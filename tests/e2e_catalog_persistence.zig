@@ -21,7 +21,7 @@ test "catalog persistence across save/load" {
         try cat.addSchema("public");
         try cat.addGraph("g1");
 
-        const cols = [_][]const u8{ "id" };
+        const cols = [_][]const u8{"id"};
         const info = catalog.IndexInfo{
             .name = "t_idx",
             .index_type = "btree",

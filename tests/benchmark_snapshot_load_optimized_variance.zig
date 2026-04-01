@@ -52,7 +52,7 @@ test "BenchmarkCANARY_REQ_GQL_028_SnapshotLoadOptimizedVarianceEnvelope" {
     defer store.deinit();
     var i: usize = 0;
     while (i < 400) : (i += 1) {
-        _ = try store.createNode(&.{ "redo" });
+        _ = try store.createNode(&.{"redo"});
     }
     try store.saveToFile();
 

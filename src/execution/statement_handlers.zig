@@ -8,6 +8,7 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
+const planned_read_runtime = @import("planned_read_runtime.zig");
 
 // Import helper functions used by statement handlers
 const getCatalog = execution.getCatalog;
@@ -52,6 +53,13 @@ fn listNodeLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) 
 pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: ExecutionContext) !ExecutionResult {
     // M2: Get catalog from context via dependency injection
     const cat = getCatalog(allocator, context);
+    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
+    defer if (read_session) |*session| session.deinit();
+    const read_store: *graph_store.GraphStore = if (read_session) |*session|
+        session.store()
+    else
+        writable_store;
 
     const column_list = switch (s.show_type) {
         .indexes => &[_][]const u8{ "name", "type", "table", "columns" },
@@ -98,7 +106,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             }
         },
         .graphs => {
-            const storage_graphs = graph_store.getGlobalStore(allocator).listGraphNames(allocator) catch null;
+            const storage_graphs = read_store.listGraphNames(allocator) catch null;
             if (storage_graphs) |names| {
                 defer {
                     for (names) |name| allocator.free(name);
@@ -147,7 +155,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // In a graph database, node labels act as "tables"
             // Return unique node labels from the graph storage
-            const labels = listNodeLabels(allocator, graph_store.getGlobalStore(allocator)) catch &.{};
+            const labels = listNodeLabels(allocator, read_store) catch &.{};
             defer {
                 for (labels) |label| {
                     allocator.free(label);
@@ -723,6 +731,18 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     // M2: context now used for catalog access via dependency injection
     // EXPLAIN shows the query execution plan with cost estimates
 
+    switch (exp.query.*) {
+        .Query => |q| {
+            var planned_query = q;
+            if (try planned_read_runtime.buildPlanIfSupported(allocator, &planned_query, context)) |plan| {
+                var owned_plan = plan;
+                defer owned_plan.deinit(allocator);
+                return buildPlannedExplainResult(allocator, owned_plan);
+            }
+        },
+        else => {},
+    }
+
     // Helper to format plan operations with stack buffer (performance optimization)
     const formatPlanOp = struct {
         fn format(alloc: std.mem.Allocator, comptime fmt: []const u8, args: anytype) ![]const u8 {
@@ -905,6 +925,26 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     // PROFILE executes the query and returns execution statistics
     // For now, execute the query and add basic profiling information
 
+    switch (prof.query.*) {
+        .Query => |q| {
+            var planned_query = q;
+            if (try planned_read_runtime.executeProfiledIfSupported(
+                allocator,
+                &planned_query,
+                context,
+                context.query_param_names,
+                context.query_param_values,
+                true,
+            )) |planned| {
+                var owned_planned = planned;
+                defer owned_planned.deinitMetadata(allocator);
+                defer owned_planned.result.deinit(allocator);
+                return buildPlannedProfileResult(allocator, owned_planned);
+            }
+        },
+        else => {},
+    }
+
     // Execute the wrapped query
     var query_result = try executeStatementWithContext(allocator, prof.query.*, context);
     defer query_result.deinit(allocator);
@@ -955,4 +995,139 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
         .rows = try stats.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+}
+
+fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_runtime.Plan) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "plan");
+
+    const rows = try allocator.alloc([]Value, plan.ops.len);
+    errdefer allocator.free(rows);
+
+    for (plan.ops, 0..) |op, idx| {
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try allocator.dupe(u8, plannedOpName(op.kind)) };
+        rows[idx] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read_runtime.ProfiledExecution) !ExecutionResult {
+    const columns = try allocator.alloc([]const u8, 2);
+    columns[0] = try allocator.dupe(u8, "metric");
+    columns[1] = try allocator.dupe(u8, "value");
+
+    const rows = try allocator.alloc([]Value, 5);
+    errdefer allocator.free(rows);
+
+    rows[0] = try allocator.alloc(Value, 2);
+    rows[0][0] = Value{ .Str = try allocator.dupe(u8, "profile") };
+    rows[0][1] = Value{ .Str = try allocator.dupe(u8, "planned_query_profile") };
+
+    rows[1] = try allocator.alloc(Value, 2);
+    rows[1][0] = Value{ .Str = try allocator.dupe(u8, "rows") };
+    rows[1][1] = Value{ .Int = @intCast(planned.result.rows.len) };
+
+    rows[2] = try allocator.alloc(Value, 2);
+    rows[2][0] = Value{ .Str = try allocator.dupe(u8, "columns") };
+    rows[2][1] = Value{ .Int = @intCast(planned.result.columns.len) };
+
+    rows[3] = try allocator.alloc(Value, 2);
+    rows[3][0] = Value{ .Str = try allocator.dupe(u8, "time_ns") };
+    rows[3][1] = Value{ .Int = @intCast(planned.trace.totalTimeNs()) };
+
+    rows[4] = try allocator.alloc(Value, 2);
+    rows[4][0] = Value{ .Str = try allocator.dupe(u8, "operators") };
+    rows[4][1] = Value{ .Int = @intCast(planned.trace.ops.len) };
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+}
+
+fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
+    return switch (kind) {
+        .ConstProjection => "ConstProjection",
+        .AllNodesScan => "AllNodesScan",
+        .LabelScan => "LabelScan",
+        .ExpandOut => "ExpandOut",
+        .ExpandIn => "ExpandIn",
+        .ExpandEither => "ExpandEither",
+        .OptionalMatch => "OptionalMatch",
+        .VarLengthExpand => "VarLengthExpand",
+        .ShortestPath => "ShortestPath",
+        .PathModeExpand => "PathModeExpand",
+        .PathCapture => "PathCapture",
+        .CallProcedure => "CallProcedure",
+        .CallSubquery => "CallSubquery",
+        .Create => "Create",
+        .Merge => "Merge",
+        .Unwind => "Unwind",
+        .Set => "Set",
+        .Remove => "Remove",
+        .Delete => "Delete",
+        .RecursiveCTE => "RecursiveCTE",
+        .QueryChain => "QueryChain",
+        .LegacyExecute => "LegacyExecute",
+        .Filter => "Filter",
+        .Aggregate => "Aggregate",
+        .Project => "Project",
+        .Distinct => "Distinct",
+        .Limit => "Limit",
+        .Sort => "Sort",
+    };
+}
+const Catalog = @import("../schema/catalog.zig").Catalog;
+const testing = std.testing;
+
+test "executeShow tables reads persisted snapshot state" {
+    graph_store.deinitGlobalStore();
+    defer graph_store.deinitGlobalStore();
+
+    var store_tmp = testing.tmpDir(.{});
+    defer store_tmp.cleanup();
+
+    const store_dir = try store_tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(store_dir);
+
+    const store = try graph_store.initGlobalStore(testing.allocator, store_dir);
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraph(&labels, "default");
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    // Simulate a stale compatibility cache; SHOW TABLES must re-read persisted storage.
+    store.clearNodes();
+
+    var catalog_tmp = testing.tmpDir(.{});
+    defer catalog_tmp.cleanup();
+
+    const catalog_dir = try catalog_tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(catalog_dir);
+
+    const catalog = try Catalog.init(testing.allocator, catalog_dir);
+    defer {
+        catalog.deinit();
+        testing.allocator.destroy(catalog);
+    }
+
+    var result = try executeShow(
+        testing.allocator,
+        .{ .show_type = .tables },
+        .{ .catalog = catalog },
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    try testing.expect(result.rows[0].len >= 1);
+    try testing.expect(result.rows[0][0] == .Str);
+    try testing.expectEqualStrings("Person", result.rows[0][0].Str);
 }

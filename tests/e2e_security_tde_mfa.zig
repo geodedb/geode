@@ -1,6 +1,6 @@
 const std = @import("std");
 const tde = @import("geode").tde_stub;
-const mfa = @import("geode").mfa_stub;
+const mfa = @import("geode").mfa_test_support;
 
 // Basic end-to-end style tests for TDE + MFA stubs (non-cryptographic).
 // Ensures feature flags gate functionality.

@@ -150,14 +150,6 @@ pub fn build(b: *std.Build) void {
     });
     const repl_mod = repl_dep.module("repl");
 
-    // Data structures and graph algorithms library
-    const ds_dep = b.dependency("ds", .{
-        .target = target,
-        .optimize = optimize,
-        .spice = false,
-    });
-    const ds_mod = ds_dep.module("ds");
-
     // Vulkan compute library
     const vulkan_dep = b.dependency("vulkan", .{
         .target = target,
@@ -165,13 +157,6 @@ pub fn build(b: *std.Build) void {
         .spice = false,
     });
     const vulkan_mod = vulkan_dep.module("vulkan");
-
-    // CUDA compute library
-    const cuda_dep = b.dependency("cuda", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const cuda_mod = cuda_dep.module("cuda");
 
     // ==========================================================================
     // Phase 2 External Library Dependencies (Core Libraries)
@@ -186,13 +171,6 @@ pub fn build(b: *std.Build) void {
     });
     const json_mod = json_dep.module("json");
     json_mod.addImport("uri", uri_mod);
-
-    // TLS 1.3 implementation (ztls is the main public API module)
-    const tls_dep = b.dependency("tls", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const tls_mod = tls_dep.module("ztls");
 
     // QUIC v1/v2 protocol - RFC 9000
     const quic_ext_dep = b.dependency("quic", .{
@@ -345,9 +323,6 @@ pub fn build(b: *std.Build) void {
     const timeseries_dep = b.dependency("timeseries", .{ .target = target, .optimize = optimize });
     const timeseries_ext_mod = timeseries_dep.module("timeseries");
 
-    const metrics_dep = b.dependency("metrics", .{ .target = target, .optimize = optimize });
-    const metrics_ext_mod = metrics_dep.module("metrics");
-
     const auth_dep = b.dependency("auth", .{ .target = target, .optimize = optimize });
     const auth_ext_mod = auth_dep.module("auth");
 
@@ -369,6 +344,7 @@ pub fn build(b: *std.Build) void {
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
     // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-04-01
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
+    const query_work_item_mod = b.createModule(.{ .root_source_file = b.path("src/transport/query_work_item.zig"), .target = target, .optimize = optimize });
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
     // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
@@ -400,21 +376,18 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("transport/quic", transport_quic_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
     root_mod.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool for query execution
+    root_mod.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     root_mod.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR stream scheduling
 
     // Phase 1 External Library Imports (foundation libraries)
-    root_mod.addImport("uri", uri_mod);
     root_mod.addImport("yaml", yaml_mod);
     root_mod.addImport("toml", toml_mod);
     root_mod.addImport("strings", strings_mod);
     root_mod.addImport("repl", repl_mod);
-    root_mod.addImport("ds", ds_mod);
     root_mod.addImport("vulkan", vulkan_mod);
-    root_mod.addImport("cuda", cuda_mod);
 
     // Phase 2 External Library Imports (core libraries)
     root_mod.addImport("json", json_mod);
-    root_mod.addImport("tls", tls_mod);
     root_mod.addImport("quic_ext", quic_ext_mod);
 
     // Phase 3 External Library Imports (integration libraries)
@@ -454,7 +427,6 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("fle_lib", fle_ext_mod);
     root_mod.addImport("gql_lib", gql_ext_mod);
     root_mod.addImport("timeseries_lib", timeseries_ext_mod);
-    root_mod.addImport("metrics_lib", metrics_ext_mod);
     root_mod.addImport("auth_lib", auth_ext_mod);
 
     // Main unified CLI binary with server and client capabilities
@@ -468,14 +440,11 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("geode", root_mod);
 
     // Phase 1 External Library Imports for CLI
-    geode_exe.root_module.addImport("uri", uri_mod);
     geode_exe.root_module.addImport("yaml", yaml_mod);
     geode_exe.root_module.addImport("toml", toml_mod);
     geode_exe.root_module.addImport("strings", strings_mod);
     geode_exe.root_module.addImport("repl", repl_mod);
-    geode_exe.root_module.addImport("ds", ds_mod);
     geode_exe.root_module.addImport("vulkan", vulkan_mod);
-    geode_exe.root_module.addImport("cuda", cuda_mod);
 
     // Phase 2 External Library Imports for CLI (core libraries)
     geode_exe.root_module.addImport("json", json_mod);
@@ -514,7 +483,6 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("fle_lib", fle_ext_mod);
     geode_exe.root_module.addImport("gql_lib", gql_ext_mod);
     geode_exe.root_module.addImport("timeseries_lib", timeseries_ext_mod);
-    geode_exe.root_module.addImport("metrics_lib", metrics_ext_mod);
     geode_exe.root_module.addImport("auth_lib", auth_ext_mod);
 
     // Add centralized logging module for CLI
@@ -736,6 +704,7 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    custom_tests.root_module.addImport("auth_lib", auth_ext_mod);
     custom_tests.root_module.addImport("json", json_mod);
     custom_tests.root_module.addImport("protobuf", protobuf_mod);
     custom_tests.root_module.addImport("schema", schema_mod);
@@ -763,6 +732,7 @@ pub fn build(b: *std.Build) void {
     const graph_store_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = optimize });
     graph_store_mod.addImport("logging", logging_mod);
     graph_store_mod.addImport("uuid", uuid_ext_mod);
+    graph_store_mod.addImport("graph_storage", graph_storage_mod);
     graph_store_mod.addImport("fle_aead", fle_aead_mod);
     graph_store_mod.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_mod.addImport("fle_key_types", fle_key_types_mod);
@@ -778,12 +748,14 @@ pub fn build(b: *std.Build) void {
     const graph_store_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = optimize }) });
     graph_store_unit_tests.root_module.addImport("logging", logging_mod);
     graph_store_unit_tests.root_module.addImport("json", json_mod);
+    graph_store_unit_tests.root_module.addImport("graph_storage", graph_storage_mod);
     graph_store_unit_tests.root_module.addImport("fle_aead", fle_aead_mod);
     graph_store_unit_tests.root_module.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_unit_tests.root_module.addImport("fle_key_types", fle_key_types_mod);
     graph_store_unit_tests.root_module.addImport("fle_blind_index", fle_blind_index_mod);
     graph_store_unit_tests.root_module.addImport("uuid", uuid_ext_mod);
     graph_store_unit_tests.root_module.addImport("wal", wal_ext_mod);
+    graph_store_unit_tests.linkLibC();
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
     // Storage migration removed (Phase 2: engine-backed persistence)
@@ -1248,14 +1220,13 @@ pub fn build(b: *std.Build) void {
 
         const hnsw_snapshot_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/hnsw_snapshot_fuzz.zig"), .target = target, .optimize = .Debug }) });
         const hnsw_persist_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw_persist.zig"), .target = target, .optimize = optimize });
-        const hnsw_mod = b.createModule(.{ .root_source_file = b.path("src/index/hnsw.zig"), .target = target, .optimize = optimize });
         // TDE module for file-level encryption (REQ-TDE-FILELEVEL-001)
         const tde_fuzz_mod = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize });
         tde_fuzz_mod.addImport("logging", logging_mod);
-        hnsw_persist_mod.addImport("hnsw", hnsw_mod);
+        hnsw_persist_mod.addImport("hnsw", hnsw_ext_mod);
         hnsw_persist_mod.addImport("tde", tde_fuzz_mod);
         hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw_persist", hnsw_persist_mod);
-        hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw", hnsw_mod);
+        hnsw_snapshot_fuzz_tests.root_module.addImport("hnsw", hnsw_ext_mod);
         const run_hnsw_snapshot_fuzz = b.addRunArtifact(hnsw_snapshot_fuzz_tests);
         test_e2e_step.dependOn(&run_hnsw_snapshot_fuzz.step);
 
@@ -1265,6 +1236,7 @@ pub fn build(b: *std.Build) void {
         // CANARY: REQ=REQ-PERF-FUZZ-BUILD-001; FEATURE="TransportFuzzing"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
         const transport_perf_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/transport_perf_fuzz.zig"), .target = target, .optimize = .Debug }) });
         transport_perf_fuzz_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+        transport_perf_fuzz_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
         transport_perf_fuzz_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
         const run_transport_perf_fuzz = b.addRunArtifact(transport_perf_fuzz_tests);
         test_e2e_step.dependOn(&run_transport_perf_fuzz.step);
@@ -1374,6 +1346,7 @@ pub fn build(b: *std.Build) void {
     // CANARY: REQ=REQ-PERF-TEST-BUILD-001; FEATURE="PerformanceTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
     const perf_opt_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_performance_optimizations.zig"), .target = target, .optimize = optimize }) });
     perf_opt_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    perf_opt_tests.root_module.addImport("transport/query_work_item", query_work_item_mod);
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
     test_step.dependOn(&perf_opt_tests.step);
 
@@ -1455,6 +1428,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
     geode_exe.root_module.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
+    geode_exe.root_module.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-002; FEATURE="CLI Subprocess Elimination"; ASPECT=ServerModules; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
@@ -1585,18 +1559,25 @@ pub fn build(b: *std.Build) void {
 
     // Create separate modules for security components
     const runtime_flags_mod = b.createModule(.{ .root_source_file = b.path("src/util/feature_flags.zig"), .target = target, .optimize = optimize });
+    const mfa_policy_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa_policy.zig"), .target = target, .optimize = optimize });
+    mfa_policy_mod.addImport("auth_lib", auth_ext_mod);
     const mfa_mod = b.createModule(.{ .root_source_file = b.path("src/security/mfa.zig"), .target = target, .optimize = optimize });
     mfa_mod.addImport("feature_flags", runtime_flags_mod);
     mfa_mod.addImport("auth_lib", auth_ext_mod);
+    mfa_mod.addImport("mfa_policy", mfa_policy_mod);
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
-    auth_mod.addImport("mfa", mfa_mod);
     auth_mod.addImport("logging", logging_mod);
+    auth_mod.addImport("auth_lib", auth_ext_mod);
+    auth_mod.addImport("mfa_policy", mfa_policy_mod);
     root_mod.addImport("geode_auth", auth_mod);
     root_mod.addImport("mfa", mfa_mod);
     root_mod.addImport("feature_flags", runtime_flags_mod);
+    root_mod.addImport("mfa_policy", mfa_policy_mod);
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-003; FEATURE="CLI Subprocess Elimination"; ASPECT=AuthModule; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
     // Add auth module to unified binary for server authentication
     geode_exe.root_module.addImport("geode_auth", auth_mod);
+    geode_exe.root_module.addImport("feature_flags", runtime_flags_mod);
+    geode_exe.root_module.addImport("mfa_policy", mfa_policy_mod);
 
     // GAP-0280: RLS shared types module (property predicates, engine, global accessor).
     // Must be a standalone module to avoid circular dependencies between server/ and execution/.
@@ -1645,10 +1626,12 @@ pub fn build(b: *std.Build) void {
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
     user_storage_mod.addImport("logging", logging_mod);
     user_storage_mod.addImport("geode", root_mod);
+    user_storage_mod.addImport("auth_lib", auth_ext_mod);
 
     // Create auth graph manager module (orchestration layer for HMAC auth)
     const auth_graph_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_graph_manager.zig"), .target = target, .optimize = optimize });
     auth_graph_manager_mod.addImport("geode", root_mod);
+    auth_graph_manager_mod.addImport("auth_lib", auth_ext_mod);
     auth_graph_manager_mod.addImport("geode_auth", auth_mod);
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
@@ -1666,6 +1649,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     auth_graph_manager_tests.root_module.addImport("geode", root_mod);
+    auth_graph_manager_tests.root_module.addImport("auth_lib", auth_ext_mod);
     auth_graph_manager_tests.root_module.addImport("geode_auth", auth_mod);
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
@@ -2153,26 +2137,21 @@ pub fn build(b: *std.Build) void {
     const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
     test_step.dependOn(&json_opt_tests.step);
 
-    // GAP-413: Create audit bundle module for test imports
-    // Uses mod.zig to bundle all audit components into a single module
-    const audit_bundle_mod = b.createModule(.{ .root_source_file = b.path("src/audit/mod.zig"), .target = target, .optimize = optimize });
-    audit_bundle_mod.addImport("audit_lib", audit_ext_mod);
-
     // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
     const test_filters_mod = b.createModule(.{ .root_source_file = b.path("tests/test_filters.zig"), .target = target, .optimize = optimize });
-    test_filters_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_filters_mod.addImport("audit_lib", audit_ext_mod);
     const test_filters_tests = b.addTest(.{ .root_module = test_filters_mod });
     test_step.dependOn(&test_filters_tests.step);
 
     // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
     const test_transports_mod = b.createModule(.{ .root_source_file = b.path("tests/test_transports.zig"), .target = target, .optimize = optimize });
-    test_transports_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_transports_mod.addImport("audit_lib", audit_ext_mod);
     const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
     test_step.dependOn(&test_transports_tests.step);
 
     // GAP-413 FIXED: test_cef.zig (4 tests) - CEF formatting tests
     const test_cef_mod = b.createModule(.{ .root_source_file = b.path("tests/test_cef.zig"), .target = target, .optimize = optimize });
-    test_cef_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_cef_mod.addImport("audit_lib", audit_ext_mod);
     const test_cef_tests = b.addTest(.{ .root_module = test_cef_mod });
     test_step.dependOn(&test_cef_tests.step);
 

@@ -144,9 +144,7 @@ test "Variable-length path expansion" {
     util.progress("Testing variable-length path...", .{});
     var client = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "MATCH (a:Node {id: 1})-[:NEXT*1..3]->(b) RETURN a.id, b.id",
-        "--server",
-        addr,
-        "--format=json",
+        "--server",            addr,    "--format=json",
     }, allocator);
     client.stdout_behavior = .Pipe;
     client.stderr_behavior = .Pipe;
@@ -217,9 +215,7 @@ test "MVCC conflict detection - write-write conflict" {
     // Transaction 1: BEGIN
     var txn1_begin = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "BEGIN",
-        "--server",
-        addr,
-        "--format=json",
+        "--server",            addr,    "--format=json",
     }, allocator);
     txn1_begin.stdout_behavior = .Pipe;
     txn1_begin.stderr_behavior = .Pipe;
@@ -231,9 +227,7 @@ test "MVCC conflict detection - write-write conflict" {
     // Transaction 2: BEGIN
     var txn2_begin = std.process.Child.init(&.{
         "./zig-out/bin/geode", "query", "BEGIN",
-        "--server",
-        addr,
-        "--format=json",
+        "--server",            addr,    "--format=json",
     }, allocator);
     txn2_begin.stdout_behavior = .Pipe;
     txn2_begin.stderr_behavior = .Pipe;

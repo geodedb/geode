@@ -13,7 +13,7 @@ test "quic: EXPLAIN schema then explain (smoke)" {
     const allocator = std.testing.allocator;
     const geode = "./zig-out/bin/geode";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

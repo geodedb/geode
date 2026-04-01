@@ -155,6 +155,34 @@ pub const IdMap = struct {
         return self.edge_uuid_to_slot.count();
     }
 
+    /// Deep-copy the mapping tables into a new IdMap owned by `allocator`.
+    pub fn clone(self: *const IdMap, allocator: Allocator) !IdMap {
+        var copy = IdMap.init(allocator);
+        errdefer copy.deinit();
+
+        copy.next_node_slot = self.next_node_slot;
+        copy.next_edge_slot = self.next_edge_slot;
+
+        try copy.node_uuid_to_slot.ensureTotalCapacity(self.node_uuid_to_slot.count());
+        try copy.node_slot_to_uuid.ensureTotalCapacity(self.node_slot_to_uuid.count());
+        try copy.edge_uuid_to_slot.ensureTotalCapacity(self.edge_uuid_to_slot.count());
+        try copy.edge_slot_to_uuid.ensureTotalCapacity(self.edge_slot_to_uuid.count());
+
+        var node_iter = self.node_uuid_to_slot.iterator();
+        while (node_iter.next()) |entry| {
+            try copy.node_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
+            try copy.node_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
+        }
+
+        var edge_iter = self.edge_uuid_to_slot.iterator();
+        while (edge_iter.next()) |entry| {
+            try copy.edge_uuid_to_slot.put(entry.key_ptr.*, entry.value_ptr.*);
+            try copy.edge_slot_to_uuid.put(entry.value_ptr.*, entry.key_ptr.*);
+        }
+
+        return copy;
+    }
+
     // ------------------------------------------------------------------
     // Persistence
     // ------------------------------------------------------------------

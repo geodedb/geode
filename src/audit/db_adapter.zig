@@ -1,6 +1,7 @@
 const std = @import("std");
-const events = @import("events.zig");
-const logger = @import("logger.zig");
+const audit_lib = @import("audit_lib");
+const events = audit_lib.events;
+const logger = audit_lib.logger;
 
 pub const DbOperation = enum {
     SELECT,
@@ -278,10 +279,10 @@ test "DB adapter basic functionality" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const config_mod = @import("config.zig");
-    const time_mod = @import("time.zig");
+    const test_support = @import("test_support.zig");
+    const time_mod = audit_lib.time;
 
-    var test_config = try config_mod.loadTestConfig(allocator);
+    var test_config = try test_support.loadTestConfig(allocator);
     defer test_config.deinit();
 
     var fixed_clock = time_mod.FixedClock.init(time_mod.TEST_TIMESTAMP_MS);

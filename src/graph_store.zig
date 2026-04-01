@@ -1,6 +1,5 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
-const uuid = @import("uuid.zig");
 const id_map_mod = @import("storage/id_map.zig");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28
@@ -170,12 +169,20 @@ fn copyPropertyValue(self: *GraphStore, value: PropertyValue) !PropertyValue {
     };
 }
 
-fn freePropertyValue(self: *GraphStore, value: PropertyValue) void {
+fn freePropertyValueWithAllocator(allocator: std.mem.Allocator, value: PropertyValue) void {
     switch (value) {
-        .String => |s| self.allocator.free(s),
-        .ExtValue => |ext| freeExtValue(self, ext),
+        .String => |s| allocator.free(s),
+        .ExtValue => |ext| freeExtValueWithAllocator(allocator, ext),
         else => {},
     }
+}
+
+fn freePropertyValue(self: *GraphStore, value: PropertyValue) void {
+    freePropertyValueWithAllocator(self.allocator, value);
+}
+
+pub fn freeDetachedPropertyValue(allocator: std.mem.Allocator, value: PropertyValue) void {
+    freePropertyValueWithAllocator(allocator, value);
 }
 
 fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) !@import("eval_extended.zig").ExtValue {
@@ -265,43 +272,75 @@ fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue)
     };
 }
 
-fn freeExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) void {
+fn freeExtValueWithAllocator(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) void {
     const bitstring_mod = @import("types/bitstring.zig");
     const jsonb_mod = @import("types/jsonb.zig");
     const url_mod = @import("types/url.zig");
 
     switch (value) {
-        .Str => |s| self.allocator.free(s),
-        .Bytea => |b| self.allocator.free(b),
-        .Json => |j| self.allocator.free(j),
-        .Geometry => |g| self.allocator.free(g.wkb),
-        .LanguageTag => |lt| self.allocator.free(lt.tag),
-        .VectorF32 => |vec| self.allocator.free(vec.data),
-        .VectorI32 => |vec| self.allocator.free(vec.data),
+        .Str => |s| allocator.free(s),
+        .Bytea => |b| allocator.free(b),
+        .Json => |j| allocator.free(j),
+        .Geometry => |g| allocator.free(g.wkb),
+        .LanguageTag => |lt| allocator.free(lt.tag),
+        .VectorF32 => |vec| allocator.free(vec.data),
+        .VectorI32 => |vec| allocator.free(vec.data),
         .Hash => |h| {
-            self.allocator.free(h.digest);
-            if (h.salt) |s| self.allocator.free(s);
+            allocator.free(h.digest);
+            if (h.salt) |s| allocator.free(s);
         },
         .Url => |u| {
-            self.allocator.free(u.scheme);
-            self.allocator.free(u.host);
-            self.allocator.free(u.path);
-            if (u.query) |q| self.allocator.free(q);
-            if (u.fragment) |f| self.allocator.free(f);
+            allocator.free(u.scheme);
+            allocator.free(u.host);
+            allocator.free(u.path);
+            if (u.query) |q| allocator.free(q);
+            if (u.fragment) |f| allocator.free(f);
         },
-        .Domain => |d| url_mod.Domain.deinit(d, self.allocator),
+        .Domain => |d| url_mod.Domain.deinit(d, allocator),
         .Jsonb => |doc| jsonb_mod.JsonbDocument.deinit(doc),
-        .Xml => |doc| self.allocator.free(doc.data),
-        .BitString => |bs| bitstring_mod.BitString.deinit(bs, self.allocator),
-        .VarBit => |bs| bitstring_mod.BitString.deinit(bs, self.allocator),
+        .Xml => |doc| allocator.free(doc.data),
+        .BitString => |bs| bitstring_mod.BitString.deinit(bs, allocator),
+        .VarBit => |bs| bitstring_mod.BitString.deinit(bs, allocator),
         .List => |list| {
             for (list) |item| {
-                freeExtValue(self, item);
+                freeExtValueWithAllocator(allocator, item);
             }
-            self.allocator.free(list);
+            allocator.free(list);
         },
         else => {},
     }
+}
+
+fn freeExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue) void {
+    freeExtValueWithAllocator(self.allocator, value);
+}
+
+pub fn freeDetachedExtValue(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) void {
+    freeExtValueWithAllocator(allocator, value);
+}
+
+pub const STORAGE_EXT_TYPE_TAG: u16 = 1;
+
+const NullHasher = struct {
+    fn update(_: *NullHasher, _: []const u8) void {}
+};
+
+pub fn encodeExtValue(allocator: std.mem.Allocator, value: @import("eval_extended.zig").ExtValue) ![]u8 {
+    var dummy: GraphStore = undefined;
+    var sink = NullHasher{};
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
+
+    try dummy.writeExtValueToWriter(buf.writer(allocator), &sink, value);
+    return try buf.toOwnedSlice(allocator);
+}
+
+pub fn decodeExtValue(allocator: std.mem.Allocator, bytes: []const u8) !@import("eval_extended.zig").ExtValue {
+    var dummy: GraphStore = undefined;
+    dummy.allocator = allocator;
+
+    var stream = std.io.fixedBufferStream(bytes);
+    return try dummy.readExtValue(stream.reader());
 }
 
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
@@ -610,6 +649,39 @@ pub const GraphStore = struct {
         return self.id_maps.getPtr(graph_name);
     }
 
+    fn requireIdMap(self: *GraphStore, graph_name: []const u8) !*id_map_mod.IdMap {
+        return self.getIdMap(graph_name) orelse error.IdMapNotLoaded;
+    }
+
+    fn cloneIdMapsFrom(self: *GraphStore, source: *const GraphStore) !void {
+        var it = source.id_maps.iterator();
+        while (it.next()) |entry| {
+            const graph_name = entry.key_ptr.*;
+            if (self.id_maps.contains(graph_name)) continue;
+
+            const key_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(key_copy);
+
+            const map_copy = try entry.value_ptr.clone(self.allocator);
+            errdefer {
+                var map = map_copy;
+                map.deinit();
+            }
+
+            try self.id_maps.put(key_copy, map_copy);
+        }
+    }
+
+    fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
+        const id_map = self.requireIdMap(graph_name) catch return error.NodeSlotMappingMissing;
+        return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
+    }
+
+    fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
+        const id_map = self.requireIdMap(graph_name) catch return error.EdgeSlotMappingMissing;
+        return id_map.edgeSlot(@as(u128, edge_id)) orelse error.EdgeSlotMappingMissing;
+    }
+
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
         // Dual-read: check adapter first, then fall back to local HashMap
         if (global_vtable) |vt| {
@@ -619,22 +691,65 @@ pub const GraphStore = struct {
     }
 
     pub fn listGraphNames(self: *const GraphStore, allocator: std.mem.Allocator) ![]const []const u8 {
-        var names = try allocator.alloc([]const u8, self.graphs.count());
-        var i: usize = 0;
+        var names = std.ArrayList([]const u8).empty;
+        errdefer {
+            for (names.items) |name| {
+                allocator.free(name);
+            }
+            names.deinit(allocator);
+        }
+
+        var seen = std.StringHashMap(void).init(allocator);
+        defer {
+            var seen_it = seen.iterator();
+            while (seen_it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+            }
+            seen.deinit();
+        }
+
+        if (global_adapter) |adapter| {
+            const persisted_names = try adapter.listGraphNames(allocator);
+            defer {
+                for (persisted_names) |name| {
+                    allocator.free(name);
+                }
+                allocator.free(persisted_names);
+            }
+
+            for (persisted_names) |name| {
+                const seen_key = try allocator.dupe(u8, name);
+                errdefer allocator.free(seen_key);
+                const seen_result = try seen.getOrPut(seen_key);
+                if (!seen_result.found_existing) {
+                    try names.append(allocator, try allocator.dupe(u8, name));
+                } else {
+                    allocator.free(seen_key);
+                }
+            }
+        }
+
         var it = self.graphs.iterator();
         while (it.next()) |entry| {
-            names[i] = try allocator.dupe(u8, entry.key_ptr.*);
-            i += 1;
+            const name = entry.key_ptr.*;
+            const seen_key = try allocator.dupe(u8, name);
+            errdefer allocator.free(seen_key);
+            const seen_result = try seen.getOrPut(seen_key);
+            if (!seen_result.found_existing) {
+                try names.append(allocator, try allocator.dupe(u8, name));
+            } else {
+                allocator.free(seen_key);
+            }
         }
-        return names;
+
+        return names.toOwnedSlice(allocator);
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
-        // Dual-write: create in adapter, then fall through to local HashMap
+        // Create the persisted graph first so the in-memory registry never
+        // diverges from the adapter-backed storage layout.
         if (global_vtable) |vt| {
-            _ = vt.getOrCreateGraphFn(vt.ctx, graph_name) catch |err| {
-                log.err("dual-write: adapter createGraph failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-            };
+            _ = try vt.getOrCreateGraphFn(vt.ctx, graph_name);
         }
         if (self.graphs.contains(graph_name)) {
             return error.GraphAlreadyExists;
@@ -644,20 +759,15 @@ pub const GraphStore = struct {
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
+        self.saveIdMaps();
 
         self.dirty.store(true, .release);
     }
 
-    /// Open a graph using a known UUID (for catalog recovery).  Opens the
-    /// existing on-disk storage directory instead of generating a new UUID.
+    /// Open a graph using a known UUID (for catalog recovery).
     pub fn openOrCreateGraphWithUuid(self: *GraphStore, graph_name: []const u8, graph_uuid: [16]u8) !void {
         if (global_adapter) |adapter| {
-            _ = adapter.openGraphWithUuid(graph_name, graph_uuid) catch |err| {
-                log.err("adapter openGraphWithUuid failed", &.{
-                    Attr.string("error", @errorName(err)),
-                    Attr.string("graph", graph_name),
-                });
-            };
+            _ = try adapter.openGraphWithUuid(graph_name, graph_uuid);
         }
         if (self.graphs.contains(graph_name)) {
             return;
@@ -704,19 +814,15 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
-    pub fn createNodeWithGraph(self: *GraphStore, labels: [][]const u8, graph_name: []const u8) !u64 {
+    pub fn createNodeWithGraph(self: *GraphStore, labels: []const []const u8, graph_name: []const u8) !u64 {
         return self.createNodeWithGraphAndTenant(labels, graph_name, DEFAULT_TENANT_ID);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
-    pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: [][]const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        // Dual-write: create in adapter (independent ID space), then fall through to local HashMap
+    pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
         const adapter_slot_id: ?u64 = if (global_vtable) |vt|
-            vt.createNodeFn(vt.ctx, graph_name, labels) catch |err| blk: {
-                log.err("dual-write: adapter createNode failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-                break :blk null;
-            }
+            try vt.createNodeFn(vt.ctx, graph_name, labels)
         else
             null;
         try self.ensureGraph(graph_name);
@@ -725,11 +831,9 @@ pub const GraphStore = struct {
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_slot_id) |slot_id| {
-            if (self.getOrCreateIdMap(graph_name)) |im| {
-                im.insertNodeWithSlot(@as(u128, id), slot_id) catch |err| {
-                    log.err("IdMap insertNodeWithSlot failed", &.{Attr.string("error", @errorName(err))});
-                };
-            } else |_| {}
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertNodeWithSlot(@as(u128, id), slot_id);
+            self.saveIdMaps();
         }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
@@ -771,9 +875,27 @@ pub const GraphStore = struct {
         return id;
     }
 
-    fn createNodeWithIdInternal(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8, mark_dirty: bool) !void {
+    fn createNodeWithIdInternal(
+        self: *GraphStore,
+        node_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        mark_dirty: bool,
+        persist_adapter: bool,
+    ) !void {
+        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+            const vt = global_vtable orelse break :blk null;
+            break :blk try vt.createNodeFn(vt.ctx, graph_name, labels);
+        } else null;
+
         try self.ensureGraph(graph_name);
         if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
+
+        if (adapter_slot_id) |slot_id| {
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertNodeWithSlot(@as(u128, node_id), slot_id);
+            self.saveIdMaps();
+        }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
         for (labels, 0..) |label, i| {
@@ -807,13 +929,13 @@ pub const GraphStore = struct {
     }
 
     /// Create a node with a specified ID (used for replication/2PC).
-    pub fn createNodeWithId(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
-        return self.createNodeWithIdInternal(node_id, labels, graph_name, true);
+    pub fn createNodeWithId(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, true, true);
     }
 
     /// Create a node with a specified ID without marking dirty (used for rollback).
-    pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: [][]const u8, graph_name: []const u8) !void {
-        return self.createNodeWithIdInternal(node_id, labels, graph_name, false);
+    pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
+        return self.createNodeWithIdInternal(node_id, labels, graph_name, false, false);
     }
 
     // Issue #391: Helper to add node to label index
@@ -968,7 +1090,7 @@ pub const GraphStore = struct {
     }
 
     // Backward-compatible createNode that uses "default" graph
-    pub fn createNode(self: *GraphStore, labels: [][]const u8) !u64 {
+    pub fn createNode(self: *GraphStore, labels: []const []const u8) !u64 {
         return self.createNodeWithGraph(labels, "default");
     }
 
@@ -1012,14 +1134,10 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        // Dual-write: set property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
-            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            // Use IdMap to translate UUIDv7 → slot_id for adapter
-            const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-            vt.setNodePropertyFn(vt.ctx, gn, slot_id, key, effective_value) catch |err| {
-                log.err("dual-write: adapter setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
-            };
+            const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+            const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+            try vt.setNodePropertyFn(vt.ctx, node.graph_name, slot_id, key, effective_value);
         }
         if (self.nodes.getPtr(node_id)) |node| {
             const value_copy = try copyPropertyValue(self, effective_value);
@@ -1099,12 +1217,23 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
-        // Dual-write: remove property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
-            const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-            const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-            vt.removeNodePropertyFn(vt.ctx, gn, slot_id, key) catch |err| {
-                log.err("dual-write: adapter removeNodeProperty failed", &.{Attr.string("error", @errorName(err))});
+            const node = self.nodes.get(node_id) orelse return;
+            const slot_id = self.requireNodeSlot(node.graph_name, node_id) catch |err| {
+                log.err("adapter node-slot lookup failed during removeNodeProperty", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", node.graph_name),
+                });
+                return;
+            };
+            vt.removeNodePropertyFn(vt.ctx, node.graph_name, slot_id, key) catch |err| {
+                log.err("adapter removeNodeProperty failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", node.graph_name),
+                });
+                return;
             };
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1120,15 +1249,33 @@ pub const GraphStore = struct {
         }
     }
 
+    pub fn clearNodeProperties(self: *GraphStore, node_id: u64) !void {
+        const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+
+        var keys = std.ArrayList([]const u8).empty;
+        defer {
+            for (keys.items) |owned_key| {
+                self.allocator.free(owned_key);
+            }
+            keys.deinit(self.allocator);
+        }
+
+        var prop_iter = node.properties.iterator();
+        while (prop_iter.next()) |entry| {
+            try keys.append(self.allocator, try self.allocator.dupe(u8, entry.key_ptr.*));
+        }
+
+        for (keys.items) |owned_key| {
+            self.removeNodeProperty(node_id, owned_key);
+        }
+    }
+
     pub fn addNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        // Dual-write: add node label in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.addNodeLabelFn) |f| {
-                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-                f(vt.ctx, gn, slot_id, label) catch |err| {
-                    log.err("dual-write: adapter addNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-                };
+                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+                try f(vt.ctx, node.graph_name, slot_id, label);
             }
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1164,14 +1311,11 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeLabel(self: *GraphStore, node_id: u64, label: []const u8) !void {
-        // Dual-write: remove node label in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.removeNodeLabelFn) |f| {
-                const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "default";
-                const slot_id = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
-                f(vt.ctx, gn, slot_id, label) catch |err| {
-                    log.err("dual-write: adapter removeNodeLabel failed", &.{Attr.string("error", @errorName(err))});
-                };
+                const node = self.nodes.get(node_id) orelse return error.NodeNotFound;
+                const slot_id = try self.requireNodeSlot(node.graph_name, node_id);
+                try f(vt.ctx, node.graph_name, slot_id, label);
             }
         }
         if (self.nodes.getPtr(node_id)) |node| {
@@ -1742,18 +1886,12 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        // Dual-write: create in adapter (independent ID space).
-        // Translate UUID-based node IDs to engine slot IDs via the IdMap,
-        // since the engine stores nodes by slot position, not UUID.
         const adapter_slot_id: ?u64 = blk: {
             const vt = global_vtable orelse break :blk null;
-            const im = (self.getOrCreateIdMap(graph_name) catch break :blk null);
+            const im = self.getOrCreateIdMap(graph_name) catch break :blk null;
             const from_slot = im.nodeSlot(@as(u128, from_id)) orelse break :blk null;
             const to_slot = im.nodeSlot(@as(u128, to_id)) orelse break :blk null;
-            break :blk vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch |err| err_blk: {
-                log.err("dual-write: adapter createEdge failed", &.{ Attr.string("error", @errorName(err)), Attr.string("graph", graph_name) });
-                break :err_blk null;
-            };
+            break :blk vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch break :blk null;
         };
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-based time-sortable unique ID
@@ -1761,11 +1899,9 @@ pub const GraphStore = struct {
 
         // Store UUID→slot mapping in IdMap for adapter translation
         if (adapter_slot_id) |slot_id| {
-            if (self.getOrCreateIdMap(graph_name)) |im| {
-                im.insertEdgeWithSlot(@as(u128, id), slot_id) catch |err| {
-                    log.err("IdMap insertEdgeWithSlot failed", &.{Attr.string("error", @errorName(err))});
-                };
-            } else |_| {}
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertEdgeWithSlot(@as(u128, id), slot_id);
+            self.saveIdMaps();
         }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
@@ -1806,9 +1942,23 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
         mark_dirty: bool,
+        persist_adapter: bool,
     ) !void {
+        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+            const vt = global_vtable orelse break :blk null;
+            const from_slot = try self.requireNodeSlot(graph_name, from_id);
+            const to_slot = try self.requireNodeSlot(graph_name, to_id);
+            break :blk try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
+        } else null;
+
         try self.ensureGraph(graph_name);
         if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
+
+        if (adapter_slot_id) |slot_id| {
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertEdgeWithSlot(@as(u128, edge_id), slot_id);
+            self.saveIdMaps();
+        }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
         const graph_name_copy = try self.allocator.dupe(u8, graph_name);
@@ -1845,7 +1995,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, true, true);
     }
 
     /// Create an edge with a specified ID without marking dirty (used for rollback).
@@ -1857,7 +2007,7 @@ pub const GraphStore = struct {
         edge_type: []const u8,
         graph_name: []const u8,
     ) !void {
-        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false);
+        return self.createEdgeWithIdInternal(edge_id, from_id, to_id, edge_type, graph_name, false, false);
     }
 
     // Issue #392: Helper to maintain adjacency indexes
@@ -1983,18 +2133,13 @@ pub const GraphStore = struct {
             else => value,
         };
 
-        // Dual-write: set edge property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.setEdgePropertyFn) |f| {
-                if (self.edges.get(edge_id)) |edge| {
-                    const gn = edge.graph_name;
-                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
-                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
-                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
-                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key, effective_value) catch |err| {
-                        log.err("dual-write: adapter setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
-                    };
-                }
+                const edge = self.edges.get(edge_id) orelse return error.EdgeNotFound;
+                const slot_from = try self.requireNodeSlot(edge.graph_name, edge.from_id);
+                const slot_to = try self.requireNodeSlot(edge.graph_name, edge.to_id);
+                const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+                try f(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge, key, effective_value);
             }
         }
         if (self.edges.getPtr(edge_id)) |edge| {
@@ -2021,16 +2166,40 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
-        // Dual-write: remove edge property in adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
                 if (self.edges.get(edge_id)) |edge_info| {
-                    const gn = edge_info.graph_name;
-                    const slot_from = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.from_id)) orelse edge_info.from_id) else edge_info.from_id;
-                    const slot_to = if (self.getIdMap(gn)) |im| (im.nodeSlot(@as(u128, edge_info.to_id)) orelse edge_info.to_id) else edge_info.to_id;
-                    const slot_edge = if (self.getIdMap(gn)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
-                    f(vt.ctx, gn, slot_from, slot_to, slot_edge, key) catch |err| {
-                        log.err("dual-write: adapter removeEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
+                    const slot_from = self.requireNodeSlot(edge_info.graph_name, edge_info.from_id) catch |err| {
+                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    const slot_to = self.requireNodeSlot(edge_info.graph_name, edge_info.to_id) catch |err| {
+                        log.err("adapter edge endpoint-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    const slot_edge = self.requireEdgeSlot(edge_info.graph_name, edge_id) catch |err| {
+                        log.err("adapter edge-slot lookup failed during removeEdgeProperty", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
+                    };
+                    f(vt.ctx, edge_info.graph_name, slot_from, slot_to, slot_edge, key) catch |err| {
+                        log.err("adapter removeEdgeProperty failed", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.int("edge_id", @intCast(edge_id)),
+                            Attr.string("graph", edge_info.graph_name),
+                        });
+                        return;
                     };
                 }
             }
@@ -2093,7 +2262,7 @@ pub const GraphStore = struct {
     }
 
     /// DEPRECATED: Legacy ExtValue writer stub — was used by graph_store.dat serialization.
-    fn writeExtValueToWriter(_: *GraphStore, writer: anytype, hasher: anytype, ext: @import("eval_extended.zig").ExtValue) !void {
+    fn writeExtValueToWriter(self: *GraphStore, writer: anytype, hasher: anytype, ext: @import("eval_extended.zig").ExtValue) !void {
         const sub_type: u8 = switch (ext) {
             .Null => 0,
             .Int => 1,
@@ -2262,6 +2431,20 @@ pub const GraphStore = struct {
                     try writer.writeAll(&salt_len_buf);
                     hasher.update(salt);
                     try writer.writeAll(salt);
+                } else {
+                    hasher.update(&[1]u8{0});
+                    try writer.writeAll(&[1]u8{0});
+                }
+                if (hash.params) |params| {
+                    hasher.update(&[1]u8{1});
+                    try writer.writeAll(&[1]u8{1});
+
+                    var params_buf: [9]u8 = undefined;
+                    std.mem.writeInt(u32, params_buf[0..4], params.iterations, .little);
+                    std.mem.writeInt(u32, params_buf[4..8], params.memory_kb, .little);
+                    params_buf[8] = params.parallelism;
+                    hasher.update(&params_buf);
+                    try writer.writeAll(&params_buf);
                 } else {
                     hasher.update(&[1]u8{0});
                     try writer.writeAll(&[1]u8{0});
@@ -2444,10 +2627,14 @@ pub const GraphStore = struct {
                 try writer.writeAll(bs.bytes);
             },
             .IntRange => |range_val| {
-                var buf: [9]u8 = undefined;
-                std.mem.writeInt(i32, buf[0..4], range_val.lower orelse 0, .little);
-                std.mem.writeInt(i32, buf[4..8], range_val.upper orelse 0, .little);
-                buf[8] = @intFromEnum(range_val.bounds);
+                var buf: [10]u8 = undefined;
+                var flags: u8 = 0;
+                if (range_val.lower != null) flags |= 0b01;
+                if (range_val.upper != null) flags |= 0b10;
+                buf[0] = flags;
+                std.mem.writeInt(i32, buf[1..5], range_val.lower orelse 0, .little);
+                std.mem.writeInt(i32, buf[5..9], range_val.upper orelse 0, .little);
+                buf[9] = @intFromEnum(range_val.bounds);
                 hasher.update(&buf);
                 try writer.writeAll(&buf);
             },
@@ -2463,6 +2650,9 @@ pub const GraphStore = struct {
                 std.mem.writeInt(u32, &len_buf, @intCast(list.len), .little);
                 hasher.update(&len_buf);
                 try writer.writeAll(&len_buf);
+                for (list) |item| {
+                    try self.writeExtValueToWriter(writer, hasher, item);
+                }
             },
         }
     }
@@ -2560,10 +2750,23 @@ pub const GraphStore = struct {
                     if ((try reader.readAll(salt_data)) < salt_len) break :blk ext_eval.ExtValue{ .Null = {} };
                     salt = salt_data;
                 }
+                var params_flag: [1]u8 = undefined;
+                if ((try reader.readAll(&params_flag)) < 1) break :blk ext_eval.ExtValue{ .Null = {} };
+                var params: ?heap_mod.Argon2Params = null;
+                if (params_flag[0] != 0) {
+                    var params_buf: [9]u8 = undefined;
+                    if ((try reader.readAll(&params_buf)) < params_buf.len) break :blk ext_eval.ExtValue{ .Null = {} };
+                    params = .{
+                        .iterations = std.mem.readInt(u32, params_buf[0..4], .little),
+                        .memory_kb = std.mem.readInt(u32, params_buf[4..8], .little),
+                        .parallelism = params_buf[8],
+                    };
+                }
                 break :blk ext_eval.ExtValue{ .Hash = .{
                     .alg = @enumFromInt(alg_buf[0]),
                     .digest = digest,
                     .salt = salt,
+                    .params = params,
                 } };
             },
             9 => blk: {
@@ -2648,8 +2851,18 @@ pub const GraphStore = struct {
                 var len_buf: [4]u8 = undefined;
                 if ((try reader.readAll(&len_buf)) < 4) break :blk ext_eval.ExtValue{ .Null = {} };
                 const len = std.mem.readInt(u32, &len_buf, .little);
-                _ = len;
-                break :blk ext_eval.ExtValue{ .List = &.{} };
+                var loaded: usize = 0;
+                const list = try self.allocator.alloc(ext_eval.ExtValue, len);
+                errdefer {
+                    for (list[0..loaded]) |item| {
+                        freeExtValue(self, item);
+                    }
+                    self.allocator.free(list);
+                }
+                while (loaded < len) : (loaded += 1) {
+                    list[loaded] = try self.readExtValue(reader);
+                }
+                break :blk ext_eval.ExtValue{ .List = list };
             },
             21 => blk: {
                 var dim_buf: [2]u8 = undefined;
@@ -2783,11 +2996,12 @@ pub const GraphStore = struct {
                 break :blk ext_eval.ExtValue{ .VarBit = bitstring_mod.BitString{ .bytes = bytes, .bit_length = @intCast(std.mem.readInt(u64, &bit_len_buf, .little)) } };
             },
             32 => blk: {
-                var buf: [9]u8 = undefined;
-                if ((try reader.readAll(&buf)) < 9) break :blk ext_eval.ExtValue{ .Null = {} };
-                const lower = std.mem.readInt(i32, buf[0..4], .little);
-                const upper = std.mem.readInt(i32, buf[4..8], .little);
-                const bounds: range_mod.IntRange.Bounds = @enumFromInt(buf[8]);
+                var buf: [10]u8 = undefined;
+                if ((try reader.readAll(&buf)) < 10) break :blk ext_eval.ExtValue{ .Null = {} };
+                const flags = buf[0];
+                const lower = if ((flags & 0b01) != 0) std.mem.readInt(i32, buf[1..5], .little) else null;
+                const upper = if ((flags & 0b10) != 0) std.mem.readInt(i32, buf[5..9], .little) else null;
+                const bounds: range_mod.IntRange.Bounds = @enumFromInt(buf[9]);
                 break :blk ext_eval.ExtValue{ .IntRange = range_mod.IntRange{ .lower = lower, .upper = upper, .bounds = bounds } };
             },
             33 => blk: {
@@ -2835,6 +3049,29 @@ pub const GraphStore = struct {
         _ = final_path;
     }
 
+    fn resolveIdMapDirPath(self: *GraphStore, graph_name: []const u8, create_if_missing: bool) ![]u8 {
+        _ = create_if_missing;
+        if (self.data_dir.len == 0) return error.InvalidDataDir;
+
+        const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
+        const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        return std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
+    }
+
+    fn resolveIdMapDirPathForLoad(self: *GraphStore, graph_name: []const u8) !?[]u8 {
+        if (self.data_dir.len == 0) return null;
+
+        const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return null;
+        const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        const uuid_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
+        std.fs.cwd().access(uuid_path, .{}) catch |err| {
+            self.allocator.free(uuid_path);
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+        return uuid_path;
+    }
+
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-003; FEATURE="EngineBackedPersistence"; ASPECT=IdMapPersistence; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
     /// Persist all dirty IdMaps to their per-graph data directories.
     pub fn saveIdMaps(self: *GraphStore) void {
@@ -2845,8 +3082,9 @@ pub const GraphStore = struct {
             const graph_name = entry.key_ptr.*;
             const id_map = entry.value_ptr;
 
-            // Open (or create) the per-graph directory: <data_dir>/graphs/<graph_name>/
-            const graph_dir_path = std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, graph_name }) catch continue;
+            // Persist the IdMap beside the graph-storage engine files in the
+            // UUID-backed graph directory (`graphs/<uuid_hex>/`).
+            const graph_dir_path = self.resolveIdMapDirPath(graph_name, true) catch continue;
             defer self.allocator.free(graph_dir_path);
 
             std.fs.cwd().makePath(graph_dir_path) catch continue;
@@ -2878,31 +3116,25 @@ pub const GraphStore = struct {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
 
-            // Load IdMap from disk if it exists
-            if (self.data_dir.len > 0) {
-                const graph_dir_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, graph_name });
+            // Current-format storage requires an IdMap alongside each UUID-backed
+            // graph directory so external IDs remain stable across reloads.
+            if (self.getIdMap(graph_name) == null and self.data_dir.len > 0) {
+                const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse return error.GraphStorageDirectoryMissing;
                 defer self.allocator.free(graph_dir_path);
 
-                if (std.fs.cwd().openDir(graph_dir_path, .{})) |dir_val| {
-                    var dir = dir_val;
-                    defer dir.close();
-                    if (id_map_mod.IdMap.load(self.allocator, dir)) |loaded_map| {
-                        const key = try self.allocator.dupe(u8, graph_name);
-                        try self.id_maps.put(key, loaded_map);
-                    } else |_| {
-                        // No IdMap on disk — will be created on demand
-                    }
-                } else |_| {}
+                var dir = try std.fs.cwd().openDir(graph_dir_path, .{});
+                defer dir.close();
+
+                try dir.access("id_map.dat", .{});
+                const loaded_map = try id_map_mod.IdMap.load(self.allocator, dir);
+                const key = try self.allocator.dupe(u8, graph_name);
+                errdefer self.allocator.free(key);
+                try self.id_maps.put(key, loaded_map);
             }
 
-            // Scan all nodes from the adapter
-            const scan_entries = adapter.scanAllNodes(graph_name, self.allocator) catch |err| {
-                log.warn("Failed to scan nodes from adapter for graph", &.{
-                    Attr.string("graph", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-                continue;
-            };
+            const id_map = try self.requireIdMap(graph_name);
+
+            const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
             log.info("loadFromAdapter: scanned nodes", &.{
@@ -2913,36 +3145,8 @@ pub const GraphStore = struct {
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
 
-                // Get labels from adapter
-                const labels = adapter.getNodeLabels(graph_name, slot_id, self.allocator) catch |err| {
-                    log.warn("Failed to get node labels from adapter", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                    continue;
-                };
-
-                // Determine the node's UUID — check IdMap reverse lookup, or use slot_id as-is.
-                // Use the lower 64 bits of the u128 UUID (the unique part on little-endian).
-                // When IdMap is missing (e.g. id_map.bin deleted or first-time upgrade),
-                // fall back to identity mapping (slot_id = node_id) so data still loads.
-                const id_map = self.getIdMap(graph_name);
-                if (id_map == null and self.data_dir.len > 0) {
-                    log.warn("IdMap missing for graph — using identity mapping (slot_id as node_id)", &.{
-                        Attr.string("graph", graph_name),
-                        Attr.int("slot_id", @intCast(slot_id)),
-                    });
-                }
-                const node_uuid: u64 = if (id_map) |im| blk: {
-                    if (im.nodeUuid(slot_id)) |uuid_val| {
-                        break :blk @truncate(uuid_val);
-                    } else {
-                        log.warn("IdMap lookup miss: node slot_id has no UUID mapping (stale id_map.bin?)", &.{
-                            Attr.string("graph", graph_name),
-                            Attr.int("slot_id", @intCast(slot_id)),
-                        });
-                        break :blk slot_id;
-                    }
-                } else slot_id;
+                const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
+                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse return error.NodeSlotMappingMissing));
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
                 const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
@@ -2955,24 +3159,20 @@ pub const GraphStore = struct {
                     .tenant_id = tenant_id_copy,
                 };
 
-                // Load properties from adapter (best-effort: node is added
-                // even if properties fail to load, e.g. props.store empty).
-                load_props: {
-                    var storage_props = adapter.getAllNodeProperties(graph_name, slot_id, self.allocator) catch break :load_props;
-                    defer {
-                        var sp_iter = storage_props.iterator();
-                        while (sp_iter.next()) |sp_entry| {
-                            self.allocator.free(sp_entry.key_ptr.*);
-                        }
-                        storage_props.deinit();
-                    }
-
+                var storage_props = try adapter.getAllNodeProperties(graph_name, slot_id, self.allocator);
+                defer {
                     var sp_iter = storage_props.iterator();
                     while (sp_iter.next()) |sp_entry| {
-                        const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
-                        const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
-                        try node.properties.put(key_copy, pv);
+                        self.allocator.free(sp_entry.key_ptr.*);
                     }
+                    storage_props.deinit();
+                }
+
+                var sp_iter = storage_props.iterator();
+                while (sp_iter.next()) |sp_entry| {
+                    const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
+                    const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
+                    try node.properties.put(key_copy, pv);
                 }
 
                 try self.nodes.put(node_uuid, node);
@@ -2987,41 +3187,19 @@ pub const GraphStore = struct {
                     try self.addToLabelIndex(graph_name, label, node_uuid);
                 }
 
-                // Scan outgoing edges for this node
-                const out_edges = adapter.getOutgoingEdges(graph_name, slot_id, self.allocator) catch continue;
+                const out_edges = try adapter.getOutgoingEdges(graph_name, slot_id, self.allocator);
                 defer self.allocator.free(out_edges);
 
                 for (out_edges) |edge_entry| {
                     // Check if this edge is already loaded (could be from another node's outgoing scan)
-                    const edge_uuid: u64 = if (id_map) |im| blk: {
-                        if (im.edgeUuid(edge_entry.edge_id)) |uuid_val| {
-                            break :blk @truncate(uuid_val);
-                        } else {
-                            log.warn("IdMap lookup miss: edge slot_id has no UUID mapping", &.{
-                                Attr.string("graph", graph_name),
-                                Attr.int("edge_id", @intCast(edge_entry.edge_id)),
-                            });
-                            break :blk edge_entry.edge_id;
-                        }
-                    } else edge_entry.edge_id;
+                    const edge_uuid = @as(u64, @truncate(id_map.edgeUuid(edge_entry.edge_id) orelse return error.EdgeSlotMappingMissing));
 
                     if (self.edges.contains(edge_uuid)) continue;
 
-                    // Resolve target node UUID
-                    const target_uuid: u64 = if (id_map) |im| blk: {
-                        if (im.nodeUuid(edge_entry.neighbor)) |uuid_val| {
-                            break :blk @truncate(uuid_val);
-                        } else {
-                            log.warn("IdMap lookup miss: edge target slot_id has no UUID mapping", &.{
-                                Attr.string("graph", graph_name),
-                                Attr.int("target_slot_id", @intCast(edge_entry.neighbor)),
-                            });
-                            break :blk edge_entry.neighbor;
-                        }
-                    } else edge_entry.neighbor;
+                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse return error.NodeSlotMappingMissing));
 
                     // Get edge label from label dict
-                    const mg = adapter.getOrCreateGraph(graph_name) catch continue;
+                    const mg = try adapter.getOrCreateGraph(graph_name);
                     const edge_label_str = mg.label_dict.getString(edge_entry.rel_type) orelse "UNKNOWN";
                     const edge_label_copy = try self.allocator.dupe(u8, edge_label_str);
                     const edge_graph_name_copy = try self.allocator.dupe(u8, graph_name);
@@ -3037,21 +3215,18 @@ pub const GraphStore = struct {
                         .tenant_id = edge_tenant_id_copy,
                     };
 
-                    // Load edge properties from adapter (best-effort: edge is
-                    // added even if properties fail to load).
-                    load_edge_props: {
-                        if (edge_entry.prop_head == 0) break :load_edge_props;
-                        var storage_props = adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator) catch break :load_edge_props;
+                    if (edge_entry.prop_head != 0) {
+                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator);
                         defer {
-                            var sp_iter = storage_props.iterator();
-                            while (sp_iter.next()) |sp_entry| {
+                            var edge_sp_iter = edge_storage_props.iterator();
+                            while (edge_sp_iter.next()) |sp_entry| {
                                 self.allocator.free(sp_entry.key_ptr.*);
                             }
-                            storage_props.deinit();
+                            edge_storage_props.deinit();
                         }
 
-                        var sp_iter = storage_props.iterator();
-                        while (sp_iter.next()) |sp_entry| {
+                        var edge_sp_iter = edge_storage_props.iterator();
+                        while (edge_sp_iter.next()) |sp_entry| {
                             const key_copy = try self.allocator.dupe(u8, sp_entry.key_ptr.*);
                             const pv = try graph_storage_adapter.fromStorageProperty(self.allocator, sp_entry.value_ptr.*);
                             try edge.properties.put(key_copy, pv);
@@ -3098,6 +3273,11 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-005; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
     // Load from per-graph storage engine instead of legacy graph_store.dat.
     pub fn loadFromFile(self: *GraphStore) !void {
+        // Reload semantics replace the in-memory compatibility cache with the
+        // latest engine-backed state. This keeps repeated loads idempotent and
+        // avoids duplicate indexes / adjacency entries.
+        self.clearNodes();
+        errdefer self.clearNodes();
         if (global_adapter) |adapter| {
             try self.loadFromAdapter(adapter);
         }
@@ -3209,16 +3389,28 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.nodes.get(node_id)) |n| n.graph_name else "";
 
-        // Dual-write: delete from adapter via IdMap slot translation
         if (global_vtable) |vt| {
             const adapter_gn = if (gn.len > 0) gn else "default";
-            const slot_id = if (self.getIdMap(adapter_gn)) |im| (im.nodeSlot(@as(u128, node_id)) orelse node_id) else node_id;
+            const slot_id = self.requireNodeSlot(adapter_gn, node_id) catch |err| {
+                log.err("adapter node-slot lookup failed during deleteNode", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", adapter_gn),
+                });
+                return;
+            };
             vt.deleteNodeFn(vt.ctx, adapter_gn, slot_id) catch |err| {
-                log.err("dual-write: adapter deleteNode failed", &.{Attr.string("error", @errorName(err))});
+                log.err("adapter deleteNode failed", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("node_id", @intCast(node_id)),
+                    Attr.string("graph", adapter_gn),
+                });
+                return;
             };
             // Remove from IdMap
             if (self.getIdMap(adapter_gn)) |im| {
                 _ = im.removeNode(@as(u128, node_id));
+                self.saveIdMaps();
             }
         }
 
@@ -3233,18 +3425,44 @@ pub const GraphStore = struct {
         // Capture graph_name before deletion for WAL notification and handle routing
         const gn = if (self.edges.get(edge_id)) |e| e.graph_name else "";
 
-        // Dual-write: delete from adapter via IdMap slot translation
         if (global_vtable) |vt| {
             if (self.edges.get(edge_id)) |edge| {
-                const slot_from = if (self.getIdMap(edge.graph_name)) |im| (im.nodeSlot(@as(u128, edge.from_id)) orelse edge.from_id) else edge.from_id;
-                const slot_to = if (self.getIdMap(edge.graph_name)) |im| (im.nodeSlot(@as(u128, edge.to_id)) orelse edge.to_id) else edge.to_id;
-                const slot_edge = if (self.getIdMap(edge.graph_name)) |im| (im.edgeSlot(@as(u128, edge_id)) orelse edge_id) else edge_id;
+                const slot_from = self.requireNodeSlot(edge.graph_name, edge.from_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
+                const slot_to = self.requireNodeSlot(edge.graph_name, edge.to_id) catch |err| {
+                    log.err("adapter edge endpoint-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
+                const slot_edge = self.requireEdgeSlot(edge.graph_name, edge_id) catch |err| {
+                    log.err("adapter edge-slot lookup failed during deleteEdge", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
+                };
                 vt.deleteEdgeFn(vt.ctx, edge.graph_name, slot_from, slot_to, slot_edge) catch |err| {
-                    log.err("dual-write: adapter deleteEdge failed", &.{Attr.string("error", @errorName(err))});
+                    log.err("adapter deleteEdge failed", &.{
+                        Attr.string("error", @errorName(err)),
+                        Attr.int("edge_id", @intCast(edge_id)),
+                        Attr.string("graph", edge.graph_name),
+                    });
+                    return;
                 };
                 // Remove edge from IdMap
                 if (self.getIdMap(edge.graph_name)) |im| {
                     _ = im.removeEdge(@as(u128, edge_id));
+                    self.saveIdMaps();
                 }
             }
         }
@@ -3449,7 +3667,12 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
 }
 
 pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*graph_storage_adapter.StorageAdapter {
-    if (global_adapter) |existing| return existing;
+    if (global_adapter) |existing| {
+        if (std.mem.eql(u8, existing.data_dir, data_dir)) {
+            return existing;
+        }
+        deinitGlobalAdapter();
+    }
 
     const gs = @import("graph_storage");
     const tde = @import("storage/tde_file_encryption.zig");
@@ -3547,9 +3770,24 @@ pub fn deinitGlobalAdapter() void {
     }
 }
 
+fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
+    if (data_dir) |dir| {
+        _ = initGlobalAdapter(global_gpa.allocator(), dir) catch |err| {
+            log.warn("Failed to initialize engine-backed adapter", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("data_dir", dir),
+            });
+            return;
+        };
+    } else if (global_adapter != null) {
+        deinitGlobalAdapter();
+    }
+}
+
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
+threadlocal var g_active_query_read_store: ?*GraphStore = null;
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
 var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
@@ -3790,13 +4028,71 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
     @constCast(&store_ptr.dirty).store(false, .release);
 }
 
+pub fn pushActiveQueryReadStore(store: *GraphStore) ?*GraphStore {
+    const previous = g_active_query_read_store;
+    g_active_query_read_store = store;
+    return previous;
+}
+
+pub fn popActiveQueryReadStore(previous: ?*GraphStore) void {
+    g_active_query_read_store = previous;
+}
+
+pub const QueryReadSession = struct {
+    parent_allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
+    snapshot: GraphStore,
+
+    pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
+        const adapter = global_adapter orelse return null;
+
+        const arena = try allocator.create(std.heap.ArenaAllocator);
+        errdefer allocator.destroy(arena);
+        arena.* = std.heap.ArenaAllocator.init(allocator);
+        errdefer arena.deinit();
+
+        var session = QueryReadSession{
+            .parent_allocator = allocator,
+            .arena = arena,
+            .snapshot = undefined,
+        };
+        errdefer {
+            session.arena.deinit();
+            session.parent_allocator.destroy(session.arena);
+        }
+
+        session.snapshot = try GraphStore.initWithTenant(
+            session.arena.allocator(),
+            source_store.tenant_id,
+            source_store.schema_name,
+        );
+        errdefer session.snapshot.deinit();
+
+        session.snapshot.data_dir = source_store.data_dir;
+        try session.snapshot.cloneIdMapsFrom(source_store);
+        try session.snapshot.loadFromAdapter(adapter);
+
+        return session;
+    }
+
+    pub fn deinit(self: *QueryReadSession) void {
+        self.snapshot.deinit();
+        self.arena.deinit();
+        self.parent_allocator.destroy(self.arena);
+    }
+
+    pub fn store(self: *QueryReadSession) *GraphStore {
+        return &self.snapshot;
+    }
+};
+
 /// GAP-0259/0260: Persistence is handled solely by the background loop (1s poll).
 /// Worker threads no longer call saveIfDirty() directly — the dirty flag set by
 /// mutations under the write lock is sufficient for the loop to detect changes.
 ///
 /// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 /// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every
-pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // P2-3: Initialize global allocator on first use
     if (!global_allocator_init) {
         global_allocator_init = true;
@@ -3889,6 +4185,8 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         last_data_dir = null;
     }
 
+    syncGlobalAdapterForDataDir(last_data_dir);
+
     // Use a persistent arena allocator for the global store
     global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
     global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
@@ -3899,9 +4197,10 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // Load from engine-backed storage (adapter) if available
     if (global_adapter != null) {
         global_store.?.loadFromFile() catch |err| {
-            log.warn("Failed to load graph store from adapter (starting fresh)", &.{
+            log.err("Failed to load graph store from adapter", &.{
                 Attr.string("error", @errorName(err)),
             });
+            @panic("graph store adapter load failed");
         };
     }
     // Release store: all writes above are visible to threads that see initialized=true.
@@ -3909,18 +4208,34 @@ pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     return &global_store.?;
 }
 
+pub fn getWritableGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    return getPrimaryGlobalStore(allocator);
+}
+
+pub fn getGlobalStore(allocator: std.mem.Allocator) *GraphStore {
+    if (g_active_query_read_store) |snapshot| {
+        return snapshot;
+    }
+    return getPrimaryGlobalStore(allocator);
+}
+
 /// Initialize the global store with engine-backed storage adapter.
 /// This is the preferred initialization path that sets up both the global
 /// GraphStore and the global StorageAdapter in one call.
 pub fn initGlobalStore(allocator: std.mem.Allocator, data_dir: []const u8) !*GraphStore {
-    // Initialize adapter first
-    _ = try initGlobalAdapter(allocator, data_dir);
-
     // Set data dir override so getGlobalStore picks it up
     setDataDirOverride(allocator, data_dir);
 
     // Get or create the global store (which will now use the adapter)
     const store = getGlobalStore(allocator);
+    const adapter = getGlobalAdapter() orelse {
+        deinitGlobalStore();
+        return error.StorageAdapterUnavailable;
+    };
+    if (!std.mem.eql(u8, adapter.data_dir, data_dir)) {
+        deinitGlobalStore();
+        return error.StorageAdapterMismatch;
+    }
     store.data_dir = data_dir;
     return store;
 }
@@ -3943,6 +4258,7 @@ pub fn deinitGlobalStore() void {
         }
         initialized.store(false, .release);
     }
+    deinitGlobalAdapter();
 }
 
 // Unit tests for label index functionality
@@ -4155,4 +4471,215 @@ test "TestTenantIsolationBackwardCompatible" {
 
     // Graph name should still work as before
     try testing.expectEqualStrings("default", node.graph_name);
+}
+
+test "clearNodeProperties removes all node properties" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "test_graph");
+
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+    try store.setNodeProperty(node_id, "age", .{ .Int = 42 });
+
+    try store.clearNodeProperties(node_id);
+
+    const node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
+    try testing.expectEqual(@as(usize, 0), node.properties.count());
+    try testing.expect(store.getNodeProperty(node_id, "name") == null);
+    try testing.expect(store.getNodeProperty(node_id, "age") == null);
+}
+
+test "getGlobalStore initializes adapter from data dir override" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    setDataDirOverride(testing.allocator, dir_path);
+    defer setDataDirOverride(testing.allocator, null);
+
+    _ = getGlobalStore(testing.allocator);
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try testing.expectEqualStrings(dir_path, adapter.data_dir);
+}
+
+test "QueryReadSession reloads persisted state instead of compatibility cache" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try store.setNodeProperty(node_id, "name", .{ .String = "persisted" });
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    try store.setNodePropertyNoSave(node_id, "name", .{ .String = "stale-cache" });
+
+    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
+        return error.AdapterNotInitialized;
+    };
+    defer read_session.deinit();
+
+    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
+    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(snapshot_name == .String);
+    try testing.expectEqualStrings("persisted", snapshot_name.String);
+
+    const live_node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
+    const live_name = live_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(live_name == .String);
+    try testing.expectEqualStrings("stale-cache", live_name.String);
+}
+
+test "QueryReadSession uses live adapter mappings instead of requiring id_map.dat" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try store.setNodeProperty(node_id, "name", .{ .String = "live-adapter" });
+
+    const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
+    const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
+    const id_map_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}/id_map.dat", .{ dir_path, uuid_hex });
+    defer testing.allocator.free(id_map_path);
+    try std.fs.cwd().deleteFile(id_map_path);
+
+    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
+        return error.AdapterNotInitialized;
+    };
+    defer read_session.deinit();
+
+    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
+    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(snapshot_name == .String);
+    try testing.expectEqualStrings("live-adapter", snapshot_name.String);
+}
+
+test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    var node_labels = [_][]const u8{"ReplayNode"};
+
+    try store.createNodeWithId(1001, &node_labels, "default");
+    try store.createNodeWithId(1002, &node_labels, "default");
+    try store.setNodeProperty(1001, "name", .{ .String = "replicated" });
+
+    try store.createEdgeWithId(9001, 1001, 1002, "LINKS", "default");
+    try store.setEdgeProperty(9001, "weight", .{ .Int = 3 });
+
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    try adapter.checkpointAll();
+
+    try store.loadFromFile();
+
+    const node = store.getNodePtr(1001) orelse return error.NodeNotFound;
+    const node_name = node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expectEqualStrings("replicated", node_name.String);
+
+    const edge = store.getEdgePtr(9001) orelse return error.EdgeNotFound;
+    try testing.expectEqual(@as(u64, 1001), edge.from_id);
+    try testing.expectEqual(@as(u64, 1002), edge.to_id);
+    const edge_weight = edge.properties.get("weight") orelse return error.PropertyNotFound;
+    try testing.expectEqual(@as(i64, 3), edge_weight.Int);
+}
+
+test "rollback removes adapter-backed state before reload" {
+    const txn_undo_log = @import("txn_undo_log.zig");
+
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
+
+    var undo = txn_undo_log.UndoLog.init(testing.allocator);
+    defer undo.deinit();
+
+    undo.begin();
+
+    var labels = [_][]const u8{"TxnNode"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    try undo.logCreateNode(node_id, "default");
+
+    try store.setNodeProperty(node_id, "name", .{ .String = "transient" });
+    try adapter.checkpointAll();
+
+    try undo.rollback(store);
+    try adapter.checkpointAll();
+    try store.loadFromFile();
+
+    try testing.expect(store.getNodePtr(node_id) == null);
+}
+test "listGraphNames merges persisted adapter graphs with local cache" {
+    deinitGlobalStore();
+    defer deinitGlobalStore();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(dir_path);
+
+    const store = try initGlobalStore(testing.allocator, dir_path);
+    try store.createGraph("persisted_only");
+
+    if (!store.graphs.remove("persisted_only")) {
+        return error.GraphNotFound;
+    }
+
+    const names = try store.listGraphNames(testing.allocator);
+    defer {
+        for (names) |name| {
+            testing.allocator.free(name);
+        }
+        testing.allocator.free(names);
+    }
+
+    var found = false;
+    for (names) |name| {
+        if (std.mem.eql(u8, name, "persisted_only")) {
+            found = true;
+            break;
+        }
+    }
+    try testing.expect(found);
 }

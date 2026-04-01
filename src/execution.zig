@@ -156,6 +156,7 @@ pub const executeReturnClauseWithParams = return_and_sorting.executeReturnClause
 
 // Re-export query execution functions for backward compatibility (M1 Phase 11 extraction)
 pub const executeQueryChain = query_execution.executeQueryChain;
+pub const executeLegacyQueryWithResolvedParams = query_execution.executeLegacyQueryWithResolvedParams;
 pub const executeQueryWithBindingsImpl = query_execution.executeQueryWithBindingsImpl;
 pub const executeQueryWithContext = query_execution.executeQueryWithContext;
 
@@ -435,6 +436,81 @@ pub const ExecutionError = error{
     GraphNotFound,
 };
 
+pub const OwnedGraphEntities = struct {
+    allocator: std.mem.Allocator,
+    nodes: std.ArrayList(*graph_store.Node),
+    edges: std.ArrayList(*graph_store.Edge),
+
+    pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
+        const self = try allocator.create(OwnedGraphEntities);
+        self.* = .{
+            .allocator = allocator,
+            .nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0),
+            .edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0),
+        };
+        return self;
+    }
+
+    pub fn trackNode(self: *OwnedGraphEntities, node: *graph_store.Node) !void {
+        try self.nodes.append(self.allocator, node);
+    }
+
+    pub fn trackEdge(self: *OwnedGraphEntities, edge: *graph_store.Edge) !void {
+        try self.edges.append(self.allocator, edge);
+    }
+
+    pub fn deinit(self: *OwnedGraphEntities) void {
+        for (self.nodes.items) |node| {
+            destroyOwnedNode(self.allocator, node);
+        }
+        self.nodes.deinit(self.allocator);
+
+        for (self.edges.items) |edge| {
+            destroyOwnedEdge(self.allocator, edge);
+        }
+        self.edges.deinit(self.allocator);
+
+        self.allocator.destroy(self);
+    }
+};
+
+fn freeOwnedPropertyValue(allocator: std.mem.Allocator, value: graph_store.PropertyValue) void {
+    switch (value) {
+        .String => |text| allocator.free(text),
+        else => {},
+    }
+}
+
+pub fn destroyOwnedNode(allocator: std.mem.Allocator, node: *graph_store.Node) void {
+    for (node.labels) |label| {
+        allocator.free(label);
+    }
+    allocator.free(node.labels);
+
+    var iter = node.properties.iterator();
+    while (iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedPropertyValue(allocator, entry.value_ptr.*);
+    }
+    node.properties.deinit();
+
+    allocator.free(node.graph_name);
+    allocator.destroy(node);
+}
+
+pub fn destroyOwnedEdge(allocator: std.mem.Allocator, edge: *graph_store.Edge) void {
+    var iter = edge.properties.iterator();
+    while (iter.next()) |entry| {
+        allocator.free(entry.key_ptr.*);
+        freeOwnedPropertyValue(allocator, entry.value_ptr.*);
+    }
+    edge.properties.deinit();
+
+    allocator.free(edge.label);
+    allocator.free(edge.graph_name);
+    allocator.destroy(edge);
+}
+
 pub const ExecutionResult = struct {
     columns: [][]const u8,
     rows: [][]Value,
@@ -442,6 +518,7 @@ pub const ExecutionResult = struct {
     owns_value_memory: bool = false, // Set to true when values were duplicated and need freeing
     // Variable bindings from CREATE patterns (for passing to UNION parts)
     variable_bindings: ?*std.StringHashMap(u64) = null,
+    owned_graph_entities: ?*OwnedGraphEntities = null,
     // PERF: PHASE5_COLUMN_BATCH_ALLOC - Batch column string allocation optimization
     // CANARY: REQ=REQ-PERF-PHASE5-001; FEATURE="ColumnOptimization"; ASPECT=BATCH_ALLOC; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
     column_buffer: ?[]u8 = null, // Single buffer for all column strings (reduces N allocations to 1)
@@ -482,6 +559,10 @@ pub const ExecutionResult = struct {
         if (self.variable_bindings) |bindings| {
             bindings.deinit();
             allocator.destroy(bindings);
+        }
+
+        if (self.owned_graph_entities) |owned| {
+            owned.deinit();
         }
     }
 
@@ -872,10 +953,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     const txn_graph = if (mut_context.session_state) |session| session.graph else null;
                     last_result = (switch (body_stmt.*) {
                         .Query => |q| executeQueryWithContext(allocator, q, mut_context),
-                        .Call => |c| switch (c) {
-                            .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
-                            .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
-                        },
+                        .Call => |c| executeCallStatement(allocator, c, mut_context),
                         .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
                         .Merge => |m| executeMerge(allocator, m, txn_graph, mut_context),
                         .StartTransaction => return error.NestedTransactionNotAllowed,
@@ -1292,7 +1370,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
-                    result = try executeCallSubquery(allocator, subq, context);
+                    _ = subq;
+                    result = try executeCallStatement(allocator, call_stmt, context);
                 },
             }
 
@@ -1323,29 +1402,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return error.DuplicateGraph;
             }
 
-            cat.addGraph(graph_name) catch |err| {
-                if (err == error.GraphAlreadyExists and cg.if_not_exists) {
-                    return ExecutionResult{
-                        .columns = try allocator.alloc([]const u8, 0),
-                        .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                    };
-                }
-                return err;
-            };
-
-            _ = store.createGraph(graph_name) catch |err| {
-                log.debug("Graph storage creation failed", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-
-            // Persist the UUID that the storage adapter assigned so
-            // the graph data directory survives restarts.
-            if (graph_store.GraphStore.getGraphUuid(graph_name)) |uuid| {
-                cat.updateGraphUuid(graph_name, uuid);
-            }
+            try store.createGraph(graph_name);
+            errdefer store.dropGraph(graph_name) catch {};
+            const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
+            try cat.addGraphWithUuid(graph_name, uuid);
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

@@ -1,6 +1,5 @@
 const std = @import("std");
-const geode = @import("geode");
-const api_keys = geode.api_keys;
+const api_keys = @import("auth_lib").api_keys;
 const cli_auth = @import("cli_auth_helpers.zig");
 
 // CANARY: REQ=REQ-AUTH-APIKEYS-CLI-001; FEATURE="ApiKeyCLI"; ASPECT=CLI; STATUS=IMPL; TEST=geodetestlab/specs/api_key_auth.yml; OWNER=cli; UPDATED=2026-02-04
@@ -8,9 +7,21 @@ const cli_auth = @import("cli_auth_helpers.zig");
 
 /// Persistent file path for API keys (uses cli_auth helpers for state dir resolution)
 const APIKEY_STATE_FILE = "geode_apikey_state.db";
+const API_KEY_VERSION = "gk1";
+const geode_api_key_config = api_keys.Config{
+    .key_prefix = API_KEY_VERSION,
+};
 
 fn apiKeyStatePath(allocator: std.mem.Allocator) ![]u8 {
     return cli_auth.resolveStatePath(allocator, APIKEY_STATE_FILE);
+}
+
+fn parseGeodeApiKey(key_string: []const u8) !api_keys.ParsedApiKey {
+    const parsed = try api_keys.parseApiKey(key_string);
+    if (!std.mem.eql(u8, parsed.prefix, API_KEY_VERSION)) {
+        return error.UnsupportedApiKeyVersion;
+    }
+    return parsed;
 }
 
 const ExitCode = enum(u8) {
@@ -230,7 +241,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     // Initialize API key manager
-    var manager = api_keys.ApiKeyManager.init(allocator);
+    var manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config);
     defer manager.deinit();
 
     const subcmd_idx = findSubcommandStart(argv, start_idx);
@@ -571,7 +582,7 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         const key_string = argv[subcmd_idx + 1];
 
         // Parse and validate format
-        _ = api_keys.parseApiKey(key_string) catch |err| {
+        _ = parseGeodeApiKey(key_string) catch |err| {
             switch (err) {
                 error.UnsupportedApiKeyVersion => {
                     std.debug.print("Error: unsupported API key version\n", .{});

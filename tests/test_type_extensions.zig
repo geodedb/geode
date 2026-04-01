@@ -124,7 +124,7 @@ test "Patricia trie insert and LPM" {
 test "R-tree insert and search" {
     const allocator = std.testing.allocator;
 
-    var tree = rtree.RTree.init(allocator, 50);
+    var tree = try rtree.RTree.init(allocator, 50);
     defer tree.deinit();
 
     const mbr1 = rtree.MBR{ .min_x = 0, .min_y = 0, .max_x = 10, .max_y = 10 };
@@ -137,7 +137,7 @@ test "R-tree insert and search" {
     defer results.deinit();
 
     const query = rtree.MBR{ .min_x = 7, .min_y = 7, .max_x = 8, .max_y = 8 };
-    try tree.search(query, &results);
+    try tree.search(query, allocator, &results);
 
     try std.testing.expectEqual(@as(usize, 2), results.items.len);
 }
@@ -145,7 +145,11 @@ test "R-tree insert and search" {
 test "HNSW insert and kNN search" {
     const allocator = std.testing.allocator;
 
-    var index = hnsw.Hnsw.init(allocator, 3, 4, 10);
+    var index = try hnsw.Hnsw.init(allocator, 3, .euclidean, .{
+        .m = 4,
+        .ef_construction = 10,
+        .ef_search = 10,
+    });
     defer index.deinit();
 
     const v1 = [_]f32{ 1.0, 0.0, 0.0 };
@@ -157,7 +161,7 @@ test "HNSW insert and kNN search" {
     try index.insert(3, &v3);
 
     const query = [_]f32{ 0.9, 0.1, 0.0 };
-    const results = try index.knnSearch(&query, 2, .l2);
+    const results = try index.knnSearch(&query, 2);
     defer allocator.free(results);
 
     try std.testing.expect(results.len > 0);

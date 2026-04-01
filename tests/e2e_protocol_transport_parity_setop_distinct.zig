@@ -28,7 +28,7 @@ test "protocol: transport parity QUIC (UNION DISTINCT rows equal)" {
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 AS x UNION RETURN 1 AS x";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

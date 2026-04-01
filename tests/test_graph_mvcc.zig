@@ -53,9 +53,9 @@ test "MATCH pattern execution - basic node scan" {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const alice_id = try store.createNode(&.{ "Person" });
+    const alice_id = try store.createNode(&.{"Person"});
     try store.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
-    const bob_id = try store.createNode(&.{ "Person" });
+    const bob_id = try store.createNode(&.{"Person"});
     try store.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     var res = try h.exec("MATCH (n:Person) RETURN n");
@@ -70,9 +70,9 @@ test "MATCH pattern with edge traversal" {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const alice_id = try store.createNode(&.{ "Person" });
+    const alice_id = try store.createNode(&.{"Person"});
     try store.setNodeProperty(alice_id, "name", .{ .String = "Alice" });
-    const bob_id = try store.createNode(&.{ "Person" });
+    const bob_id = try store.createNode(&.{"Person"});
     try store.setNodeProperty(bob_id, "name", .{ .String = "Bob" });
 
     const edge_id = try store.createEdge(alice_id, bob_id, "KNOWS");

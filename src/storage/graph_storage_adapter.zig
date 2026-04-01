@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const gs = @import("graph_storage");
-const uuid_mod = @import("../uuid.zig");
+const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 
 const Allocator = std.mem.Allocator;
@@ -94,7 +94,7 @@ pub const LabelStringDict = struct {
 ///
 /// String data is passed through as a slice reference (no copy). The caller
 /// must ensure the source value outlives the returned storage value.
-pub fn toStorageProperty(val: graph_store.PropertyValue) gs.PropertyValue {
+pub fn toStorageProperty(allocator: Allocator, val: graph_store.PropertyValue) !gs.PropertyValue {
     return switch (val) {
         .String => |s| .{ .string = s },
         .Int => |i| .{ .int = i },
@@ -102,7 +102,10 @@ pub fn toStorageProperty(val: graph_store.PropertyValue) gs.PropertyValue {
         .Bool => |b| .{ .bool = b },
         .Null => .null,
         .Decimal => |d| .{ .decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ExtValue => .{ .ext = .{ .type_tag = 0, .data = "" } },
+        .ExtValue => |ext| .{ .ext = .{
+            .type_tag = graph_store.STORAGE_EXT_TYPE_TAG,
+            .data = try graph_store.encodeExtValue(allocator, ext),
+        } },
     };
 }
 
@@ -118,8 +121,20 @@ pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_s
         .bool => |b| .{ .Bool = b },
         .null => .Null,
         .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ext => .Null, // ExtValue round-trip is lossy; no geode ExtValue representation for raw ext
+        .ext => |ext| blk: {
+            if (ext.type_tag != graph_store.STORAGE_EXT_TYPE_TAG) {
+                break :blk .Null;
+            }
+            break :blk .{ .ExtValue = try graph_store.decodeExtValue(allocator, ext.data) };
+        },
     };
+}
+
+fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {
+    switch (val) {
+        .ext => |ext| allocator.free(ext.data),
+        else => {},
+    }
 }
 
 // ============================================================================
@@ -158,6 +173,8 @@ pub const StorageAdapter = struct {
     engines: std.StringHashMap(*ManagedGraph),
     default_engine: ?*ManagedGraph,
     config: gs.GraphConfig,
+    registry: gs.registry.GraphRegistry,
+    registry_path: []const u8, // owned
     mutex: std.Thread.Mutex,
 
     /// Create a new `StorageAdapter`.
@@ -177,13 +194,23 @@ pub const StorageAdapter = struct {
         };
 
         const self = try allocator.create(StorageAdapter);
+        errdefer allocator.destroy(self);
         self.* = .{
             .allocator = allocator,
             .data_dir = owned_dir,
             .engines = std.StringHashMap(*ManagedGraph).init(allocator),
             .default_engine = null,
             .config = config,
+            .registry = gs.registry.GraphRegistry.init(allocator),
+            .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
             .mutex = .{},
+        };
+        errdefer self.registry.deinit();
+        errdefer allocator.free(self.registry_path);
+
+        self.loadRegistry() catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => log.warn("failed to load graph registry {s}: {}", .{ self.registry_path, err }),
         };
 
         return self;
@@ -192,7 +219,6 @@ pub const StorageAdapter = struct {
     /// Shut down all engines, release every allocation.
     pub fn deinit(self: *StorageAdapter) void {
         self.mutex.lock();
-        defer self.mutex.unlock();
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
@@ -201,7 +227,10 @@ pub const StorageAdapter = struct {
         self.engines.deinit();
         self.default_engine = null;
 
+        self.registry.deinit();
+        self.allocator.free(self.registry_path);
         self.allocator.free(self.data_dir);
+        self.mutex.unlock();
         self.allocator.destroy(self);
     }
 
@@ -215,13 +244,15 @@ pub const StorageAdapter = struct {
             return mg;
         }
 
+        if (self.findRegistryEntryLocked(name)) |entry| {
+            return self.openGraphLocked(name, entry.uuid);
+        }
+
         return self.createGraphLocked(name);
     }
 
-    /// Open an existing graph by name and UUID.  Uses `GraphEngine.open()` to
-    /// recover the existing on-disk data directory instead of creating a new
-    /// one.  Falls back to `GraphEngine.create()` if the UUID directory does
-    /// not exist (e.g. first run after migration).
+    /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
+    /// recover the persisted on-disk data directory.
     pub fn openGraphWithUuid(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -241,15 +272,19 @@ pub const StorageAdapter = struct {
         if (self.engines.get(name)) |mg| {
             return mg.uuid;
         }
+        if (self.findRegistryEntryLocked(name)) |entry| {
+            return entry.uuid;
+        }
         return null;
     }
 
-    /// Check whether a graph with the given name is currently loaded.
+    /// Check whether a graph with the given name exists either in memory or in
+    /// the persisted registry.
     pub fn graphExists(self: *StorageAdapter, name: []const u8) bool {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        return self.engines.contains(name);
+        return self.engines.contains(name) or self.findRegistryEntryLocked(name) != null;
     }
 
     /// Close and remove the graph identified by `name`.
@@ -257,6 +292,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
+        var dropped_uuid: ?[16]u8 = null;
         if (self.engines.fetchRemove(name)) |kv| {
             const mg = kv.value;
 
@@ -265,28 +301,73 @@ pub const StorageAdapter = struct {
                 self.default_engine = null;
             }
 
+            dropped_uuid = mg.uuid;
             mg.deinit(self.allocator);
+        } else if (self.findRegistryEntryLocked(name)) |entry| {
+            dropped_uuid = entry.uuid;
+        }
+
+        if (self.registry.removeGraph(name)) {
+            self.saveRegistryLocked() catch |err| {
+                log.warn("failed to persist graph registry after drop of '{s}': {}", .{ name, err });
+            };
+        }
+
+        if (dropped_uuid) |graph_uuid| {
+            var graph_dir = gs.graph_dir.GraphDir.open(self.allocator, self.data_dir, graph_uuid) catch return;
+            defer graph_dir.deinit();
+
+            graph_dir.delete() catch |err| {
+                log.warn("failed to delete graph directory for '{s}': {}", .{ name, err });
+            };
         }
     }
 
-    /// Return the names of all currently loaded graphs. Caller owns the
-    /// returned slice and each name string inside it.
+    /// Return the names of all known graphs. Caller owns the returned slice and
+    /// each name string inside it.
     pub fn listGraphNames(self: *StorageAdapter, allocator: Allocator) ![][]const u8 {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const n = self.engines.count();
-        const names = try allocator.alloc([]const u8, n);
-        errdefer allocator.free(names);
-
-        var idx: usize = 0;
-        var it = self.engines.iterator();
-        while (it.next()) |entry| {
-            names[idx] = try allocator.dupe(u8, entry.key_ptr.*);
-            idx += 1;
+        var names = std.ArrayList([]const u8){};
+        errdefer {
+            for (names.items) |name| allocator.free(name);
+            names.deinit(allocator);
         }
 
-        return names;
+        var seen = std.StringHashMap(void).init(allocator);
+        defer {
+            var seen_it = seen.iterator();
+            while (seen_it.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+            }
+            seen.deinit();
+        }
+
+        for (self.registry.entries.items) |entry| {
+            const seen_key = try allocator.dupe(u8, entry.name);
+            errdefer allocator.free(seen_key);
+            const seen_result = try seen.getOrPut(seen_key);
+            if (!seen_result.found_existing) {
+                try names.append(allocator, try allocator.dupe(u8, entry.name));
+            } else {
+                allocator.free(seen_key);
+            }
+        }
+
+        var it = self.engines.iterator();
+        while (it.next()) |entry| {
+            const seen_key = try allocator.dupe(u8, entry.key_ptr.*);
+            errdefer allocator.free(seen_key);
+            const seen_result = try seen.getOrPut(seen_key);
+            if (!seen_result.found_existing) {
+                try names.append(allocator, try allocator.dupe(u8, entry.key_ptr.*));
+            } else {
+                allocator.free(seen_key);
+            }
+        }
+
+        return names.toOwnedSlice(allocator);
     }
 
     /// Return the default graph, creating one named "default" if none exists.
@@ -300,6 +381,8 @@ pub const StorageAdapter = struct {
 
         const mg = if (self.engines.get("default")) |existing|
             existing
+        else if (self.findRegistryEntryLocked("default")) |entry|
+            try self.openGraphLocked("default", entry.uuid)
         else
             try self.createGraphLocked("default");
 
@@ -348,7 +431,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         try mg.engine.deleteNode(node_id);
     }
 
@@ -358,7 +441,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         // Retrieve label IDs from the engine's LabelStore (variable-length
@@ -397,7 +480,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         try mg.engine.removeEdge(from_id, to_id, edge_id);
     }
 
@@ -407,7 +490,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.expandOut(node_id, null, allocator);
     }
 
@@ -417,7 +500,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.expandIn(node_id, null, allocator);
     }
 
@@ -434,10 +517,11 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
-        const storage_val = toStorageProperty(value);
+        const storage_val = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_val);
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, storage_val);
 
         // Update the node record with the (possibly changed) prop_head.
@@ -450,7 +534,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, .null);
@@ -463,7 +547,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         if (rec.prop_head == 0) return null;
@@ -475,7 +559,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
         return mg.engine.scanLabel(label_id, allocator);
     }
@@ -499,8 +583,9 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
-        const storage_val = toStorageProperty(value);
+        const mg = try self.requireExistingGraphLocked(graph_name);
+        const storage_val = try toStorageProperty(self.allocator, value);
+        defer freeTemporaryStorageProperty(self.allocator, storage_val);
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
     }
 
@@ -517,7 +602,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.getEdgeProperty(from_id, edge_id, key, allocator);
     }
 
@@ -538,7 +623,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
 
         const Ctx = struct {
             entries: std.ArrayList(ScanEntry),
@@ -578,7 +663,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return null;
+        const mg = self.requireExistingGraphLocked(graph_name) catch return null;
         const m = &mg.engine.manifest;
 
         return .{
@@ -611,7 +696,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
@@ -662,7 +747,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
         errdefer result.deinit();
@@ -705,7 +790,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.beginTxn();
     }
 
@@ -714,7 +799,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         try mg.engine.commitTxn(txn_id);
     }
 
@@ -723,7 +808,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         try mg.engine.abortTxn(txn_id);
     }
 
@@ -741,7 +826,12 @@ pub const StorageAdapter = struct {
             self.saveLabelDict(mg) catch |err| {
                 log.warn("failed to save label dict for graph '{s}': {}", .{ mg.name, err });
             };
+            self.syncRegistryCountsLocked(mg);
         }
+
+        self.saveRegistryLocked() catch |err| {
+            log.warn("failed to persist graph registry: {}", .{err});
+        };
     }
 
     /// Save the adapter's LabelStringDict to a file in the graph's data
@@ -824,7 +914,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.nodeCount();
     }
 
@@ -833,7 +923,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.edgeCount();
     }
 
@@ -872,15 +962,17 @@ pub const StorageAdapter = struct {
         };
 
         try self.engines.put(owned_name, mg);
+        self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
+        self.saveRegistryLocked() catch |err| {
+            log.warn("failed to persist graph registry after create of '{s}': {}", .{ name, err });
+        };
 
         log.info("created graph '{s}'", .{name});
 
         return mg;
     }
 
-    /// Open an existing graph engine from a known UUID directory.  Falls back
-    /// to creating a new engine if the directory is missing (handles the case
-    /// where a graph name was persisted before this fix was deployed).
+    /// Open an existing graph engine from a known UUID directory.
     fn openGraphLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
@@ -891,10 +983,8 @@ pub const StorageAdapter = struct {
             graph_uuid,
             cfg,
         ) catch |err| {
-            // Directory missing — fall back to creating a new engine so that
-            // graphs persisted before this fix (with no UUID on disk) still work.
-            log.warn("GraphEngine.open failed for graph '{s}', creating new: {}", .{ name, err });
-            return self.createGraphLocked(name);
+            log.err("failed to open GraphEngine for graph '{s}': {}", .{ name, err });
+            return err;
         };
         errdefer engine.close() catch {};
 
@@ -912,6 +1002,10 @@ pub const StorageAdapter = struct {
         };
 
         try self.engines.put(owned_name, mg);
+        self.upsertRegistryEntryLocked(name, graph_uuid, mg.engine.manifest.node_count, mg.engine.manifest.edge_count);
+        self.saveRegistryLocked() catch |err| {
+            log.warn("failed to persist graph registry after open of '{s}': {}", .{ name, err });
+        };
 
         // Load the adapter-level label string dict from disk so that label
         // string ↔ ID mappings match what was used when nodes were created.
@@ -920,6 +1014,60 @@ pub const StorageAdapter = struct {
         log.info("opened existing graph '{s}'", .{name});
 
         return mg;
+    }
+
+    fn requireExistingGraphLocked(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        if (self.engines.get(graph_name)) |mg| {
+            return mg;
+        }
+        if (self.findRegistryEntryLocked(graph_name)) |entry| {
+            return self.openGraphLocked(graph_name, entry.uuid);
+        }
+        return error.GraphNotFound;
+    }
+
+    fn findRegistryEntryLocked(self: *StorageAdapter, name: []const u8) ?gs.registry.GraphEntry {
+        return self.registry.findByName(name);
+    }
+
+    fn upsertRegistryEntryLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8, node_count: u64, edge_count: u64) void {
+        for (self.registry.entries.items) |*entry| {
+            if (std.mem.eql(u8, entry.name, name)) {
+                entry.uuid = graph_uuid;
+                entry.node_count = node_count;
+                entry.edge_count = edge_count;
+                return;
+            }
+        }
+
+        self.registry.addGraph(name, graph_uuid) catch |err| {
+            log.warn("failed to add graph '{s}' to registry: {}", .{ name, err });
+            return;
+        };
+        const entry = &self.registry.entries.items[self.registry.entries.items.len - 1];
+        entry.node_count = node_count;
+        entry.edge_count = edge_count;
+    }
+
+    fn syncRegistryCountsLocked(self: *StorageAdapter, mg: *ManagedGraph) void {
+        self.upsertRegistryEntryLocked(
+            mg.name,
+            mg.uuid,
+            mg.engine.manifest.node_count,
+            mg.engine.manifest.edge_count,
+        );
+    }
+
+    fn saveRegistryLocked(self: *StorageAdapter) !void {
+        try self.registry.saveToFile(self.registry_path);
+    }
+
+    fn loadRegistry(self: *StorageAdapter) !void {
+        std.fs.cwd().access(self.registry_path, .{}) catch |err| {
+            if (err == error.FileNotFound) return err;
+            return err;
+        };
+        try self.registry.loadFromFile(self.registry_path);
     }
 
     // ------------------------------------------------------------------
@@ -933,7 +1081,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = try mg.label_dict.getOrCreate(label);
         try mg.engine.addLabel(node_id, label_id);
     }
@@ -944,7 +1092,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         try mg.engine.removeLabel(node_id, label_id);
     }
@@ -966,7 +1114,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
 
@@ -979,7 +1127,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.getStorageStats();
     }
 
@@ -988,7 +1136,7 @@ pub const StorageAdapter = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const mg = self.engines.get(graph_name) orelse return error.GraphNotFound;
+        const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.checkIntegrity();
     }
 };
@@ -998,7 +1146,7 @@ pub const StorageAdapter = struct {
 // ============================================================================
 
 fn generateUuid() [16]u8 {
-    return uuid_mod.UuidV7.new().bytes;
+    return (uuid.newV7() catch unreachable).bytes;
 }
 
 // ============================================================================
@@ -1046,30 +1194,62 @@ test "LabelStringDict starts at id 1" {
 }
 
 test "toStorageProperty round-trip for scalars" {
+    const allocator = std.testing.allocator;
+
     // Int
-    const gs_int = toStorageProperty(.{ .Int = 42 });
+    const gs_int = try toStorageProperty(allocator, .{ .Int = 42 });
     try std.testing.expectEqual(@as(i64, 42), gs_int.int);
 
     // Float
-    const gs_float = toStorageProperty(.{ .Float = 3.14 });
+    const gs_float = try toStorageProperty(allocator, .{ .Float = 3.14 });
     try std.testing.expectApproxEqAbs(@as(f64, 3.14), gs_float.float, 0.001);
 
     // Bool
-    const gs_bool = toStorageProperty(.{ .Bool = true });
+    const gs_bool = try toStorageProperty(allocator, .{ .Bool = true });
     try std.testing.expect(gs_bool.bool);
 
     // Null
-    const gs_null = toStorageProperty(.Null);
+    const gs_null = try toStorageProperty(allocator, .Null);
     try std.testing.expectEqual(gs.PropertyValue.null, gs_null);
 
     // String
-    const gs_str = toStorageProperty(.{ .String = "hello" });
+    const gs_str = try toStorageProperty(allocator, .{ .String = "hello" });
     try std.testing.expectEqualStrings("hello", gs_str.string);
 
     // Decimal
-    const gs_dec = toStorageProperty(.{ .Decimal = .{ .coeff = 12345, .scale = 2 } });
+    const gs_dec = try toStorageProperty(allocator, .{ .Decimal = .{ .coeff = 12345, .scale = 2 } });
     try std.testing.expectEqual(@as(i128, 12345), gs_dec.decimal.coeff);
     try std.testing.expectEqual(@as(u8, 2), gs_dec.decimal.scale);
+}
+
+test "ExtValue survives adapter property translation" {
+    const allocator = std.testing.allocator;
+    const nested = try allocator.dupe(u8, "nested");
+    errdefer allocator.free(nested);
+
+    const ext = graph_store.PropertyValue{
+        .ExtValue = .{
+            .List = try allocator.dupe(@import("../eval_extended.zig").ExtValue, &.{
+                .{ .Int = 7 },
+                .{ .Str = nested },
+            }),
+        },
+    };
+    defer graph_store.freeDetachedExtValue(allocator, ext.ExtValue);
+
+    const storage_val = try toStorageProperty(allocator, ext);
+    defer freeTemporaryStorageProperty(allocator, storage_val);
+
+    try std.testing.expectEqual(graph_store.STORAGE_EXT_TYPE_TAG, storage_val.ext.type_tag);
+    try std.testing.expect(storage_val.ext.data.len > 0);
+
+    const roundtrip = try fromStorageProperty(allocator, storage_val);
+    defer graph_store.freeDetachedExtValue(allocator, roundtrip.ExtValue);
+
+    try std.testing.expect(roundtrip == .ExtValue);
+    try std.testing.expectEqual(@as(usize, 2), roundtrip.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 7), roundtrip.ExtValue.List[0].Int);
+    try std.testing.expectEqualStrings("nested", roundtrip.ExtValue.List[1].Str);
 }
 
 test "fromStorageProperty round-trip for scalars" {
@@ -1202,6 +1382,49 @@ test "StorageAdapter: drop graph" {
 
     adapter.dropGraph("drop_me");
     try std.testing.expect(!adapter.graphExists("drop_me"));
+}
+
+test "StorageAdapter: registry persists graph discovery across restart" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        const graph = "persisted_graph";
+        const node_id = try adapter.createNode(graph, &[_][]const u8{"Person"});
+        try adapter.setNodeProperty(graph, node_id, "name", .{ .String = "Alice" });
+        try adapter.checkpointAll();
+        try std.testing.expect(adapter.graphExists(graph));
+    }
+
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        try std.testing.expect(adapter.graphExists("persisted_graph"));
+
+        const names = try adapter.listGraphNames(allocator);
+        defer {
+            for (names) |name| allocator.free(name);
+            allocator.free(names);
+        }
+
+        var found = false;
+        for (names) |name| {
+            if (std.mem.eql(u8, name, "persisted_graph")) found = true;
+        }
+        try std.testing.expect(found);
+
+        _ = try adapter.getOrCreateGraph("persisted_graph");
+        try std.testing.expectEqual(@as(u64, 1), try adapter.nodeCount("persisted_graph"));
+    }
 }
 
 test "StorageAdapter: node and edge counts" {

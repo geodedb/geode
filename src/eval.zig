@@ -872,7 +872,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         return EvalError.TypeMismatch;
                     }
 
-                    const ts_module = @import("timeseries/timeseries.zig");
+                    const ts_module = @import("timeseries_lib");
                     const key = ts_module.SeriesKey{
                         .device_id = device_id_val.Int,
                         .metric = metric_val.Str,

@@ -17,7 +17,7 @@ test "graphstore saveIfDirty respects clean state" {
     store.saveIfDirty();
     try std.testing.expect(!store.isDirty());
 
-    _ = try store.createNode(&.{ "A" });
+    _ = try store.createNode(&.{"A"});
     try std.testing.expect(store.isDirty());
 
     try store.saveToFile();

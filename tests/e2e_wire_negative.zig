@@ -15,8 +15,8 @@ test "TestCANARY_REQ_GQL_001_WireMalformedFrame" {
     // Truncated/invalid protobuf frames should not decode.
     const bads = [_][]const u8{
         &[_]u8{0x0a}, // missing length
-        &[_]u8{0x0a, 0x05, 0x08}, // length says 5 but data truncated
-        &[_]u8{0xff, 0xff, 0xff}, // invalid varint
+        &[_]u8{ 0x0a, 0x05, 0x08 }, // length says 5 but data truncated
+        &[_]u8{ 0xff, 0xff, 0xff }, // invalid varint
     };
 
     for (bads) |b| {

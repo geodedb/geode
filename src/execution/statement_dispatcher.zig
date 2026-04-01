@@ -191,10 +191,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .Call => |c| blk: {
                             // CRITICAL SECURITY: Check Read permission for Call in transaction
                             checkPermission(mut_context, .Read) catch |err| break :blk err;
-                            break :blk switch (c) {
-                                .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
-                                .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
-                            };
+                            break :blk executeCallStatement(allocator, c, mut_context);
                         },
                         .Create => |create_stmt| blk: {
                             // CRITICAL SECURITY: Check Write permission for Create in transaction
@@ -749,7 +746,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
-                    result = try executeCallSubquery(allocator, subq, context);
+                    _ = subq;
+                    result = try executeCallStatement(allocator, call_stmt, context);
                 },
             }
 
@@ -809,28 +807,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
             }
 
-            // Add to catalog
-            // P2-3: Use catalog's allocator (owned by catalog)
-            try cat.graphs.put(try cat.allocator.dupe(u8, graph_name), {});
+            // Add to catalog only after storage creation succeeds so the
+            // catalog never persists placeholder graph metadata.
+            try graph_store.getGlobalStore(allocator).createGraph(graph_name);
+            errdefer graph_store.getGlobalStore(allocator).dropGraph(graph_name) catch {};
+            const graph_uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
 
-            // Create actual graph storage for this graph
-            _ = graph_store.getGlobalStore(allocator).createGraph(graph_name) catch |err| {
-                log.err("Failed to create graph storage", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-                // Remove from catalog on failure
-                _ = cat.graphs.remove(graph_name);
-                return err;
-            };
+            try cat.graphs.put(try cat.allocator.dupe(u8, graph_name), graph_uuid);
 
             // Save catalog to disk after creating graph
-            cat.save() catch |err| {
-                log.err("CRITICAL: Failed to persist catalog after graph creation", &.{
-                    Attr.string("graph_name", graph_name),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
+            try cat.save();
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

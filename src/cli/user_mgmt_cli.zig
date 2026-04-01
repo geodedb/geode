@@ -1,7 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const geode = @import("geode");
-const mfa = geode.mfa_stub;
+const flags_mod = @import("feature_flags");
+const ext_mfa = @import("auth_lib").mfa;
+const mfa_policy = @import("mfa_policy");
 const cli_dispatcher = @import("cli_dispatcher.zig");
 const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
@@ -489,26 +490,20 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        if (!mfa.globallyEnabled()) {
+        if (!flags_mod.global().mfa.enabled()) {
             std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
-        const enrollment = mfa.enroll(allocator, username) catch |err| {
+        var enrollment = ext_mfa.enroll(allocator, username, mfa_policy.defaultConfig()) catch |err| {
             std.debug.print("Error: MFA enrollment failed: {any}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer allocator.free(enrollment.secret_base32);
-        defer {
-            for (enrollment.scratch_codes) |code| {
-                allocator.free(code);
-            }
-            allocator.free(enrollment.scratch_codes);
-        }
+        defer enrollment.deinit(allocator);
 
         // Update user's MFA state in graph store
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, null, null, true, null);
+            try mgr.storage.updateUser(existing.id, null, null, null, true, enrollment.secret_base32);
         }
 
         // Output secret
@@ -516,22 +511,12 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 
         // Output provisioning URI if requested or by default
         if (show_uri) {
-            // URL encode special characters in username
-            var encoded_user: [256]u8 = undefined;
-            var encoded_len: usize = 0;
-            for (username) |c| {
-                if (c == '@') {
-                    @memcpy(encoded_user[encoded_len .. encoded_len + 3], "%40");
-                    encoded_len += 3;
-                } else if (c == '+') {
-                    @memcpy(encoded_user[encoded_len .. encoded_len + 3], "%2B");
-                    encoded_len += 3;
-                } else {
-                    encoded_user[encoded_len] = c;
-                    encoded_len += 1;
-                }
-            }
-            printOut("otpauth://totp/Geode:{s}?secret={s}&issuer=Geode\n", .{ encoded_user[0..encoded_len], enrollment.secret_base32 });
+            const provisioning_uri = mfa_policy.buildProvisioningUri(allocator, username, enrollment.secret_base32) catch {
+                std.debug.print("Error: failed to build provisioning URI\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            defer allocator.free(provisioning_uri);
+            printOut("{s}\n", .{provisioning_uri});
         }
 
         // Output recovery codes
@@ -575,9 +560,40 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
 
-        // Verify user exists
-        if (mgr.storage.getUserByUsername(username) == null) {
+        const existing = mgr.storage.getUserByUsername(username) orelse {
             std.debug.print("Error: User '{s}' does not exist.\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+
+        if (!flags_mod.global().mfa.enabled()) {
+            std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+
+        const secret = existing.getMFASecret() orelse {
+            std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+
+        const code_str = token.?;
+        if (code_str.len != 6) {
+            std.debug.print("Error: invalid code format - must be exactly 6 digits\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+
+        const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
+            std.debug.print("Error: invalid code format - must contain only digits\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+
+        const timestamp_ms = @as(u64, @intCast(std.time.milliTimestamp()));
+        const valid = ext_mfa.verifyCode(allocator, secret, timestamp_ms, code_int, mfa_policy.codeConfig(30, 6, 1)) catch {
+            std.debug.print("Error: code verification failed\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+
+        if (!valid) {
+            std.debug.print("Error: invalid code - TOTP verification failed\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
 
@@ -645,21 +661,15 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Error: invalid code format - must contain only digits\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
-            if (!mfa.globallyEnabled()) {
+            if (!flags_mod.global().mfa.enabled()) {
                 std.debug.print("Error: MFA is disabled. Set GEODE_ENABLE_MFA=1 to enable.\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             }
 
-            // Get the enrollment to verify against
-            const enrollment = mfa.enroll(allocator, username) catch {
-                std.debug.print("Error: MFA enrollment failed\n", .{});
+            const secret = existing.getMFASecret() orelse {
+                std.debug.print("Error: User '{s}' has no MFA secret. Run 'geode user mfa-setup' first.\n", .{username});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };
-            defer allocator.free(enrollment.secret_base32);
-            defer {
-                for (enrollment.scratch_codes) |sc| allocator.free(sc);
-                allocator.free(enrollment.scratch_codes);
-            }
 
             const code_int = std.fmt.parseInt(u32, code_str, 10) catch {
                 std.debug.print("Error: invalid code format\n", .{});
@@ -667,7 +677,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             };
 
             const timestamp_ms = @as(u64, @intCast(std.time.milliTimestamp()));
-            const valid = mfa.verifyCode(allocator, enrollment.secret_base32, timestamp_ms, code_int, 30, 6, 1) catch {
+            const valid = ext_mfa.verifyCode(allocator, secret, timestamp_ms, code_int, mfa_policy.codeConfig(30, 6, 1)) catch {
                 std.debug.print("Error: code verification failed\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));
             };

@@ -20,6 +20,19 @@ fn cleanupTempDir(allocator: std.mem.Allocator, dir: []const u8) void {
     allocator.free(dir);
 }
 
+fn initAdapterForDir(allocator: std.mem.Allocator, data_dir: []const u8) !void {
+    graph_store.deinitGlobalStore();
+    graph_store.deinitGlobalAdapter();
+    graph_store.setDataDirOverride(allocator, data_dir);
+    _ = try graph_store.initGlobalAdapter(allocator, data_dir);
+}
+
+fn resetGlobalStorage(allocator: std.mem.Allocator) void {
+    graph_store.deinitGlobalStore();
+    graph_store.deinitGlobalAdapter();
+    graph_store.setDataDirOverride(allocator, null);
+}
+
 fn readBackupHeader(path: []const u8) !backup.BackupHeader {
     var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
@@ -32,14 +45,19 @@ fn readBackupHeader(path: []const u8) !backup.BackupHeader {
 test "TestCANARY_REQ_GQL_201_BackupE2E" {
     const allocator = testing.allocator;
 
+    defer resetGlobalStorage(allocator);
+
     const data_dir = try makeTempDir(allocator, "data");
     defer cleanupTempDir(allocator, data_dir);
-    graph_store.setDataDirOverride(allocator, data_dir);
-    defer graph_store.setDataDirOverride(allocator, null);
+    try initAdapterForDir(allocator, data_dir);
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "E2E" });
+    store.data_dir = data_dir;
+
+    const node_id = try store.createNode(&.{"E2E"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "backup-e2e" });
+    try store.saveToFile();
 
     const backup_dir = try makeTempDir(allocator, "backups");
     defer cleanupTempDir(allocator, backup_dir);
@@ -62,22 +80,42 @@ test "TestCANARY_REQ_GQL_201_BackupE2E" {
     defer cleanupTempDir(allocator, restore_dir);
     try mgr.restoreToPointInTime(restore_dir, meta.timestamp + 1);
 
-    const restore_path = try std.fmt.allocPrint(allocator, "{s}/graph_store.dat", .{restore_dir});
-    defer allocator.free(restore_path);
-    try std.fs.cwd().access(restore_path, .{});
+    const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{restore_dir});
+    defer allocator.free(registry_path);
+    try std.fs.cwd().access(registry_path, .{});
+
+    try initAdapterForDir(allocator, restore_dir);
+
+    var restored = try graph_store.GraphStore.init(allocator);
+    defer restored.deinit();
+    restored.data_dir = restore_dir;
+
+    try restored.loadFromFile();
+    try testing.expectEqual(@as(usize, 1), restored.nodes.count());
+    try testing.expect(restored.nodes.contains(node_id));
+
+    const prop = restored.getNodeProperty(node_id, "name") orelse return error.PropertyNotFound;
+    try testing.expectEqualStrings("backup-e2e", prop.String);
+
+    try restored.loadFromFile();
+    try testing.expectEqual(@as(usize, 1), restored.nodes.count());
+    try testing.expect(restored.nodes.contains(node_id));
 }
 
 test "backup workflow metadata log" {
     const allocator = testing.allocator;
 
+    defer resetGlobalStorage(allocator);
+
     const data_dir = try makeTempDir(allocator, "meta_data");
     defer cleanupTempDir(allocator, data_dir);
-    graph_store.setDataDirOverride(allocator, data_dir);
-    defer graph_store.setDataDirOverride(allocator, null);
+    try initAdapterForDir(allocator, data_dir);
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "Meta" });
+    store.data_dir = data_dir;
+    _ = try store.createNode(&.{"Meta"});
+    try store.saveToFile();
 
     const backup_dir = try makeTempDir(allocator, "meta_backups");
     defer cleanupTempDir(allocator, backup_dir);
@@ -93,13 +131,15 @@ test "backup workflow metadata log" {
 test "backup restore without backups returns error" {
     const allocator = testing.allocator;
 
+    defer resetGlobalStorage(allocator);
+
     const data_dir = try makeTempDir(allocator, "empty_data");
     defer cleanupTempDir(allocator, data_dir);
-    graph_store.setDataDirOverride(allocator, data_dir);
-    defer graph_store.setDataDirOverride(allocator, null);
+    try initAdapterForDir(allocator, data_dir);
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
+    store.data_dir = data_dir;
 
     const backup_dir = try makeTempDir(allocator, "empty_backups");
     defer cleanupTempDir(allocator, backup_dir);

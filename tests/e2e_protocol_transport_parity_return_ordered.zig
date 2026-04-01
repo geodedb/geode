@@ -28,7 +28,7 @@ test "protocol: transport parity QUIC (RETURN ORDER/LIMIT)" {
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 AS x ORDER BY x LIMIT 1";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

@@ -2,8 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const btree = @import("btree.zig");
 const fulltext = @import("fulltext.zig");
-const hnsw = @import("hnsw.zig");
-const rtree = @import("rtree.zig");
+const hnsw = @import("hnsw_lib");
+const rtree = @import("rtree_lib");
 const advanced_types = @import("advanced_types_index.zig");
 const vector_index = @import("vector_index.zig");
 const spatial_index = @import("spatial_index.zig");
@@ -273,14 +273,18 @@ pub const IndexManager = struct {
                 null,
             .spatial_index = if (index_type == .spatial) blk: {
                 const spatial = try self.allocator.create(rtree.RTree);
-                spatial.* = rtree.RTree.init(self.allocator, 16);
+                spatial.* = try rtree.RTree.init(self.allocator, 16);
                 try self.spatial_indexes.put(name, spatial);
                 break :blk spatial;
             } else null,
             .vector_index = if (index_type == .vector) blk: {
                 // Default to 128-dimensional vectors with M=16, ef_construction=200
                 const vector = try self.allocator.create(hnsw.Hnsw);
-                vector.* = hnsw.Hnsw.init(self.allocator, 128, 16, 200);
+                vector.* = try hnsw.Hnsw.init(self.allocator, 128, .euclidean, .{
+                    .m = 16,
+                    .ef_construction = 200,
+                    .ef_search = 200,
+                });
                 try self.vector_indexes.put(name, vector);
                 break :blk @as(?*anyopaque, vector);
             } else null,
@@ -680,10 +684,10 @@ pub const IndexManager = struct {
         defer results.deinit();
 
         if (self.spatial_indexes.get(index_name)) |spatial| {
-            try spatial.search(query_mbr, &results);
+            try spatial.search(query_mbr, self.allocator, &results);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
             if (index.spatial_index) |spatial| {
-                try spatial.search(query_mbr, &results);
+                try spatial.search(query_mbr, self.allocator, &results);
                 index.statistics.read_count += 1;
             }
         }
@@ -711,7 +715,11 @@ pub const IndexManager = struct {
             .spatial_index = null,
             .vector_index = blk: {
                 const vector = try self.allocator.create(hnsw.Hnsw);
-                vector.* = hnsw.Hnsw.init(self.allocator, dimensions, 16, 200);
+                vector.* = try hnsw.Hnsw.init(self.allocator, dimensions, .euclidean, .{
+                    .m = 16,
+                    .ef_construction = 200,
+                    .ef_search = 200,
+                });
                 try self.vector_indexes.put(index_name, vector);
                 break :blk @as(?*anyopaque, vector);
             },
@@ -761,16 +769,33 @@ pub const IndexManager = struct {
     ) ![]struct { id: u64, score: f64 } {
         if (self.vector_indexes.get(index_name)) |vector_idx| {
             const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
-            return try hnsw_index.knnSearch(query_vector, k, .l2);
+            const raw_results = try hnsw_index.knnSearch(query_vector, @intCast(k));
+            return try mapSearchResults(self.allocator, raw_results);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
             if (index.vector_index) |vector_idx| {
                 const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
                 index.statistics.read_count += 1;
-                return try hnsw_index.knnSearch(query_vector, k, .l2);
+                const raw_results = try hnsw_index.knnSearch(query_vector, @intCast(k));
+                return try mapSearchResults(self.allocator, raw_results);
             }
         }
 
         return try self.allocator.alloc(struct { id: u64, score: f64 }, 0);
+    }
+
+    fn mapSearchResults(
+        allocator: std.mem.Allocator,
+        raw_results: []const hnsw.SearchResult,
+    ) ![]struct { id: u64, score: f64 } {
+        const results = try allocator.alloc(struct { id: u64, score: f64 }, raw_results.len);
+        for (raw_results, 0..) |result, i| {
+            results[i] = .{
+                .id = result.id,
+                .score = @as(f64, result.distance),
+            };
+        }
+        allocator.free(raw_results);
+        return results;
     }
 
     // Advanced type index management functions

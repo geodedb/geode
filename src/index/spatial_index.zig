@@ -1,5 +1,5 @@
 const std = @import("std");
-const rtree = @import("rtree.zig");
+const rtree = @import("rtree_lib");
 const geographic_types = @import("../types/geographic.zig");
 const heap = @import("../storage/heap.zig");
 
@@ -53,10 +53,10 @@ pub const SpatialIndex = struct {
         }
     };
 
-    pub fn init(allocator: std.mem.Allocator) SpatialIndex {
+    pub fn init(allocator: std.mem.Allocator) !SpatialIndex {
         return SpatialIndex{
             .allocator = allocator,
-            .rtree_index = rtree.RTree.init(allocator, 8), // Max 8 entries per node
+            .rtree_index = try rtree.RTree.init(allocator, 8), // Max 8 entries per node
             .value_storage = std.AutoHashMap(u64, heap.Value).init(allocator),
             .coordinate_storage = std.AutoHashMap(u64, Coordinate).init(allocator),
             .next_id = 1,
@@ -141,7 +141,7 @@ pub const SpatialIndex = struct {
         var result_ids = std.ArrayList(u64).init(self.allocator);
         defer result_ids.deinit();
 
-        try self.rtree_index.search(query_mbr, &result_ids);
+        try self.rtree_index.search(query_mbr, self.allocator, &result_ids);
 
         var search_result = SpatialSearchResult.init(self.allocator);
 
@@ -168,7 +168,7 @@ pub const SpatialIndex = struct {
         var result_ids = std.ArrayList(u64).init(self.allocator);
         defer result_ids.deinit();
 
-        try self.rtree_index.search(query_mbr, &result_ids);
+        try self.rtree_index.search(query_mbr, self.allocator, &result_ids);
 
         var search_result = SpatialSearchResult.init(self.allocator);
 
@@ -235,7 +235,7 @@ pub const SpatialIndex = struct {
             const mbr = coord.toMBR();
 
             // Remove from R-tree
-            const removed = self.rtree_index.remove(mbr, id);
+            const removed = self.rtree_index.remove(mbr, id) catch false;
 
             // Remove from storage
             _ = self.value_storage.remove(id);
@@ -356,7 +356,7 @@ pub const SpatialIndexManager = struct {
         }
 
         const index = try self.allocator.create(SpatialIndex);
-        index.* = SpatialIndex.init(self.allocator);
+        index.* = try SpatialIndex.init(self.allocator);
 
         const owned_name = try self.allocator.dupe(u8, name);
         try self.indexes.put(owned_name, index);
@@ -397,7 +397,7 @@ test "SpatialIndex basic operations" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = SpatialIndex.init(allocator);
+    var index = try SpatialIndex.init(allocator);
     defer index.deinit();
 
     // Test LatLon insertion
@@ -431,7 +431,7 @@ test "SpatialIndex distance calculations" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = SpatialIndex.init(allocator);
+    var index = try SpatialIndex.init(allocator);
     defer index.deinit();
 
     // Test points in NYC area
@@ -458,7 +458,7 @@ test "SpatialIndex k-nearest neighbors" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = SpatialIndex.init(allocator);
+    var index = try SpatialIndex.init(allocator);
     defer index.deinit();
 
     // Add several points around NYC

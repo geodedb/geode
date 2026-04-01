@@ -18,7 +18,7 @@ test "graphstore snapshot compaction reclaims deleted nodes" {
 
     var i: usize = 0;
     while (i < 500) : (i += 1) {
-        const id = try store.createNode(&.{ "compact" });
+        const id = try store.createNode(&.{"compact"});
         try ids.append(allocator, id);
     }
     try store.saveToFile();

@@ -5,10 +5,11 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
-const mfa = @import("mfa");
+const ext_mfa = @import("auth_lib").mfa;
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
+const mfa_policy = @import("mfa_policy");
 // Note: hash_module import will need to be configured via build.zig module system
 // For now, use std.crypto.pwhash.argon2 directly
 
@@ -1365,7 +1366,7 @@ pub const SecurityManager = struct {
         if (!used_recovery) {
             // Verify TOTP code (30s step, 6 digits, +/-1 window)
             const now = @as(u64, @intCast(std.time.milliTimestamp()));
-            if (!try mfa.verifyCode(self.allocator, user.mfa_secret.?, now, code, 30, 6, 1)) {
+            if (!try ext_mfa.verifyCode(self.allocator, user.mfa_secret.?, now, code, mfa_policy.codeConfig(30, 6, 1))) {
                 try self.audit_log.logMfaChallengeFailure(user.id, "totp", "invalid_code");
                 return error.MFAInvalidCode;
             }

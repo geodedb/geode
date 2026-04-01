@@ -24,32 +24,60 @@ pub const UndoOpType = enum(u8) {
 /// Serializable property value for undo log
 pub const SerializedProperty = struct {
     key: []const u8,
-    value_type: u8, // 0=null, 1=string, 2=int, 3=float, 4=bool
+    value_type: u8, // 0=null, 1=string, 2=int, 3=float, 4=bool, 5=decimal, 6=ext
     string_value: ?[]const u8 = null,
     int_value: i64 = 0,
     float_value: f64 = 0.0,
     bool_value: bool = false,
+    decimal_coeff: i128 = 0,
+    decimal_scale: u8 = 0,
+    ext_value: ?[]const u8 = null,
 
-    pub fn fromPropertyValue(key: []const u8, pv: graph_store.PropertyValue) SerializedProperty {
+    pub fn fromPropertyValue(allocator: std.mem.Allocator, key: []const u8, pv: graph_store.PropertyValue) !SerializedProperty {
+        const key_copy = try allocator.dupe(u8, key);
+        errdefer allocator.free(key_copy);
+
         return switch (pv) {
-            .Null => .{ .key = key, .value_type = 0 },
-            .String => |s| .{ .key = key, .value_type = 1, .string_value = s },
-            .Int => |i| .{ .key = key, .value_type = 2, .int_value = i },
-            .Float => |f| .{ .key = key, .value_type = 3, .float_value = f },
-            .Bool => |b| .{ .key = key, .value_type = 4, .bool_value = b },
-            .ExtValue => .{ .key = key, .value_type = 0 }, // Treat ExtValue as null for now
+            .Null => .{ .key = key_copy, .value_type = 0 },
+            .String => |s| .{
+                .key = key_copy,
+                .value_type = 1,
+                .string_value = try allocator.dupe(u8, s),
+            },
+            .Int => |i| .{ .key = key_copy, .value_type = 2, .int_value = i },
+            .Float => |f| .{ .key = key_copy, .value_type = 3, .float_value = f },
+            .Bool => |b| .{ .key = key_copy, .value_type = 4, .bool_value = b },
+            .Decimal => |d| .{
+                .key = key_copy,
+                .value_type = 5,
+                .decimal_coeff = d.coeff,
+                .decimal_scale = d.scale,
+            },
+            .ExtValue => |ext| .{
+                .key = key_copy,
+                .value_type = 6,
+                .ext_value = try graph_store.encodeExtValue(allocator, ext),
+            },
         };
     }
 
-    pub fn toPropertyValue(self: SerializedProperty) graph_store.PropertyValue {
+    pub fn toPropertyValue(self: SerializedProperty, allocator: std.mem.Allocator) !graph_store.PropertyValue {
         return switch (self.value_type) {
             0 => .Null,
             1 => .{ .String = self.string_value orelse "" },
             2 => .{ .Int = self.int_value },
             3 => .{ .Float = self.float_value },
             4 => .{ .Bool = self.bool_value },
+            5 => .{ .Decimal = .{ .coeff = self.decimal_coeff, .scale = self.decimal_scale } },
+            6 => .{ .ExtValue = try graph_store.decodeExtValue(allocator, self.ext_value orelse &.{}) },
             else => .Null,
         };
+    }
+
+    pub fn deinit(self: SerializedProperty, allocator: std.mem.Allocator) void {
+        allocator.free(self.key);
+        if (self.string_value) |s| allocator.free(s);
+        if (self.ext_value) |ext| allocator.free(ext);
     }
 };
 
@@ -98,7 +126,7 @@ pub const UndoEntry = union(UndoOpType) {
     DeleteNode: struct {
         node_id: u64,
         labels: []const []const u8,
-        properties: []SerializedProperty,
+        properties: []const SerializedProperty,
         graph_name: []const u8,
     },
 
@@ -108,7 +136,7 @@ pub const UndoEntry = union(UndoOpType) {
         from_id: u64,
         to_id: u64,
         label: []const u8,
-        properties: []SerializedProperty,
+        properties: []const SerializedProperty,
         graph_name: []const u8,
     },
 
@@ -163,28 +191,23 @@ pub const UndoLog = struct {
             switch (entry) {
                 .SetNodeProperty => |e| {
                     self.allocator.free(e.key);
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    self.allocator.free(e.old_value.key);
+                    e.old_value.deinit(self.allocator);
                 },
                 .RemoveNodeProperty => |e| {
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    self.allocator.free(e.old_value.key);
+                    e.old_value.deinit(self.allocator);
                 },
                 .SetEdgeProperty => |e| {
                     self.allocator.free(e.key);
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    self.allocator.free(e.old_value.key);
+                    e.old_value.deinit(self.allocator);
                 },
                 .RemoveEdgeProperty => |e| {
-                    if (e.old_value.string_value) |s| self.allocator.free(s);
-                    self.allocator.free(e.old_value.key);
+                    e.old_value.deinit(self.allocator);
                 },
                 .DeleteNode => |e| {
                     for (e.labels) |label| self.allocator.free(label);
                     self.allocator.free(e.labels);
                     for (e.properties) |prop| {
-                        self.allocator.free(prop.key);
-                        if (prop.string_value) |s| self.allocator.free(s);
+                        prop.deinit(self.allocator);
                     }
                     self.allocator.free(e.properties);
                     self.allocator.free(e.graph_name);
@@ -192,8 +215,7 @@ pub const UndoLog = struct {
                 .DeleteEdge => |e| {
                     self.allocator.free(e.label);
                     for (e.properties) |prop| {
-                        self.allocator.free(prop.key);
-                        if (prop.string_value) |s| self.allocator.free(s);
+                        prop.deinit(self.allocator);
                     }
                     self.allocator.free(e.properties);
                     self.allocator.free(e.graph_name);
@@ -376,14 +398,10 @@ pub const UndoLog = struct {
     pub fn logSetNodeProperty(self: *UndoLog, node_id: u64, key: []const u8, old_value: ?graph_store.PropertyValue) !void {
         if (!self.active) return;
         const key_copy = try self.allocator.dupe(u8, key);
-        const serialized = if (old_value) |ov| blk: {
-            var sp = SerializedProperty.fromPropertyValue(key, ov);
-            sp.key = try self.allocator.dupe(u8, sp.key);
-            if (sp.string_value) |s| {
-                sp.string_value = try self.allocator.dupe(u8, s);
-            }
-            break :blk sp;
-        } else SerializedProperty{ .key = try self.allocator.dupe(u8, key), .value_type = 0 };
+        const serialized = if (old_value) |ov|
+            try SerializedProperty.fromPropertyValue(self.allocator, key, ov)
+        else
+            SerializedProperty{ .key = try self.allocator.dupe(u8, key), .value_type = 0 };
 
         try self.entries.append(self.allocator, .{ .SetNodeProperty = .{
             .node_id = node_id,
@@ -396,11 +414,7 @@ pub const UndoLog = struct {
     /// Log removing a node property (undo = restore it)
     pub fn logRemoveNodeProperty(self: *UndoLog, node_id: u64, old_value: graph_store.PropertyValue, key: []const u8) !void {
         if (!self.active) return;
-        var sp = SerializedProperty.fromPropertyValue(key, old_value);
-        sp.key = try self.allocator.dupe(u8, sp.key);
-        if (sp.string_value) |s| {
-            sp.string_value = try self.allocator.dupe(u8, s);
-        }
+        const sp = try SerializedProperty.fromPropertyValue(self.allocator, key, old_value);
         try self.entries.append(self.allocator, .{ .RemoveNodeProperty = .{
             .node_id = node_id,
             .old_value = sp,
@@ -421,11 +435,7 @@ pub const UndoLog = struct {
         var props: std.ArrayListUnmanaged(SerializedProperty) = .{};
         var prop_iter = node.properties.iterator();
         while (prop_iter.next()) |entry| {
-            var sp = SerializedProperty.fromPropertyValue(entry.key_ptr.*, entry.value_ptr.*);
-            sp.key = try self.allocator.dupe(u8, sp.key);
-            if (sp.string_value) |s| {
-                sp.string_value = try self.allocator.dupe(u8, s);
-            }
+            const sp = try SerializedProperty.fromPropertyValue(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
             try props.append(self.allocator, sp);
         }
 
@@ -445,11 +455,7 @@ pub const UndoLog = struct {
         var props: std.ArrayListUnmanaged(SerializedProperty) = .{};
         var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |entry| {
-            var sp = SerializedProperty.fromPropertyValue(entry.key_ptr.*, entry.value_ptr.*);
-            sp.key = try self.allocator.dupe(u8, sp.key);
-            if (sp.string_value) |s| {
-                sp.string_value = try self.allocator.dupe(u8, s);
-            }
+            const sp = try SerializedProperty.fromPropertyValue(self.allocator, entry.key_ptr.*, entry.value_ptr.*);
             try props.append(self.allocator, sp);
         }
 
@@ -484,6 +490,8 @@ pub const UndoLog = struct {
     /// Rollback all changes by replaying undo entries in reverse order
     pub fn rollback(self: *UndoLog, store: *graph_store.GraphStore) !void {
         if (!self.active) return;
+        graph_store.setMutationNotifyInhibit(true);
+        defer graph_store.setMutationNotifyInhibit(false);
 
         // Process entries in reverse order
         var i: usize = self.entries.items.len;
@@ -503,6 +511,8 @@ pub const UndoLog = struct {
     pub fn rollbackGraphStore(self: *UndoLog, storage: *graph_common.GraphStore) void {
         _ = storage; // Kept for API compatibility, but we look up per-entry graph
         if (!self.active) return;
+        graph_store.setMutationNotifyInhibit(true);
+        defer graph_store.setMutationNotifyInhibit(false);
 
         // Process entries in reverse order
         var i: usize = self.entries.items.len;
@@ -517,86 +527,79 @@ pub const UndoLog = struct {
     }
 
     fn undoEntryGraphStore(self: *UndoLog, entry: UndoEntry) void {
-        switch (entry) {
-            .CreateNode => |e| {
-                // CANARY: REQ=REQ-TXN-UNDO-020; FEATURE="TransactionUndoLog"; ASPECT=RollbackUseGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
-                // Use GraphStore (the actual data store used by crud_operations) for rollback
-                const store = graph_store.getGlobalStore(self.allocator);
-                store.deleteNodeNoSave(e.node_id);
-            },
-            .CreateEdge => |e| {
-                // Use GraphStore for rollback
-                const store = graph_store.getGlobalStore(self.allocator);
-                store.deleteEdgeNoSave(e.edge_id);
-            },
-            // Other entry types are not commonly used in server mode for now
-            // They can be implemented later if needed
-            else => {},
-        }
+        const store = graph_store.getGlobalStore(self.allocator);
+        self.undoEntry(store, entry) catch |err| {
+            std.log.err("rollbackGraphStore failed: {}", .{err});
+        };
     }
 
     fn undoEntry(self: *UndoLog, store: *graph_store.GraphStore, entry: UndoEntry) !void {
-        _ = self;
         switch (entry) {
             .CreateNode => |e| {
                 // Undo: delete the created node
-                store.deleteNodeNoSave(e.node_id);
+                store.deleteNode(e.node_id);
             },
             .CreateEdge => |e| {
                 // Undo: delete the created edge
-                store.deleteEdgeNoSave(e.edge_id);
+                store.deleteEdge(e.edge_id);
             },
             .SetNodeProperty => |e| {
                 // Undo: restore old value or remove property
                 if (e.had_old_value) {
-                    const pv = e.old_value.toPropertyValue();
-                    try store.setNodePropertyNoSave(e.node_id, e.key, pv);
+                    const pv = try e.old_value.toPropertyValue(self.allocator);
+                    defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                    try store.setNodeProperty(e.node_id, e.key, pv);
                 } else {
-                    store.removeNodePropertyNoSave(e.node_id, e.key);
+                    store.removeNodeProperty(e.node_id, e.key);
                 }
             },
             .RemoveNodeProperty => |e| {
                 // Undo: restore the removed property
-                const pv = e.old_value.toPropertyValue();
-                try store.setNodePropertyNoSave(e.node_id, e.old_value.key, pv);
+                const pv = try e.old_value.toPropertyValue(self.allocator);
+                defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                try store.setNodeProperty(e.node_id, e.old_value.key, pv);
             },
             .SetEdgeProperty => |e| {
                 // Undo: restore old value or remove property
                 if (e.had_old_value) {
-                    const pv = e.old_value.toPropertyValue();
-                    try store.setEdgePropertyNoSave(e.edge_id, e.key, pv);
+                    const pv = try e.old_value.toPropertyValue(self.allocator);
+                    defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                    try store.setEdgeProperty(e.edge_id, e.key, pv);
                 } else {
-                    store.removeEdgePropertyNoSave(e.edge_id, e.key);
+                    store.removeEdgeProperty(e.edge_id, e.key);
                 }
             },
             .RemoveEdgeProperty => |e| {
                 // Undo: restore the removed property
-                const pv = e.old_value.toPropertyValue();
-                try store.setEdgePropertyNoSave(e.edge_id, e.old_value.key, pv);
+                const pv = try e.old_value.toPropertyValue(self.allocator);
+                defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                try store.setEdgeProperty(e.edge_id, e.old_value.key, pv);
             },
             .DeleteNode => |e| {
                 // Undo: recreate the node
-                try store.restoreNodeNoSave(e.node_id, e.labels, e.graph_name);
+                try store.createNodeWithId(e.node_id, e.labels, e.graph_name);
                 for (e.properties) |prop| {
-                    const pv = prop.toPropertyValue();
-                    try store.setNodePropertyNoSave(e.node_id, prop.key, pv);
+                    const pv = try prop.toPropertyValue(self.allocator);
+                    defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                    try store.setNodeProperty(e.node_id, prop.key, pv);
                 }
             },
             .DeleteEdge => |e| {
                 // Undo: recreate the edge
-                try store.restoreEdgeNoSave(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name);
+                try store.createEdgeWithId(e.edge_id, e.from_id, e.to_id, e.label, e.graph_name);
                 for (e.properties) |prop| {
-                    const pv = prop.toPropertyValue();
-                    try store.setEdgePropertyNoSave(e.edge_id, prop.key, pv);
+                    const pv = try prop.toPropertyValue(self.allocator);
+                    defer graph_store.freeDetachedPropertyValue(self.allocator, pv);
+                    try store.setEdgeProperty(e.edge_id, prop.key, pv);
                 }
             },
             .AddNodeLabel => |e| {
                 // Undo: remove the added label
-                try store.removeNodeLabelNoSave(e.node_id, e.label);
+                try store.removeNodeLabel(e.node_id, e.label);
             },
             .RemoveNodeLabel => |e| {
                 // Undo: add the removed label back
-                try store.addNodeLabelNoSave(e.node_id, e.label);
+                try store.addNodeLabel(e.node_id, e.label);
             },
         }
     }
@@ -666,6 +669,12 @@ fn writeI64(file: std.fs.File, value: i64) !void {
     _ = try file.write(&buf);
 }
 
+fn writeI128(file: std.fs.File, value: i128) !void {
+    var buf: [16]u8 = undefined;
+    std.mem.writeInt(i128, &buf, value, .little);
+    _ = try file.write(&buf);
+}
+
 fn writeF64(file: std.fs.File, value: f64) !void {
     const bits: u64 = @bitCast(value);
     try writeU64(file, bits);
@@ -690,6 +699,11 @@ fn writeSerializedProperty(file: std.fs.File, prop: SerializedProperty) !void {
         2 => try writeI64(file, prop.int_value),
         3 => try writeF64(file, prop.float_value),
         4 => try writeBool(file, prop.bool_value),
+        5 => {
+            try writeI128(file, prop.decimal_coeff);
+            _ = try file.write(&[_]u8{prop.decimal_scale});
+        },
+        6 => try writeString(file, prop.ext_value orelse &.{}),
         else => {},
     }
 }
@@ -796,20 +810,26 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
 
 fn readU32(file: std.fs.File) !u32 {
     var buf: [4]u8 = undefined;
-    try file.reader().readNoEof(&buf);
+    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(u32, &buf, .little);
 }
 
 fn readU64(file: std.fs.File) !u64 {
     var buf: [8]u8 = undefined;
-    try file.reader().readNoEof(&buf);
+    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(u64, &buf, .little);
 }
 
 fn readI64(file: std.fs.File) !i64 {
     var buf: [8]u8 = undefined;
-    try file.reader().readNoEof(&buf);
+    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(i64, &buf, .little);
+}
+
+fn readI128(file: std.fs.File) !i128 {
+    var buf: [16]u8 = undefined;
+    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
+    return std.mem.readInt(i128, &buf, .little);
 }
 
 fn readF64(file: std.fs.File) !f64 {
@@ -819,21 +839,21 @@ fn readF64(file: std.fs.File) !f64 {
 
 fn readBool(file: std.fs.File) !bool {
     var buf: [1]u8 = undefined;
-    try file.reader().readNoEof(&buf);
+    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return buf[0] != 0;
 }
 
 fn readString(allocator: std.mem.Allocator, file: std.fs.File) ![]u8 {
     const len = try readU32(file);
     const buf = try allocator.alloc(u8, len);
-    try file.reader().readNoEof(buf);
+    if ((try file.readAll(buf)) < len) return error.UnexpectedEndOfFile;
     return buf;
 }
 
 fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !SerializedProperty {
     const key = try readString(allocator, file);
     var type_buf: [1]u8 = undefined;
-    try file.reader().readNoEof(&type_buf);
+    if ((try file.readAll(&type_buf)) < type_buf.len) return error.UnexpectedEndOfFile;
     const value_type = type_buf[0];
     var prop = SerializedProperty{ .key = key, .value_type = value_type };
     switch (value_type) {
@@ -850,6 +870,15 @@ fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !Seri
         4 => {
             prop.bool_value = try readBool(file);
         },
+        5 => {
+            prop.decimal_coeff = try readI128(file);
+            var scale_buf: [1]u8 = undefined;
+            if ((try file.readAll(&scale_buf)) < scale_buf.len) return error.UnexpectedEndOfFile;
+            prop.decimal_scale = scale_buf[0];
+        },
+        6 => {
+            prop.ext_value = try readString(allocator, file);
+        },
         else => {},
     }
     return prop;
@@ -857,8 +886,9 @@ fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !Seri
 
 fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
     var type_buf: [1]u8 = undefined;
-    const bytes_read = try file.read(&type_buf);
+    const bytes_read = try file.readAll(&type_buf);
     if (bytes_read == 0) return null;
+    if (bytes_read < type_buf.len) return error.UnexpectedEndOfFile;
 
     const entry_type: UndoOpType = @enumFromInt(type_buf[0]);
 
@@ -1167,7 +1197,7 @@ test "savepoint not found error" {
     undo.commit();
 }
 
-const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(0xdeadbeef));
+const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(std.mem.alignForward(usize, 0xdeadbeef, @alignOf(graph_store.GraphStore))));
 
 test "begin clears savepoints from previous transaction" {
     const allocator = std.testing.allocator;
@@ -1182,4 +1212,46 @@ test "begin clears savepoints from previous transaction" {
     undo.begin();
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
     undo.commit();
+}
+
+test "SerializedProperty round-trips decimal and ext values" {
+    const allocator = std.testing.allocator;
+
+    const decimal = try SerializedProperty.fromPropertyValue(
+        allocator,
+        "price",
+        .{ .Decimal = .{ .coeff = 123456, .scale = 3 } },
+    );
+    defer decimal.deinit(allocator);
+
+    const decimal_value = try decimal.toPropertyValue(allocator);
+    try std.testing.expect(decimal_value == .Decimal);
+    try std.testing.expectEqual(@as(i128, 123456), decimal_value.Decimal.coeff);
+    try std.testing.expectEqual(@as(u8, 3), decimal_value.Decimal.scale);
+
+    const nested = try allocator.dupe(u8, "ext");
+    const list_slice = try allocator.dupe(@import("eval_extended.zig").ExtValue, &.{
+        .{ .Int = 9 },
+        .{ .Str = nested },
+    });
+    const ext_prop = SerializedProperty.fromPropertyValue(
+        allocator,
+        "payload",
+        .{ .ExtValue = .{ .List = list_slice } },
+    ) catch |err| {
+        allocator.free(nested);
+        allocator.free(list_slice);
+        return err;
+    };
+    defer ext_prop.deinit(allocator);
+    // Free input allocations — fromPropertyValue copies what it needs
+    allocator.free(nested);
+    allocator.free(list_slice);
+
+    const ext_value = try ext_prop.toPropertyValue(allocator);
+    defer graph_store.freeDetachedPropertyValue(allocator, ext_value);
+    try std.testing.expect(ext_value == .ExtValue);
+    try std.testing.expectEqual(@as(usize, 2), ext_value.ExtValue.List.len);
+    try std.testing.expectEqual(@as(i64, 9), ext_value.ExtValue.List[0].Int);
+    try std.testing.expectEqualStrings("ext", ext_value.ExtValue.List[1].Str);
 }

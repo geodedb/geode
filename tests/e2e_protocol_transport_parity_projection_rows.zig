@@ -29,7 +29,7 @@ test "protocol: transport parity QUIC (projection rows, ORDER)" {
     // Two-row, two-column deterministic projection; explicit ORDER for stable pagination semantics even if not slicing here.
     const q = "RETURN 2 AS a, 1 AS b UNION ALL RETURN 1 AS a, 2 AS b ORDER BY a, b";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

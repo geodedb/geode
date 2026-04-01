@@ -21,6 +21,7 @@ const Attr = logging.Attr;
 // Import from parent execution module
 const execution = @import("../execution.zig");
 const execution_helpers = @import("execution_helpers.zig"); // added for extractNodeId
+const procedure_access = @import("procedure_access.zig");
 const executeBFS = execution.executeBFS;
 const executeDFS = execution.executeDFS;
 const executeDijkstra = execution.executeDijkstra;
@@ -196,25 +197,9 @@ fn requireAdminRole(allocator: std.mem.Allocator, context: ExecutionContext) !?E
 }
 
 pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
-
-    // Get the procedure name from the Call expression
-    const proc_name = switch (call_stmt.procedure) {
-        .Call => |call| blk: {
-            if (call.callee.* == .Ident) {
-                break :blk call.callee.Ident.orig;
-            } else if (call.callee.* == .Member) {
-                // Handle algo.pageRank.stream -> extract the full name
-                // Build the full member access path
-                var name_parts = std.ArrayList(u8).empty;
-                defer name_parts.deinit(allocator);
-
-                try recursion_handler.buildMemberPath(allocator, call.callee, &name_parts);
-                break :blk try name_parts.toOwnedSlice(allocator);
-            }
-            break :blk "unknown";
-        },
-        else => "unknown",
-    };
+    var resolved_proc_name = try procedure_access.resolveProcedureName(allocator, call_stmt);
+    defer resolved_proc_name.deinit(allocator);
+    const proc_name = resolved_proc_name.name;
 
     // Get the graph store
     const store = graph_store.getGlobalStore(allocator);

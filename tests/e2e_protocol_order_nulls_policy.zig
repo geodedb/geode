@@ -5,7 +5,7 @@ const testing = std.testing;
 
 fn run(args: []const []const u8, env_last: bool) !struct { out: []u8 } {
     const allocator = testing.allocator;
-    const env = if (env_last) &.{ "GEODE_NULLS_LAST=1" } else null;
+    const env = if (env_last) &.{"GEODE_NULLS_LAST=1"} else null;
     var server = try proto_test_util.spawnServerRandom(allocator, env);
     defer server.deinit();
 

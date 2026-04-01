@@ -1,9 +1,11 @@
 const std = @import("std");
-const events = @import("audit/events.zig");
-const config = @import("audit/config.zig");
-const logger = @import("audit/logger.zig");
+const audit_lib = @import("audit_lib");
+const events = audit_lib.events;
+const config = audit_lib.config;
+const logger = audit_lib.logger;
 const db_adapter = @import("audit/db_adapter.zig");
-const time = @import("audit/time.zig");
+const time = audit_lib.time;
+const test_support = @import("audit/test_support.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -15,9 +17,9 @@ pub fn main() !void {
 
     // Load configuration
     const audit_config = config.loadConfig(allocator, "config/logging.json") catch |err| switch (err) {
-        error.ConfigNotFound => {
+        error.ConfigNotFound => blk: {
             std.debug.print("Config file not found, using default configuration\n");
-            try config.loadTestConfig(allocator);
+            break :blk try test_support.loadTestConfig(allocator);
         },
         else => return err,
     };

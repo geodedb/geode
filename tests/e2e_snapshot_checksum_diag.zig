@@ -12,7 +12,7 @@ test "graphstore checksum diagnostic" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "x" });
+    _ = try store.createNode(&.{"x"});
     try store.saveToFile();
 
     const file_path = try graph_store.getPersistenceFilePath(allocator);

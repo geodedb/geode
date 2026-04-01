@@ -35,7 +35,7 @@ test "massive graph store stress test" {
 
     var prng = std.rand.DefaultPrng.init(0);
     const random = prng.random();
-    const labels = [_][]const u8{ "Item" };
+    const labels = [_][]const u8{"Item"};
 
     var i: usize = 0;
     while (i < MASSIVE_ITEM_COUNT) : (i += 1) {

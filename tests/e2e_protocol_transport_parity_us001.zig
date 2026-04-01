@@ -22,7 +22,7 @@ test "protocol: transport parity diagnostics (US001) QUIC (gated)" {
     const exe = "./zig-out/bin/geode";
     const q = "RETURN 1 LIMIT 10 OFFSET 5";
 
-    var server = try util.spawnServerRandom(allocator, &.{ "GEODE_QUIC_PASSIVE_TEARDOWN=1" });
+    var server = try util.spawnServerRandom(allocator, &.{"GEODE_QUIC_PASSIVE_TEARDOWN=1"});
     defer server.deinit();
     const addr = server.getAddr();
 

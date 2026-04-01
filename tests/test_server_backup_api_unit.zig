@@ -51,7 +51,7 @@ test "BackupManager creates backup metadata and header" {
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
-    _ = try store.createNode(&.{ "ServerUnit" });
+    _ = try store.createNode(&.{"ServerUnit"});
 
     const backup_dir = try makeTempDir(allocator, "backups");
     defer cleanupTempDir(allocator, backup_dir);

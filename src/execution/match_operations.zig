@@ -390,7 +390,10 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
     // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
     // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
 
-    const store = graph_store.getGlobalStore(allocator);
+    const store = graph_store.getWritableGlobalStore(allocator);
+    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
+    defer if (read_session) |*session| session.deinit();
+    const read_store: *graph_store.GraphStore = if (read_session) |*session| session.store() else store;
     const call_clause = q.call_clause.?;
 
     // Get current graph from session context
@@ -424,7 +427,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         }
 
         // Find matching node
-        var node_iter = store.nodes.iterator();
+        var node_iter = read_store.nodes.iterator();
         var found = false;
         while (node_iter.next()) |entry| {
             const node_id = entry.key_ptr.*;
@@ -3237,6 +3240,19 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
+    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
+    var previous_read_store: ?*graph_store.GraphStore = null;
+    if (read_session) |*session| {
+        previous_read_store = graph_store.pushActiveQueryReadStore(session.store());
+    }
+    defer {
+        if (read_session) |*session| {
+            graph_store.popActiveQueryReadStore(previous_read_store);
+            session.deinit();
+        }
+    }
+
     const store = graph_store.getGlobalStore(allocator);
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
@@ -6490,18 +6506,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                                // Clear all existing properties by getting node and manually clearing
-                                if (store.nodes.getPtr(node.id)) |node_ptr| {
-                                    var prop_iter = node_ptr.properties.iterator();
-                                    while (prop_iter.next()) |prop_entry| {
-                                        store.allocator.free(prop_entry.key_ptr.*);
-                                        switch (prop_entry.value_ptr.*) {
-                                            .String => |s| store.allocator.free(s),
-                                            else => {},
-                                        }
-                                    }
-                                    node_ptr.properties.clearRetainingCapacity();
-                                }
+                                try store.clearNodeProperties(node.id);
 
                                 // Set new properties from the map
                                 if (props_value == .Map) {

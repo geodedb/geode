@@ -41,22 +41,10 @@
             .hash = "repl-0.1.0-gwF1T0haBQB4jId_6euLKrM_FsDv-5dvyw2GZyHh-Bgs",
         },
 
-        // Data structures and graph algorithms
-        .ds = .{
-            .url = "git+https://gitlab.com/devnw/zig/ds.git#7cd56e8b784f2d04f2b8a39feaec19aad5325442",
-            .hash = "ds-0.1.0-aDfG08UPCAD1Vis9LOxJpr5R1zttQL2Vhld3kmx4iDi2",
-        },
-
         // Vulkan compute library
         .vulkan = .{
             .url = "git+https://gitlab.com/devnw/zig/vulkan.git#a83ac8fdfe5d3c8b75db0b21a95ad146d6a70ab9",
             .hash = "vulkan-0.1.0-zh1htT5mEQBA8V28Hvyl52AYL4RVF1AUaqxFUuF0_cyJ",
-        },
-
-        // CUDA compute library
-        .cuda = .{
-            .url = "git+https://gitlab.com/devnw/zig/cuda.git#1f9e5d62ee7797418ca1f82ebb1d42ac649013e1",
-            .hash = "cuda-0.1.0-OCmgen2yBwC_15T5G8KeQ-9tC3zMjSdNZWuByJFcOXUy",
         },
 
         // =======================================================================
@@ -67,13 +55,6 @@
         .json = .{
             .url = "git+https://gitlab.com/devnw/zig/json.git#6281a8508117921096004d05e452e52041de3c60",
             .hash = "json-0.1.0-tOue4RqoCwBR_QTbDnTYNloo6_CLLzV3MYywaF0OU8_l",
-        },
-
-        // TLS 1.3 library for QUIC
-        // Updated 2026-03: HRR state reset, mTLS with OpenSSL/BoringSSL interop
-        .tls = .{
-            .url = "git+https://gitlab.com/devnw/zig/tls.git#5143f627d5ac8e5d0243906a83d2405ed0941b3b",
-            .hash = "tls-0.1.1-mtEaLBa2EQBD_AY2-8HMYMx9Nx3Lz59zbyI2vXcZ0YbC",
         },
 
         // QUIC v1/v2 protocol implementation
@@ -221,12 +202,6 @@
         .timeseries = .{
             .url = "git+https://gitlab.com/devnw/zig/timeseries.git#0103cf25b9239754fa3525ea6f08b826fbc617d1",
             .hash = "timeseries-0.1.0-iAEwOlA3AwB0QmX0WcYWUljO4_aG4Q2Q8ot-WW919ch7",
-        },
-
-        // Metrics - Counters, gauges, histograms, Prometheus export
-        .metrics = .{
-            .url = "git+https://gitlab.com/devnw/zig/metrics.git#29444b3d53402e7a4e597bd1259c582e9937de39",
-            .hash = "metrics-0.1.0-uPGXFkQsAQARWdyIIeww-eHO0Y0G1DHOAFDM-4Ju8j8-",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives

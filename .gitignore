@@ -152,6 +152,7 @@ editors/vscode/*.vsix
 
 # Claude settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # Keep devcontainer configuration
 !.devcontainer/

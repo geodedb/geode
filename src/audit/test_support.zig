@@ -1,31 +1,17 @@
-// Thin compatibility wrapper — delegates to external audit library.
-// CANARY: REQ=REQ-AUDIT-TLS-PIN-001; FEATURE="SyslogTLSCertPinning"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-12
+const std = @import("std");
+const config = @import("audit_lib").config;
 
-const audit_lib = @import("audit_lib");
-const lib_config = audit_lib.config;
+pub const Config = config.Config;
+pub const ServiceConfig = config.ServiceConfig;
+pub const CefIdentityConfig = config.CefIdentityConfig;
+pub const IdentityConfig = config.IdentityConfig;
+pub const FileSinkConfig = config.FileSinkConfig;
+pub const SyslogRfc5424Config = config.SyslogRfc5424Config;
+pub const SyslogSinkConfig = config.SyslogSinkConfig;
+pub const SinksConfig = config.SinksConfig;
+pub const FiltersConfig = config.FiltersConfig;
 
-// Re-export all public types from the external library
-pub const SyslogProtocol = lib_config.SyslogProtocol;
-pub const SyslogFacility = lib_config.SyslogFacility;
-pub const PiiMode = lib_config.PiiMode;
-pub const ServiceConfig = lib_config.ServiceConfig;
-pub const CefIdentityConfig = lib_config.CefIdentityConfig;
-pub const IdentityConfig = lib_config.IdentityConfig;
-pub const SyncMode = lib_config.SyncMode;
-pub const FileSinkConfig = lib_config.FileSinkConfig;
-pub const SyslogRfc5424Config = lib_config.SyslogRfc5424Config;
-pub const SyslogTlsConfig = lib_config.SyslogTlsConfig;
-pub const SyslogSinkConfig = lib_config.SyslogSinkConfig;
-pub const SinksConfig = lib_config.SinksConfig;
-pub const FiltersConfig = lib_config.FiltersConfig;
-pub const Config = lib_config.Config;
-
-// Re-export functions
-pub const loadConfig = lib_config.loadConfig;
-
-/// Geode-specific test config that uses build_options.version for the CEF product version
-/// and sets product name to "GEODE" instead of the library default "AUDIT".
-pub fn loadTestConfig(allocator: @import("std").mem.Allocator) !Config {
+pub fn loadTestConfig(allocator: std.mem.Allocator) !Config {
     const allow_fields = try allocator.alloc([]const u8, 10);
     allow_fields[0] = try allocator.dupe(u8, "actor_id");
     allow_fields[1] = try allocator.dupe(u8, "subject_id");

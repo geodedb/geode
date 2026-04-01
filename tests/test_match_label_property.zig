@@ -74,9 +74,9 @@ pub fn TestCANARY_REQ_GQL_017_MatchLabelProperty() !void {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const id1 = try store.createNode(&.{ "Person" });
-    const id2 = try store.createNode(&.{ "Person" });
-    const id3 = try store.createNode(&.{ "Animal" });
+    const id1 = try store.createNode(&.{"Person"});
+    const id2 = try store.createNode(&.{"Person"});
+    const id3 = try store.createNode(&.{"Animal"});
 
     try store.setNodeProperty(id1, "name", .{ .String = "Alice" });
     try store.setNodeProperty(id2, "name", .{ .String = "Bob" });
@@ -100,8 +100,8 @@ pub fn TestCANARY_REQ_GQL_017_MatchLabelPropertyEquivalenceDeterminism() !void {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const id1 = try store.createNode(&.{ "Person" });
-    const id2 = try store.createNode(&.{ "Person" });
+    const id1 = try store.createNode(&.{"Person"});
+    const id2 = try store.createNode(&.{"Person"});
     try store.setNodeProperty(id1, "name", .{ .String = "Alice" });
     try store.setNodeProperty(id2, "name", .{ .String = "Alice" });
 
@@ -132,7 +132,7 @@ pub fn TestCANARY_REQ_GQL_017_OptionalMatchNullPreserve() !void {
     defer h.deinit();
 
     const store = graph_store.getGlobalStore(allocator);
-    const id = try store.createNode(&.{ "Person" });
+    const id = try store.createNode(&.{"Person"});
     try store.setNodeProperty(id, "name", .{ .String = "Solo" });
 
     var res = try h.exec("MATCH (n:Person { name: \"Solo\" }) OPTIONAL MATCH (m:Animal { name: \"Ghost\" }) RETURN n, m");

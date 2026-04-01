@@ -5,7 +5,7 @@
 // CANARY: REQ=REQ-GQL-008; FEATURE="ORDER/LIMIT/OFFSET Parsing"; ASPECT=Parser; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=parser; UPDATED=2025-09-20
 
 const std = @import("std");
-const tok = @import("token.zig");
+const tok = @import("gql_lib").token;
 const ast = @import("ast.zig");
 const temporal = @import("../temporal.zig");
 const Lexer = @import("lexer.zig").Lexer;

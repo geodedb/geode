@@ -1,5 +1,5 @@
 const std = @import("std");
-const hnsw = @import("hnsw.zig");
+const hnsw = @import("hnsw_lib");
 const vector_types = @import("../types/vector.zig");
 const heap = @import("../storage/heap.zig");
 
@@ -22,10 +22,14 @@ pub const VectorIndex = struct {
         IndexCorrupted,
     };
 
-    pub fn init(allocator: std.mem.Allocator, dimension: u16, metric: hnsw.DistanceMetric) VectorIndex {
+    pub fn init(allocator: std.mem.Allocator, dimension: u16, metric: hnsw.DistanceMetric) !VectorIndex {
         return VectorIndex{
             .allocator = allocator,
-            .hnsw_index = hnsw.Hnsw.init(allocator, dimension, 16, 200), // M=16, ef_construction=200
+            .hnsw_index = try hnsw.Hnsw.init(allocator, dimension, metric, .{
+                .m = 16,
+                .ef_construction = 200,
+                .ef_search = 200,
+            }),
             .dimension = dimension,
             .metric = metric,
             .value_storage = std.AutoHashMap(u64, heap.Value).init(allocator),
@@ -88,7 +92,7 @@ pub const VectorIndex = struct {
     pub fn searchVectorF32(self: *const VectorIndex, query: vector_types.VectorF32, k: usize) !VectorSearchResult {
         if (query.dim != self.dimension) return IndexError.DimensionMismatch;
 
-        const results = try self.hnsw_index.knnSearch(query.data, k, self.metric);
+        const results = try self.hnsw_index.knnSearch(query.data, @intCast(k));
         defer self.allocator.free(results);
 
         var search_result = VectorSearchResult.init(self.allocator);
@@ -97,7 +101,7 @@ pub const VectorIndex = struct {
             if (self.value_storage.get(result.id)) |stored_value| {
                 try search_result.results.append(.{
                     .id = result.id,
-                    .score = result.score,
+                    .score = distanceToScore(self.metric, result.distance),
                     .value = stored_value,
                 });
             }
@@ -118,7 +122,7 @@ pub const VectorIndex = struct {
             f32_query[i] = @floatFromInt(query.data[i]);
         }
 
-        const results = try self.hnsw_index.knnSearch(f32_query, k, self.metric);
+        const results = try self.hnsw_index.knnSearch(f32_query, @intCast(k));
         defer self.allocator.free(results);
 
         var search_result = VectorSearchResult.init(self.allocator);
@@ -127,7 +131,7 @@ pub const VectorIndex = struct {
             if (self.value_storage.get(result.id)) |stored_value| {
                 try search_result.results.append(.{
                     .id = result.id,
-                    .score = result.score,
+                    .score = distanceToScore(self.metric, result.distance),
                     .value = stored_value,
                 });
             }
@@ -160,7 +164,7 @@ pub const VectorIndex = struct {
             .total_vectors = self.value_storage.count(),
             .dimension = self.dimension,
             .metric = self.metric,
-            .hnsw_nodes = self.hnsw_index.nodes.count(),
+            .hnsw_nodes = @intCast(self.hnsw_index.nodes.items.len),
             .max_level = self.hnsw_index.max_level,
         };
     }
@@ -171,6 +175,14 @@ pub const VectorIndex = struct {
         return id;
     }
 };
+
+fn distanceToScore(metric: hnsw.DistanceMetric, distance: f32) f64 {
+    return switch (metric) {
+        .euclidean, .manhattan => 1.0 / (1.0 + @as(f64, distance)),
+        .cosine => 1.0 - @as(f64, distance),
+        .dot_product => -@as(f64, distance),
+    };
+}
 
 /// Result of a vector similarity search
 pub const VectorSearchResult = struct {
@@ -244,7 +256,7 @@ pub const VectorIndexManager = struct {
         }
 
         const index = try self.allocator.create(VectorIndex);
-        index.* = VectorIndex.init(self.allocator, dimension, metric);
+        index.* = try VectorIndex.init(self.allocator, dimension, metric);
 
         const owned_name = try self.allocator.dupe(u8, name);
         try self.indexes.put(owned_name, index);
@@ -285,7 +297,7 @@ test "VectorIndex basic operations" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = VectorIndex.init(allocator, 3, .l2);
+    var index = try VectorIndex.init(allocator, 3, .euclidean);
     defer index.deinit();
 
     // Test VectorF32 insertion and search
@@ -307,20 +319,20 @@ test "VectorIndex basic operations" {
     // The first result should be vec1 (exact match)
     const first_match = results.get(0).?;
     try testing.expectEqual(id1, first_match.id);
-    try testing.expect(first_match.score < 0.1); // Very close to 0 for exact match
+    try testing.expect(first_match.score > 0.99); // Exact match normalizes to the best score
 
     // Test stats
     const stats = index.getStats();
     try testing.expectEqual(@as(u32, 3), stats.total_vectors);
     try testing.expectEqual(@as(u16, 3), stats.dimension);
-    try testing.expectEqual(hnsw.DistanceMetric.l2, stats.metric);
+    try testing.expectEqual(hnsw.DistanceMetric.euclidean, stats.metric);
 }
 
 test "VectorIndex with VectorI32" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = VectorIndex.init(allocator, 4, .l2);
+    var index = try VectorIndex.init(allocator, 4, .euclidean);
     defer index.deinit();
 
     // Test VectorI32 insertion
@@ -346,7 +358,7 @@ test "VectorIndexManager operations" {
 
     // Create indexes
     try manager.createIndex("embeddings", 128, .cosine);
-    try manager.createIndex("features", 64, .l2);
+    try manager.createIndex("features", 64, .euclidean);
 
     // Test getting indexes
     const embeddings_index = manager.getIndex("embeddings");
@@ -376,7 +388,7 @@ test "VectorIndex error handling" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var index = VectorIndex.init(allocator, 3, .l2);
+    var index = try VectorIndex.init(allocator, 3, .euclidean);
     defer index.deinit();
 
     // Test dimension mismatch

@@ -22,7 +22,6 @@ fn makeEngine() !cdc.CDCEngine {
     return try cdc.CDCEngine.init(dummyAllocator(), cfg);
 }
 
-
 test "CDC diagnostics export contains core, adaptive & ratio fields" {
     var engine = try makeEngine();
     defer engine.deinit();
