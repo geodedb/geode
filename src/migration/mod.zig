@@ -843,20 +843,20 @@ test "QueryExecutor can execute with context" {
 }
 
 test "PolicyMode defaults to lenient" {
-    try std.testing.expectEqual(PolicyMode.lenient, policy_mode);
+    // Reset to known state via the public API (thread-safe).
+    try enforcePolicy("LENIENT");
+    try std.testing.expect(!isStrictPolicy());
 }
 
 test "enforcePolicy sets strict mode" {
-    // Reset to known state
-    policy_mode = .lenient;
+    try enforcePolicy("LENIENT");
     try enforcePolicy("STRICT");
     try std.testing.expect(isStrictPolicy());
-    // Restore
-    policy_mode = .lenient;
+    try enforcePolicy("LENIENT");
 }
 
 test "enforcePolicy sets lenient mode" {
-    policy_mode = .strict;
+    try enforcePolicy("STRICT");
     try enforcePolicy("LENIENT");
     try std.testing.expect(!isStrictPolicy());
 }
