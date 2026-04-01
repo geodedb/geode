@@ -10,6 +10,7 @@ const std = @import("std");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
 const fle_integration = @import("../fle_integration.zig");
+const property_codec = @import("../property_value_codec.zig");
 const execution = @import("../execution.zig");
 const value_types = @import("../value_types.zig");
 
@@ -298,7 +299,11 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
-                        .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
+                        .ExtValue => {
+                            const projected = try property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*);
+                            defer property_codec.freeValue(allocator, projected);
+                            try writeValue(allocator, writer, projected);
+                        },
                     }
                 }
                 try writer.writeAll("}");
@@ -390,7 +395,11 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
                         },
                         .Bool => |b| try writer.writeAll(if (b) "true" else "false"),
                         .Null => try writer.writeAll("null"),
-                        .ExtValue => try writer.writeAll("\"<ExtValue>\""), // Placeholder for ExtValue serialization
+                        .ExtValue => {
+                            const projected = try property_codec.propertyValueToProjectedValue(allocator, prop_value);
+                            defer property_codec.freeValue(allocator, projected);
+                            try writeValue(allocator, writer, projected);
+                        },
                     }
                 }
                 try writer.writeAll("}");
@@ -682,8 +691,7 @@ pub fn writeValue(allocator: std.mem.Allocator, writer: anytype, value: Value) !
             try writer.writeAll(j);
         },
         .Jsonb => |j| {
-            // Jsonb stores binary data, output as placeholder
-            try writer.print("\"[jsonb:{d}bytes]\"", .{j.data.len});
+            try writer.writeAll(j.data);
         },
         .Xml => |x| {
             try writer.writeByte('"');

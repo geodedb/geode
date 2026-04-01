@@ -552,6 +552,9 @@ pub const IndexType = enum {
     spatial_geographic,
     network_cidr,
     signature_crypto,
+    interval_tree,
+    jsonb_inverted,
+    domain_trie,
 };
 
 // Backup and restore statements

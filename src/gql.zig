@@ -212,6 +212,25 @@ test "CREATE INDEX with name still works" {
     }
 }
 
+test "CREATE INDEX preserves advanced GA index types" {
+    const cases = [_]struct {
+        query: []const u8,
+        expected: ast.IndexType,
+    }{
+        .{ .query = "CREATE INDEX idx_interval FOR (n:Event) ON (n.window) USING IntervalTree", .expected = .interval_tree },
+        .{ .query = "CREATE INDEX idx_jsonb FOR (n:Doc) ON (n.payload) USING JsonbInverted", .expected = .jsonb_inverted },
+        .{ .query = "CREATE INDEX idx_domain FOR (n:Host) ON (n.domain) USING DomainTrie", .expected = .domain_trie },
+    };
+
+    for (cases) |case| {
+        var result = try lib.parse(std.testing.allocator, case.query, .{});
+        defer result.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), result.program.statements.len);
+        try std.testing.expectEqual(case.expected, result.program.statements[0].CreateIndex.index_type);
+    }
+}
+
 test "Parenthesized UNION with INTERSECT" {
     const query = "(MATCH (a:MixedA) RETURN a.id AS id UNION MATCH (b:MixedB) RETURN b.id AS id) INTERSECT MATCH (c:MixedC) RETURN c.id AS id";
     var result = lib.parse(std.testing.allocator, query, .{}) catch |err| {

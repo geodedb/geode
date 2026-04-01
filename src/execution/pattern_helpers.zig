@@ -5,6 +5,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 
 // Local type aliases
@@ -17,15 +18,7 @@ pub const Env = value_types.Env;
 // This eliminates duplicate switch statements throughout match_operations.zig
 // ============================================================================
 pub fn propertyValueToValue(prop_val: graph_store.PropertyValue) Value {
-    return switch (prop_val) {
-        .Null => Value{ .Null = {} },
-        .Bool => |b| Value{ .Bool = b },
-        .Int => |i| Value{ .Int = i },
-        .String => |s| Value{ .Str = s },
-        .Float => |f| Value{ .Double = f },
-        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-        .ExtValue => |ext| Value{ .ExtValue = ext },
-    };
+    return property_codec.propertyValueToValue(prop_val);
 }
 
 // ============================================================================

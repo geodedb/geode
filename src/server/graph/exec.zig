@@ -7,6 +7,7 @@ const diagnostics = @import("../../diagnostics.zig");
 const eval_ext = @import("../../eval_extended.zig");
 const evaluator_functions = @import("../../types/evaluator_functions.zig");
 const heap = @import("../../storage/heap.zig");
+const property_codec = @import("../../property_value_codec.zig");
 const value_types = @import("../../value_types.zig");
 
 // Import shared types from common module
@@ -677,15 +678,7 @@ fn evaluateExpressionInBinding(
 
                 // Call the extended function
                 if (func(allocator, args)) |result| {
-                    // Convert ExtValue result back to PropertyValue for BindingValue
-                    const property_value = switch (result) {
-                        .Str => |s| PropertyValue{ .String = s },
-                        .Int => |int_val| PropertyValue{ .Int = int_val },
-                        .Bool => |b| PropertyValue{ .Bool = b },
-                        .Null => PropertyValue{ .Null = {} },
-                        .Decimal => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = dec.scale } },
-                        else => PropertyValue{ .ExtValue = result },
-                    };
+                    const property_value = property_codec.extValueToPropertyValue(result);
                     break :blk_call .{ .Value = property_value };
                 } else |_| {
                     // Function call failed, return null
@@ -728,105 +721,23 @@ fn evaluateExpressionInBinding(
                     };
                 }
 
-                // Convert eval.Value to heap.Value for function calls
-                const convertEvalToHeap = struct {
-                    fn convert(val: eval.Value) heap.Value {
-                        return switch (val) {
-                            .Null => heap.Value{ .Null = {} },
-                            .Bool => |b| heap.Value{ .Bool = b },
-                            .Int => |i| heap.Value{ .Int = i },
-                            .Str => |s| heap.Value{ .Str = s },
-                            .Decimal => |dec| heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .Double => |f| heap.Value{ .Double = f },
-                            .Real => |f| heap.Value{ .Real = f },
-                            .ExtValue => |ext| switch (ext) {
-                                .Null => heap.Value{ .Null = {} },
-                                .Int => |i| heap.Value{ .Int = i },
-                                .Bool => |b| heap.Value{ .Bool = b },
-                                .Str => |s| heap.Value{ .Str = s },
-                                .Decimal => |dec| heap.Value{ .Decimal128 = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                                .IpAddr => |v| heap.Value{ .IpAddr = v },
-                                .Subnet => |v| heap.Value{ .Subnet = v },
-                                .Mac => |v| heap.Value{ .Mac = v },
-                                .Hash => |v| heap.Value{ .Hash = v },
-                                .Currency => |v| heap.Value{ .Currency = v },
-                                .LanguageTag => |v| heap.Value{ .LanguageTag = v },
-                                .LatLon => |v| heap.Value{ .LatLon = v },
-                                .LatLonAlt => |v| heap.Value{ .LatLonAlt = v },
-                                .Geometry => |v| heap.Value{ .Geometry = v },
-                                .Temperature => |v| heap.Value{ .Temperature = v },
-                                .Pressure => |v| heap.Value{ .Pressure = v },
-                                .VectorF32 => |v| heap.Value{ .VectorF32 = v },
-                                .VectorI32 => |v| heap.Value{ .VectorI32 = v },
-                                .Date => |v| heap.Value{ .Date = v },
-                                .Time => |v| heap.Value{ .Time = v },
-                                .TimestampTZ => |v| heap.Value{ .TimestampTZ = v },
-                                .Interval => |v| heap.Value{ .Interval = v },
-                                .UUID => |v| heap.Value{ .UUID = v },
-                                .Url => |v| heap.Value{ .Url = v },
-                                .Domain => |v| heap.Value{ .Domain = v },
-                                .Bytea => |v| heap.Value{ .Bytea = v },
-                                .Json => |v| heap.Value{ .Json = v },
-                                .Jsonb => |v| heap.Value{ .Jsonb = v },
-                                .Xml => |v| heap.Value{ .Xml = v },
-                                .BitString => |v| heap.Value{ .BitString = v },
-                                .VarBit => |v| heap.Value{ .VarBit = v },
-                                .IntRange => |v| heap.Value{ .IntRange = v },
-                                .Enum => |v| heap.Value{ .Enum = v },
-                                else => heap.Value{ .Null = {} },
-                            },
-                            else => heap.Value{ .Null = {} },
-                        };
-                    }
-                }.convert;
-
                 // Try basic function calls
                 if (std.ascii.eqlIgnoreCase(function_name, "toString") and eval_args.len == 1) {
-                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    const heap_arg = property_codec.evalValueToHeapValue(eval_args[0]);
                     if (evaluator_functions.toString_val(allocator, heap_arg)) |result| {
-                        // Convert heap.Value to PropertyValue
-                        const property_value = switch (result) {
-                            .Text => |s| PropertyValue{ .String = s },
-                            .Str => |s| PropertyValue{ .String = s },
-                            .Int => |int_val| PropertyValue{ .Int = int_val },
-                            .Bool => |b| PropertyValue{ .Bool = b },
-                            .Null => PropertyValue{ .Null = {} },
-                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
-                            else => PropertyValue{ .Null = {} }, // Fallback for other types
-                        };
+                        const property_value = property_codec.heapValueToPropertyValue(result);
                         break :blk_call .{ .Value = property_value };
                     } else |_| {}
                 } else if (std.ascii.eqlIgnoreCase(function_name, "toInteger") and eval_args.len == 1) {
-                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    const heap_arg = property_codec.evalValueToHeapValue(eval_args[0]);
                     if (evaluator_functions.toInteger_val(heap_arg)) |result| {
-                        // Convert heap.Value to PropertyValue
-                        const property_value = switch (result) {
-                            .Text => |s| PropertyValue{ .String = s },
-                            .Str => |s| PropertyValue{ .String = s },
-                            .Int => |int_val| PropertyValue{ .Int = int_val },
-                            .Bool => |b| PropertyValue{ .Bool = b },
-                            .Null => PropertyValue{ .Null = {} },
-                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
-                            else => PropertyValue{ .Null = {} }, // Fallback for other types
-                        };
+                        const property_value = property_codec.heapValueToPropertyValue(result);
                         break :blk_call .{ .Value = property_value };
                     } else |_| {}
                 } else if (std.ascii.eqlIgnoreCase(function_name, "type") and eval_args.len == 1) {
-                    const heap_arg = convertEvalToHeap(eval_args[0]);
+                    const heap_arg = property_codec.evalValueToHeapValue(eval_args[0]);
                     if (evaluator_functions.type_val(heap_arg)) |result| {
-                        // Convert heap.Value to PropertyValue
-                        const property_value = switch (result) {
-                            .Text => |s| PropertyValue{ .String = s },
-                            .Str => |s| PropertyValue{ .String = s },
-                            .Int => |int_val| PropertyValue{ .Int = int_val },
-                            .Bool => |b| PropertyValue{ .Bool = b },
-                            .Null => PropertyValue{ .Null = {} },
-                            .Decimal128 => |dec| PropertyValue{ .Decimal = .{ .coeff = dec.coeff, .scale = @intCast(dec.scale) } },
-                            .VectorF32 => |vec| PropertyValue{ .ExtValue = .{ .VectorF32 = vec } },
-                            else => PropertyValue{ .Null = {} }, // Fallback for other types
-                        };
+                        const property_value = property_codec.heapValueToPropertyValue(result);
                         break :blk_call .{ .Value = property_value };
                     } else |_| {}
                 }

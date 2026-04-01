@@ -403,7 +403,14 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
         .Int => |v| v == b.Int,
         .Bool => |v| v == b.Bool,
         .Str => |v| std.mem.eql(u8, v, b.Str),
+        .SmallInt => |v| v == b.SmallInt,
+        .BigInt => |v| v == b.BigInt,
+        .Real => |v| v == b.Real,
+        .Double => |v| v == b.Double,
         .Decimal => |v| v.coeff == b.Decimal.coeff and v.scale == b.Decimal.scale,
+        .Char => |v| v.n == b.Char.n and std.mem.eql(u8, v.data, b.Char.data),
+        .Varchar => |v| v.n == b.Varchar.n and std.mem.eql(u8, v.data, b.Varchar.data),
+        .Text => |v| std.mem.eql(u8, v, b.Text),
         .IpAddr => |v| switch (v) {
             .v4 => |addr| switch (b.IpAddr) {
                 .v4 => |baddr| std.mem.eql(u8, &addr, &baddr),
@@ -441,6 +448,8 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
         .VectorI32 => |v| std.mem.eql(i32, v.data, b.VectorI32.data),
         .Date => |v| v.days_since_epoch == b.Date.days_since_epoch,
         .Time => |v| v.micros_since_midnight == b.Time.micros_since_midnight,
+        .TimeTZ => |v| v.time.micros_since_midnight == b.TimeTZ.time.micros_since_midnight and v.offset_seconds == b.TimeTZ.offset_seconds,
+        .Timestamp => |v| v.micros_since_epoch == b.Timestamp.micros_since_epoch,
         .TimestampTZ => |v| v.micros_since_epoch_utc == b.TimestampTZ.micros_since_epoch_utc,
         .Interval => |v| v.months == b.Interval.months and v.days == b.Interval.days and v.micros == b.Interval.micros,
         .UUID => |v| std.mem.eql(u8, &v.bytes, &b.UUID.bytes),
@@ -467,6 +476,7 @@ pub fn eqExtValues(a: @import("eval_extended.zig").ExtValue, b: @import("eval_ex
             break :blk true;
         },
         .Enum => |v| v.type_id == b.Enum.type_id and v.value_ordinal == b.Enum.value_ordinal,
+        .Array => |v| v.elem_type == b.Array.elem_type and std.mem.eql(u8, v.data, b.Array.data),
     };
 }
 

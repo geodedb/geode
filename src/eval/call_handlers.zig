@@ -16,6 +16,8 @@ const std = @import("std");
 const value_types = @import("../value_types.zig");
 const ast = @import("../gql/ast.zig");
 const evaluator_functions = @import("../types/evaluator_functions.zig");
+const datetime = @import("../types/datetime.zig");
+const bitstring = @import("../types/bitstring.zig");
 const type_promotion = @import("type_promotion.zig");
 
 pub const Value = value_types.Value;
@@ -27,6 +29,101 @@ const heapValueToEvalValue = type_promotion.heapValueToEvalValue;
 
 // Forward declaration for recursive evalExpr call
 const eval = @import("../eval.zig");
+
+fn mapEvaluatorError(err: evaluator_functions.EvaluatorError) EvalError {
+    return switch (err) {
+        evaluator_functions.EvaluatorError.TypeMismatch => EvalError.TypeMismatch,
+        evaluator_functions.EvaluatorError.DivisionByZero => EvalError.DivisionByZero,
+        evaluator_functions.EvaluatorError.Overflow => EvalError.Unsupported,
+        evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
+        evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
+        evaluator_functions.EvaluatorError.OutOfMemory => EvalError.OutOfMemory,
+        evaluator_functions.EvaluatorError.CharLengthExceeded => EvalError.CharLengthExceeded,
+        evaluator_functions.EvaluatorError.HexFormatError => EvalError.HexFormatError,
+        evaluator_functions.EvaluatorError.JsonInvalid => EvalError.JsonInvalid,
+        evaluator_functions.EvaluatorError.XmlNotWellFormed => EvalError.XmlNotWellFormed,
+        evaluator_functions.EvaluatorError.UrlParseError => EvalError.UrlParseError,
+        evaluator_functions.EvaluatorError.DomainSyntaxError => EvalError.DomainSyntaxError,
+        evaluator_functions.EvaluatorError.UuidParseError => EvalError.UuidParseError,
+        evaluator_functions.EvaluatorError.EnumTypeError => EvalError.EnumTypeError,
+        evaluator_functions.EvaluatorError.EnumValueError => EvalError.EnumValueError,
+        evaluator_functions.EvaluatorError.IndexOutOfBounds => EvalError.IndexOutOfBounds,
+        evaluator_functions.EvaluatorError.BitParseError => EvalError.BitParseError,
+        evaluator_functions.EvaluatorError.RangeBoundsError => EvalError.RangeBoundsError,
+        evaluator_functions.EvaluatorError.FloatNaN => EvalError.FloatNaN,
+        evaluator_functions.EvaluatorError.TimeParse => EvalError.TimeParse,
+        evaluator_functions.EvaluatorError.DecimalOverflow => EvalError.DecimalOverflow,
+        evaluator_functions.EvaluatorError.DecimalDivZero => EvalError.DecimalDivZero,
+        evaluator_functions.EvaluatorError.IdnaError => EvalError.IdnaError,
+    };
+}
+
+fn textLike(value: Value) ?[]const u8 {
+    return switch (value) {
+        .Str => |s| s,
+        .Text => |s| s,
+        .Char => |c| c.data,
+        .Varchar => |v| v.data,
+        .Json => |j| j,
+        else => null,
+    };
+}
+
+fn intLike(value: Value) ?i64 {
+    return switch (value) {
+        .Int => |i| i,
+        .SmallInt => |i| i,
+        .BigInt => |i| i,
+        else => null,
+    };
+}
+
+fn stringifyValueForConstructor(allocator: std.mem.Allocator, value: Value) !?[]u8 {
+    if (textLike(value)) |text| {
+        return try allocator.dupe(u8, text);
+    }
+
+    return switch (value) {
+        .Bool => |b| try allocator.dupe(u8, if (b) "true" else "false"),
+        .Int => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .SmallInt => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .BigInt => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
+        .Real => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .Double => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
+        .Decimal => |d| try std.fmt.allocPrint(
+            allocator,
+            "{d}",
+            .{@as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)))},
+        ),
+        else => null,
+    };
+}
+
+fn parseOffsetSeconds(value: Value) ?i32 {
+    return switch (value) {
+        .Int => |i| if (i >= std.math.minInt(i32) and i <= std.math.maxInt(i32)) @intCast(i) else null,
+        .SmallInt => |i| i,
+        .BigInt => |i| if (i >= std.math.minInt(i32) and i <= std.math.maxInt(i32)) @intCast(i) else null,
+        else => blk: {
+            const text = textLike(value) orelse break :blk null;
+            if (std.mem.eql(u8, text, "Z")) break :blk 0;
+            if (text.len != 6 or text[3] != ':') break :blk null;
+            if (text[0] != '+' and text[0] != '-') break :blk null;
+
+            const hours = std.fmt.parseInt(i32, text[1..3], 10) catch break :blk null;
+            const mins = std.fmt.parseInt(i32, text[4..6], 10) catch break :blk null;
+            const sign: i32 = if (text[0] == '-') -1 else 1;
+            break :blk sign * (hours * 3600 + mins * 60);
+        },
+    };
+}
+
+fn normalizeBitLiteral(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    if (std.mem.startsWith(u8, text, "B'") and std.mem.endsWith(u8, text, "'")) {
+        return allocator.dupe(u8, text);
+    }
+    return std.fmt.allocPrint(allocator, "B'{s}'", .{text});
+}
 
 // ============================================================================
 // Math Functions
@@ -1461,6 +1558,462 @@ pub fn evalAggregateFunction(
     }
 
     // Not an aggregate function
+    return null;
+}
+
+// ============================================================================
+// Advanced Type Functions
+// ============================================================================
+
+/// Evaluate documented advanced constructors and built-ins that are not handled
+/// by the simpler string/math/collection dispatchers.
+pub fn evalAdvancedTypeFunction(
+    allocator: std.mem.Allocator,
+    function_name: []const u8,
+    args: []*ast.Expr,
+    env: Env,
+) EvalError!?Value {
+    if (std.mem.eql(u8, function_name, "smallint")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.SmallInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "bigint")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.BigInt(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "real")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.Real(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "double")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.Double(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "int")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        return switch (arg) {
+            .Int => arg,
+            .SmallInt => |i| Value{ .Int = i },
+            .BigInt => |i| Value{ .Int = i },
+            .Bool => |b| Value{ .Int = if (b) 1 else 0 },
+            else => blk: {
+                const text = textLike(arg) orelse break :blk Value{ .Null = {} };
+                const parsed = std.fmt.parseInt(i64, text, 10) catch break :blk Value{ .Null = {} };
+                break :blk Value{ .Int = parsed };
+            },
+        };
+    }
+
+    if (std.mem.eql(u8, function_name, "bool")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        return switch (arg) {
+            .Bool => arg,
+            .Int => |i| Value{ .Bool = i != 0 },
+            .SmallInt => |i| Value{ .Bool = i != 0 },
+            .BigInt => |i| Value{ .Bool = i != 0 },
+            else => blk: {
+                const text = textLike(arg) orelse break :blk Value{ .Null = {} };
+                if (std.ascii.eqlIgnoreCase(text, "true") or std.mem.eql(u8, text, "1")) break :blk Value{ .Bool = true };
+                if (std.ascii.eqlIgnoreCase(text, "false") or std.mem.eql(u8, text, "0")) break :blk Value{ .Bool = false };
+                break :blk Value{ .Null = {} };
+            },
+        };
+    }
+
+    if (std.mem.eql(u8, function_name, "decimal")) {
+        if (args.len < 1 or args.len > 2) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const value_text = (try stringifyValueForConstructor(allocator, arg)) orelse return Value{ .Null = {} };
+        defer allocator.free(value_text);
+
+        const scale = if (args.len == 2) blk: {
+            const scale_arg = try eval.evalExpr(allocator, args[1].*, env);
+            const scale_value = intLike(scale_arg) orelse return Value{ .Null = {} };
+            break :blk @as(i16, @intCast(scale_value));
+        } else null;
+
+        const result = evaluator_functions.Decimal(allocator, value_text, scale) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "char")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const value_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const len_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const text = textLike(value_arg) orelse return Value{ .Null = {} };
+        const n = intLike(len_arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Char(allocator, text, @intCast(n)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "varchar")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const value_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const len_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const text = textLike(value_arg) orelse return Value{ .Null = {} };
+        const n = intLike(len_arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Varchar(allocator, text, @intCast(n)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "text")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        return Value{ .Text = try allocator.dupe(u8, text) };
+    }
+
+    if (std.mem.eql(u8, function_name, "date")) {
+        if (args.len != 1) return null;
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Date(text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "time")) {
+        if (args.len != 1) return null;
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        return Value{ .Time = datetime.Time.fromStr(text) catch return EvalError.TimeParse };
+    }
+
+    if (std.mem.eql(u8, function_name, "timetz")) {
+        if (args.len != 1 and args.len != 2) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+
+        if (args.len == 1) {
+            return Value{ .TimeTZ = datetime.TimeTZ.fromStr(text) catch return EvalError.TimeParse };
+        }
+
+        const offset_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const offset_seconds = parseOffsetSeconds(offset_arg) orelse return Value{ .Null = {} };
+        const time = datetime.Time.fromStr(text) catch return EvalError.TimeParse;
+        return Value{ .TimeTZ = .{ .time = time, .offset_seconds = offset_seconds } };
+    }
+
+    if (std.mem.eql(u8, function_name, "timestamp")) {
+        if (args.len != 1) return null;
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Timestamp(text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "timestamptz")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.TimestampTZ(text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "interval")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        return Value{ .Interval = datetime.Interval.fromStr(text) catch return EvalError.TimeParse };
+    }
+
+    if (std.mem.eql(u8, function_name, "makeinterval")) {
+        if (args.len != 3) return Value{ .Null = {} };
+        const months_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const days_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const micros_arg = try eval.evalExpr(allocator, args[2].*, env);
+        const months = intLike(months_arg) orelse return Value{ .Null = {} };
+        const days = intLike(days_arg) orelse return Value{ .Null = {} };
+        const micros = intLike(micros_arg) orelse return Value{ .Null = {} };
+        return Value{ .Interval = .{
+            .months = @intCast(months),
+            .days = @intCast(days),
+            .micros = micros,
+        } };
+    }
+
+    if (std.mem.eql(u8, function_name, "bytea")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Bytea(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "json")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Json(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "jsonb")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Jsonb(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "xml")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Xml(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "url")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Url(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "domain")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.Domain(allocator, text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "uuid")) {
+        if (args.len == 0) {
+            return heapValueToEvalValue(evaluator_functions.uuid_v4());
+        }
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.UUID(text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "bit")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const wrapped = try normalizeBitLiteral(allocator, text);
+        defer allocator.free(wrapped);
+        return Value{ .BitString = bitstring.BitString.fromString(allocator, wrapped) catch return EvalError.BitParseError };
+    }
+
+    if (std.mem.eql(u8, function_name, "varbit")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const text = textLike(arg) orelse return Value{ .Null = {} };
+        const wrapped = try normalizeBitLiteral(allocator, text);
+        defer allocator.free(wrapped);
+        const result = evaluator_functions.VarBit(allocator, wrapped) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "range")) {
+        if (args.len != 4) return Value{ .Null = {} };
+        const base_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const lower_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const upper_arg = try eval.evalExpr(allocator, args[2].*, env);
+        const bounds_arg = try eval.evalExpr(allocator, args[3].*, env);
+        const base_type = textLike(base_arg) orelse return Value{ .Null = {} };
+        const bounds = textLike(bounds_arg) orelse return Value{ .Null = {} };
+
+        const result = evaluator_functions.RangeValue(
+            allocator,
+            base_type,
+            if (lower_arg == .Null) null else evalValueToHeapValue(lower_arg),
+            if (upper_arg == .Null) null else evalValueToHeapValue(upper_arg),
+            bounds,
+        ) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "jsonb_get")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const doc = try eval.evalExpr(allocator, args[0].*, env);
+        const path = try eval.evalExpr(allocator, args[1].*, env);
+        const path_text = textLike(path) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.jsonb_get(evalValueToHeapValue(doc), path_text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "jsonb_exists")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const doc = try eval.evalExpr(allocator, args[0].*, env);
+        const key = try eval.evalExpr(allocator, args[1].*, env);
+        const key_text = textLike(key) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.jsonb_exists(evalValueToHeapValue(doc), key_text) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "xml_is_well_formed")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        return heapValueToEvalValue(evaluator_functions.xml_is_well_formed(evalValueToHeapValue(arg)));
+    }
+
+    if (std.mem.eql(u8, function_name, "url_host")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.url_host(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "url_scheme")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.url_scheme(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "url_path")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.url_path(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "url_query")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        return switch (arg) {
+            .Url => |u| Value{ .Text = if (u.query) |q| q else "" },
+            .ExtValue => |ext| switch (ext) {
+                .Url => |u| Value{ .Text = if (u.query) |q| q else "" },
+                else => Value{ .Null = {} },
+            },
+            else => Value{ .Null = {} },
+        };
+    }
+
+    if (std.mem.eql(u8, function_name, "url_origin")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        return switch (arg) {
+            .Url => |u| Value{ .Text = try u.getOrigin(allocator) },
+            .ExtValue => |ext| switch (ext) {
+                .Url => |u| Value{ .Text = try u.getOrigin(allocator) },
+                else => Value{ .Null = {} },
+            },
+            else => Value{ .Null = {} },
+        };
+    }
+
+    if (std.mem.eql(u8, function_name, "domain_labels")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.domain_labels(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "domain_root")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const domain = switch (arg) {
+            .Domain => |d| d,
+            .ExtValue => |ext| switch (ext) {
+                .Domain => |d| d,
+                else => return Value{ .Null = {} },
+            },
+            else => return Value{ .Null = {} },
+        };
+        if (domain.labels.len == 0) return Value{ .Null = {} };
+        if (domain.labels.len == 1) return Value{ .Text = try allocator.dupe(u8, domain.labels[0]) };
+        return Value{ .Text = try std.mem.join(allocator, ".", domain.labels[domain.labels.len - 2 ..]) };
+    }
+
+    if (std.mem.eql(u8, function_name, "uuid_v4")) {
+        if (args.len != 0) return Value{ .Null = {} };
+        return heapValueToEvalValue(evaluator_functions.uuid_v4());
+    }
+
+    if (std.mem.eql(u8, function_name, "uuid_v7")) {
+        if (args.len != 0) return Value{ .Null = {} };
+        return heapValueToEvalValue(evaluator_functions.uuid_v7());
+    }
+
+    if (std.mem.eql(u8, function_name, "uuid_equal")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const lhs = try eval.evalExpr(allocator, args[0].*, env);
+        const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        const result = evaluator_functions.uuid_equal(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "to_hex")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.to_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "from_hex")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.from_hex(allocator, evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "array_length")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.array_length(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "array_contains")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const array_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const value_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const result = evaluator_functions.array_contains(evalValueToHeapValue(array_arg), evalValueToHeapValue(value_arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "bit_and")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const lhs = try eval.evalExpr(allocator, args[0].*, env);
+        const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        const result = evaluator_functions.bit_and(allocator, evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "bit_count")) {
+        if (args.len != 1) return Value{ .Null = {} };
+        const arg = try eval.evalExpr(allocator, args[0].*, env);
+        const result = evaluator_functions.bit_count(evalValueToHeapValue(arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "range_contains")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const range_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const element_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const result = evaluator_functions.range_contains(evalValueToHeapValue(range_arg), evalValueToHeapValue(element_arg)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "range_overlaps")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const lhs = try eval.evalExpr(allocator, args[0].*, env);
+        const rhs = try eval.evalExpr(allocator, args[1].*, env);
+        const result = evaluator_functions.range_overlaps(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
     return null;
 }
 

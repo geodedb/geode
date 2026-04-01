@@ -86,7 +86,7 @@ pub fn Hash(allocator: std.mem.Allocator, alg: []const u8, hex: []const u8) Eval
     else
         return EvaluatorError.InvalidFormat;
 
-    const expected_len = switch (alg_enum) {
+    const expected_len: usize = switch (alg_enum) {
         .SHA3_256 => 32,
         .SHA3_512 => 64,
         .BLAKE3 => 32,
@@ -314,7 +314,7 @@ pub fn Real(val: Value) EvaluatorError!Value {
         .BigInt => |i| Value{ .Real = @floatFromInt(i) },
         .Real => val,
         .Double => |d| {
-            if (d > std.math.maxInt(f32) or d < std.math.minInt(f32)) return EvaluatorError.Overflow;
+            if (d > std.math.floatMax(f32) or d < -std.math.floatMax(f32)) return EvaluatorError.Overflow;
             return Value{ .Real = @floatCast(d) };
         },
         else => EvaluatorError.TypeMismatch,
@@ -342,7 +342,7 @@ pub fn Decimal(allocator: std.mem.Allocator, value_str: []const u8, scale_val: ?
 
 pub fn Char(allocator: std.mem.Allocator, text: []const u8, n: u16) EvaluatorError!Value {
     _ = allocator;
-    if (std.unicode.utf8CountCodepoints(text) catch return EvaluatorError.InvalidFormat > n) {
+    if ((std.unicode.utf8CountCodepoints(text) catch return EvaluatorError.InvalidFormat) > n) {
         return EvaluatorError.CharLengthExceeded;
     }
     return Value{ .Char = .{ .data = text, .n = n } };
@@ -350,7 +350,7 @@ pub fn Char(allocator: std.mem.Allocator, text: []const u8, n: u16) EvaluatorErr
 
 pub fn Varchar(allocator: std.mem.Allocator, text: []const u8, n: u16) EvaluatorError!Value {
     _ = allocator;
-    if (std.unicode.utf8CountCodepoints(text) catch return EvaluatorError.InvalidFormat > n) {
+    if ((std.unicode.utf8CountCodepoints(text) catch return EvaluatorError.InvalidFormat) > n) {
         return EvaluatorError.CharLengthExceeded;
     }
     return Value{ .Varchar = .{ .data = text, .n = n } };
@@ -430,8 +430,8 @@ pub fn Array(allocator: std.mem.Allocator, elements: []const Value) EvaluatorErr
     const first_type = elements[0];
     switch (first_type) {
         .Int, .SmallInt, .BigInt => {
-            var int_vals = std.ArrayList(i64).init(allocator);
-            defer int_vals.deinit();
+            var int_vals = std.ArrayList(i64).empty;
+            defer int_vals.deinit(allocator);
 
             for (elements) |elem| {
                 const int_val = switch (elem) {
@@ -440,7 +440,7 @@ pub fn Array(allocator: std.mem.Allocator, elements: []const Value) EvaluatorErr
                     .BigInt => |i| i,
                     else => return EvaluatorError.TypeMismatch,
                 };
-                try int_vals.append(int_val);
+                try int_vals.append(allocator, int_val);
             }
 
             const array = try arrays.DynamicArray.fromInts(allocator, int_vals.items);
@@ -684,7 +684,7 @@ pub fn xml_is_well_formed(val: Value) Value {
         else => return Value{ .Bool = false },
     };
 
-    return Value{ .Bool = xml.XmlDocument.isWellFormed(text) };
+    return Value{ .Bool = xml.XmlDocument.isWellFormed(std.heap.smp_allocator, text) };
 }
 
 pub fn url_host(val: Value) EvaluatorError!Value {
@@ -722,11 +722,11 @@ pub fn domain_labels(allocator: std.mem.Allocator, val: Value) EvaluatorError!Va
     };
 
     // P2-3: Use provided allocator instead of page_allocator
-    var elements = std.ArrayList(Value).init(allocator);
-    defer elements.deinit();
+    var elements = std.ArrayList(Value).empty;
+    defer elements.deinit(allocator);
 
     for (domain.getLabels()) |label| {
-        try elements.append(Value{ .Text = label });
+        try elements.append(allocator, Value{ .Text = label });
     }
 
     const array_data = try allocator.alloc(u8, elements.items.len * 32);

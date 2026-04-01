@@ -5,8 +5,10 @@ const schema = @import("schema");
 const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const graph_store = @import("../graph_store.zig");
+const heap = @import("../storage/heap.zig");
 const type_helpers = @import("../eval/type_helpers.zig");
 const eval_extended = @import("../eval_extended.zig");
+const property_codec = @import("../property_value_codec.zig");
 
 pub const ParamBindings = struct {
     names: []const []const u8,
@@ -104,35 +106,13 @@ pub fn protoValueToValue(allocator: std.mem.Allocator, value: schema.Value, dept
             }
             break :blk .{ .Map = map };
         },
-        .ext_val => return error.UnsupportedParamType,
+        .ext_val => |ev| property_codec.extValueToValue(try property_codec.protoExtendedToExtValue(allocator, ev)),
         .node_val, .edge_val, .path_val => return error.UnsupportedParamType,
     };
 }
 
 fn freeParamValue(allocator: std.mem.Allocator, value: value_types.Value) void {
-    switch (value) {
-        .Str => |s| allocator.free(s),
-        .Text => |s| allocator.free(s),
-        .Char => |c| allocator.free(c.data),
-        .Varchar => |v| allocator.free(v.data),
-        .Bytea => |b| allocator.free(b),
-        .Json => |j| allocator.free(j),
-        .Decimal => |d| if (d.orig_repr) |repr| allocator.free(repr),
-        .List => |list| {
-            for (list) |item| freeParamValue(allocator, item);
-            allocator.free(list);
-        },
-        .Map => |map_const| {
-            var map = map_const;
-            var iter = map.iterator();
-            while (iter.next()) |entry| {
-                allocator.free(entry.key_ptr.*);
-                freeParamValue(allocator, entry.value_ptr.*);
-            }
-            map.deinit();
-        },
-        else => {},
-    }
+    property_codec.freeValue(allocator, value);
 }
 
 pub fn mapError(err: anyerror) ErrorInfo {
@@ -461,7 +441,14 @@ fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !s
         .Null => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, "null") } },
         .Int => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
         .Bool => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bool_val = b } },
+        .SmallInt => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
+        .BigInt => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
+        .Real => |f| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .double_val = f } },
+        .Double => |f| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .double_val = f } },
         .Str => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },
+        .Text => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },
+        .Char => |c| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, c.data) } },
+        .Varchar => |v| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, v.data) } },
         .Decimal => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = if (d.scale > 0) try reconstructDecimalRepr(allocator, d.coeff, d.scale) else try std.fmt.allocPrint(allocator, "{d}", .{d.coeff}) } },
         .Bytea => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try allocator.dupe(u8, b) } },
         .Json => |j| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, j) } },
@@ -469,6 +456,8 @@ fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !s
         .Xml => |x| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, x.data) } },
         .Date => |d| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try d.toString(allocator) } },
         .Time => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
+        .TimeTZ => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
+        .Timestamp => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
         .TimestampTZ => |t| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try t.toString(allocator) } },
         .Interval => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try i.toString(allocator) } },
         .UUID => |u| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try u.toStringAlloc(allocator) } },
@@ -478,7 +467,11 @@ fn extValueToProto(allocator: std.mem.Allocator, ext: eval_extended.ExtValue) !s
         .VarBit => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try b.toString(allocator) } },
         .IntRange => |r| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try r.toString(allocator) } },
         .LanguageTag => |lt| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, lt.tag) } },
-        else => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try std.fmt.allocPrint(allocator, "{any}", .{ext}) } },
+        .Geometry => |g| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try allocator.dupe(u8, g.wkb) } },
+        else => blk: {
+            const encoded = try property_codec.encodeExtValueBinary(allocator, ext);
+            break :blk .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = encoded } };
+        },
     };
 }
 

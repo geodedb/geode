@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 
 // Import valuesEqual from parent execution module
@@ -35,15 +36,7 @@ pub fn nodeHasAllLabels(node_labels: []const []const u8, required_labels: []cons
 
 /// Convert a property value from storage format to Value type
 pub fn propertyToValue(node_prop_val: graph_store.PropertyValue) Value {
-    return switch (node_prop_val) {
-        .String => |s| Value{ .Str = s },
-        .Int => |i| Value{ .Int = i },
-        .Bool => |b| Value{ .Bool = b },
-        .Float => |f| Value{ .Double = f },
-        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-        .Null => Value{ .Null = {} },
-        .ExtValue => |ext| Value{ .ExtValue = ext },
-    };
+    return property_codec.propertyValueToValue(node_prop_val);
 }
 
 /// Check if a node's properties match the required properties
@@ -409,15 +402,7 @@ pub fn countPatternMatches(allocator: std.mem.Allocator, pattern: ast.GraphPatte
                         if (node.properties.get(prop.key)) |node_prop_val| {
                             // GAP-0120 FIX: Proper type coverage for property values
                             // CANARY: REQ=REQ-EXPR-TYPE-001; FEATURE="ExprTypeCoverage"; ASPECT=Types; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system.yml; OWNER=exec; UPDATED=2026-01-25
-                            const node_val = switch (node_prop_val) {
-                                .String => |s| Value{ .Str = s },
-                                .Int => |i| Value{ .Int = i },
-                                .Bool => |b| Value{ .Bool = b },
-                                .Float => |f| Value{ .Double = f }, // GAP-0120: Map Float (f64) to Double
-                                .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                                .Null => Value{ .Null = {} },
-                                .ExtValue => |ext| Value{ .ExtValue = ext },
-                            };
+                            const node_val = property_codec.propertyValueToValue(node_prop_val);
                             if (!valuesEqual(node_val, expected)) {
                                 matches = false;
                                 break;

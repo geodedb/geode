@@ -127,6 +127,42 @@ pub const TimeTZ = struct {
     time: Time,
     offset_seconds: i32,
 
+    pub fn fromStr(str: []const u8) Date.Error!TimeTZ {
+        if (str.len == 0) return Date.Error.ParseError;
+
+        if (str[str.len - 1] == 'Z') {
+            return TimeTZ{
+                .time = try Time.fromStr(str[0 .. str.len - 1]),
+                .offset_seconds = 0,
+            };
+        }
+
+        var sign_index: ?usize = null;
+        var i: usize = str.len;
+        while (i > 0) {
+            i -= 1;
+            if (str[i] == '+' or str[i] == '-') {
+                sign_index = i;
+                break;
+            }
+        }
+
+        const idx = sign_index orelse return Date.Error.ParseError;
+        if (idx + 6 != str.len or str[idx + 3] != ':') return Date.Error.ParseError;
+
+        const time_part = str[0..idx];
+        const sign: i32 = if (str[idx] == '-') -1 else 1;
+        const hours = std.fmt.parseInt(i32, str[idx + 1 .. idx + 3], 10) catch return Date.Error.ParseError;
+        const mins = std.fmt.parseInt(i32, str[idx + 4 .. idx + 6], 10) catch return Date.Error.ParseError;
+
+        if (hours > 23 or mins > 59) return Date.Error.ParseError;
+
+        return TimeTZ{
+            .time = try Time.fromStr(time_part),
+            .offset_seconds = sign * (hours * 3600 + mins * 60),
+        };
+    }
+
     pub fn toString(self: TimeTZ, allocator: std.mem.Allocator) ![]u8 {
         const time_str = try self.time.toString(allocator);
         defer allocator.free(time_str);

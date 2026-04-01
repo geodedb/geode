@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
@@ -23,8 +24,6 @@ const sortRowsEx = execution.sortRowsEx; // D05 Fix: Extended sortRows with RETU
 const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
 const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
-const encryptPropertyIfNeeded = execution.encryptPropertyIfNeeded;
-const encryptEdgePropertyIfNeeded = execution.encryptEdgePropertyIfNeeded;
 const executeWithClause = execution.executeWithClause;
 const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 
@@ -4865,25 +4864,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.target.object, match_variable orelse "")) {
                                 const value = try eval.evalExpr(allocator, prop.value, env);
-                                const prop_value = switch (value) {
-                                    .Str => |s| blk: {
-                                        // Encrypt if needed before storing
-                                        const final_value = try encryptPropertyIfNeeded(
-                                            allocator,
-                                            node.labels,
-                                            prop.target.property,
-                                            s,
-                                            node.id,
-                                        );
-                                        break :blk graph_store.PropertyValue{ .String = final_value };
-                                    },
-                                    .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                    .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                    else => graph_store.PropertyValue{ .Null = {} },
-                                };
-                                try store.setNodeProperty(node.id, prop.target.property, prop_value);
+                                try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
                             }
                         },
                         .Labels => |label_set| {
@@ -5996,71 +5977,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
                                         const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                // Encrypt if needed before storing
-                                                const final_value = try encryptEdgePropertyIfNeeded(
-                                                    allocator,
-                                                    edge_ptr.label,
-                                                    prop.target.property,
-                                                    s,
-                                                    edge_ptr.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setEdgeProperty(edge_ptr.id, prop.target.property, prop_value);
+                                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
                                     }
                                     // Check if setting property on left node variable
                                     else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                // Encrypt if needed before storing
-                                                const final_value = try encryptPropertyIfNeeded(
-                                                    allocator,
-                                                    left_node.labels,
-                                                    prop.target.property,
-                                                    s,
-                                                    left_node.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setNodeProperty(left_node.id, prop.target.property, prop_value);
+                                        try property_mutation.setNodePropertyFromValue(allocator, store, left_node.labels, left_node.id, prop.target.property, value);
                                     }
                                     // Check if setting property on right node variable
                                     else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                // Encrypt if needed before storing
-                                                const final_value = try encryptPropertyIfNeeded(
-                                                    allocator,
-                                                    right_node_ptr.labels,
-                                                    prop.target.property,
-                                                    s,
-                                                    right_node_ptr.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setNodeProperty(right_node_ptr.id, prop.target.property, prop_value);
+                                        try property_mutation.setNodePropertyFromValue(allocator, store, right_node_ptr.labels, right_node_ptr.id, prop.target.property, value);
                                     }
                                 },
                                 .Labels => |label_set| {
@@ -6244,64 +6171,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
                                         const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                const final_value = try encryptEdgePropertyIfNeeded(
-                                                    allocator,
-                                                    edge_ptr.label,
-                                                    prop.target.property,
-                                                    s,
-                                                    edge_ptr.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setEdgeProperty(edge_ptr.id, prop.target.property, prop_value);
+                                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
                                     } else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                const final_value = try encryptPropertyIfNeeded(
-                                                    allocator,
-                                                    left_node.labels,
-                                                    prop.target.property,
-                                                    s,
-                                                    left_node.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setNodeProperty(left_node.id, prop.target.property, prop_value);
+                                        try property_mutation.setNodePropertyFromValue(allocator, store, left_node.labels, left_node.id, prop.target.property, value);
                                     } else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
                                         const value = try eval.evalExpr(allocator, prop.value, env);
-                                        const prop_value = switch (value) {
-                                            .Str => |s| blk: {
-                                                const final_value = try encryptPropertyIfNeeded(
-                                                    allocator,
-                                                    right_node_ptr.labels,
-                                                    prop.target.property,
-                                                    s,
-                                                    right_node_ptr.id,
-                                                );
-                                                break :blk graph_store.PropertyValue{ .String = final_value };
-                                            },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setNodeProperty(right_node_ptr.id, prop.target.property, prop_value);
+                                        try property_mutation.setNodePropertyFromValue(allocator, store, right_node_ptr.labels, right_node_ptr.id, prop.target.property, value);
                                     }
                                 },
                                 .Labels => |label_set| {
@@ -6479,26 +6355,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         .Property => |prop| {
                             if (std.mem.eql(u8, prop.target.object, match_variable orelse "")) {
                                 const value = try eval.evalExpr(allocator, prop.value, env);
-                                // Convert Value to PropertyValue
-                                const prop_value = switch (value) {
-                                    .Str => |s| blk: {
-                                        // Encrypt if needed before storing
-                                        const final_value = try encryptPropertyIfNeeded(
-                                            allocator,
-                                            node.labels,
-                                            prop.target.property,
-                                            s,
-                                            node.id,
-                                        );
-                                        break :blk graph_store.PropertyValue{ .String = final_value };
-                                    },
-                                    .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                    .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                    .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                    .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                    else => graph_store.PropertyValue{ .Null = {} },
-                                };
-                                try store.setNodeProperty(node.id, prop.target.property, prop_value);
+                                try property_mutation.setNodePropertyFromValue(allocator, store, node.labels, node.id, prop.target.property, value);
                             }
                         },
                         .Labels => |label_set| {
@@ -6513,24 +6370,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 // Evaluate the properties expression (should be a map literal)
                                 const props_value = try eval.evalExpr(allocator, all_props.properties, env);
 
-                                try store.clearNodeProperties(node.id);
-
-                                // Set new properties from the map
-                                if (props_value == .Map) {
-                                    var map_iter = props_value.Map.iterator();
-                                    while (map_iter.next()) |map_entry| {
-                                        const key = map_entry.key_ptr.*;
-                                        const value = map_entry.value_ptr.*;
-                                        const prop_value = switch (value) {
-                                            .Str => |s| graph_store.PropertyValue{ .String = s },
-                                            .Int => |i| graph_store.PropertyValue{ .Int = i },
-                                            .Decimal => |d| graph_store.PropertyValue{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-                                            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
-                                            .ExtValue => |ext| graph_store.PropertyValue{ .ExtValue = ext },
-                                            else => graph_store.PropertyValue{ .Null = {} },
-                                        };
-                                        try store.setNodeProperty(node.id, key, prop_value);
-                                    }
+                                // Clear all existing properties by getting node and manually clearing
+                                if (store.nodes.getPtr(node.id)) |node_ptr| {
+                                    try property_mutation.replaceNodeProperties(allocator, store, node_ptr, props_value);
                                 }
                             }
                         },

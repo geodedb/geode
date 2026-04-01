@@ -131,6 +131,240 @@ test "bug4: inline CREATE with relationships preserves property values" {
     try expectValueStr(result.rows[0][1], "Fish");
 }
 
+test "advanced property constructors round-trip through CREATE storage" {
+    test_mutex.lock();
+    defer test_mutex.unlock();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.exec(
+            "CREATE (:AdvancedThing {age: SmallInt(7), doc: Jsonb('{\"kind\":\"ok\"}'), dom: Domain('example.com')})",
+        );
+        defer r.deinit(allocator);
+    }
+
+    var result = try h.exec("MATCH (n:AdvancedThing) RETURN n.age AS age, n.doc AS doc, n.dom AS dom");
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    switch (result.rows[0][0]) {
+        .SmallInt => |age| try std.testing.expectEqual(@as(i16, 7), age),
+        .Int => |age| try std.testing.expectEqual(@as(i64, 7), age),
+        .ExtValue => |ext| switch (ext) {
+            .SmallInt => |age| try std.testing.expectEqual(@as(i16, 7), age),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][1]) {
+        .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"kind\"") != null),
+        .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+        .Str => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+        .ExtValue => |ext| switch (ext) {
+            .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"kind\"") != null),
+            .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][2]) {
+        .Domain => |dom| {
+            try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+            try std.testing.expectEqualStrings("example", dom.labels[0]);
+            try std.testing.expectEqualStrings("com", dom.labels[1]);
+        },
+        .Str => |dom| try std.testing.expectEqualStrings("example.com", dom),
+        .ExtValue => |ext| switch (ext) {
+            .Domain => |dom| {
+                try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+                try std.testing.expectEqualStrings("example", dom.labels[0]);
+                try std.testing.expectEqualStrings("com", dom.labels[1]);
+            },
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+}
+
+test "advanced property setters round-trip through MATCH storage" {
+    test_mutex.lock();
+    defer test_mutex.unlock();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.exec("CREATE (a:SetterThing {id: 'left'})-[:LINKS]->(b:SetterThing {id: 'right'})");
+        defer r.deinit(allocator);
+    }
+
+    {
+        var r = try h.exec(
+            "MATCH (a:SetterThing {id: 'left'})-[r:LINKS]->(b:SetterThing {id: 'right'}) " ++
+                "SET a.dom = Domain('example.com'), r.rank = SmallInt(5), b.doc = Jsonb('{\"kind\":\"set\"}')",
+        );
+        defer r.deinit(allocator);
+    }
+
+    var result = try h.exec(
+        "MATCH (a:SetterThing {id: 'left'})-[r:LINKS]->(b:SetterThing {id: 'right'}) " ++
+            "RETURN a.dom AS dom, r.rank AS rank, b.doc AS doc",
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+
+    switch (result.rows[0][0]) {
+        .Domain => |dom| {
+            try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+            try std.testing.expectEqualStrings("example", dom.labels[0]);
+            try std.testing.expectEqualStrings("com", dom.labels[1]);
+        },
+        .ExtValue => |ext| switch (ext) {
+            .Domain => |dom| {
+                try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+                try std.testing.expectEqualStrings("example", dom.labels[0]);
+                try std.testing.expectEqualStrings("com", dom.labels[1]);
+            },
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][1]) {
+        .SmallInt => |rank| try std.testing.expectEqual(@as(i16, 5), rank),
+        .Int => |rank| try std.testing.expectEqual(@as(i64, 5), rank),
+        .ExtValue => |ext| switch (ext) {
+            .SmallInt => |rank| try std.testing.expectEqual(@as(i16, 5), rank),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][2]) {
+        .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"kind\"") != null),
+        .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+        .Str => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+        .ExtValue => |ext| switch (ext) {
+            .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"kind\"") != null),
+            .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"kind\"") != null),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+}
+
+test "advanced values serialize in result json without placeholders" {
+    test_mutex.lock();
+    defer test_mutex.unlock();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.exec(
+            "CREATE (:JsonThing {dom: Domain('example.com'), doc: Jsonb('{\"kind\":\"json\"}')})",
+        );
+        defer r.deinit(allocator);
+    }
+
+    var result = try h.exec("MATCH (n:JsonThing) RETURN n");
+    defer result.deinit(allocator);
+
+    const json_output = try result.toJson(allocator);
+
+    try std.testing.expect(std.mem.indexOf(u8, json_output, "<ExtValue>") == null);
+    try std.testing.expect(std.mem.indexOf(u8, json_output, "example.com") != null);
+    try std.testing.expect(std.mem.indexOf(u8, json_output, "\"kind\":\"json\"") != null);
+}
+
+test "advanced all-properties replacement preserves extended values" {
+    test_mutex.lock();
+    defer test_mutex.unlock();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    {
+        var r = try h.exec("CREATE (:ReplaceableThing {legacy: 'old'})");
+        defer r.deinit(allocator);
+    }
+
+    {
+        var r = try h.exec(
+            "MATCH (n:ReplaceableThing) SET n = {dom: Domain('example.com'), score: SmallInt(9), payload: Jsonb('{\"ok\":true}')} " ++
+                "RETURN n.dom AS dom, n.score AS score, n.payload AS payload",
+        );
+        defer r.deinit(allocator);
+    }
+
+    var result = try h.exec("MATCH (n:ReplaceableThing) RETURN n.dom AS dom, n.score AS score, n.payload AS payload, n.legacy AS legacy");
+    defer result.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+
+    switch (result.rows[0][0]) {
+        .Domain => |dom| {
+            try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+            try std.testing.expectEqualStrings("example", dom.labels[0]);
+            try std.testing.expectEqualStrings("com", dom.labels[1]);
+        },
+        .ExtValue => |ext| switch (ext) {
+            .Domain => |dom| {
+                try std.testing.expectEqual(@as(usize, 2), dom.labels.len);
+                try std.testing.expectEqualStrings("example", dom.labels[0]);
+                try std.testing.expectEqualStrings("com", dom.labels[1]);
+            },
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][1]) {
+        .SmallInt => |score| try std.testing.expectEqual(@as(i16, 9), score),
+        .Int => |score| try std.testing.expectEqual(@as(i64, 9), score),
+        .ExtValue => |ext| switch (ext) {
+            .SmallInt => |score| try std.testing.expectEqual(@as(i16, 9), score),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    switch (result.rows[0][2]) {
+        .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"ok\"") != null),
+        .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"ok\"") != null),
+        .Str => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"ok\"") != null),
+        .ExtValue => |ext| switch (ext) {
+            .Jsonb => |doc| try std.testing.expect(std.mem.indexOf(u8, doc.data, "\"ok\"") != null),
+            .Json => |doc| try std.testing.expect(std.mem.indexOf(u8, doc, "\"ok\"") != null),
+            else => return error.UnexpectedValueTag,
+        },
+        else => return error.UnexpectedValueTag,
+    }
+
+    try std.testing.expect(result.rows[0][3] == .Null);
+}
+
 // ---------------------------------------------------------------------------
 // Bug #3 (High): MATCH (a), (b) CREATE relationship
 // Tests that matching two nodes then creating a relationship works.

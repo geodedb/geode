@@ -12,6 +12,7 @@ const std = @import("std");
 const gs = @import("graph_storage");
 const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
+const property_codec = @import("../property_value_codec.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
@@ -102,10 +103,14 @@ pub fn toStorageProperty(allocator: Allocator, val: graph_store.PropertyValue) !
         .Bool => |b| .{ .bool = b },
         .Null => .null,
         .Decimal => |d| .{ .decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ExtValue => |ext| .{ .ext = .{
-            .type_tag = graph_store.STORAGE_EXT_TYPE_TAG,
-            .data = try graph_store.encodeExtValue(allocator, ext),
-        } },
+        .ExtValue => blk: {
+            const encoded = try property_codec.encodePropertyValue(allocator, val);
+            errdefer allocator.free(encoded);
+            const type_tag = if (encoded.len > 0) encoded[0] else 0;
+            const payload = if (encoded.len > 1) try allocator.dupe(u8, encoded[1..]) else try allocator.dupe(u8, "");
+            allocator.free(encoded);
+            break :blk .{ .ext = .{ .type_tag = type_tag, .data = payload } };
+        },
     };
 }
 
@@ -122,10 +127,12 @@ pub fn fromStorageProperty(allocator: Allocator, val: gs.PropertyValue) !graph_s
         .null => .Null,
         .decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
         .ext => |ext| blk: {
-            if (ext.type_tag != graph_store.STORAGE_EXT_TYPE_TAG) {
-                break :blk .Null;
-            }
-            break :blk .{ .ExtValue = try graph_store.decodeExtValue(allocator, ext.data) };
+            const encoded_len = ext.data.len + 1;
+            const encoded = try allocator.alloc(u8, encoded_len);
+            encoded[0] = @intCast(ext.type_tag & 0xFF);
+            @memcpy(encoded[1..], ext.data);
+            defer allocator.free(encoded);
+            break :blk try property_codec.decodePropertyValue(allocator, encoded);
         },
     };
 }
@@ -1195,7 +1202,6 @@ test "LabelStringDict starts at id 1" {
 
 test "toStorageProperty round-trip for scalars" {
     const allocator = std.testing.allocator;
-
     // Int
     const gs_int = try toStorageProperty(allocator, .{ .Int = 42 });
     try std.testing.expectEqual(@as(i64, 42), gs_int.int);

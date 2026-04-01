@@ -9,6 +9,7 @@ const network = @import("types/network.zig");
 const datetime = @import("types/datetime.zig");
 const uuid = @import("uuid");
 const url = @import("types/url.zig");
+const arrays = @import("types/arrays.zig");
 const jsonb = @import("types/jsonb.zig");
 const xml = @import("types/xml.zig");
 const bitstring = @import("types/bitstring.zig");
@@ -92,8 +93,17 @@ pub const ExtValue = union(enum) {
     Pressure: heap.Pressure,
     VectorF32: heap.VectorF32,
     VectorI32: heap.VectorI32,
+    SmallInt: i16,
+    BigInt: i64,
+    Real: f32,
+    Double: f64,
+    Char: struct { data: []const u8, n: u16 },
+    Varchar: struct { data: []const u8, n: u16 },
+    Text: []const u8,
     Date: datetime.Date,
     Time: datetime.Time,
+    TimeTZ: datetime.TimeTZ,
+    Timestamp: datetime.Timestamp,
     TimestampTZ: datetime.TimestampTZ,
     Interval: datetime.Interval,
     UUID: uuid.UUID,
@@ -107,6 +117,7 @@ pub const ExtValue = union(enum) {
     VarBit: bitstring.BitString,
     IntRange: range.IntRange,
     Enum: struct { type_id: u32, value_ordinal: u32 },
+    Array: arrays.DynamicArray,
     List: []ExtValue,
 };
 
@@ -1012,48 +1023,12 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 }
 
 fn constructJsonb(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
-    _ = allocator;
     if (args.len != 1) return error.InvalidArgs;
     if (args[0] != .Str) return error.TypeMismatch;
 
     const json_str = args[0].Str;
-
-    // Basic JSON validation - check for balanced braces/brackets
-    var brace_depth: i32 = 0;
-    var bracket_depth: i32 = 0;
-    var in_string = false;
-    var escape_next = false;
-
-    for (json_str) |c| {
-        if (escape_next) {
-            escape_next = false;
-            continue;
-        }
-
-        if (c == '\\') {
-            escape_next = true;
-            continue;
-        }
-
-        if (c == '"') {
-            in_string = !in_string;
-            continue;
-        }
-
-        if (!in_string) {
-            if (c == '{') brace_depth += 1;
-            if (c == '}') brace_depth -= 1;
-            if (c == '[') bracket_depth += 1;
-            if (c == ']') bracket_depth -= 1;
-        }
-    }
-
-    if (brace_depth != 0 or bracket_depth != 0 or in_string) {
-        return error.InvalidJson;
-    }
-
-    // Return as string for now (until Jsonb heap type is fully integrated)
-    return .{ .Str = json_str };
+    const doc = jsonb.JsonbDocument.fromString(allocator, json_str) catch return error.InvalidJson;
+    return .{ .Jsonb = doc };
 }
 
 // IP/CIDR functions

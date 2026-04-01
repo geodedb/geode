@@ -4867,14 +4867,11 @@ pub const Parser = struct {
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
-                    // IntervalTree - temporal/interval index (map to btree for now)
-                    index_type = .btree;
+                    index_type = .interval_tree;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
-                    // JsonbInverted - JSONB GIN-style index (map to btree for now)
-                    index_type = .btree;
+                    index_type = .jsonb_inverted;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
-                    // DomainTrie - domain name trie (map to btree for now)
-                    index_type = .btree;
+                    index_type = .domain_trie;
                 } else {
                     // Reject unrecognized index types
                     return error.InvalidIndexType;
@@ -4954,11 +4951,11 @@ pub const Parser = struct {
                 } else if (std.ascii.eqlIgnoreCase(type_str, "signature_crypto")) {
                     index_type = .signature_crypto;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "IntervalTree")) {
-                    index_type = .btree;
+                    index_type = .interval_tree;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "JsonbInverted")) {
-                    index_type = .btree;
+                    index_type = .jsonb_inverted;
                 } else if (std.ascii.eqlIgnoreCase(type_str, "DomainTrie")) {
-                    index_type = .btree;
+                    index_type = .domain_trie;
                 } else {
                     // Reject unrecognized index types
                     return error.InvalidIndexType;

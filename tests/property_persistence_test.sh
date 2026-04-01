@@ -15,11 +15,12 @@ echo "Testing property persistence within same QUIC server session..."
 
 echo "Starting QUIC server for property persistence test..."
 ADMIN_USER="${GEODE_ADMIN_USERNAME:-geode}"
-ADMIN_PASS="${GEODE_DEFAULT_PASSWORD:-geode-test-password}"
+ADMIN_PASS="${GEODE_ADMIN_PASSWORD:-geode-test-password}"
 SERVER_ADDR="127.0.0.1:9443"
 QUERY_CMD="./zig-out/bin/geode query --server ${SERVER_ADDR} --insecure --user ${ADMIN_USER} --password ${ADMIN_PASS}"
 DATA_DIR=/tmp/geode_property_test
-GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_DEFAULT_PASSWORD="${ADMIN_PASS}" \
+rm -rf "${DATA_DIR}"
+GEODE_ADMIN_USERNAME="${ADMIN_USER}" GEODE_ADMIN_PASSWORD="${ADMIN_PASS}" \
     ./zig-out/bin/geode serve --listen ${SERVER_ADDR} --data-dir "${DATA_DIR}" &
 SERVER_PID=$!
 

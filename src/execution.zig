@@ -1204,6 +1204,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     .spatial_geographic => "spatial_geographic",
                     .network_cidr => "network_cidr",
                     .signature_crypto => "signature_crypto",
+                    .interval_tree => "IntervalTree",
+                    .jsonb_inverted => "JsonbInverted",
+                    .domain_trie => "DomainTrie",
                 },
                 .table_name = ci.label,
                 .columns = @as([][]const u8, @constCast(ci.properties)),
@@ -2720,6 +2723,49 @@ pub fn valuesEqual(a: Value, b: Value) bool {
     if (a == .Text and b == .Text) return std.mem.eql(u8, a.Text, b.Text);
     if (a == .Bytea and b == .Bytea) return std.mem.eql(u8, a.Bytea, b.Bytea);
     if (a == .Json and b == .Json) return std.mem.eql(u8, a.Json, b.Json);
+    if (a == .Jsonb and b == .Jsonb) return std.mem.eql(u8, a.Jsonb.data, b.Jsonb.data);
+    if (a == .Xml and b == .Xml) return std.mem.eql(u8, a.Xml.data, b.Xml.data);
+
+    // Temporal and identifier types
+    if (a == .Date and b == .Date) return std.meta.eql(a.Date, b.Date);
+    if (a == .Time and b == .Time) return std.meta.eql(a.Time, b.Time);
+    if (a == .TimeTZ and b == .TimeTZ) return std.meta.eql(a.TimeTZ, b.TimeTZ);
+    if (a == .Timestamp and b == .Timestamp) return std.meta.eql(a.Timestamp, b.Timestamp);
+    if (a == .TimestampTZ and b == .TimestampTZ) return std.meta.eql(a.TimestampTZ, b.TimestampTZ);
+    if (a == .Interval and b == .Interval) return std.meta.eql(a.Interval, b.Interval);
+    if (a == .UUID and b == .UUID) return std.meta.eql(a.UUID, b.UUID);
+    if (a == .Enum and b == .Enum) return std.meta.eql(a.Enum, b.Enum);
+    if (a == .IntRange and b == .IntRange) return std.meta.eql(a.IntRange, b.IntRange);
+
+    if (a == .BitString and b == .BitString) {
+        return a.BitString.bit_length == b.BitString.bit_length and
+            std.mem.eql(u8, a.BitString.bytes, b.BitString.bytes);
+    }
+    if (a == .VarBit and b == .VarBit) {
+        return a.VarBit.bit_length == b.VarBit.bit_length and
+            std.mem.eql(u8, a.VarBit.bytes, b.VarBit.bytes);
+    }
+
+    if (a == .Url and b == .Url) {
+        return std.mem.eql(u8, a.Url.scheme, b.Url.scheme) and
+            std.mem.eql(u8, a.Url.host, b.Url.host) and
+            a.Url.port == b.Url.port and
+            std.mem.eql(u8, a.Url.path, b.Url.path) and
+            ((a.Url.query == null and b.Url.query == null) or
+                (a.Url.query != null and b.Url.query != null and std.mem.eql(u8, a.Url.query.?, b.Url.query.?))) and
+            ((a.Url.fragment == null and b.Url.fragment == null) or
+                (a.Url.fragment != null and b.Url.fragment != null and std.mem.eql(u8, a.Url.fragment.?, b.Url.fragment.?)));
+    }
+
+    if (a == .Domain and b == .Domain) {
+        if (a.Domain.labels.len != b.Domain.labels.len) return false;
+        for (a.Domain.labels, b.Domain.labels) |lhs, rhs| {
+            if (!std.mem.eql(u8, lhs, rhs)) return false;
+        }
+        return true;
+    }
+
+    if (a == .ExtValue and b == .ExtValue) return value_types.eqExtValues(a.ExtValue, b.ExtValue);
 
     // For other types, default to false (different types or unsupported comparison)
     return false;

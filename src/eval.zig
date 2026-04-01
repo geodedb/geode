@@ -4,6 +4,7 @@ const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
 const fle_integration = @import("fle_integration.zig");
 const graph_store = @import("graph_store.zig");
+const property_codec = @import("property_value_codec.zig");
 
 // CANARY: REQ=REQ-M5.3-EVAL-REFACTOR-001; FEATURE="Circular Dependency Resolution"; ASPECT=AdapterImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.3: Import evaluator_adapter instead of execution.zig to break circular dependency
@@ -80,30 +81,6 @@ const isNull = value_types.isNull;
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-008; FEATURE="Circular Dependency Resolution"; ASPECT=Truthy; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use truthy from value_types module
 const truthy = value_types.truthy;
-
-// CANARY: REQ=REQ-LIST-PROP-005; FEATURE="ListProperties"; ASPECT=Conversion; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
-/// Convert ExtValue.List ([]ExtValue) back to Value.List ([]Value)
-/// Strings must be duplicated to avoid dangling pointers
-const ExtValue = @import("eval_extended.zig").ExtValue;
-fn extValueListToValueList(allocator: std.mem.Allocator, ext_values: []ExtValue) ![]Value {
-    var result = try allocator.alloc(Value, ext_values.len);
-    for (ext_values, 0..) |ext, i| {
-        result[i] = switch (ext) {
-            .Null => Value{ .Null = {} },
-            .Int => |n| Value{ .Int = n },
-            .Bool => |b| Value{ .Bool = b },
-            // Duplicate strings to avoid dangling pointers after ExtValue is freed
-            .Str => |s| Value{ .Str = try allocator.dupe(u8, s) },
-            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-            .List => |nested| blk: {
-                const nested_values = try extValueListToValueList(allocator, nested);
-                break :blk Value{ .List = nested_values };
-            },
-            else => Value{ .ExtValue = ext }, // Other ExtValue types stay as ExtValue
-        };
-    }
-    return result;
-}
 
 // CANARY: REQ=REQ-M6.1-EVAL-REFACTOR-001; FEATURE="Phase 6 Modularization"; ASPECT=TypePromotionImport; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 6 M6.1: Import type promotion module for type conversion and validation utilities
@@ -874,6 +851,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // Try aggregate functions (count, sum, avg, min, max)
             if (try call_handlers.evalAggregateFunction(allocator, lowercase_fn, call.args, env)) |result| {
+                break :blk_call result;
+            }
+
+            // Try advanced type constructors and built-ins documented for GA property families.
+            if (try call_handlers.evalAdvancedTypeFunction(allocator, lowercase_fn, call.args, env)) |result| {
                 break :blk_call result;
             }
 
@@ -2044,6 +2026,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     break :blk_call .{ .Null = {} };
                 };
                 defer allocator.free(args);
+                var initialized_args: usize = 0;
+                defer {
+                    for (args[0..initialized_args]) |arg| {
+                        property_codec.freeExtValue(allocator, arg);
+                    }
+                }
 
                 for (call.args, 0..) |arg, i| {
                     const arg_value = evalExpr(allocator, arg.*, env) catch {
@@ -2052,6 +2040,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     args[i] = valueToExtValue(allocator, arg_value) catch {
                         break :blk_call .{ .Null = {} };
                     };
+                    initialized_args += 1;
                 }
 
                 // Call the extended function and handle validation errors
@@ -2259,7 +2248,6 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     if (node.properties.get(pa.property)) |val| {
                         const result = switch (val) {
                             .String => |s| blk: {
-                                // For string properties, check FLE permissions
                                 const type_name = if (node.labels.len > 0) node.labels[0] else "Unknown";
                                 const checked_value = fle_integration.checkPropertyAccess(
                                     allocator,
@@ -2271,32 +2259,18 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                                     if (err == error.SearchNotPermitted) {
                                         return EvalError.SearchNotPermitted;
                                     }
-                                    // For other errors, fall back to original value
                                     break :blk Value{ .Str = s };
                                 };
                                 break :blk Value{ .Str = checked_value };
                             },
-                            .Int => |i| Value{ .Int = i },
-                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                            .Bool => |b| Value{ .Bool = b },
-                            .Null => Value{ .Null = {} },
-                            .ExtValue => |ext| Value{ .ExtValue = ext },
+                            else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
                     }
                 },
                 .Edge => |edge| {
                     if (edge.properties.get(pa.property)) |val| {
-                        const result = switch (val) {
-                            .String => |s| Value{ .Str = s },
-                            .Int => |i| Value{ .Int = i },
-                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                            .Bool => |b| Value{ .Bool = b },
-                            .Null => Value{ .Null = {} },
-                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                        };
+                        const result = property_codec.propertyValueToValue(val);
                         break :blk_property result;
                     }
                 },
@@ -2337,31 +2311,38 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
         },
         // New type literals
-        .SmallIntLit => |i| Value{ .Int = @as(i64, i) },
-        .BigIntLit => |i| Value{ .Int = i },
-        .RealLit => |f| blk_real: {
-            const float_val: f64 = @floatCast(f);
-            const scale: u8 = 6;
-            const multiplier: f64 = 1000000.0;
-            const scaled: i128 = @intFromFloat(@round(float_val * multiplier));
-            break :blk_real Value{ .Decimal = .{ .coeff = scaled, .scale = scale, .orig_scale = scale } };
+        .SmallIntLit => |i| Value{ .SmallInt = i },
+        .BigIntLit => |i| Value{ .BigInt = i },
+        .RealLit => |f| Value{ .Real = f },
+        .DoubleLit => |d| Value{ .Double = d },
+        .CharLit => |c| Value{ .Char = .{ .data = c.text, .n = c.n } },
+        .VarcharLit => |v| Value{ .Varchar = .{ .data = v.text, .n = v.n } },
+        .TextLit => |t| Value{ .Text = t },
+        .ByteaLit => |b| blk_bytea: {
+            const parsed = eval_funcs.Bytea(allocator, b) catch break :blk_bytea Value{ .Null = {} };
+            break :blk_bytea heapValueToEvalValue(parsed);
         },
-        .DoubleLit => |d| blk_dbl: {
-            const scale: u8 = 6;
-            const multiplier: f64 = 1000000.0;
-            const scaled: i128 = @intFromFloat(@round(d * multiplier));
-            break :blk_dbl Value{ .Decimal = .{ .coeff = scaled, .scale = scale, .orig_scale = scale } };
+        .JsonLit => |j| Value{ .Json = j },
+        .JsonbLit => |jb| blk_jsonb: {
+            const parsed = eval_funcs.Jsonb(allocator, jb) catch break :blk_jsonb Value{ .Null = {} };
+            break :blk_jsonb heapValueToEvalValue(parsed);
         },
-        .CharLit => |c| Value{ .Str = c.text },
-        .VarcharLit => |v| Value{ .Str = v.text },
-        .TextLit => |t| Value{ .Str = t },
-        .ByteaLit => |b| Value{ .Str = b },
-        .JsonLit => |j| Value{ .Str = j },
-        .JsonbLit => |jb| Value{ .Str = jb },
-        .XmlLit => |x| Value{ .Str = x },
-        .UrlLit => |u| Value{ .Str = u },
-        .DomainLit => |d| Value{ .Str = d },
-        .UuidLit => |u| Value{ .Str = u },
+        .XmlLit => |x| blk_xml: {
+            const parsed = eval_funcs.Xml(allocator, x) catch break :blk_xml Value{ .Null = {} };
+            break :blk_xml heapValueToEvalValue(parsed);
+        },
+        .UrlLit => |u| blk_url: {
+            const parsed = eval_funcs.Url(allocator, u) catch break :blk_url Value{ .Null = {} };
+            break :blk_url heapValueToEvalValue(parsed);
+        },
+        .DomainLit => |d| blk_domain: {
+            const parsed = eval_funcs.Domain(allocator, d) catch break :blk_domain Value{ .Null = {} };
+            break :blk_domain heapValueToEvalValue(parsed);
+        },
+        .UuidLit => |u| blk_uuid: {
+            const parsed = eval_funcs.UUID(u) catch break :blk_uuid Value{ .Null = {} };
+            break :blk_uuid heapValueToEvalValue(parsed);
+        },
         .EnumLit => |enum_val| Value{ .Str = enum_val.value },
         .ArrayLit => |arr| blk_arr: {
             var list = try allocator.alloc(Value, arr.len);
@@ -2410,8 +2391,17 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             break :blk_lc Value{ .List = try result_list.toOwnedSlice(allocator) };
         },
-        .BitLit => |b| Value{ .Str = b },
-        .VarBitLit => |vb| Value{ .Str = vb },
+        .BitLit => |b| blk_bit: {
+            const bit_literal = if (std.mem.startsWith(u8, b, "B'")) b else std.fmt.allocPrint(allocator, "B'{s}'", .{b}) catch break :blk_bit Value{ .Null = {} };
+            defer if (bit_literal.ptr != b.ptr) allocator.free(bit_literal);
+            break :blk_bit Value{ .BitString = @import("types/bitstring.zig").BitString.fromString(allocator, bit_literal) catch return EvalError.BitParseError };
+        },
+        .VarBitLit => |vb| blk_varbit: {
+            const bit_literal = if (std.mem.startsWith(u8, vb, "B'")) vb else std.fmt.allocPrint(allocator, "B'{s}'", .{vb}) catch break :blk_varbit Value{ .Null = {} };
+            defer if (bit_literal.ptr != vb.ptr) allocator.free(bit_literal);
+            const parsed = eval_funcs.VarBit(allocator, bit_literal) catch break :blk_varbit Value{ .Null = {} };
+            break :blk_varbit heapValueToEvalValue(parsed);
+        },
         .Member => |member| blk_member: {
             // Handle member access like n.name or r.property (where n/r is already evaluated)
             const target = try evalExpr(allocator, member.target.*, env);
@@ -2439,20 +2429,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             };
                             break :blk Value{ .Str = checked_value };
                         },
-                        .Int => |i| Value{ .Int = i },
-                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                        .Bool => |b| Value{ .Bool = b },
-                        .Null => Value{ .Null = {} },
-                        // CANARY: REQ=REQ-LIST-PROP-006; FEATURE="ListProperties"; ASPECT=MemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
-                        // Handle ExtValue specially - convert List back to Value.List
-                        .ExtValue => |ext| switch (ext) {
-                            .List => |list| blk_list: {
-                                const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
-                                break :blk_list Value{ .List = value_list };
-                            },
-                            else => Value{ .ExtValue = ext },
-                        },
-                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                        else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
                     };
                     break :blk_member result;
                 }
@@ -2481,20 +2458,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                             };
                             break :blk Value{ .Str = checked_value };
                         },
-                        .Int => |i| Value{ .Int = i },
-                        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2 } },
-                        .Bool => |b| Value{ .Bool = b },
-                        .Null => Value{ .Null = {} },
-                        // CANARY: REQ=REQ-LIST-PROP-007; FEATURE="ListProperties"; ASPECT=EdgeMemberAccess; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
-                        // Handle ExtValue specially - convert List back to Value.List
-                        .ExtValue => |ext| switch (ext) {
-                            .List => |list| blk_list: {
-                                const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
-                                break :blk_list Value{ .List = value_list };
-                            },
-                            else => Value{ .ExtValue = ext },
-                        },
-                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
+                        else => property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} },
                     };
                     break :blk_member result;
                 }
@@ -2748,43 +2712,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     .Node => |node| blk_node: {
                         // Try to get the property from the node
                         const val = node.properties.get(field) orelse break :blk_node Value{ .Null = {} };
-                        // Convert PropertyValue to Value
-                        const converted = switch (val) {
-                            .String => |s| Value{ .Str = s },
-                            .Int => |i| Value{ .Int = i },
-                            .Bool => |b| Value{ .Bool = b },
-                            // CANARY: REQ=REQ-LIST-PROP-003; FEATURE="ListProperties"; ASPECT=Retrieval; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
-                            // Handle ExtValue specially - convert List back to Value.List
-                            .ExtValue => |ext| switch (ext) {
-                                .List => |list| blk_list: {
-                                    const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
-                                    break :blk_list Value{ .List = value_list };
-                                },
-                                else => Value{ .ExtValue = ext }, // Preserve other ExtValue types (Geometry, VectorF32, etc.)
-                            },
-                            else => Value{ .Null = {} },
-                        };
+                        const converted = property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
                         break :blk_node converted;
                     },
                     .Edge => |edge| blk_edge: {
                         // Try to get the property from the edge
                         const val = edge.properties.get(field) orelse break :blk_edge Value{ .Null = {} };
-                        // Convert PropertyValue to Value
-                        const converted = switch (val) {
-                            .String => |s| Value{ .Str = s },
-                            .Int => |i| Value{ .Int = i },
-                            .Bool => |b| Value{ .Bool = b },
-                            // CANARY: REQ=REQ-LIST-PROP-004; FEATURE="ListProperties"; ASPECT=EdgeRetrieval; STATUS=TESTED; TEST=geodetestlab/specs/geode_b01_b10_regression.yml; OWNER=eval; UPDATED=2025-12-27
-                            // Handle ExtValue specially - convert List back to Value.List
-                            .ExtValue => |ext| switch (ext) {
-                                .List => |list| blk_list: {
-                                    const value_list = extValueListToValueList(allocator, list) catch break :blk_list Value{ .Null = {} };
-                                    break :blk_list Value{ .List = value_list };
-                                },
-                                else => Value{ .ExtValue = ext }, // Preserve other ExtValue types (Geometry, VectorF32, etc.)
-                            },
-                            else => Value{ .Null = {} },
-                        };
+                        const converted = property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
                         break :blk_edge converted;
                     },
                     .ExtValue => |_| blk_ext: {
@@ -2986,16 +2920,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = node.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    // CANARY: REQ=REQ-FLOAT-PROP-001; FEATURE="FloatPropertyPreservation"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-                    const prop_val: Value = switch (entry.value_ptr.*) {
-                        .Null => Value{ .Null = {} },
-                        .Bool => |b| Value{ .Bool = b },
-                        .Int => |i| Value{ .Int = i },
-                        .String => |s| Value{ .Str = s },
-                        .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
-                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                        .ExtValue => |ext| Value{ .ExtValue = ext },
-                    };
+                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;
                 }
                 return Value{ .Map = prop_map };
@@ -3005,16 +2930,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 var prop_map = std.StringHashMap(Value).init(allocator);
                 var prop_iter = edge.properties.iterator();
                 while (prop_iter.next()) |entry| {
-                    // CANARY: REQ=REQ-FLOAT-PROP-002; FEATURE="FloatPropertyPreservation"; ASPECT=EdgeProperties; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
-                    const prop_val: Value = switch (entry.value_ptr.*) {
-                        .Null => Value{ .Null = {} },
-                        .Bool => |b| Value{ .Bool = b },
-                        .Int => |i| Value{ .Int = i },
-                        .String => |s| Value{ .Str = s },
-                        .Float => |f| Value{ .Double = f }, // Convert PropertyValue.Float (f64) to Value.Double
-                        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                        .ExtValue => |ext| Value{ .ExtValue = ext },
-                    };
+                    const prop_val = property_codec.propertyValueToProjectedValue(allocator, entry.value_ptr.*) catch continue;
                     prop_map.put(entry.key_ptr.*, prop_val) catch continue;
                 }
                 return Value{ .Map = prop_map };

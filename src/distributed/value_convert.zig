@@ -2,6 +2,9 @@ const std = @import("std");
 const schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const eval_extended = @import("../eval_extended.zig");
+const heap = @import("../storage/heap.zig");
+const property_codec = @import("../property_value_codec.zig");
+const type_helpers = @import("../eval/type_helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -19,7 +22,8 @@ pub fn protoValueToPropertyValue(allocator: Allocator, value: schema.Value, dept
             break :blk graph_store.PropertyValue{ .Decimal = .{ .coeff = coeff, .scale = @intCast(dec.scale) } };
         },
         .bytes_val => |bv| graph_store.PropertyValue{ .ExtValue = .{ .Bytea = try allocator.dupe(u8, bv.value) } },
-        .list_val, .map_val, .ext_val, .node_val, .edge_val, .path_val => blk: {
+        .ext_val => |ev| property_codec.extValueToPropertyValue(try property_codec.protoExtendedToExtValue(allocator, ev)),
+        .list_val, .map_val, .node_val, .edge_val, .path_val => blk: {
             const json = try protoValueToJsonString(allocator, value, depth + 1);
             break :blk graph_store.PropertyValue{ .ExtValue = .{ .Json = json } };
         },
@@ -103,14 +107,15 @@ pub fn mapEntriesFromProperties(
 }
 
 fn extValueToProto(allocator: Allocator, ext: eval_extended.ExtValue) !schema.ExtendedValue {
+    const type_name = type_helpers.getExtTypeName(ext);
     return switch (ext) {
-        .Null => .{ .type_name = try allocator.dupe(u8, "null"), .data = .{ .text = "null" } },
-        .Int => |i| .{ .type_name = try allocator.dupe(u8, "int"), .data = .{ .int_val = i } },
-        .Bool => |b| .{ .type_name = try allocator.dupe(u8, "bool"), .data = .{ .bool_val = b } },
-        .Str => |s| .{ .type_name = try allocator.dupe(u8, "string"), .data = .{ .text = try allocator.dupe(u8, s) } },
-        .Bytea => |b| .{ .type_name = try allocator.dupe(u8, "bytea"), .data = .{ .bytes = try allocator.dupe(u8, b) } },
-        .Json => |j| .{ .type_name = try allocator.dupe(u8, "json"), .data = .{ .text = try allocator.dupe(u8, j) } },
-        else => .{ .type_name = try allocator.dupe(u8, "ext"), .data = .{ .text = try allocator.dupe(u8, "unsupported") } },
+        .Null => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = "null" } },
+        .Int => |i| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .int_val = i } },
+        .Bool => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bool_val = b } },
+        .Str => |s| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, s) } },
+        .Bytea => |b| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try allocator.dupe(u8, b) } },
+        .Json => |j| .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .text = try allocator.dupe(u8, j) } },
+        else => .{ .type_name = try allocator.dupe(u8, type_name), .data = .{ .bytes = try property_codec.encodeExtValueBinary(allocator, ext) } },
     };
 }
 
@@ -191,14 +196,5 @@ fn freeJsonValue(allocator: Allocator, value: std.json.Value) void {
 }
 
 fn freeExtValue(allocator: Allocator, ext: eval_extended.ExtValue) void {
-    switch (ext) {
-        .Str => |s| allocator.free(s),
-        .Bytea => |b| allocator.free(b),
-        .Json => |j| allocator.free(j),
-        .List => |list| {
-            for (list) |item| freeExtValue(allocator, item);
-            allocator.free(list);
-        },
-        else => {},
-    }
+    property_codec.freeExtValue(allocator, ext);
 }

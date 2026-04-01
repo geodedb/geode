@@ -226,12 +226,27 @@ fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue)
             .dim = vec.dim,
             .data = try self.allocator.dupe(i32, vec.data),
         } },
+        .SmallInt => |v| ext_eval.ExtValue{ .SmallInt = v },
+        .BigInt => |v| ext_eval.ExtValue{ .BigInt = v },
+        .Real => |v| ext_eval.ExtValue{ .Real = v },
+        .Double => |v| ext_eval.ExtValue{ .Double = v },
+        .Text => |s| ext_eval.ExtValue{ .Text = try self.allocator.dupe(u8, s) },
+        .Char => |c| ext_eval.ExtValue{ .Char = .{
+            .data = try self.allocator.dupe(u8, c.data),
+            .n = c.n,
+        } },
+        .Varchar => |v| ext_eval.ExtValue{ .Varchar = .{
+            .data = try self.allocator.dupe(u8, v.data),
+            .n = v.n,
+        } },
         .Hash => |h| ext_eval.ExtValue{ .Hash = heap_mod.Hash{
             .alg = h.alg,
             .digest = try self.allocator.dupe(u8, h.digest),
             .salt = if (h.salt) |s| try self.allocator.dupe(u8, s) else null,
             .params = h.params,
         } },
+        .TimeTZ => |v| ext_eval.ExtValue{ .TimeTZ = v },
+        .Timestamp => |v| ext_eval.ExtValue{ .Timestamp = v },
         .Url => |u| ext_eval.ExtValue{ .Url = url_mod.Url{
             .scheme = try self.allocator.dupe(u8, u.scheme),
             .host = try self.allocator.dupe(u8, u.host),
@@ -262,6 +277,11 @@ fn copyExtValue(self: *GraphStore, value: @import("eval_extended.zig").ExtValue)
             .bytes = try self.allocator.dupe(u8, bs.bytes),
             .bit_length = bs.bit_length,
         } },
+        .Array => |arr| ext_eval.ExtValue{ .Array = .{
+            .elem_type = arr.elem_type,
+            .data = try self.allocator.dupe(u8, arr.data),
+            .allocator = self.allocator,
+        } },
         .List => |list| blk: {
             const copied = try self.allocator.alloc(ext_eval.ExtValue, list.len);
             for (list, 0..) |item, i| {
@@ -285,6 +305,9 @@ fn freeExtValueWithAllocator(allocator: std.mem.Allocator, value: @import("eval_
         .LanguageTag => |lt| allocator.free(lt.tag),
         .VectorF32 => |vec| allocator.free(vec.data),
         .VectorI32 => |vec| allocator.free(vec.data),
+        .Text => |s| allocator.free(s),
+        .Char => |c| allocator.free(c.data),
+        .Varchar => |v| allocator.free(v.data),
         .Hash => |h| {
             allocator.free(h.digest);
             if (h.salt) |s| allocator.free(s);
@@ -301,6 +324,7 @@ fn freeExtValueWithAllocator(allocator: std.mem.Allocator, value: @import("eval_
         .Xml => |doc| allocator.free(doc.data),
         .BitString => |bs| bitstring_mod.BitString.deinit(bs, allocator),
         .VarBit => |bs| bitstring_mod.BitString.deinit(bs, allocator),
+        .Array => |arr| arr.deinit(),
         .List => |list| {
             for (list) |item| {
                 freeExtValueWithAllocator(allocator, item);

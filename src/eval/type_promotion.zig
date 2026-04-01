@@ -14,6 +14,7 @@ const std = @import("std");
 const value_types = @import("../value_types.zig");
 const ast = @import("../gql/ast.zig");
 const heap = @import("../storage/heap.zig");
+const property_codec = @import("../property_value_codec.zig");
 
 pub const Value = value_types.Value;
 pub const EvalError = value_types.EvalError;
@@ -82,57 +83,7 @@ pub fn expectInt(v: Value) EvalError!i64 {
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-005; FEATURE="Value Converters"; ASPECT=Core; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-17
 pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../eval_extended.zig").ExtValue {
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .ExtValue => |ext| ext, // Unwrap the ExtValue directly
-        .List => |list| blk: {
-            // Convert Value.List to ExtValue.List recursively
-            var ext_list = try allocator.alloc(@import("../eval_extended.zig").ExtValue, list.len);
-            for (list, 0..) |item, i| {
-                ext_list[i] = try valueToExtValue(allocator, item);
-            }
-            break :blk .{ .List = ext_list };
-        },
-        .Node => .{ .Null = {} }, // ExtValue doesn't support graph types
-        .Edge => .{ .Null = {} }, // ExtValue doesn't support graph types
-        .Map => .{ .Null = {} }, // ExtValue doesn't support map types
-        .Path => .{ .Null = {} }, // ExtValue doesn't support path types
-        // Extended types
-        .SmallInt => |i| .{ .Int = i }, // Promote to i64? ExtValue has Int (i64).
-        .BigInt => |i| .{ .Int = i },
-        .Real => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } }, // Best effort? Or add Real to ExtValue?
-        // ExtValue doesn't have Real/Double. It has Decimal.
-        .Double => |f| .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } },
-        .Char => |c| .{ .Str = c.data }, // Convert to Str
-        .Varchar => |v| .{ .Str = v.data },
-        .Text => |t| .{ .Str = t },
-        .Date => |d| .{ .Date = d },
-        .Time => |t| .{ .Time = t },
-        .TimeTZ => |_| .{ .Null = {} }, // ExtValue doesn't have TimeTZ? Checked eval_extended.zig in Step 70 only saw TimestampTZ. Wait, I should check ExtValue again.
-        // Step 70 diff showed: TimestampTZ, Interval. No TimeTZ.
-        // It has Date, Time.
-        // I should probably map TimeTZ to Time (lossy) or Null?
-        // Let's check heapValueToEvalValue - it wrapped Date/Time.
-        // I will map to ExtValue variants where they exist.
-        .Timestamp => |_| .{ .Null = {} }, // ExtValue doesn't have Timestamp, only TimestampTZ?
-        .TimestampTZ => |t| .{ .TimestampTZ = t },
-        .Interval => |i| .{ .Interval = i },
-        .Bytea => |b| .{ .Bytea = b },
-        .Json => |j| .{ .Json = j },
-        .Jsonb => |j| .{ .Jsonb = j },
-        .Xml => |x| .{ .Xml = x },
-        .Url => |u| .{ .Url = u },
-        .Domain => |d| .{ .Domain = d },
-        .UUID => |u| .{ .UUID = u },
-        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
-        .BitString => |b| .{ .BitString = b },
-        .VarBit => |b| .{ .VarBit = b },
-        .IntRange => |r| .{ .IntRange = r },
-    };
+    return property_codec.valueToExtValue(allocator, value);
 }
 
 /// Convert eval_extended.ExtValue to eval.Value
@@ -140,33 +91,7 @@ pub fn valueToExtValue(allocator: std.mem.Allocator, value: Value) !@import("../
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-006; FEATURE="Value Converters"; ASPECT=Core; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-17
 pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Value {
-    return switch (ext_value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale } },
-        .Date => |d| .{ .Date = d },
-        .Time => |t| .{ .Time = t },
-        .TimestampTZ => |t| .{ .TimestampTZ = t },
-        .Interval => |i| .{ .Interval = i },
-        .UUID => |u| .{ .UUID = u },
-        .Url => |u| .{ .Url = u },
-        .Domain => |d| .{ .Domain = d },
-        .Bytea => |b| .{ .Bytea = b },
-        .Json => |j| .{ .Json = j },
-        .Jsonb => |j| .{ .Jsonb = j },
-        .Xml => |x| .{ .Xml = x },
-        .BitString => |b| .{ .BitString = b },
-        .VarBit => |v| .{ .VarBit = v },
-        .IntRange => |r| .{ .IntRange = r },
-        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
-        .List => |list| .{ .ExtValue = .{ .List = list } },
-
-        // For advanced types, wrap in Value.ExtValue to preserve type information
-        // This allows nested function calls like ip_family(IpAddr('...')) to work correctly
-        else => .{ .ExtValue = ext_value },
-    };
+    return property_codec.extValueToValue(ext_value);
 }
 
 /// Convert eval.Value to heap.Value for function calls
@@ -175,49 +100,7 @@ pub fn extValueToValue(ext_value: @import("../eval_extended.zig").ExtValue) Valu
 ///
 // CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-007; FEATURE="Value Converters"; ASPECT=Core; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-10
 pub fn evalValueToHeapValue(value: Value) heap.Value {
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        // GAP-0045: Preserve type information where possible instead of converting to NULL
-        // ExtValue wraps advanced types - we need to unwrap and convert where possible
-        .ExtValue => |ext| extValueToHeapValue(ext),
-        // List converts to Text representation for storage compatibility
-        .List => .{ .Text = "[...]" }, // Lists should be handled at higher level, not stored directly
-        // Graph types are graph-specific; they represent pointers to graph storage, not storable values
-        // Return Null as these should be handled by graph operations, not scalar functions
-        .Node => .{ .Null = {} }, // Graph types handled by graph ops
-        .Edge => .{ .Null = {} }, // Graph types handled by graph ops
-        .Map => .{ .Null = {} }, // Maps should use JSON serialization path
-        .Path => .{ .Null = {} }, // Paths are graph-specific
-        // Extended types
-        .SmallInt => |i| .{ .SmallInt = i },
-        .BigInt => |i| .{ .BigInt = i },
-        .Real => |f| .{ .Real = f },
-        .Double => |f| .{ .Double = f },
-        .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
-        .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
-        .Text => |t| .{ .Text = t },
-        .Date => |d| .{ .Date = d },
-        .Time => |t| .{ .Time = t },
-        .TimeTZ => |t| .{ .TimeTZ = t },
-        .Timestamp => |t| .{ .Timestamp = t },
-        .TimestampTZ => |t| .{ .TimestampTZ = t },
-        .Interval => |i| .{ .Interval = i },
-        .Bytea => |b| .{ .Bytea = b },
-        .Json => |j| .{ .Json = j },
-        .Jsonb => |j| .{ .Jsonb = j }, // heap.Value has JsonbDocument
-        .Xml => |x| .{ .Xml = x },
-        .Url => |u| .{ .Url = u },
-        .Domain => |d| .{ .Domain = d },
-        .UUID => |u| .{ .UUID = u },
-        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
-        .BitString => |b| .{ .BitString = b },
-        .VarBit => |v| .{ .VarBit = v },
-        .IntRange => |r| .{ .IntRange = r },
-    };
+    return property_codec.evalValueToHeapValue(value);
 }
 
 /// Convert heap.Value to eval.Value for function results
@@ -226,63 +109,7 @@ pub fn evalValueToHeapValue(value: Value) heap.Value {
 ///
 /// CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-008; FEATURE="Value Converters"; ASPECT=Core; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-17
 pub fn heapValueToEvalValue(value: heap.Value) Value {
-    // eval_ext removed
-
-    return switch (value) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Text => |s| .{ .Str = s },
-        .Real => |f| blk: {
-            // Check for overflow when converting to decimal
-            if (!std.math.isFinite(f)) {
-                break :blk .{ .Null = {} }; // Return null for infinite or NaN
-            }
-            if (@abs(f) > 1e20) {
-                // For very large values, reduce precision to avoid overflow
-                const scale_factor = std.math.pow(f32, 10, 3);
-                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f / scale_factor), .scale = 0 } };
-            }
-            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6 } };
-        },
-        .Double => |d| blk: {
-            // Check for overflow when converting to decimal
-            if (!std.math.isFinite(d)) {
-                break :blk .{ .Null = {} }; // Return null for infinite or NaN
-            }
-            if (@abs(d) > 1e20) {
-                // For very large values, reduce precision to avoid overflow
-                const scale_factor = std.math.pow(f64, 10, 3);
-                break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d / scale_factor), .scale = 0 } };
-            }
-            break :blk .{ .Decimal = .{ .coeff = @intFromFloat(d * 1000000), .scale = 6 } };
-        },
-        .Decimal128 => |d| .{ .Decimal = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        // Direct mapping
-        .SmallInt => |i| .{ .SmallInt = i },
-        .BigInt => |i| .{ .BigInt = i },
-        .Char => |c| .{ .Char = .{ .data = c.data, .n = c.n } },
-        .Varchar => |v| .{ .Varchar = .{ .data = v.data, .n = v.n } },
-        .Date => |dt| .{ .Date = dt },
-        .Time => |t| .{ .Time = t },
-        .TimeTZ => |t| .{ .TimeTZ = t },
-        .Timestamp => |t| .{ .Timestamp = t },
-        .TimestampTZ => |ts| .{ .TimestampTZ = ts },
-        .Interval => |i| .{ .Interval = i },
-        .Bytea => |b| .{ .Bytea = b },
-        .Json => |j| .{ .Json = j },
-        .Jsonb => |j| .{ .Jsonb = j },
-        .Xml => |x| .{ .Xml = x },
-        .Url => |u| .{ .Url = u },
-        .Domain => |d| .{ .Domain = d },
-        .UUID => |u| .{ .UUID = u },
-        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
-        .BitString => |b| .{ .BitString = b },
-        .VarBit => |v| .{ .VarBit = v },
-        .IntRange => |r| .{ .IntRange = r },
-        else => .{ .Null = {} }, // Convert unknown types to null
-    };
+    return property_codec.heapValueToValue(value);
 }
 
 // ============================================================================
@@ -292,29 +119,7 @@ pub fn heapValueToEvalValue(value: heap.Value) Value {
 /// Convert ExtValue to heap.Value for storage operations
 // CANARY: REQ=REQ-M6.1-TYPE-PROMOTION-012; FEATURE="ExtValueHeapConversion"; ASPECT=Core; STATUS=TESTED; OWNER=eval; UPDATED=2026-01-10
 fn extValueToHeapValue(ext: @import("../eval_extended.zig").ExtValue) heap.Value {
-    return switch (ext) {
-        .Null => .{ .Null = {} },
-        .Int => |i| .{ .Int = i },
-        .Bool => |b| .{ .Bool = b },
-        .Str => |s| .{ .Str = s },
-        .Decimal => |d| .{ .Decimal128 = .{ .coeff = d.coeff, .scale = @intCast(d.scale) } },
-        .Date => |d| .{ .Date = d },
-        .Time => |t| .{ .Time = t },
-        .TimestampTZ => |t| .{ .TimestampTZ = t },
-        .Interval => |i| .{ .Interval = i },
-        .UUID => |u| .{ .UUID = u },
-        .Url => |u| .{ .Url = u },
-        .Domain => |d| .{ .Domain = d },
-        .Bytea => |b| .{ .Bytea = b },
-        .Json => |j| .{ .Json = j },
-        .Jsonb => |j| .{ .Jsonb = j },
-        .Xml => |x| .{ .Xml = x },
-        .BitString => |b| .{ .BitString = b },
-        .VarBit => |v| .{ .VarBit = v },
-        .IntRange => |r| .{ .IntRange = r },
-        .Enum => |e| .{ .Enum = .{ .type_id = e.type_id, .value_ordinal = e.value_ordinal } },
-        else => .{ .Null = {} }, // Unsupported ExtValue types convert to null
-    };
+    return property_codec.extValueToHeapValue(ext);
 }
 
 // ============================================================================

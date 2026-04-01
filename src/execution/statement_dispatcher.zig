@@ -474,6 +474,9 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .spatial_geographic => "spatial_geographic",
                         .network_cidr => "network_cidr",
                         .signature_crypto => "signature_crypto",
+                        .interval_tree => "IntervalTree",
+                        .jsonb_inverted => "JsonbInverted",
+                        .domain_trie => "DomainTrie",
                     },
                     .table_name = try cat.allocator.dupe(u8, label),
                     .columns = blk: {

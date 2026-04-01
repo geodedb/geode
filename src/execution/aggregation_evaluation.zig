@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
 
 // Import from parent execution module
@@ -30,15 +31,7 @@ fn extractFieldName(expr_ptr: *const ast.Expr) ?[]const u8 {
 
 /// Convert a property value to a Value
 fn propertyToValue(prop_val: graph_store.PropertyValue) Value {
-    return switch (prop_val) {
-        .String => |s| Value{ .Str = s },
-        .Int => |n| Value{ .Int = n },
-        .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
-        .Bool => |b| Value{ .Bool = b },
-        .Null => Value{ .Null = {} },
-        .ExtValue => |ext| Value{ .ExtValue = ext },
-        .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-    };
+    return property_codec.propertyValueToValue(prop_val);
 }
 
 /// Get integer value from property if it's numeric
@@ -1007,15 +1000,7 @@ pub fn evaluateAggregation(allocator: std.mem.Allocator, expr: ast.Expr, store: 
                                 } else {
                                     // collect(n.prop) - collect property values
                                     if (node.properties.get(field)) |val| {
-                                        const value = switch (val) {
-                                            .String => |s| Value{ .Str = s },
-                                            .Int => |n| Value{ .Int = n },
-                                            .Float => |f| Value{ .Decimal = .{ .coeff = @intFromFloat(f * 100), .scale = 2, .orig_scale = 2, .orig_repr = null } },
-                                            .Bool => |b| Value{ .Bool = b },
-                                            .Null => Value{ .Null = {} },
-                                            .ExtValue => |ext| Value{ .ExtValue = ext },
-                                            .Decimal => |d| Value{ .Decimal = .{ .coeff = d.coeff, .scale = d.scale, .orig_scale = d.scale, .orig_repr = null } },
-                                        };
+                                        const value = try property_codec.propertyValueToProjectedValue(allocator, val);
                                         try list.append(allocator, value);
                                     }
                                 }

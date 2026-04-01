@@ -160,363 +160,363 @@ pub const VectorI32 = struct {
 };
 
 pub fn encodeValue(allocator: std.mem.Allocator, v: Value) ![]u8 {
-    var buf = std.ArrayList(u8).init(allocator);
-    defer buf.deinit();
+    var buf = std.ArrayList(u8).empty;
+    defer buf.deinit(allocator);
 
     switch (v) {
         .Null => {
-            try buf.append(0x00);
+            try buf.append(allocator, 0x00);
         },
         .Bool => |b| {
-            try buf.append(0x01);
-            try buf.append(if (b) 1 else 0);
+            try buf.append(allocator, 0x01);
+            try buf.append(allocator, if (b) 1 else 0);
         },
         .Int => |i| {
-            try buf.append(0x02);
+            try buf.append(allocator, 0x02);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &tmp, i, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Str => |s| {
-            try buf.append(0x03);
+            try buf.append(allocator, 0x03);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(s.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(s);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, s);
         },
         .IpAddr => |ip| {
             switch (ip) {
                 .v4 => |bytes| {
-                    try buf.append(0x04); // TAG_IPv4
-                    try buf.appendSlice(&bytes);
+                    try buf.append(allocator, 0x04); // TAG_IPv4
+                    try buf.appendSlice(allocator, &bytes);
                 },
                 .v6 => |bytes| {
-                    try buf.append(0x05); // TAG_IPv6
-                    try buf.appendSlice(&bytes);
+                    try buf.append(allocator, 0x05); // TAG_IPv6
+                    try buf.appendSlice(allocator, &bytes);
                 },
             }
         },
         .Subnet => |subnet| {
             switch (subnet.addr) {
                 .v4 => |bytes| {
-                    try buf.append(0x06); // TAG_Subnet4
-                    try buf.appendSlice(&bytes);
-                    try buf.append(subnet.prefix_len);
+                    try buf.append(allocator, 0x06); // TAG_Subnet4
+                    try buf.appendSlice(allocator, &bytes);
+                    try buf.append(allocator, subnet.prefix_len);
                 },
                 .v6 => |bytes| {
-                    try buf.append(0x07); // TAG_Subnet6
-                    try buf.appendSlice(&bytes);
-                    try buf.append(subnet.prefix_len);
+                    try buf.append(allocator, 0x07); // TAG_Subnet6
+                    try buf.appendSlice(allocator, &bytes);
+                    try buf.append(allocator, subnet.prefix_len);
                 },
             }
         },
         .Mac => |mac| {
-            try buf.append(0x08); // TAG_Mac
-            try buf.appendSlice(&mac.bytes);
+            try buf.append(allocator, 0x08); // TAG_Mac
+            try buf.appendSlice(allocator, &mac.bytes);
         },
         .Hash => |hash| {
-            try buf.append(0x09); // TAG_Hash
-            try buf.append(@intFromEnum(hash.alg));
-            try buf.appendSlice(hash.digest);
+            try buf.append(allocator, 0x09); // TAG_Hash
+            try buf.append(allocator, @intFromEnum(hash.alg));
+            try buf.appendSlice(allocator, hash.digest);
         },
         .Currency => |cur| {
-            try buf.append(0x0A); // TAG_Currency
-            try buf.appendSlice(&cur.code);
+            try buf.append(allocator, 0x0A); // TAG_Currency
+            try buf.appendSlice(allocator, &cur.code);
         },
         .LanguageTag => |lang| {
-            try buf.append(0x0B); // TAG_LangTag
+            try buf.append(allocator, 0x0B); // TAG_LangTag
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(lang.tag.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(lang.tag);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, lang.tag);
         },
         .LatLon => |ll| {
             if (std.math.isNan(ll.lat) or std.math.isNan(ll.lon)) return error.FloatNaN;
             if (std.math.isInf(ll.lat) or std.math.isInf(ll.lon)) return error.FloatNaN;
-            try buf.append(0x0C); // TAG_LatLon
+            try buf.append(allocator, 0x0C); // TAG_LatLon
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(u64, &tmp, @bitCast(ll.lat), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             std.mem.writeInt(u64, &tmp, @bitCast(ll.lon), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .LatLonAlt => |lla| {
             if (std.math.isNan(lla.lat) or std.math.isNan(lla.lon) or std.math.isNan(lla.alt)) return error.FloatNaN;
             if (std.math.isInf(lla.lat) or std.math.isInf(lla.lon) or std.math.isInf(lla.alt)) return error.FloatNaN;
-            try buf.append(0x0D); // TAG_LatLonAlt
+            try buf.append(allocator, 0x0D); // TAG_LatLonAlt
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(u64, &tmp, @bitCast(lla.lat), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             std.mem.writeInt(u64, &tmp, @bitCast(lla.lon), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             std.mem.writeInt(u64, &tmp, @bitCast(lla.alt), .little);
-            try buf.appendSlice(&tmp);
-            try buf.append(@intFromEnum(lla.ref));
+            try buf.appendSlice(allocator, &tmp);
+            try buf.append(allocator, @intFromEnum(lla.ref));
         },
         .Geometry => |geom| {
-            try buf.append(0x0E); // TAG_Geom
+            try buf.append(allocator, 0x0E); // TAG_Geom
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(geom.wkb.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(geom.wkb);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, geom.wkb);
         },
         .Temperature => |temp| {
             if (std.math.isNan(temp.value_K)) return error.FloatNaN;
             if (std.math.isInf(temp.value_K)) return error.FloatNaN;
-            try buf.append(0x0F); // TAG_Temp
+            try buf.append(allocator, 0x0F); // TAG_Temp
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(u64, &tmp, @bitCast(temp.value_K), .little);
-            try buf.appendSlice(&tmp);
-            try buf.append(@intFromEnum(temp.unit_in));
+            try buf.appendSlice(allocator, &tmp);
+            try buf.append(allocator, @intFromEnum(temp.unit_in));
         },
         .Pressure => |press| {
             if (std.math.isNan(press.value_Pa)) return error.FloatNaN;
             if (std.math.isInf(press.value_Pa)) return error.FloatNaN;
-            try buf.append(0x10); // TAG_Press
+            try buf.append(allocator, 0x10); // TAG_Press
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(u64, &tmp, @bitCast(press.value_Pa), .little);
-            try buf.appendSlice(&tmp);
-            try buf.append(@intFromEnum(press.unit_in));
+            try buf.appendSlice(allocator, &tmp);
+            try buf.append(allocator, @intFromEnum(press.unit_in));
         },
         .VectorF32 => |vec| {
-            try buf.append(0x11); // TAG_VecF32
+            try buf.append(allocator, 0x11); // TAG_VecF32
             var tmp: [2]u8 = undefined;
             std.mem.writeInt(u16, &tmp, vec.dim, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             for (vec.data) |f| {
                 if (std.math.isNan(f)) return error.FloatNaN;
                 if (std.math.isInf(f)) return error.FloatNaN;
                 var ftmp: [4]u8 = undefined;
                 std.mem.writeInt(u32, &ftmp, @bitCast(f), .little);
-                try buf.appendSlice(&ftmp);
+                try buf.appendSlice(allocator, &ftmp);
             }
         },
         .VectorI32 => |vec| {
-            try buf.append(0x12); // TAG_VecI32
+            try buf.append(allocator, 0x12); // TAG_VecI32
             var tmp: [2]u8 = undefined;
             std.mem.writeInt(u16, &tmp, vec.dim, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             for (vec.data) |i| {
                 var itmp: [4]u8 = undefined;
                 std.mem.writeInt(i32, &itmp, i, .little);
-                try buf.appendSlice(&itmp);
+                try buf.appendSlice(allocator, &itmp);
             }
         },
         // Additional data types (tags >= 0x20)
         .SmallInt => |i| {
-            try buf.append(0x20);
+            try buf.append(allocator, 0x20);
             var tmp: [2]u8 = undefined;
             std.mem.writeInt(i16, &tmp, i, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .BigInt => |i| {
-            try buf.append(0x21);
+            try buf.append(allocator, 0x21);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &tmp, i, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Real => |f| {
             if (std.math.isNan(f) or std.math.isInf(f)) return error.FloatNaN;
-            try buf.append(0x22);
+            try buf.append(allocator, 0x22);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @bitCast(f), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Double => |f| {
             if (std.math.isNan(f) or std.math.isInf(f)) return error.FloatNaN;
-            try buf.append(0x23);
+            try buf.append(allocator, 0x23);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(u64, &tmp, @bitCast(f), .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Decimal128 => |d| {
-            try buf.append(0x24);
+            try buf.append(allocator, 0x24);
             var tmp: [16]u8 = undefined;
             std.mem.writeInt(i128, &tmp, d.coeff, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
             var scale_tmp: [2]u8 = undefined;
             std.mem.writeInt(i16, &scale_tmp, d.scale, .little);
-            try buf.appendSlice(&scale_tmp);
+            try buf.appendSlice(allocator, &scale_tmp);
         },
         .Char => |ch| {
-            try buf.append(0x25);
+            try buf.append(allocator, 0x25);
             var n_tmp: [2]u8 = undefined;
             std.mem.writeInt(u16, &n_tmp, ch.n, .little);
-            try buf.appendSlice(&n_tmp);
+            try buf.appendSlice(allocator, &n_tmp);
             var len_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_tmp, @intCast(ch.data.len), .little);
-            try buf.appendSlice(&len_tmp);
-            try buf.appendSlice(ch.data);
+            try buf.appendSlice(allocator, &len_tmp);
+            try buf.appendSlice(allocator, ch.data);
         },
         .Varchar => |vc| {
-            try buf.append(0x26);
+            try buf.append(allocator, 0x26);
             var n_tmp: [2]u8 = undefined;
             std.mem.writeInt(u16, &n_tmp, vc.n, .little);
-            try buf.appendSlice(&n_tmp);
+            try buf.appendSlice(allocator, &n_tmp);
             var len_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_tmp, @intCast(vc.data.len), .little);
-            try buf.appendSlice(&len_tmp);
-            try buf.appendSlice(vc.data);
+            try buf.appendSlice(allocator, &len_tmp);
+            try buf.appendSlice(allocator, vc.data);
         },
         .Text => |s| {
-            try buf.append(0x27);
+            try buf.append(allocator, 0x27);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(s.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(s);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, s);
         },
         .Date => |d| {
-            try buf.append(0x28);
+            try buf.append(allocator, 0x28);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(i32, &tmp, d.days_since_epoch, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Time => |t| {
-            try buf.append(0x29);
+            try buf.append(allocator, 0x29);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &tmp, t.micros_since_midnight, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .TimeTZ => |tz| {
-            try buf.append(0x2A);
+            try buf.append(allocator, 0x2A);
             var time_tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &time_tmp, tz.time.micros_since_midnight, .little);
-            try buf.appendSlice(&time_tmp);
+            try buf.appendSlice(allocator, &time_tmp);
             var offset_tmp: [4]u8 = undefined;
             std.mem.writeInt(i32, &offset_tmp, tz.offset_seconds, .little);
-            try buf.appendSlice(&offset_tmp);
+            try buf.appendSlice(allocator, &offset_tmp);
         },
         .Timestamp => |ts| {
-            try buf.append(0x2B);
+            try buf.append(allocator, 0x2B);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &tmp, ts.micros_since_epoch, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .TimestampTZ => |tsz| {
-            try buf.append(0x2C);
+            try buf.append(allocator, 0x2C);
             var tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &tmp, tsz.micros_since_epoch_utc, .little);
-            try buf.appendSlice(&tmp);
+            try buf.appendSlice(allocator, &tmp);
         },
         .Interval => |iv| {
-            try buf.append(0x2D);
+            try buf.append(allocator, 0x2D);
             var months_tmp: [4]u8 = undefined;
             std.mem.writeInt(i32, &months_tmp, iv.months, .little);
-            try buf.appendSlice(&months_tmp);
+            try buf.appendSlice(allocator, &months_tmp);
             var days_tmp: [4]u8 = undefined;
             std.mem.writeInt(i32, &days_tmp, iv.days, .little);
-            try buf.appendSlice(&days_tmp);
+            try buf.appendSlice(allocator, &days_tmp);
             var micros_tmp: [8]u8 = undefined;
             std.mem.writeInt(i64, &micros_tmp, iv.micros, .little);
-            try buf.appendSlice(&micros_tmp);
+            try buf.appendSlice(allocator, &micros_tmp);
         },
         .Bytea => |b| {
-            try buf.append(0x2E);
+            try buf.append(allocator, 0x2E);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(b.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(b);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, b);
         },
         .Json => |j| {
-            try buf.append(0x2F);
+            try buf.append(allocator, 0x2F);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(j.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(j);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, j);
         },
         .Jsonb => |jb| {
-            try buf.append(0x30);
+            try buf.append(allocator, 0x30);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(jb.data.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(jb.data);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, jb.data);
         },
         .Xml => |x| {
-            try buf.append(0x31);
+            try buf.append(allocator, 0x31);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(x.data.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(x.data);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, x.data);
         },
         .Url => |u| {
-            try buf.append(0x32);
+            try buf.append(allocator, 0x32);
             const url_str = try u.toString(allocator);
             defer allocator.free(url_str);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(url_str.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(url_str);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, url_str);
         },
         .Domain => |d| {
-            try buf.append(0x33);
+            try buf.append(allocator, 0x33);
             const domain_str = try d.toString(allocator);
             defer allocator.free(domain_str);
             var tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &tmp, @intCast(domain_str.len), .little);
-            try buf.appendSlice(&tmp);
-            try buf.appendSlice(domain_str);
+            try buf.appendSlice(allocator, &tmp);
+            try buf.appendSlice(allocator, domain_str);
         },
         .UUID => |u| {
-            try buf.append(0x34);
-            try buf.appendSlice(&u.bytes);
+            try buf.append(allocator, 0x34);
+            try buf.appendSlice(allocator, &u.bytes);
         },
         .Enum => |e| {
-            try buf.append(0x35);
+            try buf.append(allocator, 0x35);
             var type_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &type_tmp, e.type_id, .little);
-            try buf.appendSlice(&type_tmp);
+            try buf.appendSlice(allocator, &type_tmp);
             var ord_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &ord_tmp, e.value_ordinal, .little);
-            try buf.appendSlice(&ord_tmp);
+            try buf.appendSlice(allocator, &ord_tmp);
         },
         .Array => |a| {
-            try buf.append(0x36);
+            try buf.append(allocator, 0x36);
             var type_tmp: [2]u8 = undefined;
             std.mem.writeInt(u16, &type_tmp, @intFromEnum(a.elem_type), .little);
-            try buf.appendSlice(&type_tmp);
+            try buf.appendSlice(allocator, &type_tmp);
             var count_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &count_tmp, @intCast(a.length()), .little);
-            try buf.appendSlice(&count_tmp);
-            try buf.appendSlice(a.data);
+            try buf.appendSlice(allocator, &count_tmp);
+            try buf.appendSlice(allocator, a.data);
         },
         .BitString => |bs| {
-            try buf.append(0x37);
+            try buf.append(allocator, 0x37);
             var len_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_tmp, bs.bit_length, .little);
-            try buf.appendSlice(&len_tmp);
-            try buf.appendSlice(bs.bytes);
+            try buf.appendSlice(allocator, &len_tmp);
+            try buf.appendSlice(allocator, bs.bytes);
         },
         .VarBit => |vb| {
-            try buf.append(0x38);
+            try buf.append(allocator, 0x38);
             var len_tmp: [4]u8 = undefined;
             std.mem.writeInt(u32, &len_tmp, vb.bit_length, .little);
-            try buf.appendSlice(&len_tmp);
-            try buf.appendSlice(vb.bytes);
+            try buf.appendSlice(allocator, &len_tmp);
+            try buf.appendSlice(allocator, vb.bytes);
         },
         .IntRange => |r| {
-            try buf.append(0x39);
+            try buf.append(allocator, 0x39);
             var bounds_tmp: [1]u8 = undefined;
             bounds_tmp[0] = @intFromEnum(r.bounds);
-            try buf.appendSlice(&bounds_tmp);
+            try buf.appendSlice(allocator, &bounds_tmp);
 
             const has_lower = r.lower != null;
             const has_upper = r.upper != null;
-            try buf.append(if (has_lower) 1 else 0);
-            try buf.append(if (has_upper) 1 else 0);
+            try buf.append(allocator, if (has_lower) 1 else 0);
+            try buf.append(allocator, if (has_upper) 1 else 0);
 
             if (has_lower) {
                 var val_tmp: [4]u8 = undefined;
                 std.mem.writeInt(i32, &val_tmp, r.lower.?, .little);
-                try buf.appendSlice(&val_tmp);
+                try buf.appendSlice(allocator, &val_tmp);
             }
             if (has_upper) {
                 var val_tmp: [4]u8 = undefined;
                 std.mem.writeInt(i32, &val_tmp, r.upper.?, .little);
-                try buf.appendSlice(&val_tmp);
+                try buf.appendSlice(allocator, &val_tmp);
             }
         },
     }
-    return buf.toOwnedSlice();
+    return buf.toOwnedSlice(allocator);
 }
 
 pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
@@ -583,6 +583,10 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
                 .SHA3_256 => 32,
                 .SHA3_512 => 64,
                 .BLAKE3 => 32,
+                .BLAKE2B_256 => 32,
+                .BLAKE2B_512 => 64,
+                .BLAKE2S_256 => 32,
+                .ARGON2ID => 32,
             };
             if (bytes.len < 1 + 1 + digest_len) return error.Underflow;
             const digest = try allocator.dupe(u8, bytes[2 .. 2 + digest_len]);
