@@ -198,11 +198,6 @@
             .hash = "rtree-0.1.0-kIpcHy-1AABSBpjL0F_LQbvs2h7tB39ann_jTpCEfEuh",
         },
 
-        // Concurrency - Thread pool and bounded MPMC queue
-        .concurrency = .{
-            .url = "git+https://gitlab.com/devnw/zig/concurrency.git#8e300a9a7d5917b120cd3ce5e321b42d9f1b628a",
-            .hash = "concurrency-0.1.0-MDWSwkvAAABjTnaUeUKLgjhjT3tpcmxY0XNWKzBDZutH",
-        },
 
         // Advanced Types - Network, vector, geographic, URL, range value types
         .advanced_types = .{

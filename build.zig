@@ -333,9 +333,6 @@ pub fn build(b: *std.Build) void {
     const rtree_dep = b.dependency("rtree", .{ .target = target, .optimize = optimize });
     const rtree_ext_mod = rtree_dep.module("rtree");
 
-    const concurrency_dep = b.dependency("concurrency", .{ .target = target, .optimize = optimize });
-    const concurrency_ext_mod = concurrency_dep.module("concurrency");
-
     const advanced_types_dep = b.dependency("advanced_types", .{ .target = target, .optimize = optimize });
     const advanced_types_ext_mod = advanced_types_dep.module("advanced_types");
 
@@ -369,9 +366,9 @@ pub fn build(b: *std.Build) void {
     transport_quic_mod.addImport("dns", dns_mod);
 
     // Thread Pool Module - High-performance worker threads for query execution (GAP-0201)
-    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
+    // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
+    // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-04-01
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
-    thread_pool_mod.addImport("concurrency_lib", concurrency_ext_mod);
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
     // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
@@ -452,7 +449,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("audit_lib", audit_ext_mod);
     root_mod.addImport("hnsw_lib", hnsw_ext_mod);
     root_mod.addImport("rtree_lib", rtree_ext_mod);
-    root_mod.addImport("concurrency_lib", concurrency_ext_mod);
+
     root_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
     root_mod.addImport("fle_lib", fle_ext_mod);
     root_mod.addImport("gql_lib", gql_ext_mod);
@@ -512,7 +509,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("audit_lib", audit_ext_mod);
     geode_exe.root_module.addImport("hnsw_lib", hnsw_ext_mod);
     geode_exe.root_module.addImport("rtree_lib", rtree_ext_mod);
-    geode_exe.root_module.addImport("concurrency_lib", concurrency_ext_mod);
+
     geode_exe.root_module.addImport("advanced_types_lib", advanced_types_ext_mod);
     geode_exe.root_module.addImport("fle_lib", fle_ext_mod);
     geode_exe.root_module.addImport("gql_lib", gql_ext_mod);
