@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 // CANARY: REQ=REQ-QUALITY-GAP-413-004; FEATURE="OrphanedTestRemediation"; ASPECT=AuditTransports; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-const audit = @import("audit_bundle");
-const events = audit.events;
-const config = audit.config;
-const syslog = audit.syslog;
-const file_sink = audit.file_sink;
-const time = audit.time;
+const audit_lib = @import("audit_lib");
+const events = audit_lib.events;
+const config = audit_lib.config;
+const syslog = audit_lib.syslog;
+const file_sink = audit_lib.file_sink;
+const time = audit_lib.time;
 
 test "syslog RFC5424 formatting" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

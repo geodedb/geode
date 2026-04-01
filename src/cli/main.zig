@@ -4,9 +4,11 @@ const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
 const geode = @import("geode");
 const Value = geode.value_types.Value;
-// CANARY: REQ=REQ-CLI-REFACTOR-001; FEATURE="CLI Library Migration"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-// TODO: Migrate to devnw/zig/cli library for improved flag management, automatic help generation,
-// shell completions, and type-safe configuration. See https://gitlab.com/devnw/zig/cli
+// CANARY: REQ=REQ-CLI-REFACTOR-001; FEATURE="CLI Library Migration"; ASPECT=FlagParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-01
+// Partial migration to devnw/zig/cli:
+// - shell completion generation now uses the external command tree
+// - flag parsing, help text, and dispatch remain manual and should migrate incrementally
+//   to avoid destabilizing the unified CLI entry point
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
 const log = logging.scoped("cli");

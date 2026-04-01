@@ -1,6 +1,6 @@
 const std = @import("std");
-const timeseries = @import("timeseries.zig");
-const chunk_storage = @import("chunk_storage.zig");
+const timeseries = @import("timeseries_lib");
+const chunk_storage = @import("timeseries_lib").chunk_storage;
 
 /// Temporary Value type for testing (will be replaced by protocol.Value)
 pub const Value = union(enum) {

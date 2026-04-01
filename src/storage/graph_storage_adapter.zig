@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const gs = @import("graph_storage");
-const uuid_mod = @import("../uuid.zig");
+const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 
 const Allocator = std.mem.Allocator;
@@ -998,7 +998,7 @@ pub const StorageAdapter = struct {
 // ============================================================================
 
 fn generateUuid() [16]u8 {
-    return uuid_mod.UuidV7.new().bytes;
+    return (uuid.newV7() catch unreachable).bytes;
 }
 
 // ============================================================================

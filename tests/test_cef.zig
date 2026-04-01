@@ -1,11 +1,11 @@
 const std = @import("std");
 const testing = std.testing;
 // CANARY: REQ=REQ-QUALITY-GAP-413-005; FEATURE="OrphanedTestRemediation"; ASPECT=AuditCef; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-const audit = @import("audit_bundle");
-const events = audit.events;
-const config = audit.config;
-const cef = audit.cef;
-const time = audit.time;
+const audit_lib = @import("audit_lib");
+const events = audit_lib.events;
+const config = audit_lib.config;
+const cef = audit_lib.cef;
+const time = audit_lib.time;
 
 test "CEF formatting basic structure" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

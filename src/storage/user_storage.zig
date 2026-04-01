@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
-const auth_hmac = @import("geode").auth_hmac;
+const auth_hmac = @import("auth_lib").hmac;
 
 // CANARY: REQ=REQ-GQL-202; FEATURE="UserStorage"; ASPECT=PersistentStorage; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_202_UserStorage; OWNER=security; UPDATED=2026-02-24
 
@@ -15,6 +15,10 @@ const ROLE_LABEL = "Role";
 const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";
 const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
+
+fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
+    return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
+}
 
 pub const UserStorageBackend = struct {
     allocator: Allocator,
@@ -460,7 +464,7 @@ pub const UserStorageBackend = struct {
             .{ .key = "username", .value = username },
         };
 
-        const hmac_bytes = auth_hmac.computeRecordHmac(hmac_key, &props);
+        const hmac_bytes = computeRecordHmacChecked(hmac_key, &props);
         const hmac_hex = auth_hmac.hmacToHex(&hmac_bytes);
 
         // Store the HMAC hex string as a node property

@@ -10,17 +10,17 @@ const type_promotion = geode.type_promotion;
 
 test "Advanced Types Roundtrip" {
     // UUID
-    const u = uuid.UUID.v4();
+    const u = uuid.newV4() catch unreachable;
     const val_uuid = value_types.Value{ .UUID = u };
     const heap_uuid = type_promotion.evalValueToHeapValue(val_uuid);
     // heap.Value should be UUID
     switch (heap_uuid) {
-        .UUID => |hu| try std.testing.expect(uuid.UUID.equal(u, hu)),
+        .UUID => |hu| try std.testing.expect(u.eql(hu)),
         else => return error.TestExpectedUUID,
     }
     const val_back = type_promotion.heapValueToEvalValue(heap_uuid);
     switch (val_back) {
-        .UUID => |vu| try std.testing.expect(uuid.UUID.equal(u, vu)),
+        .UUID => |vu| try std.testing.expect(u.eql(vu)),
         else => return error.TestExpectedUUID,
     }
 

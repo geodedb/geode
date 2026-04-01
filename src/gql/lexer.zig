@@ -1,5 +1,5 @@
 const std = @import("std");
-const t = @import("token.zig");
+const t = @import("gql_lib").token;
 const temporal = @import("../temporal.zig");
 
 pub const Lexer = struct {

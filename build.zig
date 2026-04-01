@@ -739,6 +739,7 @@ pub fn build(b: *std.Build) void {
 
     const custom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/all_tests.zig"), .target = target, .optimize = optimize }) });
     custom_tests.root_module.addImport("geode", root_mod);
+    custom_tests.root_module.addImport("auth_lib", auth_ext_mod);
     custom_tests.root_module.addImport("json", json_mod);
     custom_tests.root_module.addImport("protobuf", protobuf_mod);
     custom_tests.root_module.addImport("schema", schema_mod);
@@ -1630,10 +1631,12 @@ pub fn build(b: *std.Build) void {
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
     user_storage_mod.addImport("logging", logging_mod);
     user_storage_mod.addImport("geode", root_mod);
+    user_storage_mod.addImport("auth_lib", auth_ext_mod);
 
     // Create auth graph manager module (orchestration layer for HMAC auth)
     const auth_graph_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_graph_manager.zig"), .target = target, .optimize = optimize });
     auth_graph_manager_mod.addImport("geode", root_mod);
+    auth_graph_manager_mod.addImport("auth_lib", auth_ext_mod);
     auth_graph_manager_mod.addImport("geode_auth", auth_mod);
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
@@ -1651,6 +1654,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     auth_graph_manager_tests.root_module.addImport("geode", root_mod);
+    auth_graph_manager_tests.root_module.addImport("auth_lib", auth_ext_mod);
     auth_graph_manager_tests.root_module.addImport("geode_auth", auth_mod);
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
@@ -2138,26 +2142,21 @@ pub fn build(b: *std.Build) void {
     const json_opt_tests = b.addTest(.{ .root_module = json_opt_test_mod });
     test_step.dependOn(&json_opt_tests.step);
 
-    // GAP-413: Create audit bundle module for test imports
-    // Uses mod.zig to bundle all audit components into a single module
-    const audit_bundle_mod = b.createModule(.{ .root_source_file = b.path("src/audit/mod.zig"), .target = target, .optimize = optimize });
-    audit_bundle_mod.addImport("audit_lib", audit_ext_mod);
-
     // GAP-413 FIXED: test_filters.zig (10 tests) - audit filter tests
     const test_filters_mod = b.createModule(.{ .root_source_file = b.path("tests/test_filters.zig"), .target = target, .optimize = optimize });
-    test_filters_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_filters_mod.addImport("audit_lib", audit_ext_mod);
     const test_filters_tests = b.addTest(.{ .root_module = test_filters_mod });
     test_step.dependOn(&test_filters_tests.step);
 
     // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
     const test_transports_mod = b.createModule(.{ .root_source_file = b.path("tests/test_transports.zig"), .target = target, .optimize = optimize });
-    test_transports_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_transports_mod.addImport("audit_lib", audit_ext_mod);
     const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
     test_step.dependOn(&test_transports_tests.step);
 
     // GAP-413 FIXED: test_cef.zig (4 tests) - CEF formatting tests
     const test_cef_mod = b.createModule(.{ .root_source_file = b.path("tests/test_cef.zig"), .target = target, .optimize = optimize });
-    test_cef_mod.addImport("audit_bundle", audit_bundle_mod);
+    test_cef_mod.addImport("audit_lib", audit_ext_mod);
     const test_cef_tests = b.addTest(.{ .root_module = test_cef_mod });
     test_step.dependOn(&test_cef_tests.step);
 

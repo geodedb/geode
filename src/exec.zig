@@ -318,7 +318,7 @@ pub fn runGroupedQuery(
     param_names: []const []const u8,
     param_values: []const eval.Value,
     timings: ?*AggStageTimings,
-    timeseries_store: ?*const @import("timeseries/timeseries.zig").Store,
+    timeseries_store: ?*const @import("timeseries_lib").Store,
 ) ![]const []const BindingValue {
     // Validate GROUP BY legality using planner first
     // P2-3: Pass allocator to planQuery

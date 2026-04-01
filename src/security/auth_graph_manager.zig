@@ -12,7 +12,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
-const auth_hmac = @import("geode").auth_hmac;
+const auth_hmac = @import("auth_lib").hmac;
 const geode_auth = @import("geode_auth");
 const user_storage = @import("user_storage");
 const UserStorageBackend = user_storage.UserStorageBackend;
@@ -22,6 +22,10 @@ const Attr = logging.Attr;
 
 const SECURITY_GRAPH_NAME = "__geode_security";
 const HAS_ROLE_EDGE = "HAS_ROLE";
+const geode_hkdf_config = auth_hmac.HkdfConfig{
+    .salt = "geode-auth-hmac-v1",
+    .info = "auth-chain-integrity",
+};
 
 /// Result of HMAC key resolution.
 pub const HmacKeyResult = struct {
@@ -151,7 +155,7 @@ pub const AuthGraphManager = struct {
     ///
     /// Resolution order:
     /// 1. `GEODE_AUTH_HMAC_KEY` env var (64-char hex -> 32 bytes)
-    /// 2. `GEODE_TDE_KEY` env var -> derive via auth_hmac.deriveHmacKeyFromTde
+    /// 2. `GEODE_TDE_KEY` env var -> derive via auth_hmac.deriveHmacKey
     /// 3. `.geode_hmac_key` file in data directory (64 hex chars or 32 raw bytes)
     /// 4. Auto-generate random 256-bit key -> write to `.geode_hmac_key` (0o600)
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
@@ -182,7 +186,7 @@ pub const AuthGraphManager = struct {
                     log.warn("GEODE_TDE_KEY contains invalid hex", &.{});
                     return error.NoHmacKeyAvailable;
                 };
-                const derived = auth_hmac.deriveHmacKeyFromTde(&tde_key);
+                const derived = auth_hmac.deriveHmacKey(&tde_key, geode_hkdf_config);
                 return HmacKeyResult{ .key = derived, .key_id = "tde-derived" };
             }
         } else |_| {}
@@ -290,7 +294,7 @@ pub const AuthGraphManager = struct {
         sortHmacs(hmac_list.items);
 
         // Recompute chain hash
-        const computed_chain_hash = auth_hmac.computeChainHash(hmac_key, hmac_list.items, total_records);
+        const computed_chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records);
         const computed_hex = auth_hmac.hmacToHex(&computed_chain_hash);
 
         // Compare with stored chain hash
@@ -405,7 +409,7 @@ pub const AuthGraphManager = struct {
         sortHmacs(hmac_list.items);
 
         const total_records = self.countAuthRecords();
-        const chain_hash = auth_hmac.computeChainHash(hmac_key, hmac_list.items, total_records);
+        const chain_hash = computeChainHashChecked(hmac_key, hmac_list.items, total_records);
         const chain_hash_hex = auth_hmac.hmacToHex(&chain_hash);
 
         try self.storage.persistChainRoot(&chain_hash_hex, total_records, "sealed");
@@ -750,7 +754,7 @@ fn computeUserHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.Us
         .{ .key = "username", .value = record.getUsername() },
     };
 
-    return auth_hmac.computeRecordHmac(hmac_key, &props);
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 fn computeRoleHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.RoleRecord) [32]u8 {
@@ -776,7 +780,7 @@ fn computeRoleHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.Ro
         .{ .key = "updated_at", .value = updated_str },
     };
 
-    return auth_hmac.computeRecordHmac(hmac_key, &props);
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 fn computePermissionHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.PermissionRecord) [32]u8 {
@@ -798,7 +802,7 @@ fn computePermissionHmac(hmac_key: *const [32]u8, record: *const UserStorageBack
         .{ .key = "resource", .value = record.getResource() },
     };
 
-    return auth_hmac.computeRecordHmac(hmac_key, &props);
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.PolicyRecord) [32]u8 {
@@ -835,7 +839,7 @@ fn computePolicyHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.
         .{ .key = "using_clause", .value = using_clause },
     };
 
-    return auth_hmac.computeRecordHmac(hmac_key, &props);
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 /// Sort HMACs by their byte representation for deterministic chain hash ordering.
@@ -846,6 +850,14 @@ fn sortHmacs(hmacs: [][32]u8) void {
         }
     };
     std.mem.sortUnstable([32]u8, hmacs, Ctx{}, Ctx.lessThan);
+}
+
+fn computeChainHashChecked(hmac_key: *const [32]u8, record_hmacs: []const [32]u8, record_count: u64) [32]u8 {
+    return auth_hmac.computeChainHash(hmac_key, record_hmacs, record_count) catch unreachable;
+}
+
+fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
+    return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
 }
 
 fn sliceUntilZero(bytes: []const u8) ?[]const u8 {

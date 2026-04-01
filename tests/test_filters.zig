@@ -1,9 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 // CANARY: REQ=REQ-QUALITY-GAP-413-003; FEATURE="OrphanedTestRemediation"; ASPECT=AuditFilters; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-const audit = @import("audit_bundle");
-const filters = audit.filters;
-const config = audit.config;
+const audit_lib = @import("audit_lib");
+const filters = audit_lib.filters;
+const config = audit_lib.config;
 
 test "sensitive key detection" {
     // Test password-related keys
