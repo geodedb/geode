@@ -371,6 +371,7 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
     if (msg_len == 0) return error.InvalidFrame;
+    if (msg_len > 16 * 1024 * 1024) return error.FrameTooLarge;
 
     const payload = try allocator.alloc(u8, msg_len);
     defer allocator.free(payload);

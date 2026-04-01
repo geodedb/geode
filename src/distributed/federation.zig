@@ -1351,6 +1351,7 @@ fn readProtoMessage(
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
     if (msg_len == 0) return error.InvalidMessage;
+    if (msg_len > 16 * 1024 * 1024) return error.FrameTooLarge;
     const msg_bytes = try allocator.alloc(u8, msg_len);
     defer allocator.free(msg_bytes);
 

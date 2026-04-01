@@ -309,6 +309,7 @@ fn readFrame(
     try readExact(client, stream, len_buf[0..], deadline);
     const len = std.mem.readInt(u32, &len_buf, .big);
     if (len == 0) return error.InvalidMessage;
+    if (len > 16 * 1024 * 1024) return error.FrameTooLarge;
     const body = try allocator.alloc(u8, len);
     errdefer allocator.free(body);
     try readExact(client, stream, body, deadline);
@@ -781,6 +782,7 @@ pub const Coordinator = struct {
             if (len_read < 4) return error.UnexpectedEndOfStream;
 
             const msg_len = std.mem.readInt(u32, &len_buf, .big);
+            if (msg_len > 16 * 1024 * 1024) return error.FrameTooLarge;
             const msg_buf = try self.allocator.alloc(u8, msg_len);
             defer self.allocator.free(msg_buf);
             const msg_read = try reader.readAll(msg_buf);
