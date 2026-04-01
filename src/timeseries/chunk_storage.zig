@@ -3,6 +3,12 @@
 //
 // Upstream: @import("timeseries_lib").chunk_storage
 
+// CANARY: REQ=REQ-TS-CHUNK-001; FEATURE="ChunkStorage"; ASPECT=Storage; STATUS=TESTED; TEST=src/timeseries/chunk_storage.zig:"chunk_storage: compression and stats"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GORILLA-ENC-001; FEATURE="GorillaEncoder"; ASPECT=Compression; STATUS=TESTED; TEST=src/timeseries/chunk_storage.zig:"chunk_storage: compression and stats"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GORILLA-DEC-001; FEATURE="GorillaDecoder"; ASPECT=Compression; STATUS=TESTED; TEST=src/timeseries/chunk_storage.zig:"chunk_storage: compression and stats"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-RETENTION-001; FEATURE="ChunkRetention"; ASPECT=Lifecycle; STATUS=TESTED; TEST=src/timeseries/chunk_storage.zig:"chunk_storage: retention"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-COMPRESS-STATS-001; FEATURE="CompressionStats"; ASPECT=Observability; STATUS=TESTED; TEST=src/timeseries/chunk_storage.zig:"chunk_storage: compression and stats"; OWNER=timeseries; UPDATED=2026-04-01
+
 const ts_lib = @import("timeseries_lib");
 const ts_chunk = ts_lib.chunk_storage;
 

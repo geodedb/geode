@@ -3,6 +3,16 @@
 //
 // Upstream: @import("timeseries_lib")  (geode/build.zig wires this)
 
+// CANARY: REQ=REQ-TS-STORE-001; FEATURE="TimeSeriesStore"; ASPECT=Core; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-INSERT-001; FEATURE="TimeSeriesInsertMany"; ASPECT=DataIngestion; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-LAST-001; FEATURE="TimeSeriesLast"; ASPECT=Query; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-VALUEBEFORE-001; FEATURE="TimeSeriesValueBefore"; ASPECT=Query; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-SAMPLEBY-001; FEATURE="TimeSeriesSampleBy"; ASPECT=Aggregation; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: sampleBy aggregations"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-TIMEBUCKET-001; FEATURE="TimeSeriesTimeBucketAvg"; ASPECT=Aggregation; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: timeBucketAvg basic"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-VALUEAT-001; FEATURE="TimeSeriesValueAt"; ASPECT=Query; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: valueAt and lastValue"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-SERIESKEY-001; FEATURE="TimeSeriesSeriesKey"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-POINT-001; FEATURE="TimeSeriesPoint"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/timeseries.zig:"ts: insert/order/last/asof"; OWNER=timeseries; UPDATED=2026-04-01
+
 const ts_lib = @import("timeseries_lib");
 
 // Re-export core store types at the same names the rest of Geode expects.

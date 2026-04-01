@@ -1,3 +1,14 @@
+// CANARY: REQ=REQ-TS-GQL-EXEC-001; FEATURE="TimeSeriesGqlExecute"; ASPECT=Integration; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-LASTVAL-001; FEATURE="TimeSeriesLastValue"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-VALUEAT-001; FEATURE="TimeSeriesGqlValueAt"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-SAMPLEBY-001; FEATURE="TimeSeriesGqlSampleBy"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-TIMEBUCKET-001; FEATURE="TimeSeriesGqlTimeBucket"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-INTERPOLATE-001; FEATURE="TimeSeriesGqlInterpolate"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: interpolate linear"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-MOVINGAVG-001; FEATURE="TimeSeriesGqlMovingAvg"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-RATE-001; FEATURE="TimeSeriesGqlRate"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-DERIVATIVE-001; FEATURE="TimeSeriesGqlDerivative"; ASPECT=GqlFunction; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+// CANARY: REQ=REQ-TS-GQL-FUNCTYPE-001; FEATURE="TSFunctionTypeEnum"; ASPECT=Types; STATUS=TESTED; TEST=src/timeseries/gql_functions.zig:"ts_functions: last_value"; OWNER=timeseries; UPDATED=2026-04-01
+
 const std = @import("std");
 const timeseries = @import("timeseries.zig");
 

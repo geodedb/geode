@@ -3926,6 +3926,30 @@ REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.z
 REQ-TRACEABILITY-001,Requirement Traceability Tests,Governance,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
+REQ-TS-CHUNK-001,ChunkStorage,Storage,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
+REQ-TS-COMPRESS-STATS-001,CompressionStats,Observability,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
+REQ-TS-GORILLA-DEC-001,GorillaDecoder,Compression,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
+REQ-TS-GORILLA-ENC-001,GorillaEncoder,Compression,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
+REQ-TS-GQL-DERIVATIVE-001,TimeSeriesGqlDerivative,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-EXEC-001,TimeSeriesGqlExecute,Integration,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-FUNCTYPE-001,TSFunctionTypeEnum,Types,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-INTERPOLATE-001,TimeSeriesGqlInterpolate,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-LASTVAL-001,TimeSeriesLastValue,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-MOVINGAVG-001,TimeSeriesGqlMovingAvg,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-RATE-001,TimeSeriesGqlRate,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-SAMPLEBY-001,TimeSeriesGqlSampleBy,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-TIMEBUCKET-001,TimeSeriesGqlTimeBucket,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-GQL-VALUEAT-001,TimeSeriesGqlValueAt,GqlFunction,TESTED,,,timeseries,2026-04-01,src/timeseries/gql_functions.zig
+REQ-TS-INSERT-001,TimeSeriesInsertMany,DataIngestion,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-LAST-001,TimeSeriesLast,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-POINT-001,TimeSeriesPoint,Types,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-RETENTION-001,ChunkRetention,Lifecycle,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
+REQ-TS-SAMPLEBY-001,TimeSeriesSampleBy,Aggregation,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-SERIESKEY-001,TimeSeriesSeriesKey,Types,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-STORE-001,TimeSeriesStore,Core,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-TIMEBUCKET-001,TimeSeriesTimeBucketAvg,Aggregation,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-VALUEAT-001,TimeSeriesValueAt,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
+REQ-TS-VALUEBEFORE-001,TimeSeriesValueBefore,Query,TESTED,,,timeseries,2026-04-01,src/timeseries/timeseries.zig
 REQ-TXN-ISOLATION-001,Enhanced Transaction Isolation,IsolationLevels,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig
 REQ-TXN-ISOLATION-001,EnhancedTransactionIsolation,IsolationLevels,TESTED,,,txn,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-TXN-ISOLATION-002,Advanced Phantom Read Prevention,PhantomReadPrevention,TESTED,,,txn,2025-10-05,src/server/txn/enhanced_isolation.zig

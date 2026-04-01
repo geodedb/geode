@@ -16,11 +16,22 @@
 
 New GQL functions are available for Time-Series data access.
 
-**New Functions:**
+**Available Now:**
 
 - `timeseries.value(device_id: Int, metric: String, timestamp: Int) -> Int`
   - Retrieves the value of a metric for a specific device at a given timestamp.
   - Returns `NULL` if no data is found or the store is disconnected.
+  - Fully wired through the server execution engine (GAP-0280).
+
+**In Progress (unit-tested, not yet wired to server):**
+
+The following functions are implemented in `src/timeseries/gql_functions.zig`
+with full unit test coverage, but are not yet routed through the server
+execution engine. They will be available in a future release:
+
+- `last_value`, `value_at`, `sample_by`, `time_bucket`
+- `interpolate` (linear, step, nearest methods)
+- `moving_avg`, `rate`, `derivative`
 
 ### Graph Centrality
 
