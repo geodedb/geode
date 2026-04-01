@@ -10,9 +10,19 @@
 **Current system under analysis**: Property and advanced type handling implemented across `src/types`, `src/eval_extended.zig`, `src/value_types.zig`, `src/graph_store.zig`, `src/storage/graph_storage_adapter.zig`, `src/index/*`, `src/server/index_optimizer.zig`, and `src/optimizer/advanced_types_optimizer.zig`
 **Confidence**: Moderate for code-path mapping and integration gaps, low for production-frequency/cost impact due missing runtime metrics and incident history
 
+**Clarified product constraints applied after initial analysis**:
+
+- All advanced property families documented in `docs/TYPES_AND_FUNCTIONS.md` and `specs/advanced-types/*` are intended to be **GA**, not experimental.
+- Extended types are expected to have **full end-to-end functionality** across parser, evaluation, storage, rollback, protocol, and index integration where applicable.
+- The client/server contract must preserve the documented annotation/constructor type contract and JSON protocol shapes described in:
+  - `docs/TYPES_AND_FUNCTIONS.md`
+  - `docs/TYPE_CONVERSION_FUNCTIONS.md`
+  - `specs/advanced-types/type-extensions-pr.md`
+  - `specs/advanced-types/type-extensions-2-pr.md`
+
 ## A) Executive Summary
 
-**Decision**: **Hybrid**. Keep the specialized type implementations and index backends, but replace the current fragmented property-type integration layer with a single canonical boundary and retire or quarantine dead optimizer paths until they are wired into the real planner/executor.
+**Decision**: **Hybrid staged convergence**. Keep the specialized type implementations and index backends, but replace the current fragmented property-type integration layer with a single canonical boundary, wire all documented GA property families end to end, and retire only those duplicate internal stacks that are no longer needed after parity is reached.
 
 ### Key reasons
 
@@ -24,7 +34,7 @@
    - Inbound protocol params reject `ext_val` (`src/server/proto_util.zig`), while outbound protocol serialization for `ExtValue` exists.
    - Several typed literals degrade to strings during evaluation (`src/eval.zig`), so parser support does not imply type fidelity.
 
-3. **Index and optimizer support is fragmented and partly dead code**.
+3. **Index and optimizer support is fragmented and partly dead code, which is incompatible with the clarified GA requirement**.
    - `src/index/index_manager.zig` exposes advanced index APIs, but there are **0 non-definition callsites** for those APIs in `src/`.
    - `src/optimizer/advanced_types_optimizer.zig` has **no imports anywhere in the repo**, so it is not part of the active query-planning path.
    - `src/gql/parser.zig` still maps `IntervalTree`, `JsonbInverted`, and `DomainTrie` DDL to `.btree` “for now”.
@@ -72,21 +82,23 @@
 ### Functional requirements
 
 1. Typed literals and constructors must preserve type semantics from parse to runtime value.
-2. Advanced property values must survive:
+2. All advanced property families documented in `docs/TYPES_AND_FUNCTIONS.md` and `specs/advanced-types/*` must be supported as GA features, not helper-only or experimental features.
+3. The documented annotation/constructor contract and JSON protocol shapes must be accepted and emitted consistently across supported client/server paths.
+4. Advanced property values must survive:
    - insertion
    - query evaluation
    - rollback
    - persistence/reload
    - protocol roundtrip where supported
-3. Supported advanced indexes must be reachable from DDL, mutation, and query execution.
-4. Equality, ordering, DISTINCT, and serialization must not collapse all advanced values to a single placeholder identity.
-5. Unsupported features must fail explicitly, not silently degrade to null or string.
+5. Supported advanced indexes must be reachable from DDL, mutation, and query execution.
+6. Equality, ordering, DISTINCT, and serialization must not collapse all advanced values to a single placeholder identity.
+7. Invalid payloads must fail explicitly, but documented GA type families must not be rejected as unsupported.
 
 ### Non-functional requirements
 
 1. **Correctness**: zero lossy boundary conversions for supported property types.
 2. **Reliability**: rollback and reload must preserve advanced types.
-3. **Security/privacy**: sensitive property handling must not be bypassed by type downgrades; unsupported inbound values should fail closed.
+3. **Security/privacy**: sensitive property handling must not be bypassed by type downgrades; invalid inbound values should fail closed without turning documented GA families into unsupported protocol cases.
 4. **Maintainability**: one canonical semantic boundary for property typing; fewer duplicate unions and ad hoc conversions.
 5. **Operability**: build/test coverage must detect property-type regressions.
 6. **Performance**: keep specialized index backends for vector/spatial/network/jsonb/domain workloads.
@@ -101,25 +113,31 @@
 ### Acceptance criteria
 
 1. `zig build` and `zig build test` pass after changes.
-2. Roundtrip tests exist for at least:
+2. Every documented GA property family has at least one end-to-end acceptance fixture covering parse/construct -> evaluation -> property write/read -> protocol output, with invalid-input fixtures for fail-closed validation.
+3. Representative persist/reload and rollback roundtrip tests exist for at least:
    - `UUID`
    - `Url`
    - `Domain`
    - `Jsonb`
+   - `Xml`
    - `IntRange`
    - `IpAddr` / `Subnet`
+   - `Geometry`
    - `VectorF32`
-3. Advanced property values survive:
+   - one enum case
+   - one array case
+   - one bit/varbit case
+4. Advanced property values survive:
    - graph-store write/read
    - storage-adapter persist/reload
    - transaction rollback
-4. No property boundary module contains silent lossy fallback for supported types.
+5. No property boundary module contains silent lossy fallback for supported types.
    - Verification target modules:
      - `src/storage/graph_storage_adapter.zig`
      - `src/txn_undo_log.zig`
      - `src/eval/type_promotion.zig`
      - `src/gql/match.zig`
-5. Advanced index families that are exposed in DDL have at least one production call path from DDL -> mutation sync -> query use, or are explicitly removed/deferred.
+6. Advanced index families documented as GA and exposed in DDL have at least one production call path from DDL -> mutation sync -> query use.
 
 ## C) Current System: Architecture, Evidence, and Gaps
 
@@ -128,7 +146,8 @@
 The property-type system is split across multiple overlapping representations:
 
 1. **`src/types/extended.zig`**
-   - Experimental type system for formatting/parsing/basic ops.
+   - A parallel type system for formatting/parsing/basic ops.
+   - The code comments present it as experimental, but the clarified product requirement says these families are GA.
    - Mostly used by `src/types/extended_functions.zig`.
    - Not the canonical runtime/storage representation.
 
@@ -174,7 +193,7 @@ The property-type system is split across multiple overlapping representations:
 3. **Some security and validation work is already present**.
    - JSONB depth guard in `src/types/jsonb.zig`
    - Advanced index input validation in `src/index/advanced_types_index.zig`
-   - Protocol fails closed for unsupported inbound `ext_val`
+   - Invalid inbound payloads can fail closed safely
 
 4. **Outbound protocol serialization partially supports advanced values**.
    - `src/server/proto_util.zig` has `extValueToProto()` and serializes `ExtValue` in responses.
@@ -214,7 +233,7 @@ The property-type system is split across multiple overlapping representations:
 **Impact**:
 
 - Server responses can describe advanced values, but clients cannot submit them through the same protocol surface.
-- API behavior is inconsistent and complicates client adoption.
+- API behavior is inconsistent and violates the clarified GA contract for documented type annotations/constructors.
 
 #### 4. Typed literals are parsed but not materialized as typed values
 
@@ -301,7 +320,7 @@ Static search result:
 **Impact**:
 
 - This optimizer is not the current system of record for property type optimization.
-- Its CANARY/test annotations do not prove production integration.
+- Its CANARY/test annotations do not prove production integration, which is especially problematic now that these families are confirmed as GA.
 
 #### 11. Comparison and serialization semantics still contain placeholder behavior
 
@@ -326,14 +345,14 @@ Static search result:
 
 **Impact**:
 
-- Lossiness is still embedded in conversion boundaries rather than isolated to explicit unsupported-feature errors.
+- Lossiness is still embedded in conversion boundaries rather than isolated to explicit validation errors for invalid input.
 
 ### Security and privacy assessment
 
 #### Positive findings
 
 - JSONB depth guard reduces DoS risk.
-- Protocol rejects unsupported inbound `ext_val` instead of attempting unsafe partial decode.
+- Invalid inbound payloads can be rejected without attempting unsafe partial decode.
 - GraphStore FLE handling exists for string properties.
 
 #### Risks
@@ -343,7 +362,7 @@ Static search result:
 
 2. **FLE appears string-focused**
    - `setNodeProperty()` / `setEdgeProperty()` only encrypt `.String`.
-   - No evidence in this analysis that advanced binary/JSON/domain/URL types participate in the same field-level controls.
+   - No evidence in this analysis that advanced binary/JSON/domain/URL types participate in the same field-level controls required for GA support.
 
 3. **Dead code can create false assurance**
    - Optimizer/index modules may appear “implemented” while not participating in live paths.
@@ -364,6 +383,7 @@ Static search result:
    - advanced property rollback
    - advanced index DDL/mutation/query roundtrip
 4. Build/test passing therefore has limited value for this feature.
+5. No evidence was found that the documented constructor/annotation contract is covered by end-to-end protocol/input tests for all GA families.
 
 ### Cost analysis
 
@@ -371,8 +391,8 @@ No cloud/service/vendor cost data was available.
 
 This report therefore limits cost analysis to engineering and operational cost:
 
-- **Current system cost**: high ongoing maintenance cost due duplicate unions, lossy shims, and dead subsystems.
-- **Incremental improvement cost**: moderate.
+- **Current system cost**: high ongoing maintenance cost due duplicate unions, lossy shims, GA contract violations, and dead subsystems.
+- **Incremental improvement cost**: moderate, but only if used as a stage toward full GA parity rather than a permanent patch layer.
 - **Full replacement cost**: high upfront, lower long-term maintenance.
 - **Hybrid staged cost**: moderate upfront, best balance of near-term correctness and long-term simplification.
 
@@ -422,6 +442,7 @@ This report therefore limits cost analysis to engineering and operational cost:
 - Retains architectural duplication
 - Risk of fixing the same semantics in multiple places
 - Dead/parallel type systems remain
+- Harder to guarantee full GA parity for every documented family without eventually converging semantics
 
 **Migration / ops impact**
 
@@ -436,7 +457,7 @@ This report therefore limits cost analysis to engineering and operational cost:
 
 - Replace `graph_store.PropertyValue`/`ExtValue` boundary with canonical value type
 - Rewrite adapter, undo log, protocol, evaluation, and index routing around that model
-- Delete or quarantine duplicate experimental stacks
+- Delete or quarantine duplicate stacks once canonical parity is reached
 
 **Pros**
 
@@ -471,11 +492,13 @@ This report therefore limits cost analysis to engineering and operational cost:
 - Preserves specialized performance backends
 - Reduces architectural duplication over time
 - Lower migration risk than big-bang replacement
+- Still satisfies the clarified requirement that all documented advanced families reach full GA parity
 
 **Cons**
 
 - Takes multiple milestones
 - Requires discipline to prevent “temporary” shims from becoming permanent
+- Duplicate internal stacks cannot remain indefinitely once parity is achieved
 
 **Migration / ops impact**
 
@@ -520,6 +543,7 @@ This report therefore limits cost analysis to engineering and operational cost:
    - Interpretation: when schedule safety matters, staged convergence is the more defensible choice.
 
 3. **If performance weight falls to 0**, Option 4 still remains ahead because the main problem is correctness and integration, not raw index speed.
+4. **If the organization requires immediate architectural simplification as part of the GA commitment**, Option 3 becomes closer, but Option 4 still remains more practical because it can enforce GA parity before internal consolidation completes.
 
 ## F) Risks & Mitigations
 
@@ -530,7 +554,7 @@ This report therefore limits cost analysis to engineering and operational cost:
 **Mitigation**
 
 - Implement explicit `ExtValue` storage codec in `src/storage/graph_storage_adapter.zig`
-- Add persist/reload tests for representative advanced types
+- Add persist/reload tests for every documented GA family, prioritizing lossy/high-value families first
 
 ### Risk 2: Rollback restores null instead of original advanced value
 
@@ -539,7 +563,7 @@ This report therefore limits cost analysis to engineering and operational cost:
 **Mitigation**
 
 - Extend `SerializedProperty` to encode advanced values or use canonical property codec
-- Add rollback tests covering advanced properties on nodes and edges
+- Add rollback tests covering advanced properties on nodes and edges across the documented GA families
 
 ### Risk 3: Planner/index work lands without real runtime wiring
 
@@ -566,7 +590,7 @@ This report therefore limits cost analysis to engineering and operational cost:
 **Mitigation**
 
 - Decide explicitly whether FLE applies only to string properties or to structured advanced values
-- Document and test the policy
+- Document and test the policy for GA advanced families before declaring parity complete
 
 ### Risk 6: Hybrid approach stalls before consolidation
 
@@ -602,21 +626,21 @@ Adopt **Option 4: Hybrid staged convergence**.
 1. Implement canonical advanced-property codec at:
    - storage adapter
    - undo log
-   - protocol input
+   - protocol input using the documented annotation/constructor contract
    - DML/property conversion boundaries
 2. Make typed literals materialize to typed values.
-3. Replace silent null/string fallback with explicit unsupported errors where a type is not yet supported.
+3. Replace silent null/string fallback with explicit validation errors for invalid inputs; documented GA families must be implemented, not rejected as unsupported.
 
 **Exit criteria**
 
-- Advanced property roundtrip tests pass for persistence and rollback.
+- Advanced property roundtrip tests pass for persistence and rollback across the documented GA matrix.
 
 #### Phase 2: Real query/index integration
 
 1. Map parser DDL for interval/jsonb/domain/vector/network/spatial to real specialized index types.
 2. Add mutation-to-index synchronization path.
 3. Provide real production call paths for advanced index query execution.
-4. Remove or quarantine advanced index APIs that remain unused.
+4. Remove or quarantine advanced index APIs that remain unused only after their documented GA responsibilities are either fully wired or explicitly superseded by the canonical path.
 
 **Exit criteria**
 
@@ -626,7 +650,7 @@ Adopt **Option 4: Hybrid staged convergence**.
 
 1. Decide canonical semantic source:
    - recommended direction: one canonical query/runtime property model with explicit storage codec
-2. Remove or quarantine `src/types/extended.zig` experimental stack if it remains unused outside helper functions.
+2. Remove or quarantine duplicate `src/types/extended.zig` surfaces only after all documented GA families have equivalent or better functionality on the canonical path.
 3. Either wire `src/optimizer/advanced_types_optimizer.zig` into the real planner/executor or delete it.
 
 **Exit criteria**
@@ -649,7 +673,7 @@ Adopt **Option 4: Hybrid staged convergence**.
 2. **Correctness verification**
    - Unit tests for scalar + advanced property roundtrip
    - Undo-log rollback tests with advanced properties
-   - Protocol request/response tests for `ext_val`
+   - Protocol request/response tests for the documented annotation/constructor contract across GA families
 
 3. **Integration verification**
    - DDL create index -> property mutation -> query use tests for each specialized index family
@@ -719,8 +743,7 @@ placeholder_hits=148
 
 ## I) Open Questions / Follow-Ups
 
-1. Should advanced property types be first-class in the external graph-storage engine, or should Geode own an explicit codec over the engine’s generic `ext` field?
-2. Should inbound protocol support for advanced values land immediately, or only after canonical storage/rollback semantics are fixed?
-3. Is `src/types/extended.zig` still intended as production architecture, or should it be explicitly scoped as helper/experimental only?
-4. Does field-level encryption need to cover structured advanced types, or is string-only FLE the intended policy?
-5. Should `src/optimizer/advanced_types_optimizer.zig` be wired into the real planner, or removed to avoid false confidence?
+1. Treat the documented constructor/annotation and protocol JSON shapes in `docs/TYPES_AND_FUNCTIONS.md` and `specs/advanced-types/*` as the authoritative GA contract unless a newer ADR supersedes them.
+2. Decide whether field-level encryption and audit requirements apply uniformly to advanced non-string property families.
+3. Define the milestone at which duplicate internal type stacks must be retired once canonical-path parity is reached.
+4. Decide whether `src/optimizer/advanced_types_optimizer.zig` will be wired into the real planner or removed after the canonical path is in place.
