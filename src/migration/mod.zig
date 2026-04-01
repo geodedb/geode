@@ -195,6 +195,10 @@ fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Led
     defer parsed.deinit();
 
     var rows = std.ArrayList(StatusRow).initCapacity(alloc, parsed.value.rows.len) catch return error.OutOfMemory;
+    errdefer {
+        for (rows.items) |row| alloc.free(row.name);
+        rows.deinit(alloc);
+    }
     for (parsed.value.rows) |row| {
         const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
         errdefer alloc.free(name_copy);
@@ -422,6 +426,7 @@ pub fn applyUpMigrations(
 
         const prefix = checksumPrefix(script);
         const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
+        errdefer alloc.free(new_name);
         ledger.rows.append(alloc, .{
             .version = entry.version,
             .name = new_name,
@@ -681,10 +686,13 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
         }.lessThan);
     }
 
-    return MigrationPlan{
-        .up = pending_up.toOwnedSlice(alloc) catch return error.OutOfMemory,
-        .down = pending_down.toOwnedSlice(alloc) catch return error.OutOfMemory,
-    };
+    const up_slice = pending_up.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    errdefer {
+        for (up_slice) |name| alloc.free(name);
+        alloc.free(up_slice);
+    }
+    const down_slice = pending_down.toOwnedSlice(alloc) catch return error.OutOfMemory;
+    return MigrationPlan{ .up = up_slice, .down = down_slice };
 }
 
 /// Frees all heap-allocated slices within a MigrationPlan returned by planDryRun.

@@ -956,6 +956,8 @@ REQ-GAP-0193-HIGHPRI,IMPLBatchPromotion,HighPriorityComprehensive,TESTED,,,test,
 REQ-GAP-0193-IMPL-VERIFICATION,IMPL Entry Verification,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-GAP-0193-PRIORITY,IMPLBatchPromotion,PriorityCategories,TESTED,,,test,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-GAP-0193-REMAINING,IMPLBatchPromotion,RemainingCategories,TESTED,,,test,2026-01-15,tests/test_gap_0193_remaining_categories.zig
+REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
+REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-04-01,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,src/migration/mod.zig
 REQ-GAP-0234,SyntaxValidationTests,ParserErrors,TESTED,,,parser,2026-01-25,tests/test_syntax_validation.zig
 REQ-GAP-0236,MonitoringUnitTests,Counter,TESTED,,,monitoring,2026-01-25,src/monitoring/metrics.zig
@@ -1714,10 +1716,14 @@ REQ-GQL-086,Temporal Types,DateParsing,TESTED,,,types,2025-09-27,src/canary.zig
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
 REQ-GQL-086,TypeConversionFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval/call_handlers.zig
 REQ-GQL-087,MigrationEngine,CliParityStatusCommand,TESTED,,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
+REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-04-01,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,,,migration,2026-01-11,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DriftPolicyOutcomeStrict,TESTED,,,migration,2026-01-11,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,ObservabilityMetrics,TESTED,,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-04-01,docs/superpowers/plans/2026-04-01-migration-engine-gap-closure.md
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,src/migration/mod.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,src/eval.zig
 REQ-GQL-087,Temporal Types,TimestampTZNormalization,TESTED,,,types,2025-09-27,src/canary.zig
