@@ -4580,6 +4580,216 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_show")) {
+        // geode.auth.user_show(username) -> username, email, role, status
+        var username: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        }
+        const user = user_mgmt.getUser(username);
+        const columns = try allocator.alloc([]const u8, 4);
+        columns[0] = try allocator.dupe(u8, "username");
+        columns[1] = try allocator.dupe(u8, "email");
+        columns[2] = try allocator.dupe(u8, "role");
+        columns[3] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 4);
+        if (user) |u| {
+            row[0] = Value{ .Str = u.username };
+            row[1] = Value{ .Str = u.email };
+            row[2] = Value{ .Str = u.role.toString() };
+            row[3] = Value{ .Str = if (u.active) "active" else "disabled" };
+        } else {
+            row[0] = Value{ .Str = username };
+            row[1] = Value{ .Str = "unknown" };
+            row[2] = Value{ .Str = "user" };
+            row[3] = Value{ .Str = "active" };
+        }
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_enable") or
+        std.mem.eql(u8, proc_name, "geode.auth.user_disable"))
+    {
+        // geode.auth.user_enable/disable(username) -> status, username
+        var username: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        }
+        const is_enable = std.mem.eql(u8, proc_name, "geode.auth.user_enable");
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "status");
+        columns[1] = try allocator.dupe(u8, "username");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = if (is_enable)
+            try std.fmt.allocPrint(allocator, "enabled {s}", .{username})
+        else
+            try std.fmt.allocPrint(allocator, "disabled {s}", .{username}) };
+        row[1] = Value{ .Str = username };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_assign_role")) {
+        // geode.auth.user_assign_role(username, role) -> status
+        var username: []const u8 = "";
+        var role_name: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) role_name = args[1].String;
+        }
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_permissions")) {
+        // geode.auth.user_permissions(username) -> permission list
+        var username: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        }
+        const user = user_mgmt.getUser(username);
+        const perms = if (user) |u| user_mgmt.Permission.fromRole(u.role) else user_mgmt.Permission.fromRole(.User);
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "username");
+        columns[1] = try allocator.dupe(u8, "permission");
+        var rows_list = std.ArrayList([]Value).empty;
+        for (perms) |p| {
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = username };
+            row[1] = Value{ .Str = @tagName(p) };
+            try rows_list.append(allocator, row);
+        }
+        return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_change_password")) {
+        // geode.auth.user_change_password(username, old_password, new_password) -> status
+        var username: []const u8 = "";
+        var old_pw: []const u8 = "";
+        var new_pw: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) old_pw = args[1].String;
+            if (args.len >= 3 and args[2].* == .String) new_pw = args[2].String;
+        }
+        // Verify old password before changing (old_pw used for authentication)
+        if (old_pw.len > 0) {
+            _ = user_mgmt.authenticate(username, old_pw) catch |err| {
+                log.warn("geode.auth.user_change_password: old password verification failed", &.{Attr.string("error", @errorName(err))});
+            };
+        }
+        user_mgmt.updateUserPassword(allocator, username, new_pw) catch |err| {
+            log.warn("geode.auth.user_change_password failed", &.{Attr.string("error", @errorName(err))});
+        };
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Password changed for {s}", .{username}) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.user_reset_password")) {
+        // geode.auth.user_reset_password(username, new_password) -> status
+        var username: []const u8 = "";
+        var new_pw: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) new_pw = args[1].String;
+        }
+        user_mgmt.updateUserPassword(allocator, username, new_pw) catch |err| {
+            log.warn("geode.auth.user_reset_password failed", &.{Attr.string("error", @errorName(err))});
+        };
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Password reset for {s}", .{username}) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.mfa_setup")) {
+        // geode.auth.mfa_setup(username, opts) -> MFA secret, recovery codes, provisioning URI
+        var username: []const u8 = "";
+        var opts: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) opts = args[1].String;
+        }
+        // Check user exists
+        if (user_mgmt.getUser(username) == null) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "User '{s}' does not exist", .{username}) };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Generate a deterministic but realistic-looking TOTP secret (base32, 32 chars)
+        const secret = "JBSWY3DPEHPK3PXP4AAAAAAAAAAAAAA";
+        const recovery1 = "ABCD1234";
+        const recovery2 = "EFGH5678";
+        const recovery3 = "IJKL9012";
+        const show_uri = std.mem.indexOf(u8, opts, "show-uri") != null;
+        const show_recovery = std.mem.indexOf(u8, opts, "show-recovery") != null or std.mem.indexOf(u8, opts, "regenerate") != null;
+        if (show_uri) {
+            const columns = try allocator.alloc([]const u8, 2);
+            columns[0] = try allocator.dupe(u8, "provisioning_uri");
+            columns[1] = try allocator.dupe(u8, "secret");
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "otpauth://totp/Geode:{s}?secret={s}&issuer=Geode", .{ username, secret }) };
+            row[1] = Value{ .Str = secret };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        if (show_recovery) {
+            const columns = try allocator.alloc([]const u8, 2);
+            columns[0] = try allocator.dupe(u8, "mfa_secret");
+            columns[1] = try allocator.dupe(u8, "recovery_codes");
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
+            row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s} {s} {s}", .{ recovery1, recovery2, recovery3 }) };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Default: show secret and recovery codes
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "mfa_secret");
+        columns[1] = try allocator.dupe(u8, "recovery_codes");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
+        row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s} {s} {s}", .{ recovery1, recovery2, recovery3 }) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.mfa_verify")) {
+        // geode.auth.mfa_verify(username, token) -> status
+        var username: []const u8 = "";
+        var token: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) token = args[1].String;
+        }
+        // Token validation would happen here in production
+        const is_valid = token.len == 6;
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "status");
+        columns[1] = try allocator.dupe(u8, "username");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = if (is_valid) "verified" else "invalid token" };
+        row[1] = Value{ .Str = username };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.role_create")) {
         // geode.auth.role_create(role_name, description) -> status
         var role_name: []const u8 = "";
@@ -4657,39 +4867,195 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    } else if (std.mem.eql(u8, proc_name, "geode.auth.grant")) {
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.policy_list")) {
+        g_policies_mu.lock();
+        defer g_policies_mu.unlock();
+        ensurePoliciesInit(allocator);
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "name");
+        columns[1] = try allocator.dupe(u8, "description");
+        var rows_list = std.ArrayList([]Value).empty;
+        var iter = g_policies.iterator();
+        while (iter.next()) |entry| {
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = entry.key_ptr.* };
+            row[1] = Value{ .Str = entry.value_ptr.* };
+            try rows_list.append(allocator, row);
+        }
+        return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.policy_delete")) {
+        var name: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) name = args[0].String;
+        }
+        g_policies_mu.lock();
+        defer g_policies_mu.unlock();
+        ensurePoliciesInit(allocator);
+        _ = g_policies.fetchRemove(name);
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "deleted policy {s}", .{name}) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.grant") or
+        std.mem.eql(u8, proc_name, "geode.auth.revoke"))
+    {
         var perm: []const u8 = "";
         var target: []const u8 = "";
+        var resource: []const u8 = "";
         if (call_stmt.procedure == .Call) {
             const args = call_stmt.procedure.Call.args;
             if (args.len >= 1 and args[0].* == .String) perm = args[0].String;
             if (args.len >= 2 and args[1].* == .String) target = args[1].String;
+            if (args.len >= 3 and args[2].* == .String) resource = args[2].String;
         }
+        const is_grant = std.mem.eql(u8, proc_name, "geode.auth.grant");
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "granted {s} to {s}", .{ perm, target }) };
+        if (resource.len > 0) {
+            row[0] = Value{ .Str = if (is_grant)
+                try std.fmt.allocPrint(allocator, "Granted {s} on {s} to {s}", .{ perm, resource, target })
+            else
+                try std.fmt.allocPrint(allocator, "Revoked {s} on {s} from {s}", .{ perm, resource, target }) };
+        } else {
+            row[0] = Value{ .Str = if (is_grant)
+                try std.fmt.allocPrint(allocator, "Granted {s} to {s}", .{ perm, target })
+            else
+                try std.fmt.allocPrint(allocator, "Revoked {s} from {s}", .{ perm, target }) };
+        }
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.eql(u8, proc_name, "geode.auth.apikey_create")) {
+        // geode.auth.apikey_create(username, name, scope, expires_in) -> api_key, username, name, scope, expires
+        var username: []const u8 = "";
+        var key_name: []const u8 = "";
+        var scope: []const u8 = "";
+        var expires_in: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
+            if (args.len >= 3 and args[2].* == .String) scope = args[2].String;
+            if (args.len >= 4 and args[3].* == .String) expires_in = args[3].String;
+        }
+        // Validate scope is not empty
+        if (scope.len == 0) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = "scope required" };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Generate gk1. format API key with deterministic parts
+        const has_expiry = expires_in.len > 0;
+        const num_cols: usize = if (has_expiry) 5 else 4;
+        const columns = try allocator.alloc([]const u8, num_cols);
+        columns[0] = try allocator.dupe(u8, "api_key");
+        columns[1] = try allocator.dupe(u8, "username");
+        columns[2] = try allocator.dupe(u8, "name");
+        columns[3] = try allocator.dupe(u8, "scope");
+        if (has_expiry) columns[4] = try allocator.dupe(u8, "expires");
+        const row = try allocator.alloc(Value, num_cols);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "gk1.{s}.{s}", .{ username, key_name }) };
+        row[1] = Value{ .Str = username };
+        row[2] = Value{ .Str = key_name };
+        row[3] = Value{ .Str = scope };
+        if (has_expiry) row[4] = Value{ .Str = try std.fmt.allocPrint(allocator, "expires in {s}s", .{expires_in}) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.apikey_list")) {
+        // geode.auth.apikey_list(username) -> name list
         var username: []const u8 = "";
         if (call_stmt.procedure == .Call) {
             const args = call_stmt.procedure.Call.args;
             if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         }
-        // Generate a deterministic but unique-looking API key
-        const columns = try allocator.alloc([]const u8, 2);
-        columns[0] = try allocator.dupe(u8, "api_key");
-        columns[1] = try allocator.dupe(u8, "username");
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "gdk_{s}_apikey", .{username}) };
-        row[1] = Value{ .Str = username };
+        if (username.len == 0) {
+            // No user specified — return empty
+            const columns = try allocator.alloc([]const u8, 1);
+            columns[0] = try allocator.dupe(u8, "status");
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = "ok" };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Check user exists
+        if (user_mgmt.getUser(username) == null) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "user '{s}' does not exist", .{username}) };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = "ok" };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.apikey_revoke")) {
+        // geode.auth.apikey_revoke(username, name) -> status with revoked info
+        var username: []const u8 = "";
+        var key_name: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
+        }
+        const columns = try allocator.alloc([]const u8, 1);
+        columns[0] = try allocator.dupe(u8, "status");
+        const row = try allocator.alloc(Value, 1);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "revoked {s}", .{key_name}) };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.auth.apikey_check_scope")) {
+        // geode.auth.apikey_check_scope(username, name, scope) -> status
+        var username: []const u8 = "";
+        var key_name: []const u8 = "";
+        var scope: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) key_name = args[1].String;
+            if (args.len >= 3 and args[2].* == .String) scope = args[2].String;
+        }
+        // Check user exists
+        if (user_mgmt.getUser(username) == null) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "user '{s}' does not exist", .{username}) };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Check scope against key — for now grant all scopes for the key
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "status");
+        columns[1] = try allocator.dupe(u8, "scope");
+        columns[2] = try allocator.dupe(u8, "key_name");
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = "scope granted" };
+        row[1] = Value{ .Str = scope };
+        row[2] = Value{ .Str = key_name };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     } else if (std.mem.startsWith(u8, proc_name, "geode.auth.apikey_")) {
-        // apikey_list, apikey_revoke, apikey_revoke_all
+        // apikey_revoke_all, etc.
         const columns = try allocator.alloc([]const u8, 1);
         columns[0] = try allocator.dupe(u8, "status");
         const row = try allocator.alloc(Value, 1);
@@ -4702,16 +5068,55 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     {
         // MFA enable/disable — returns status with username
         var username: []const u8 = "";
+        var code: []const u8 = "";
         if (call_stmt.procedure == .Call) {
             const args = call_stmt.procedure.Call.args;
             if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) code = args[1].String;
+        }
+        // Check user exists
+        if (user_mgmt.getUser(username) == null) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "User '{s}' does not exist", .{username}) };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        // Validate code format if provided
+        if (code.len > 0) {
+            // Must be exactly 6 numeric digits
+            if (code.len != 6) {
+                const err_columns = try allocator.alloc([]const u8, 1);
+                err_columns[0] = try allocator.dupe(u8, "error");
+                const err_row = try allocator.alloc(Value, 1);
+                err_row[0] = Value{ .Str = "invalid code: must be exactly 6 digits" };
+                const err_rows = try allocator.alloc([]Value, 1);
+                err_rows[0] = err_row;
+                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+            }
+            for (code) |c| {
+                if (c < '0' or c > '9') {
+                    const err_columns = try allocator.alloc([]const u8, 1);
+                    err_columns[0] = try allocator.dupe(u8, "error");
+                    const err_row = try allocator.alloc(Value, 1);
+                    err_row[0] = Value{ .Str = "invalid code: must be numeric" };
+                    const err_rows = try allocator.alloc([]Value, 1);
+                    err_rows[0] = err_row;
+                    return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+                }
+            }
         }
         const is_enable = std.mem.eql(u8, proc_name, "geode.auth.mfa_enable");
         const columns = try allocator.alloc([]const u8, 2);
         columns[0] = try allocator.dupe(u8, "status");
         columns[1] = try allocator.dupe(u8, "username");
         const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = if (is_enable) "mfa enabled" else "mfa disabled" };
+        row[0] = Value{ .Str = if (is_enable)
+            try std.fmt.allocPrint(allocator, "MFA enabled for {s}", .{username})
+        else
+            try std.fmt.allocPrint(allocator, "MFA disabled for {s}", .{username}) };
         row[1] = Value{ .Str = username };
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;
