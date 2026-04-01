@@ -1231,7 +1231,8 @@ test "toStorageProperty round-trip for scalars" {
 test "ExtValue survives adapter property translation" {
     const allocator = std.testing.allocator;
     const nested = try allocator.dupe(u8, "nested");
-    errdefer allocator.free(nested);
+    // nested ownership transfers to ext.ExtValue.List below;
+    // freeDetachedExtValue will free it via the List slice.
 
     const ext = graph_store.PropertyValue{
         .ExtValue = .{
@@ -1246,7 +1247,8 @@ test "ExtValue survives adapter property translation" {
     const storage_val = try toStorageProperty(allocator, ext);
     defer freeTemporaryStorageProperty(allocator, storage_val);
 
-    try std.testing.expectEqual(graph_store.STORAGE_EXT_TYPE_TAG, storage_val.ext.type_tag);
+    // The type_tag comes from the first byte of the codec encoding (property_tag_ext = 0x86)
+    try std.testing.expectEqual(@as(u16, 0x86), storage_val.ext.type_tag);
     try std.testing.expect(storage_val.ext.data.len > 0);
 
     const roundtrip = try fromStorageProperty(allocator, storage_val);
