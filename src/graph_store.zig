@@ -4827,7 +4827,6 @@ test "listGraphNames merges persisted adapter graphs with local cache" {
     try testing.expect(found);
 }
 
-
 test "TestSerializeSnapshotNonEmpty" {
     // GAP-D001: serializeSnapshot must produce non-empty output with nodes/edges
     var store = try GraphStore.init(testing.allocator);
