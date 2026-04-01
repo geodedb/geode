@@ -39,12 +39,14 @@ const Message = struct {
     key: ?[]const u8 = null,
     client_id: ?[]const u8 = null,
     data: ?[]const u8 = null,
+    auth_token: []const u8 = "",
 
     pub const _desc_table = .{
         .msg_type = fd(1, .{ .scalar = .@"enum" }),
         .key = fd(2, .{ .scalar = .string }),
         .client_id = fd(3, .{ .scalar = .string }),
         .data = fd(4, .{ .scalar = .bytes }),
+        .auth_token = fd(5, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *Message, allocator: std.mem.Allocator) void {
@@ -488,6 +490,7 @@ pub const ClusterCoordinator = struct {
         // Accept a single stream (simple model for now)
         const stream = try conn.acceptStream();
         // Stream/connection cleanup handled by transport on deinit (no explicit close)
+        var authenticated = false;
         while (true) {
             const frame_res = raft_consensus.readRaftFrame(self.allocator, stream) catch |err| switch (err) {
                 error.EndOfStream => break,
@@ -498,6 +501,21 @@ pub const ClusterCoordinator = struct {
                 else => return err,
             };
             defer frame_res.deinit(self.allocator);
+
+            // Validate cluster token on the first frame; skip if no token is configured
+            if (!authenticated) {
+                const expected_token = std.posix.getenv("GEODE_CLUSTER_TOKEN");
+                if (expected_token) |tok| {
+                    if (tok.len > 0) {
+                        const cluster_auth = @import("cluster_auth.zig");
+                        if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
+                            log.warn("Raft connection rejected: invalid cluster auth token", &.{});
+                            return;
+                        }
+                    }
+                }
+                authenticated = true;
+            }
 
             self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
                 log.err("Raft handleMessage error", &.{
@@ -513,6 +531,21 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
+        // Validate cluster auth token before processing join request
+        const expected_token = std.posix.getenv("GEODE_CLUSTER_TOKEN");
+        if (expected_token) |tok| {
+            if (tok.len > 0) {
+                const cluster_auth = @import("cluster_auth.zig");
+                if (!cluster_auth.validateClusterToken(msg.auth_token)) {
+                    log.warn("JOIN_CLUSTER rejected: invalid cluster auth token", &.{});
+                    return Response{
+                        .status = .ERR,
+                        .data = null,
+                    };
+                }
+            }
+        }
+
         if (self.raft.state != .leader) {
             return Response{
                 .status = .REDIRECT,

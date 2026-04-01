@@ -358,7 +358,12 @@ pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message)
     errdefer aw.deinit();
 
     const proto_msg = try messageToProto(allocator, msg);
-    var envelope = raft_schema.RaftEnvelope{ .term = term, .from = from, .message = proto_msg };
+    var envelope = raft_schema.RaftEnvelope{
+        .term = term,
+        .from = from,
+        .message = proto_msg,
+        .auth_token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "",
+    };
     defer envelope.deinit(allocator);
 
     try protobuf.encode(&aw.writer, allocator, envelope);
@@ -371,10 +376,12 @@ pub const DecodedRaftFrame = struct {
     term: u64,
     from: u64,
     body: Message,
+    auth_token: []const u8,
 
     pub fn deinit(self: DecodedRaftFrame, allocator: Allocator) void {
         var msg = self.body;
         freeMessage(allocator, &msg);
+        if (self.auth_token.len > 0) allocator.free(self.auth_token);
     }
 };
 
@@ -385,7 +392,8 @@ pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFr
 
     const msg = decoded.message orelse return error.InvalidFrame;
     const body = try protoToMessage(allocator, msg);
-    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .body = body };
+    const token = if (decoded.auth_token.len > 0) try allocator.dupe(u8, decoded.auth_token) else "";
+    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .body = body, .auth_token = token };
 }
 
 pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {
