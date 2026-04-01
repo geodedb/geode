@@ -231,6 +231,7 @@ repos:
     stages: [pre-push]
 
       # GAP-0160: Status.csv sync check - runs on pre-commit and pre-push
+      # always_run because status.csv can go stale from merges that don't touch .zig files
   - id: status-csv-check
     name: status.csv sync check
     entry: bash
@@ -247,10 +248,29 @@ repos:
       fi
       echo "✓ docs/status.csv is up to date"
     language: system
-    files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/)
+    always_run: true
     pass_filenames: false
     stages: [pre-commit, pre-push]
+
+      # MATCH staged parity + benchmark + CLI transport parity (matches CI governance-match-ops-campaign)
+  - id: match-ops-campaign
+    name: MATCH ops campaign (parity + bench + CLI transport)
+    entry: bash
+    args:
+    - -c
+    - |
+      echo "=== Running MATCH staged parity campaign ==="
+      zig build test-match-parity --summary all || exit 1
+      echo "=== Running MATCH staged benchmark campaign ==="
+      GEODE_MATCH_BENCH_ENABLE=1 zig build test-match-bench --summary all || exit 1
+      echo "=== Running CLI transport response parity goldens ==="
+      zig build test-cli-transport-parity --summary all || exit 1
+      echo "✓ MATCH and CLI transport parity campaigns passed"
+    language: system
+    files: \.(zig|zon)$
+    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+    pass_filenames: false
+    stages: [pre-push]
 
       # GAP-0227: Canaryscan GAP verification (matches CI governance-canaryscan-verify)
   - id: canaryscan-verify
@@ -288,5 +308,5 @@ ci:
   autoupdate_branch: ''
   autoupdate_commit_msg: '[pre-commit.ci] pre-commit autoupdate'
   autoupdate_schedule: weekly
-  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify, canaryscan-verify]
+  skip: [zig-fmt, zig-build, zig-test, cross-compile-check, no-feature-flags, canary-verify, canaryscan-verify, match-ops-campaign]
   submodules: false
