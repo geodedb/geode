@@ -1249,10 +1249,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             std.debug.print("Error: Failed to plan migrations: {}\n", .{err});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer {
-            allocator.free(plan.up);
-            allocator.free(plan.down);
-        }
+        defer migration.freePlan(allocator, &plan);
         for (plan.up) |name| printStdout("  Would apply: {s}\n", .{name});
         for (plan.down) |name| printStdout("  Could rollback: {s}\n", .{name});
         std.process.exit(@intFromEnum(ExitCode.success));
@@ -1315,6 +1312,12 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.debug.print("Error: migration name is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
+
+    // Validate migration name for path traversal (GAP-0285/0301)
+    migration.validateMigrationName(migration_name.?) catch {
+        std.debug.print("Error: invalid migration name '{s}' (must not contain path separators or '..')\n", .{migration_name.?});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
 
     // Ensure migrations directory exists
     std.fs.cwd().makePath(migrations_dir) catch |err| {

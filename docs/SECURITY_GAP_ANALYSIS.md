@@ -1,0 +1,358 @@
+# Security Gap Analysis -- Migration Engine Audit
+
+Last updated: 2026-04-01
+Scope: `src/migration/mod.zig`, `src/cli/backup_cli.zig`
+Audited by: Claude Opus 4.6 (adversarial security review)
+
+## Summary
+
+- **Total findings:** 24 (13 prior + 11 new from re-audit)
+- **Critical:** 0
+- **High:** 5 -- 2 closed, 2 won't do, 1 open (new)
+- **Medium:** 9 -- 3 closed, 2 won't do, 4 open (new)
+- **Low:** 10 -- 2 closed, 2 won't do, 6 open (new)
+- **Closed / Implemented:** 7
+- **Won't Do:** 5 (unsigned ledger, weak checksum, GQL injection, missing authz, password exposure)
+- **Open (new from re-audit):** 11
+- **Confidential issues:** 2 (#592, #598)
+
+### Top 5 Risks (Overall)
+
+| Rank | Risk Score | Finding | Status |
+|------|-----------|---------|--------|
+| 1 | 64 | Path traversal in applyUpMigrations (CWE-22) | Closed |
+| 2 | 64 | Unsigned ledger file -- full state forgery (CWE-345) | Won't Do |
+| 3 | 64 | GQL injection via migration file content (CWE-94) | Won't Do |
+| 4 | 48 | JSON injection via unescaped row.name (CWE-74/116) | Closed |
+| 5 | 40 | No cryptographic signing of migration files (CWE-345) | **Open (NEW)** |
+
+### Top 5 Risks (Open Only)
+
+| Rank | Risk Score | Finding | ID |
+|------|-----------|---------|-----|
+| 1 | 40 | No cryptographic signing of migration files (CWE-345) | SEC-MIG-01 |
+| 2 | 36 | `migrate status`/`create` have zero authentication (CWE-306) | SEC-MIG-03 |
+| 3 | 36 | In-process lock provides no cross-process protection (CWE-362/667) | SEC-MIG-04 |
+| 4 | 32 | No CI pipeline migration guard (CWE-829) | SEC-MIG-02 |
+| 5 | 24 | Drift evasion via FNV-1a collision + unsigned ledger (CWE-328) | SEC-MIG-05 |
+
+### Critical Attack Chain
+
+Ledger tampering (#573) -> injected name with `../` -> `applyDownMigrations` constructs `{name}.down.gql` -> `joinPath` joins unsanitized name (#572) -> `readFileAlloc` reads arbitrary file (8MB) -> content passed to `executor.execFn` = arbitrary GQL injection (#598). Combined effect: **full database compromise from filesystem write access to migrations dir**.
+
+**Deployment model:** CLI tool requiring local shell access. Risk is significantly amplified in CI/CD pipelines and shared development environments where the migrations directory is writable by build processes.
+
+**New attack surface (re-audit):** Unsigned migration files (SEC-MIG-01) combined with no CI guard (SEC-MIG-02) means a compromised CI runner or malicious MR can inject arbitrary GQL that executes without review. Cross-process lock gap (SEC-MIG-04) enables concurrent migration execution in multi-runner CI environments.
+
+---
+
+## Prior Findings (Original Audit)
+
+### Stack-Ranked Prior Findings Table
+
+| Rank | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence (file:line) | Issue URL | Fix | Owner | Due | Status |
+|------|----------|-----------|---------|-----------|-----------|---------------------|-----------|-----|-------|-----|--------|
+| 1 | HIGH | 64 | Path traversal in applyUpMigrations | migration | CWE-22 / A01:2021 | mod.zig:273-274, 346 | [#572](https://gitlab.com/devnw/codepros/geode/geode/-/issues/572) | GAP-0285: name sanitization rejects `../`, `/`, `\`. Commit f64bf2c6. | migration | -- | Closed / Implemented |
+| 2 | HIGH | 64 | Unsigned ledger file | migration | CWE-345 / A08:2021 | mod.zig:165-200, 235-255 | [#573](https://gitlab.com/devnw/codepros/geode/geode/-/issues/573) | GAP-0286: too invasive, needs separate sprint with migration path design | migration | -- | Won't Do |
+| 3 | HIGH | 64 | GQL injection via migration file content | migration | CWE-94 / A03:2021 | mod.zig:348-351 | [#598](https://gitlab.com/devnw/codepros/geode/geode/-/issues/598) | SEC-598: needs DDL sandbox architecture | migration | -- | Won't Do |
+| 4 | HIGH | 48 | JSON injection via unescaped row.name | migration | CWE-74, CWE-116 / A03:2021 | mod.zig:214-215 | [#592](https://gitlab.com/devnw/codepros/geode/geode/-/issues/592) | GAP-0287: std.json.stringify. Commit f64bf2c6. | migration | -- | Closed / Implemented |
+| 5 | MEDIUM | 36 | TOCTOU race in global lock | migration | CWE-362, CWE-367 / A04:2021 | mod.zig:279-311 | [#606](https://gitlab.com/devnw/codepros/geode/geode/-/issues/606) | GAP-0293: std.Thread.Mutex. Commit 0d39cd15. | migration | -- | Closed / Implemented |
+| 6 | MEDIUM | 36 | CLI path traversal in cmdMigrateCreate | cli | CWE-22 / A01:2021 | backup_cli.zig:1309-1351 | [#614](https://gitlab.com/devnw/codepros/geode/geode/-/issues/614) | GAP-0301: name sanitization. Commit f64bf2c6. | migration | -- | Closed / Implemented |
+| 7 | MEDIUM | 36 | No authorization enforcement | migration | CWE-862 / A01:2021 | mod.zig (entire module) | [#617](https://gitlab.com/devnw/codepros/geode/geode/-/issues/617) | GAP-0300: needs architectural decision on auth boundary | migration | -- | Won't Do |
+| 8 | MEDIUM | 24 | Integer overflow in statusReport version parsing | migration | CWE-190 / A04:2021 | mod.zig:449-452 | [#602](https://gitlab.com/devnw/codepros/geode/geode/-/issues/602) | GAP-0292: shared parseVersion with overflow guard. Commit c49dc110. | migration | -- | Closed / Implemented |
+| 9 | MEDIUM | 24 | Weak checksum (28-bit FNV-1a prefix) | migration | CWE-328 / A02:2021 | mod.zig:110-127, 534 | [#612](https://gitlab.com/devnw/codepros/geode/geode/-/issues/612) | GAP-0294: breaking change, needs versioned ledger format | migration | -- | Won't Do |
+| 10 | LOW | 16 | Resume slots silent overwrite + undefined memory | migration | CWE-908 | mod.zig:603-614 | [#620](https://gitlab.com/devnw/codepros/geode/geode/-/issues/620) | GAP-0289/0303: alloc.dupe + error on full. Commit 7c545694. | migration | -- | Closed / Implemented |
+| 11 | LOW | 16 | --password visible in process listing | cli | CWE-214 / A07:2021 | backup_cli.zig:1186-1192 | [#627](https://gitlab.com/devnw/codepros/geode/geode/-/issues/627) | SEC-627: CLI backlog item | migration | -- | Won't Do |
+| 12 | LOW | 12 | Ledger use_last enables stealthy field override | migration | CWE-345 / A08:2021 | mod.zig:178 | [#622](https://gitlab.com/devnw/codepros/geode/geode/-/issues/622) | SEC-622: parse option changed to error. Commit f64bf2c6. | migration | -- | Closed / Implemented |
+| 13 | LOW | 8 | Global policy_mode unsynchronized | migration | CWE-362 | mod.zig:491 | [#625](https://gitlab.com/devnw/codepros/geode/geode/-/issues/625) | GAP-0302: std.atomic.Value. Commit 0d39cd15. | migration | -- | Closed / Implemented |
+
+### Verification Summary (Re-Audit)
+
+All 7 prior fixes verified intact in current codebase. All 5 Won't Do items confirmed as still applicable with documented rationale.
+
+---
+
+## New Findings (Re-Audit: 2026-04-01)
+
+### Stack-Ranked New Findings Table
+
+| Rank | ID | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence (file:line) | Fix Guidance | Owner | SLA | Status |
+|------|-----|----------|-----------|---------|-----------|-----------|---------------------|--------------|-------|-----|--------|
+| 1 | SEC-MIG-01 | HIGH | 40 | No cryptographic signing of migration files -- executed verbatim from filesystem | migration | CWE-345 / A08:2021 | mod.zig:415-418 | Ed25519 or HMAC-SHA256 signing; verify signature before execution | migration | 30 days | Open |
+| 2 | SEC-MIG-03 | MEDIUM | 36 | `migrate status`/`create` have zero authentication -- local filesystem only | cli | CWE-306 / A07:2021 | backup_cli.zig:1052, 1283 | Require authentication for CLI migration commands or restrict to admin role | migration | 90 days | Open |
+| 3 | SEC-MIG-04 | MEDIUM | 36 | In-process lock provides no cross-process protection | migration | CWE-362, CWE-667 / A04:2021 | mod.zig:329-373 | Replace in-process mutex with `flock()` on lockfile for cross-process safety | migration | 90 days | Open |
+| 4 | SEC-MIG-02 | MEDIUM | 32 | No CI pipeline migration guard -- .gql files not reviewed/validated by CI | ci | CWE-829 / A08:2021 | .gitlab-ci.yml | Add CI job to lint/validate .gql migration files; require approval for changes | migration | 90 days | Open |
+| 5 | SEC-MIG-05 | MEDIUM | 24 | Drift evasion via FNV-1a collision + unsigned ledger | migration | CWE-328 / A02:2021 | mod.zig:124-160 | Upgrade to SHA-256 content hash; sign ledger entries | migration | 90 days | Open |
+| 6 | SEC-MIG-10 | LOW | 24 | `--dir` accepts arbitrary paths without validation | cli | CWE-22 / A01:2021 | backup_cli.zig:1069, 1141, 1303 | Validate `--dir` path is under allowed base directory; reject `..` components | migration | 180 days | Open |
+| 7 | SEC-MIG-06 | LOW | 24 | No file permissions set on ledger/migration files (default umask) | migration | CWE-732 / A01:2021 | mod.zig:286 | Set `0o600` permissions on ledger and migration files after creation | migration | 180 days | Open |
+| 8 | SEC-MIG-11 | LOW | 24 | Password visible in process listing (duplicate of #627 scope, new path) | cli | CWE-214 / A07:2021 | backup_cli.zig:1186-1192 | Support GEODE_PASSWORD env var; deprecate --password CLI flag | migration | 180 days | Open |
+| 9 | SEC-MIG-07 | LOW | 16 | Predictable temp file name (ms timestamp) | migration | CWE-377 / A01:2021 | mod.zig:282 | Use cryptographic random suffix or OS-provided temp file creation | migration | 180 days | Open |
+| 10 | SEC-MIG-08 | LOW | 8 | Resume token memory leak (8 slots max) | migration | CWE-401 / A04:2021 | mod.zig:700-713 | Free resume tokens when no longer needed; add slot reclamation | migration | 180 days | Open |
+| 11 | SEC-MIG-09 | LOW | 4 | CLI version counter overflow in cmdMigrateCreate | cli | CWE-190 / A04:2021 | backup_cli.zig:1342-1347 | Add overflow check on version counter before increment | migration | 180 days | Open |
+
+### New Finding Details
+
+#### SEC-MIG-01: No Cryptographic Signing of Migration Files
+
+- **Severity:** HIGH | **Risk Score:** 40 (Impact: 5 x Likelihood: 2 x 4)
+- **CWE:** CWE-345 (Insufficient Verification of Data Authenticity) | **OWASP:** A08:2021 Software and Data Integrity Failures
+- **Exploit surface:** Local filesystem / CI pipeline
+- **Summary:** Migration `.gql` files are read from disk and executed verbatim by the migration engine with no integrity verification. Any process with write access to the migrations directory can inject arbitrary GQL.
+- **Evidence:** `mod.zig:415-418` -- `readFileAlloc` followed by direct execution without signature check.
+- **Attack scenario:** Attacker gains write access to migrations directory (compromised CI runner, shared dev environment, supply chain attack on dependency that writes to project root). Injects malicious `.gql` file. Next `migrate up` executes it with full database privileges.
+- **Likelihood:** Score 2 -- requires filesystem write access to migrations directory. Elevated in CI/CD where build processes have write access.
+- **Fix guidance:** Implement Ed25519 or HMAC-SHA256 signing of migration files. Store signatures in a `.sig` sidecar file or in the ledger. Verify before execution. Reject unsigned migrations by default with `--allow-unsigned` escape hatch.
+- **Acceptance criteria:** (1) Unsigned migration files are rejected by default. (2) Tampered migration files (modified after signing) are rejected. (3) `--allow-unsigned` flag exists for development use.
+- **Confidence:** `confidence::confirmed` -- code path verified.
+
+#### SEC-MIG-02: No CI Pipeline Migration Guard
+
+- **Severity:** MEDIUM | **Risk Score:** 32 (Impact: 4 x Likelihood: 2 x 4)
+- **CWE:** CWE-829 (Inclusion of Functionality from Untrusted Control Sphere) | **OWASP:** A08:2021
+- **Exploit surface:** CI/CD pipeline
+- **Summary:** `.gql` migration files are not linted, validated, or gated by CI. Any MR adding or modifying migration files is merged without automated review.
+- **Evidence:** `.gitlab-ci.yml` -- no job validates migration file content or requires approval for changes to `migrations/` directory.
+- **Attack scenario:** Malicious or compromised contributor adds a migration file containing destructive GQL (DROP, data exfiltration). MR is merged without CI flagging the migration content.
+- **Likelihood:** Score 2 -- requires MR access; mitigated by code review but not by automation.
+- **Fix guidance:** Add a CI job that (1) parses migration files for DDL-only statements, (2) flags non-DDL operations, (3) requires CODEOWNERS approval for `migrations/**/*.gql` changes.
+- **Acceptance criteria:** (1) CI job runs on all MRs touching `migrations/`. (2) Non-DDL statements are flagged. (3) CODEOWNERS rule covers migration directory.
+- **Confidence:** `confidence::confirmed` -- CI config reviewed.
+
+#### SEC-MIG-03: Migration CLI Commands Have Zero Authentication
+
+- **Severity:** MEDIUM | **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
+- **CWE:** CWE-306 (Missing Authentication for Critical Function) | **OWASP:** A07:2021 Identification and Authentication Failures
+- **Exploit surface:** Local shell / CI pipeline
+- **Summary:** `migrate status` and `migrate create` commands operate directly on the filesystem without any authentication. Any local user or CI process can enumerate migration state and create new migrations.
+- **Evidence:** `backup_cli.zig:1052` (`cmdMigrateStatus`), `backup_cli.zig:1283` (`cmdMigrateCreate`) -- no auth checks.
+- **Attack scenario:** Unprivileged local user or CI job enumerates migration status to discover schema details, or creates a malicious migration file for later execution.
+- **Likelihood:** Score 3 -- requires local shell access, which is common in CI/CD and shared dev environments.
+- **Fix guidance:** Add authentication requirement for migration CLI commands. At minimum, require the same admin credentials used for `migrate up`/`down`.
+- **Acceptance criteria:** (1) `migrate status` requires valid credentials. (2) `migrate create` requires admin role. (3) Unauthenticated calls return error.
+- **Confidence:** `confidence::confirmed` -- code paths verified.
+
+#### SEC-MIG-04: In-Process Lock Provides No Cross-Process Protection
+
+- **Severity:** MEDIUM | **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
+- **CWE:** CWE-362 (Concurrent Execution Using Shared Resource with Improper Synchronization), CWE-667 (Improper Locking) | **OWASP:** A04:2021
+- **Exploit surface:** Multi-process deployment / CI pipeline
+- **Summary:** The migration global lock uses `std.Thread.Mutex`, which only protects within a single process. Multiple Geode processes or CI runners can execute migrations concurrently, causing ledger corruption or partial application.
+- **Evidence:** `mod.zig:329-373` -- mutex is process-local.
+- **Attack scenario:** Two CI runners trigger `migrate up` simultaneously. Both read the same ledger state, both apply the same migration, ledger becomes inconsistent.
+- **Likelihood:** Score 3 -- common in CI/CD with parallel runners; also possible with multiple Geode instances sharing a data directory.
+- **Fix guidance:** Replace in-process mutex with filesystem-based `flock()` on a lockfile in the migrations directory. Hold lock for duration of migration execution.
+- **Acceptance criteria:** (1) Only one process can execute migrations at a time. (2) Second process blocks or errors with clear message. (3) Lock is released on crash (OS reclaims flock).
+- **Confidence:** `confidence::confirmed` -- mutex scope verified.
+
+#### SEC-MIG-05: Drift Evasion via FNV-1a Collision + Unsigned Ledger
+
+- **Severity:** MEDIUM | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
+- **CWE:** CWE-328 (Use of Weak Hash) | **OWASP:** A02:2021 Cryptographic Failures
+- **Exploit surface:** Local filesystem
+- **Summary:** FNV-1a hash used for drift detection is 28-bit truncated, making collisions computationally trivial. Combined with the unsigned ledger (#573), an attacker can replace migration file content while preserving the hash prefix.
+- **Evidence:** `mod.zig:124-160` -- FNV-1a hash computation with `startsWith` matching on hex prefix.
+- **Attack scenario:** Attacker crafts a replacement migration file whose FNV-1a hash prefix matches the original. Drift detection passes, but the file contains different GQL.
+- **Likelihood:** Score 2 -- requires filesystem write access and understanding of hash algorithm. Collision search is trivial for 28-bit prefix.
+- **Fix guidance:** Upgrade to SHA-256 full-content hash. Use exact match instead of prefix match. Sign ledger entries.
+- **Acceptance criteria:** (1) Hash algorithm upgraded to SHA-256. (2) Full hash comparison (no prefix matching). (3) Drift detection catches single-byte changes.
+- **Confidence:** `confidence::confirmed` -- hash algorithm and matching logic verified.
+
+#### SEC-MIG-06: No File Permissions Set on Ledger/Migration Files
+
+- **Severity:** LOW | **Risk Score:** 24 (Impact: 2 x Likelihood: 3 x 4)
+- **CWE:** CWE-732 (Incorrect Permission Assignment for Critical Resource) | **OWASP:** A01:2021
+- **Exploit surface:** Shared filesystem
+- **Summary:** Ledger and migration files are created with default umask permissions (often 0644 or 0666). Other local users can read migration content and ledger state.
+- **Evidence:** `mod.zig:286` -- file creation without explicit permission mode.
+- **Fix guidance:** Set `0o600` permissions on ledger files and `0o644` on migration files (readable but not writable by others).
+- **Acceptance criteria:** (1) Ledger file created with `0o600`. (2) Permissions verified in tests.
+- **Confidence:** `confidence::confirmed` -- file creation call verified.
+
+#### SEC-MIG-07: Predictable Temp File Name
+
+- **Severity:** LOW | **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
+- **CWE:** CWE-377 (Insecure Temporary File) | **OWASP:** A01:2021
+- **Exploit surface:** Local filesystem
+- **Summary:** Temporary files use millisecond timestamp as suffix, making the name predictable. A local attacker can pre-create the file (symlink attack) to redirect writes.
+- **Evidence:** `mod.zig:282` -- timestamp-based temp file naming.
+- **Fix guidance:** Use cryptographic random bytes for temp file suffix or use OS-provided temp file APIs.
+- **Acceptance criteria:** (1) Temp file names contain cryptographic random component. (2) Symlink following is disabled.
+- **Confidence:** `confidence::confirmed` -- naming logic verified.
+
+#### SEC-MIG-08: Resume Token Memory Leak
+
+- **Severity:** LOW | **Risk Score:** 8 (Impact: 1 x Likelihood: 2 x 4)
+- **CWE:** CWE-401 (Missing Release of Memory after Effective Lifetime) | **OWASP:** A04:2021
+- **Exploit surface:** Internal (long-running process)
+- **Summary:** Resume tokens (8 slots max) are allocated but never freed during normal operation. In long-running processes, repeated migration attempts accumulate leaked token memory.
+- **Evidence:** `mod.zig:700-713` -- token allocation without corresponding deallocation.
+- **Fix guidance:** Free resume tokens after successful migration completion. Add slot reclamation when all slots are consumed.
+- **Acceptance criteria:** (1) Tokens freed after use. (2) No memory growth from repeated migrate cycles.
+- **Confidence:** `confidence::suspected` -- would confirm with memory profiler under repeated migrate cycles.
+
+#### SEC-MIG-09: CLI Version Counter Overflow
+
+- **Severity:** LOW | **Risk Score:** 4 (Impact: 1 x Likelihood: 1 x 4)
+- **CWE:** CWE-190 (Integer Overflow or Wraparound) | **OWASP:** A04:2021
+- **Exploit surface:** CLI (local)
+- **Summary:** Version counter in `cmdMigrateCreate` can overflow if enough migrations are created. Overflow would cause version number collision or wrap to zero.
+- **Evidence:** `backup_cli.zig:1342-1347` -- version increment without overflow check.
+- **Fix guidance:** Add overflow check before version increment. Error if version exceeds safe maximum.
+- **Acceptance criteria:** (1) Overflow returns error. (2) Maximum version documented.
+- **Confidence:** `confidence::suspected` -- theoretical; would require impractically large number of migrations in practice.
+
+#### SEC-MIG-10: `--dir` Accepts Arbitrary Paths Without Validation
+
+- **Severity:** LOW | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
+- **CWE:** CWE-22 (Improper Limitation of a Pathname to a Restricted Directory) | **OWASP:** A01:2021
+- **Exploit surface:** CLI (local)
+- **Summary:** The `--dir` CLI flag accepts any filesystem path without validation. An attacker with CLI access can point migrations at arbitrary directories, potentially reading or writing outside expected boundaries.
+- **Evidence:** `backup_cli.zig:1069`, `backup_cli.zig:1141`, `backup_cli.zig:1303` -- `--dir` argument used directly.
+- **Fix guidance:** Validate `--dir` path: reject `..` path components, optionally require path to be under a configured base directory.
+- **Acceptance criteria:** (1) `..` in `--dir` path is rejected. (2) Path is resolved and validated before use.
+- **Confidence:** `confidence::confirmed` -- argument handling verified.
+
+#### SEC-MIG-11: Password Visible in Process Listing
+
+- **Severity:** LOW | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
+- **CWE:** CWE-214 (Invocation of Process Using Visible Sensitive Information) | **OWASP:** A07:2021
+- **Exploit surface:** Local system (process table)
+- **Summary:** Password passed via `--password` CLI flag is visible in `/proc/*/cmdline` and `ps` output. Related to prior #627 but with additional affected code paths.
+- **Evidence:** `backup_cli.zig:1186-1192` -- password read from CLI args.
+- **Fix guidance:** Support `GEODE_PASSWORD` environment variable. Add `--password-file` flag. Deprecate `--password` flag with warning.
+- **Acceptance criteria:** (1) `GEODE_PASSWORD` env var accepted. (2) `--password` emits deprecation warning. (3) `--password-file` reads from file.
+- **Confidence:** `confidence::confirmed` -- CLI argument handling verified.
+
+---
+
+## Findings by Area
+
+### Input Validation / Path Traversal
+
+- **#572** (HIGH/64): `applyUpMigrations` joins user-supplied names via `std.fs.path.join` with no `..` sanitization -- **Closed**
+- **#614** (MEDIUM/36): `cmdMigrateCreate` takes migration name from CLI args without sanitization -- **Closed**
+- **#602** (MEDIUM/24): `statusReport` version parsing has no integer overflow guard -- **Closed**
+- **SEC-MIG-10** (LOW/24): `--dir` accepts arbitrary paths without validation -- **Open**
+- **SEC-MIG-09** (LOW/4): CLI version counter overflow in `cmdMigrateCreate` -- **Open**
+
+### Data Integrity
+
+- **#573** (HIGH/64): Ledger JSON has no HMAC/signature -- full state forgery from filesystem write -- **Won't Do**
+- **#592** (HIGH/48): `writeLedgerJson` does not escape `row.name` -- JSON injection -- **Closed**
+- **#612** (MEDIUM/24): 28-bit FNV-1a prefix with `startsWith` matching -- weak integrity check -- **Won't Do**
+- **#622** (LOW/12): `use_last` duplicate field behavior enables stealthy field override -- **Closed**
+- **SEC-MIG-01** (HIGH/40): No cryptographic signing of migration files -- **Open**
+- **SEC-MIG-05** (MEDIUM/24): Drift evasion via FNV-1a collision + unsigned ledger -- **Open**
+
+### Injection
+
+- **#598** (HIGH/64): Migration file content (up to 8MB) passed verbatim to `executor.execFn` as GQL -- **Won't Do**
+
+### Access Control
+
+- **#617** (MEDIUM/36): No authorization checks in migration module -- any caller can run migrations -- **Won't Do**
+- **#606** (MEDIUM/36): Global lock has TOCTOU race -- concurrent migration execution possible -- **Closed**
+- **SEC-MIG-03** (MEDIUM/36): `migrate status`/`create` have zero authentication -- **Open**
+- **SEC-MIG-04** (MEDIUM/36): In-process lock provides no cross-process protection -- **Open**
+
+### CI/CD / Supply Chain
+
+- **SEC-MIG-02** (MEDIUM/32): No CI pipeline migration guard -- .gql files not reviewed/validated -- **Open**
+
+### Operations / Hardening
+
+- **#627** (LOW/16): `--password` CLI argument visible in process listing -- **Won't Do**
+- **#620** (LOW/16): Resume slots use `undefined` memory and silently overwrite when full -- **Closed**
+- **#625** (LOW/8): `policy_mode` global variable has no synchronization -- **Closed**
+- **SEC-MIG-06** (LOW/24): No file permissions set on ledger/migration files -- **Open**
+- **SEC-MIG-07** (LOW/16): Predictable temp file name (ms timestamp) -- **Open**
+- **SEC-MIG-08** (LOW/8): Resume token memory leak (8 slots max) -- **Open**
+- **SEC-MIG-11** (LOW/24): Password visible in process listing (additional paths) -- **Open**
+
+---
+
+## Roadmap
+
+### Quick Wins (< 1 day each)
+
+| Finding | Fix | Status |
+|---------|-----|--------|
+| Path traversal in names | Add `containsAny(name, "../\\")` reject | Closed |
+| JSON injection in writeLedgerJson | Escape `"`, `\`, control chars in `row.name` | Closed |
+| Integer overflow in statusReport | Add `if (j > 17) break;` guard | Closed |
+| CLI path traversal | Validate `[a-zA-Z0-9_-]` pattern | Closed |
+| use_last -> error | Change parse option | Closed |
+| policy_mode sync | Use `std.atomic.Value` | Closed |
+| Resume slots init | Change `= undefined` to `= std.mem.zeroes(...)` | Closed |
+| **SEC-MIG-06: File permissions** | Set `0o600` on ledger files at creation | **Open** |
+| **SEC-MIG-07: Temp file naming** | Use crypto random suffix | **Open** |
+| **SEC-MIG-09: Version counter overflow** | Add overflow check before increment | **Open** |
+| **SEC-MIG-10: `--dir` validation** | Reject `..` components in `--dir` path | **Open** |
+
+### Medium (1-5 days each)
+
+| Finding | Fix | Status |
+|---------|-----|--------|
+| TOCTOU lock race | Add mutex; wire lock into apply functions | Closed |
+| **SEC-MIG-01: Migration file signing** | Ed25519 or HMAC-SHA256 signing + verify before execution | **Open -- Priority 1** |
+| **SEC-MIG-02: CI migration guard** | Add CI job to lint/validate .gql files + CODEOWNERS | **Open -- Priority 2** |
+| **SEC-MIG-04: Cross-process flock()** | Replace in-process mutex with flock() on lockfile | **Open -- Priority 3** |
+| **SEC-MIG-05: SHA-256 hash upgrade** | Replace FNV-1a prefix with SHA-256 full match | **Open -- Priority 4** |
+| **SEC-MIG-11: GEODE_PASSWORD env var** | Add env var + --password-file support | **Open -- Priority 5** |
+
+### Strategic (> 5 days)
+
+| Finding | Fix | Status |
+|---------|-----|--------|
+| GQL injection via file content | Restricted query executor for migrations (DDL-only sandbox) | Won't Do |
+| Missing authorization | Auth context threading through migration API + role checks | Won't Do |
+| **SEC-MIG-03: CLI auth for status/create** | Require authentication for all migration CLI commands | **Open** |
+
+### Won't Do (Documented Rationale)
+
+| Finding | Issue | Rationale |
+|---------|-------|-----------|
+| Unsigned ledger (#573) | [#573](https://gitlab.com/devnw/codepros/geode/geode/-/issues/573) | Too invasive; needs separate sprint with migration path design |
+| GQL injection (#598) | [#598](https://gitlab.com/devnw/codepros/geode/geode/-/issues/598) | Needs DDL sandbox architecture -- separate project |
+| Missing authz (#617) | [#617](https://gitlab.com/devnw/codepros/geode/geode/-/issues/617) | Needs architectural decision on auth boundary (module vs. CLI) |
+| Weak checksum (#612) | [#612](https://gitlab.com/devnw/codepros/geode/geode/-/issues/612) | Breaking change; needs versioned ledger format |
+| Password exposure (#627) | [#627](https://gitlab.com/devnw/codepros/geode/geode/-/issues/627) | CLI backlog item; low priority given local-only attack surface |
+
+---
+
+## Blockers and Unknowns
+
+1. **GQL injection (#598):** Confirming whether the QueryExecutor can be sandboxed to DDL-only requires understanding the full query execution path. A simpler alternative is requiring signed migration files (SEC-MIG-01).
+
+2. **Authorization (#617):** The migration module is a standalone library -- threading auth context requires API changes to all public functions. Need to decide: auth at module boundary vs. auth at CLI boundary only.
+
+3. **Unsigned ledger (#573):** Migration path for existing unsigned ledgers needs design -- reject-and-require-re-init vs. auto-sign-on-first-read.
+
+4. **Cross-process locking (SEC-MIG-04):** `flock()` behavior varies across NFS and network filesystems. Need to document supported filesystem requirements.
+
+5. **Migration signing (SEC-MIG-01):** Key management for signing -- reuse existing HMAC key infrastructure or introduce separate signing keys? Need design decision before implementation.
+
+### What Would Confirm Suspected Issues
+
+- **SEC-MIG-08 (memory leak):** Run repeated migrate up/down cycles under memory profiler. Confirm token slots are never freed. (Confidence: suspected)
+- **SEC-MIG-09 (version overflow):** Create migrations until version counter wraps. Verify behavior. (Confidence: suspected -- theoretical, impractical in practice)
+- **#622 (use_last override):** Craft a ledger JSON with duplicate `version` keys and verify the parser accepts the last value silently. (Confidence: suspected -> would confirm with test) -- **Now Closed**
+- **#625 (policy_mode race):** Run concurrent `enforcePolicy("STRICT")` and `isStrictPolicy()` calls across threads. (Confidence: suspected -- Zig's memory model may make this benign on x86, but UB per spec) -- **Now Closed**
+
+---
+
+## Immediate Actions Required
+
+No findings require immediate rotation or emergency remediation. All new findings are defense-in-depth improvements for a CLI tool requiring local filesystem access. The highest priority item (SEC-MIG-01: migration file signing) should be planned for the next sprint.
+
+### Recommended Priority Order for New Findings
+
+1. **SEC-MIG-01** (HIGH/40) -- Migration file signing (blocks SEC-MIG-05)
+2. **SEC-MIG-04** (MEDIUM/36) -- Cross-process flock() locking
+3. **SEC-MIG-02** (MEDIUM/32) -- CI pipeline migration guard
+4. **SEC-MIG-06** (LOW/24) -- File permissions on ledger
+5. **SEC-MIG-11** (LOW/24) -- GEODE_PASSWORD env var support
+6. **SEC-MIG-10** (LOW/24) -- `--dir` path validation
+7. **SEC-MIG-07** (LOW/16) -- Predictable temp file naming
+8. **SEC-MIG-08** (LOW/8) -- Resume token memory leak
+9. **SEC-MIG-09** (LOW/4) -- Version counter overflow

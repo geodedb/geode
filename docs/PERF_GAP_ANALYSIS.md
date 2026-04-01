@@ -1,16 +1,20 @@
 # Performance Gap Analysis
 
-Last updated: 2026-03-13
+Last updated: 2026-04-01
 
 ## Summary
 
-- Total findings: 24
+- Total findings: 30
 - Open: 0
 - Closed / Implemented: 23
-- Closed (Won't Do / Sufficient): 1
+- Closed (Won't Do / Sufficient): 7 (1 transport + 6 migration engine)
 - Blocked: 0
 
-Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings — all 7 closed 2026-03-13.
+Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts). April 2026 re-audit confirmed all 6 Won't Do dispositions correct; zero new actionable findings.
+
+### Top 5 Open Risks (by PerfScore)
+
+No open performance risks. All migration engine findings closed as Won't Do (unmeasurable benefit at realistic migration counts). Re-audit 2026-04-01 confirmed all dispositions correct; zero new actionable findings.
 
 ## Stack-Ranked Findings
 
@@ -46,6 +50,19 @@ Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 n
 | 23 | P2 | 36 | WAL truncation is O(n) full file rewrite | Storage | `src/wal.zig:425-500` | [#562](https://gitlab.com/devnw/codepros/geode/geode/-/issues/562) | Added early exit for `up_to_lsn == 0`; pre-sized `kept` buffer from file end position instead of 4096 | Closed / Implemented |
 | 24 | P2 | 32 | GroupBy HashMap allocation churn — per-query HashMap without reuse | Query exec | `src/execution/match_operations.zig:852` | [#563](https://gitlab.com/devnw/codepros/geode/geode/-/issues/563) | Pre-sized with `ensureTotalCapacity` at 5 GroupBy locations (heuristic: 25% distinct groups or min 16); addressed via #552 | Closed / Implemented |
 
+### April 2026 Audit -- Migration Engine (`src/migration/mod.zig`)
+
+Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per migration). No benchmarks exist. Reviewer consensus: none of these represent real bottlenecks at any realistic migration count (<10K). **Re-audit 2026-04-01**: All 6 Won't Do dispositions confirmed correct. Per-migration fsync in `applyUpMigrations` (mod.zig:433-435, 0.5-50ms) is correct for crash safety (GAP-0280) and dominated by QUIC RTT. O(N*R) quadratic loops bounded by migration count (<500). Full ledger reload per API call correct for CLI tool. 4MB/8MB read caps appropriate. Global mutex hold times nanosecond-scale. No pipelining opportunities without violating correctness. No benchmarks needed for admin-time tool. Zero new actionable performance findings.
+
+| Rank | Sev | Score | Finding | Component | Evidence | GitLab | Fix Summary | Status |
+|---|---|---:|---|---|---|---|---|---|
+| 25 | P2 | 24 | Repeated full ledger load/parse -- `loadLedger` called by every public operation (7 call sites) | Migration | `src/migration/mod.zig:165-200` (7 call sites: L321, L378, L409, L508, L548, L563) | [#577](https://gitlab.com/devnw/codepros/geode/geode/-/issues/577) | Not recommended: caching adds complexity for negligible gain vs QUIC round-trip | Closed (Won't Do) |
+| 26 | P3 | 16 | `applyUpMigrations` saves ledger only at end -- partial progress lost on crash | Migration | `src/migration/mod.zig:345-369` | [#594](https://gitlab.com/devnw/codepros/geode/geode/-/issues/594) | Already covered by GAP-0280 errdefer fix for crash safety | Closed (Won't Do) |
+| 27 | P3 | 4 | O(N*R) quadratic scan in `applyUpMigrations` -- `versionExists` per name | Migration | `src/migration/mod.zig:328-335` | [#579](https://gitlab.com/devnw/codepros/geode/geode/-/issues/579) | Not recommended: HashMap overhead exceeds scan cost at realistic counts | Closed (Won't Do) |
+| 28 | P3 | 4 | O(F*R) quadratic scan in `statusReport` -- ledger scan per file | Migration | `src/migration/mod.zig:447-464` | [#582](https://gitlab.com/devnw/codepros/geode/geode/-/issues/582) | Not recommended: unmeasurable benefit at realistic counts | Closed (Won't Do) |
+| 29 | P3 | 4 | O(M*R) quadratic scan in `checksumValidate` -- ledger scan per manifest line | Migration | `src/migration/mod.zig:531-538` | [#584](https://gitlab.com/devnw/codepros/geode/geode/-/issues/584) | Not recommended: HashMap overhead exceeds scan cost at realistic counts | Closed (Won't Do) |
+| 30 | P3 | 4 | `planDryRun` sort calls `parseVersion` per comparison instead of using pre-parsed `.version` field | Migration | `src/migration/mod.zig:587-592` | [#589](https://gitlab.com/devnw/codepros/geode/geode/-/issues/589) | Unmeasurable improvement | Closed (Won't Do) |
+
 ## Findings by Area
 
 - Query execution: `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed), `#557` (Closed), `#558` (Closed), `#560` (Closed), `#561` (Closed), `#563` (Closed)
@@ -53,6 +70,7 @@ Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 n
 - Serialization: `#446` (Closed), `#448` (Closed)
 - Transport/concurrency: `#447` (Closed), `#453` (Closed), `#454` (Closed), `#457` (Closed), `#458` (Closed/Won't Do)
 - Planner/index: `#455` (Closed), `#459` (Closed)
+- Migration: `#577` (Won't Do), `#579` (Won't Do), `#582` (Won't Do), `#584` (Won't Do), `#589` (Won't Do), `#594` (Won't Do)
 
 ## Related Open Performance Bugs (tracked separately)
 
@@ -63,6 +81,10 @@ Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 n
 | [#540](https://gitlab.com/devnw/codepros/geode/geode/-/issues/540) | Excessive CPU usage: idles at ~60% CPU | High | QUIC handshake spin |
 | [#545](https://gitlab.com/devnw/codepros/geode/geode/-/issues/545) | CI benchmarks optional for release builds | High | Regression detection — **fixed via GAP-0252** |
 | [#552](https://gitlab.com/devnw/codepros/geode/geode/-/issues/552) | HashMap/ArrayList pre-sizing ratio 0.7% | Medium | #561, #563 (allocation churn) — **fixed: 5 GroupBy locations pre-sized** |
+
+## Roadmap
+
+No open performance items. All migration engine perf findings closed as Won't Do (2026-04-01). Re-audit 2026-04-01 confirmed all dispositions; no new items.
 
 ## Blockers and Unblock Steps
 

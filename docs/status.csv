@@ -18224,7 +18224,7 @@ REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.wo
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/session-20260401/src/migration/mod.zig
 REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,.worktrees/timeseries-gap-close/src/migration/mod.zig
-REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-01-25,src/migration/mod.zig
+REQ-GAP-0233,MigrationUnitTests,RegressionTest,TESTED,,,migration,2026-04-01,src/migration/mod.zig
 REQ-GAP-0234,SyntaxValidationTests,ParserErrors,TESTED,,,parser,2026-01-25,.claude/worktrees/agent-a10cae4d/tests/test_syntax_validation.zig
 REQ-GAP-0234,SyntaxValidationTests,ParserErrors,TESTED,,,parser,2026-01-25,.claude/worktrees/agent-a233c712/tests/test_syntax_validation.zig
 REQ-GAP-0234,SyntaxValidationTests,ParserErrors,TESTED,,,parser,2026-01-25,.claude/worktrees/agent-a37683fc/tests/test_syntax_validation.zig
@@ -32624,7 +32624,7 @@ REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/audit-
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/session-20260401/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,.worktrees/timeseries-gap-close/src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,Core,TESTED,,,migration,2026-04-01,src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,,,migration,2026-01-11,.claude/worktrees/agent-a10cae4d/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,,,migration,2026-01-11,.claude/worktrees/agent-a233c712/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,DownReversalSafety,TESTED,,,migration,2026-01-11,.claude/worktrees/agent-a37683fc/src/migration/mod.zig
@@ -32698,7 +32698,7 @@ REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.w
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/graph-storage-integration/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/session-20260401/src/migration/mod.zig
 REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,.worktrees/timeseries-gap-close/src/migration/mod.zig
-REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-01-11,src/migration/mod.zig
+REQ-GQL-087,MigrationEngine,PlanDryRunIntegrity,TESTED,,,migration,2026-04-01,src/migration/mod.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,.claude/worktrees/agent-a10cae4d/src/eval.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,.claude/worktrees/agent-a233c712/src/eval.zig
 REQ-GQL-087,NamespacedFunctions,Evaluation,TESTED,,,eval,2025-10-14,.claude/worktrees/agent-a37683fc/src/eval.zig
