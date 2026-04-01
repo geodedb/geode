@@ -282,7 +282,7 @@ fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Led
     defer alloc.free(path);
 
     // Use timestamp-based suffix to avoid predictable temp file names (CWE-377).
-    var suffix_buf: [32]u8 = undefined;
+    var suffix_buf: [64]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.tmp", .{nowMs()}) catch return error.OutOfMemory;
     const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
@@ -426,13 +426,15 @@ pub fn applyUpMigrations(
 
         const prefix = checksumPrefix(script);
         const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
-        errdefer alloc.free(new_name);
         ledger.rows.append(alloc, .{
             .version = entry.version,
             .name = new_name,
             .applied = true,
             .checksum_prefix = prefix,
-        }) catch return error.OutOfMemory;
+        }) catch {
+            alloc.free(new_name);
+            return error.OutOfMemory;
+        };
         ledger.metrics.applied_total += 1;
 
         // Save ledger after each successful migration for crash safety (GAP-0280).
@@ -1056,4 +1058,356 @@ test "appendJsonEscaped handles control characters" {
     defer buffer.deinit(alloc);
     try appendJsonEscaped(&buffer, alloc, &[_]u8{0x01});
     try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\u") != null);
+}
+
+// ==================== JSON Round-Trip Test (GAP-0311) ====================
+
+test "writeLedgerJson round-trips through std.json.parseFromSlice" {
+    const alloc = std.testing.allocator;
+
+    var rows = std.ArrayList(StatusRow).initCapacity(alloc, 3) catch unreachable;
+    defer {
+        for (rows.items) |row| alloc.free(row.name);
+        rows.deinit(alloc);
+    }
+
+    const name1 = try alloc.dupe(u8, "001_init.gql");
+    errdefer alloc.free(name1);
+    try rows.append(alloc, .{ .version = 1, .name = name1, .applied = true, .checksum_prefix = "abc1234".* });
+
+    const name2 = try alloc.dupe(u8, "002_with-special_chars.gql");
+    errdefer alloc.free(name2);
+    try rows.append(alloc, .{ .version = 2, .name = name2, .applied = false, .checksum_prefix = "def5678".* });
+
+    const ledger = Ledger{
+        .rows = rows,
+        .baseline_fingerprint = 42,
+        .metrics = .{ .applied_total = 1, .failed_total = 0, .drift_detected_total = 3, .lock_steal_attempts_total = 7 },
+        .alloc = alloc,
+    };
+
+    var buffer = try std.ArrayList(u8).initCapacity(alloc, 512);
+    defer buffer.deinit(alloc);
+    try writeLedgerJson(&buffer, alloc, &ledger);
+
+    var parsed = try std.json.parseFromSlice(LedgerFile, alloc, buffer.items, .{ .duplicate_field_behavior = .@"error" });
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(u64, 42), parsed.value.baseline_fingerprint);
+    try std.testing.expectEqual(@as(usize, 2), parsed.value.rows.len);
+    try std.testing.expect(std.mem.eql(u8, "001_init.gql", parsed.value.rows[0].name));
+    try std.testing.expectEqual(true, parsed.value.rows[0].applied);
+    try std.testing.expect(std.mem.eql(u8, "abc1234", &parsed.value.rows[0].checksum_prefix));
+    try std.testing.expect(std.mem.eql(u8, "002_with-special_chars.gql", parsed.value.rows[1].name));
+    try std.testing.expectEqual(false, parsed.value.rows[1].applied);
+    try std.testing.expectEqual(@as(u64, 1), parsed.value.metrics.applied_total);
+    try std.testing.expectEqual(@as(u64, 3), parsed.value.metrics.drift_detected_total);
+    try std.testing.expectEqual(@as(u64, 7), parsed.value.metrics.lock_steal_attempts_total);
+}
+
+// ==================== Core Logic Tests (GAP-0310) ====================
+
+fn makeTestExecutor(ctx: *bool) QueryExecutor {
+    return .{
+        .context = @ptrCast(ctx),
+        .execFn = struct {
+            fn exec(context: ?*anyopaque, _: []const u8) anyerror!void {
+                const ptr: *bool = @ptrCast(@alignCast(context.?));
+                ptr.* = true;
+            }
+        }.exec,
+    };
+}
+
+fn makeFailingExecutor() QueryExecutor {
+    return .{
+        .context = null,
+        .execFn = struct {
+            fn exec(_: ?*anyopaque, _: []const u8) anyerror!void {
+                return error.ConnectionRefused;
+            }
+        }.exec,
+    };
+}
+
+test "applyUpMigrations applies migration and persists ledger" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    try std.testing.expect(executed);
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    try std.testing.expectEqual(@as(usize, 1), ledger.rows.items.len);
+    try std.testing.expect(ledger.rows.items[0].applied);
+    try std.testing.expectEqual(@as(i64, 1), ledger.rows.items[0].version);
+    try std.testing.expectEqual(@as(u64, 1), ledger.metrics.applied_total);
+}
+
+test "applyUpMigrations skips already-applied versions" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    executed = false;
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    try std.testing.expect(!executed);
+}
+
+test "applyUpMigrations records failure metric on executor error" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "FAIL" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const executor = makeFailingExecutor();
+    const result = applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    try std.testing.expectError(error.ApplyFailed, result);
+}
+
+test "applyDownMigration rolls back the latest applied migration" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
+    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql.down.gql", .data = "DROP GRAPH g2" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"002_add.gql"}, executor);
+    executed = false;
+
+    try applyDownMigration(alloc, cfg, executor);
+    try std.testing.expect(executed);
+
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    for (ledger.rows.items) |row| {
+        if (row.version == 2) {
+            try std.testing.expect(!row.applied);
+        }
+    }
+}
+
+test "statusReport returns discovered migration files with applied status" {
+    const alloc = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql.down.gql", .data = "DROP GRAPH g1" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const rows = try statusReport(alloc, cfg);
+    defer freeStatusRows(alloc, rows);
+
+    try std.testing.expectEqual(@as(usize, 2), rows.len);
+    for (rows) |row| {
+        try std.testing.expect(!row.applied);
+    }
+}
+
+test "driftCheck returns true for consistent ledger" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    baseline_override = null;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    const ok = try driftCheck(alloc, cfg);
+    try std.testing.expect(ok);
+}
+
+test "driftCheck returns false after simulated drift" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    baseline_override = null;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    testSimulateDrift();
+    const ok = try driftCheck(alloc, cfg);
+    try std.testing.expect(!ok);
+
+    migration_mutex.lock();
+    baseline_override = null;
+    migration_mutex.unlock();
+}
+
+test "checksumValidate passes for matching manifest" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    const row = ledger.rows.items[0];
+
+    var manifest_buf: [64]u8 = undefined;
+    const manifest = std.fmt.bufPrint(&manifest_buf, "{d} {s}", .{ row.version, row.checksum_prefix }) catch unreachable;
+
+    const valid = try checksumValidate(alloc, cfg, manifest);
+    try std.testing.expect(valid);
+}
+
+test "checksumValidate fails for mismatched manifest" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    const valid = try checksumValidate(alloc, cfg, "1 XXXXXXX");
+    try std.testing.expect(!valid);
+}
+
+test "planDryRun returns pending and rollback migrations" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "ADD" });
+    try tmp.dir.writeFile(.{ .sub_path = "003_more.gql", .data = "MORE" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"002_add.gql"}, executor);
+
+    const plan = try planDryRun(alloc, cfg, &[_][]const u8{ "002_add.gql", "003_more.gql" });
+    defer freePlan(alloc, &plan);
+
+    try std.testing.expectEqual(@as(usize, 1), plan.up.len);
+    try std.testing.expect(std.mem.eql(u8, "003_more.gql", plan.up[0]));
+    try std.testing.expectEqual(@as(usize, 1), plan.down.len);
+    try std.testing.expect(std.mem.eql(u8, "002_add.gql", plan.down[0]));
+}
+
+test "metricsSnapshot returns ledger metrics plus lock steal count" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 5;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const m = try metricsSnapshot(alloc, cfg);
+    try std.testing.expectEqual(@as(u64, 5), m.lock_steal_attempts_total);
+
+    migration_mutex.lock();
+    lock_steal_count = 0;
+    migration_mutex.unlock();
 }
