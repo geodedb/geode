@@ -191,10 +191,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .Call => |c| blk: {
                             // CRITICAL SECURITY: Check Read permission for Call in transaction
                             checkPermission(mut_context, .Read) catch |err| break :blk err;
-                            break :blk switch (c) {
-                                .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
-                                .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
-                            };
+                            break :blk executeCallStatement(allocator, c, mut_context);
                         },
                         .Create => |create_stmt| blk: {
                             // CRITICAL SECURITY: Check Write permission for Create in transaction
@@ -749,7 +746,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
-                    result = try executeCallSubquery(allocator, subq, context);
+                    _ = subq;
+                    result = try executeCallStatement(allocator, call_stmt, context);
                 },
             }
 

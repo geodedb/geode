@@ -860,10 +860,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     const txn_graph = if (mut_context.session_state) |session| session.graph else null;
                     last_result = (switch (body_stmt.*) {
                         .Query => |q| executeQueryWithContext(allocator, q, mut_context),
-                        .Call => |c| switch (c) {
-                            .Procedure => |proc| executeCallProcedure(allocator, proc, mut_context),
-                            .Subquery => |subq| executeCallSubquery(allocator, subq, mut_context),
-                        },
+                        .Call => |c| executeCallStatement(allocator, c, mut_context),
                         .Create => |create_stmt| executeCreate(allocator, create_stmt, txn_graph, mut_context),
                         .Merge => |m| executeMerge(allocator, m, txn_graph, mut_context),
                         .StartTransaction => return error.NestedTransactionNotAllowed,
@@ -1280,7 +1277,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 },
                 .Subquery => |subq| {
                     // Execute the subquery in an isolated context
-                    result = try executeCallSubquery(allocator, subq, context);
+                    _ = subq;
+                    result = try executeCallStatement(allocator, call_stmt, context);
                 },
             }
 
