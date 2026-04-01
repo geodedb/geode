@@ -229,62 +229,15 @@ fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Led
     };
 }
 
-/// Appends a string to the buffer with proper JSON escaping for special characters.
-fn appendJsonEscaped(buffer: *std.ArrayList(u8), alloc: std.mem.Allocator, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => buffer.appendSlice(alloc, "\\\"") catch return error.OutOfMemory,
-            '\\' => buffer.appendSlice(alloc, "\\\\") catch return error.OutOfMemory,
-            '\n' => buffer.appendSlice(alloc, "\\n") catch return error.OutOfMemory,
-            '\r' => buffer.appendSlice(alloc, "\\r") catch return error.OutOfMemory,
-            '\t' => buffer.appendSlice(alloc, "\\t") catch return error.OutOfMemory,
-            else => {
-                if (c < 0x20) {
-                    var esc_buf: [6]u8 = undefined;
-                    const esc = std.fmt.bufPrint(&esc_buf, "\\u{x:0>4}", .{c}) catch return error.OutOfMemory;
-                    buffer.appendSlice(alloc, esc) catch return error.OutOfMemory;
-                } else {
-                    buffer.append(alloc, c) catch return error.OutOfMemory;
-                }
-            },
-        }
-    }
-}
-
 fn writeLedgerJson(buffer: *std.ArrayList(u8), alloc: std.mem.Allocator, ledger: *const Ledger) !void {
-    buffer.appendSlice(alloc, "{\"baseline_fingerprint\":") catch return error.OutOfMemory;
-    var num_buf: [32]u8 = undefined;
-    const fp_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.baseline_fingerprint}) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, fp_slice) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ",\"rows\":[") catch return error.OutOfMemory;
-
-    for (ledger.rows.items, 0..) |row, i| {
-        if (i > 0) buffer.appendSlice(alloc, ",") catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, "{\"version\":") catch return error.OutOfMemory;
-        const ver_slice = std.fmt.bufPrint(&num_buf, "{d}", .{row.version}) catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, ver_slice) catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, ",\"name\":\"") catch return error.OutOfMemory;
-        try appendJsonEscaped(buffer, alloc, row.name);
-        buffer.appendSlice(alloc, "\",\"applied\":") catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, if (row.applied) "true" else "false") catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, ",\"checksum_prefix\":\"") catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, &row.checksum_prefix) catch return error.OutOfMemory;
-        buffer.appendSlice(alloc, "\"}") catch return error.OutOfMemory;
-    }
-
-    buffer.appendSlice(alloc, "],\"metrics\":{\"applied_total\":") catch return error.OutOfMemory;
-    const at_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.applied_total}) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, at_slice) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ",\"failed_total\":") catch return error.OutOfMemory;
-    const ft_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.failed_total}) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ft_slice) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ",\"drift_detected_total\":") catch return error.OutOfMemory;
-    const dt_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.drift_detected_total}) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, dt_slice) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ",\"lock_steal_attempts_total\":") catch return error.OutOfMemory;
-    const ls_slice = std.fmt.bufPrint(&num_buf, "{d}", .{ledger.metrics.lock_steal_attempts_total}) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, ls_slice) catch return error.OutOfMemory;
-    buffer.appendSlice(alloc, "}}") catch return error.OutOfMemory;
+    const ledger_file = LedgerFile{
+        .baseline_fingerprint = ledger.baseline_fingerprint,
+        .rows = ledger.rows.items,
+        .metrics = ledger.metrics,
+    };
+    const json_bytes = std.json.Stringify.valueAlloc(alloc, ledger_file, .{}) catch return error.OutOfMemory;
+    defer alloc.free(json_bytes);
+    buffer.appendSlice(alloc, json_bytes) catch return error.OutOfMemory;
 }
 
 fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Ledger) MigrationError!void {
@@ -1052,25 +1005,6 @@ test "validateMigrationName rejects names exceeding 255 bytes" {
     // 255 bytes should be fine
     const max_name = "a" ** 255;
     try validateMigrationName(max_name);
-}
-
-test "appendJsonEscaped escapes special characters" {
-    const alloc = std.testing.allocator;
-    var buffer = try std.ArrayList(u8).initCapacity(alloc, 64);
-    defer buffer.deinit(alloc);
-    try appendJsonEscaped(&buffer, alloc, "hello\"world\\new\nline\ttab");
-    try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\\\") != null);
-    try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\n") != null);
-    try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\t") != null);
-}
-
-test "appendJsonEscaped handles control characters" {
-    const alloc = std.testing.allocator;
-    var buffer = try std.ArrayList(u8).initCapacity(alloc, 64);
-    defer buffer.deinit(alloc);
-    try appendJsonEscaped(&buffer, alloc, &[_]u8{0x01});
-    try std.testing.expect(std.mem.indexOf(u8, buffer.items, "\\u") != null);
 }
 
 // ==================== JSON Round-Trip Test (GAP-0311) ====================
