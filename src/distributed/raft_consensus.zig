@@ -301,12 +301,21 @@ pub const InstallSnapshotResponse = struct {
 
 // ---- Wire format (protobuf frames over QUIC) ----
 
+// SEC-D009: Import nonce tracker for replay protection.
+const nonce_tracker = @import("nonce_tracker.zig");
+
 pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message) ![]u8 {
     var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch return error.OutOfMemory;
     errdefer aw.deinit();
 
     const proto_msg = try messageToProto(allocator, msg);
-    var envelope = raft_schema.RaftEnvelope{ .term = term, .from = from, .message = proto_msg };
+    // SEC-D009: Generate cryptographic nonce for replay protection.
+    var envelope = raft_schema.RaftEnvelope{
+        .term = term,
+        .from = from,
+        .nonce = nonce_tracker.NonceTracker.generateNonce(),
+        .message = proto_msg,
+    };
     defer envelope.deinit(allocator);
 
     try protobuf.encode(&aw.writer, allocator, envelope);
@@ -318,6 +327,8 @@ pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message)
 pub const DecodedRaftFrame = struct {
     term: u64,
     from: u64,
+    /// SEC-D009: Nonce for replay protection (0 if absent / legacy frame).
+    nonce: u64 = 0,
     body: Message,
 
     pub fn deinit(self: DecodedRaftFrame, allocator: Allocator) void {
@@ -333,7 +344,7 @@ pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFr
 
     const msg = decoded.message orelse return error.InvalidFrame;
     const body = try protoToMessage(allocator, msg);
-    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .body = body };
+    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .nonce = decoded.nonce, .body = body };
 }
 
 pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {

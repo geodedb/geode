@@ -127,7 +127,7 @@ const _e2e_cbo_v0 = @import("e2e_cbo_v0.zig");
 const _e2e_graph_algos_new = @import("e2e_graph_algos_new.zig");
 
 // New advanced feature tests - commented out due to module import issues
-// const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
+const _e2e_distributed_cluster = @import("e2e_distributed_cluster.zig");
 // const _e2e_recursive_queries = @import("e2e_recursive_queries.zig");
 // const _e2e_materialized_views = @import("e2e_materialized_views.zig");
 // const _e2e_rls_enhanced = @import("e2e_rls_enhanced.zig");
@@ -139,7 +139,9 @@ const _test_gql_hash_parsing = @import("test_gql_hash_parsing.zig");
 const _test_hash_evaluator = @import("test_hash_evaluator.zig");
 const _e2e_hash_functions = @import("e2e_hash_functions.zig");
 
-// Distributed systems tests - 2PC, BM25, Leiden, WCOJ
+// Distributed systems tests - Raft persistence, 2PC, BM25, Leiden, WCOJ
+const _e2e_raft_persist = @import("e2e_raft_persist_snapshot_membership.zig");
+const _test_twophase_unit = @import("test_twophase_unit.zig");
 const _test_2pc_distributed = @import("test_2pc_distributed.zig");
 const _test_fulltext_bm25 = @import("test_fulltext_bm25.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");

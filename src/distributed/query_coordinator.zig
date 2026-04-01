@@ -7,11 +7,15 @@ const raft = @import("raft.zig");
 const cbo = @import("../planner/cbo.zig");
 const spice_wrapper = @import("parallel/spice");
 const value_utilities = @import("../execution/value_utilities.zig");
+const result_utils = @import("result_utils.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("query_coordinator");
 const Attr = logging.Attr;
 
+/// Deprecated: Use EnhancedQueryCoordinator for production deployments.
+/// EnhancedQueryCoordinator is a superset that adds caching, optimization, and Top-K push-down.
+///
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
 /// GAP-0077: Now uses statistics registry for row estimates
@@ -23,6 +27,7 @@ pub const QueryCoordinator = struct {
     node_registry: NodeRegistry,
     metrics: CoordinatorMetrics,
     stats_registry: ?*cbo.StatsRegistry = null, // GAP-0077: Optional statistics registry
+    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
 
     const Self = @This();
 
@@ -34,10 +39,12 @@ pub const QueryCoordinator = struct {
             .shard_map = try ShardMap.init(allocator),
             .node_registry = try NodeRegistry.init(allocator),
             .metrics = CoordinatorMetrics.init(),
+            .pool = spice_wrapper.SpicePool.init(allocator, null),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        self.pool.deinit();
         self.shard_map.deinit();
         self.node_registry.deinit();
     }
@@ -111,7 +118,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// Scatter query fragments to shards with concurrent execution
-    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
     /// GAP-0184: Implements actual concurrent scatter/gather for fragment execution
     fn scatterQuery(self: *Self, plan: DistributedPlan, params: []const protocol.Value) ![]federation.QueryResults {
         const fragment_count = plan.fragments.items.len;
@@ -145,9 +152,7 @@ pub const QueryCoordinator = struct {
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
-        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
-        defer pool.deinit();
-
+        // PERF-D007: Reuse struct-level pool instead of creating per-call
         const Context = struct {
             coordinator: *Self,
             fragments: []const QueryFragment,
@@ -165,7 +170,7 @@ pub const QueryCoordinator = struct {
         };
 
         spice_wrapper.parallelForEach(
-            &pool,
+            &self.pool,
             0,
             fragment_count,
             ctx,
@@ -552,42 +557,9 @@ pub const QueryCoordinator = struct {
     }
 };
 
-fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
-    var cols = try allocator.alloc(protocol.Value, row.cols.len);
-    errdefer {
-        for (cols) |val| value_utilities.freeValue(allocator, val);
-        allocator.free(cols);
-    }
-    for (row.cols, 0..) |val, i| {
-        cols[i] = try value_utilities.duplicateValue(allocator, val);
-    }
-    return .{ .cols = cols };
-}
-
-fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    if (row.cols.len > 0) allocator.free(row.cols);
-}
-
-fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
-    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
-    errdefer {
-        for (cols) |col| {
-            allocator.free(col.name);
-            allocator.free(col.data_type);
-        }
-        allocator.free(cols);
-    }
-    for (schema_defs, 0..) |col, i| {
-        cols[i] = .{
-            .name = try allocator.dupe(u8, col.name),
-            .data_type = try allocator.dupe(u8, col.data_type),
-        };
-    }
-    return cols;
-}
+const cloneBindingRow = result_utils.cloneBindingRow;
+const freeBindingRow = result_utils.freeBindingRow;
+const cloneSchema = result_utils.cloneSchema;
 
 /// Distributed query plan
 const DistributedPlan = struct {
@@ -640,7 +612,7 @@ const ShardMap = struct {
         self.shards.deinit();
     }
 
-    // CANARY: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; ASPECT=QueryOptimization; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-SHARD-PRUNE-001; FEATURE="ShardPruning"; ASPECT=QueryOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getShardsForQuery(self: *ShardMap, query: []const u8) ![][]const u8 {
         // Try to extract partition key predicates from query
         // Look for patterns like "WHERE id = <value>" or "WHERE partition_key = <value>"
@@ -832,7 +804,7 @@ const TopKHeap = struct {
 };
 
 /// Coordinator metrics
-/// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Metrics; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+/// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Metrics; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
 const CoordinatorMetrics = struct {
     total_queries: u64,
     total_time_ms: u64,
@@ -860,7 +832,7 @@ const CoordinatorMetrics = struct {
 
 // =============================================================================
 // GAP-0184: Unit Tests for Concurrent Shard Execution
-// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=UnitTests; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=UnitTests; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
 // =============================================================================
 
 test "QueryCoordinator: initialization" {

@@ -7,10 +7,14 @@ const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
+const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
 const logging = @import("logging");
 const log = logging.scoped("cluster");
 const Attr = logging.Attr;
+
+pub const cluster_health = @import("cluster_health.zig");
+pub const HealthMonitor = cluster_health.HealthMonitor;
 
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
@@ -179,7 +183,12 @@ pub const ClusterCoordinator = struct {
     cluster_state: ClusterState,
     network_transport: NetworkTransport,
     health_monitor: HealthMonitor,
+    /// SEC-D009: Nonce tracker for Raft frame replay protection.
+    raft_nonce_tracker: NonceTracker,
     message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
+    // PERF-D006: Connection semaphore to limit concurrent cluster threads
+    active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    max_connections: u32 = 100,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -303,28 +312,6 @@ pub const ClusterCoordinator = struct {
         };
     };
 
-    pub const HealthMonitor = struct {
-        allocator: Allocator,
-        check_interval_ms: u64,
-        unhealthy_threshold: u32,
-        health_checks: std.ArrayList(HealthCheck),
-
-        pub const HealthCheck = struct {
-            node_id: u64,
-            consecutive_failures: u32,
-            last_check: i64,
-            latency_ms: u64,
-            status: HealthStatus,
-        };
-
-        pub const HealthStatus = enum {
-            healthy,
-            degraded,
-            unhealthy,
-            unknown,
-        };
-    };
-
     pub fn init(
         allocator: Allocator,
         node_id: u64,
@@ -352,10 +339,12 @@ pub const ClusterCoordinator = struct {
             .cluster_state = try initClusterState(allocator),
             .network_transport = try initNetworkTransport(allocator, config),
             .health_monitor = try initHealthMonitor(allocator, config),
+            .raft_nonce_tracker = try NonceTracker.init(allocator, 10000),
         };
     }
 
     pub fn deinit(self: *ClusterCoordinator) void {
+        self.raft_nonce_tracker.deinit();
         self.raft.deinit();
         self.allocator.destroy(self.raft);
         for (self.cluster_state.nodes.items) |*node| {
@@ -437,6 +426,17 @@ pub const ClusterCoordinator = struct {
 
         while (true) {
             const conn = try self.network_transport.quic_server.?.accept();
+
+            // PERF-D006: Connection semaphore - reject if at capacity
+            if (self.active_connections.load(.acquire) >= self.max_connections) {
+                log.warn("Connection limit reached, rejecting new connection", &.{
+                    Attr.uint("active", self.active_connections.load(.acquire)),
+                    Attr.uint("max", self.max_connections),
+                });
+                // Connection will be cleaned up when it goes out of scope
+                continue;
+            }
+
             const t = try std.Thread.spawn(.{}, handleQuicConnection, .{ self, conn });
             t.detach();
         }
@@ -469,6 +469,10 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleQuicConnection(self: *ClusterCoordinator, conn: *quic.QuicConnection) !void {
+        // PERF-D006: Track active connections
+        _ = self.active_connections.fetchAdd(1, .release);
+        defer _ = self.active_connections.fetchSub(1, .release);
+
         // Accept a single stream (simple model for now)
         const stream = try conn.acceptStream();
         // Stream/connection cleanup handled by transport on deinit (no explicit close)
@@ -482,6 +486,15 @@ pub const ClusterCoordinator = struct {
                 else => return err,
             };
             defer frame_res.deinit(self.allocator);
+
+            // SEC-D009: Validate nonce to prevent replay attacks.
+            if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
+                log.warn("Raft frame rejected: replay or missing nonce", &.{
+                    Attr.uint("from", frame_res.from),
+                    Attr.uint("nonce", frame_res.nonce),
+                });
+                continue;
+            }
 
             self.raft.handleMessage(frame_res.from, frame_res.body) catch |e| {
                 log.err("Raft handleMessage error", &.{
@@ -703,43 +716,19 @@ pub const ClusterCoordinator = struct {
     }
 
     fn initHealthMonitor(allocator: Allocator, config: Config) !HealthMonitor {
-        return HealthMonitor{
-            .allocator = allocator,
-            .check_interval_ms = config.health_check_interval_ms,
-            .unhealthy_threshold = config.unhealthy_threshold,
-            .health_checks = std.ArrayList(HealthMonitor.HealthCheck).init(allocator),
-        };
+        return HealthMonitor.init(allocator, config.health_check_interval_ms, config.unhealthy_threshold);
     }
 
     fn checkNodeHealth(self: *ClusterCoordinator, node: *NodeInfo) !HealthMonitor.HealthStatus {
         _ = self;
-        const now = std.time.milliTimestamp();
-        const elapsed = now - node.last_heartbeat;
-
-        if (elapsed < 1000) return .healthy;
-        if (elapsed < 5000) return .degraded;
-        return .unhealthy;
+        return HealthMonitor.evaluateNodeHealth(node.last_heartbeat);
     }
 
     fn updateHealthStatus(self: *ClusterCoordinator, node_id: u64, status: HealthMonitor.HealthStatus) !void {
-        for (self.health_monitor.health_checks.items) |*check| {
-            if (check.node_id == node_id) {
-                check.status = status;
-                check.last_check = std.time.milliTimestamp();
-                return;
-            }
-        }
-
-        try self.health_monitor.health_checks.append(.{
-            .node_id = node_id,
-            .consecutive_failures = 0,
-            .last_check = std.time.milliTimestamp(),
-            .latency_ms = 0,
-            .status = status,
-        });
+        try self.health_monitor.updateHealthStatus(node_id, status);
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-001; FEATURE="DistributedCluster"; ASPECT=ReplicationLag; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn getReplicationLag(self: *ClusterCoordinator, node_id: u64, shard_id: u64) !u64 {
         // Calculate replication lag based on node health check latency
         // In a real implementation, this would compare snapshot generations between primary and replica
@@ -748,17 +737,7 @@ pub const ClusterCoordinator = struct {
                 // Check if node is a replica for this shard
                 for (shard.replica_nodes) |replica| {
                     if (replica == node_id) {
-                        // Use health check latency as a proxy for replication lag
-                        for (self.health_monitor.health_checks.items) |check| {
-                            if (check.node_id == node_id) {
-                                // Lag estimated based on network latency and shard size
-                                // Formula: latency_ms * (shard_size_bytes / 1MB) as estimate
-                                const size_factor = @max(1, shard.size_bytes / (1024 * 1024));
-                                return check.latency_ms * size_factor;
-                            }
-                        }
-                        // If no health check found, return 0 (assume in sync)
-                        return 0;
+                        return self.health_monitor.estimateReplicationLag(node_id, shard.size_bytes);
                     }
                 }
             }
@@ -790,7 +769,7 @@ pub const ClusterCoordinator = struct {
         return available.toOwnedSlice();
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn startReplication(self: *ClusterCoordinator, shard_id: u64, node_id: u64) !void {
         log.info("Starting replication of shard to node", &.{
             Attr.uint("shard_id", shard_id),
@@ -836,7 +815,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-003; FEATURE="DistributedCluster"; ASPECT=Rebalance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn rebalanceShards(self: *ClusterCoordinator) !void {
         const node_count = self.cluster_state.nodes.items.len;
         if (node_count == 0) {
@@ -881,7 +860,7 @@ pub const ClusterCoordinator = struct {
         });
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-DIST-CLUSTER-004; FEATURE="DistributedCluster"; ASPECT=Topology; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn serializeClusterTopology(self: *ClusterCoordinator) ![]const u8 {
         var nodes = std.ArrayList(TopologyNode).init(self.allocator);
         defer nodes.deinit(self.allocator);

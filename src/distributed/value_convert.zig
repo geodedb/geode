@@ -198,3 +198,119 @@ fn freeJsonValue(allocator: Allocator, value: std.json.Value) void {
 fn freeExtValue(allocator: Allocator, ext: eval_extended.ExtValue) void {
     property_codec.freeExtValue(allocator, ext);
 }
+
+// ---- Unit tests ----
+
+test "protoValueToPropertyValue: null kind yields Null" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = null };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    try std.testing.expectEqual(graph_store.PropertyValue{ .Null = {} }, pv);
+}
+
+test "protoValueToPropertyValue: explicit null_val yields Null" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .null_val = .{} } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    try std.testing.expectEqual(graph_store.PropertyValue{ .Null = {} }, pv);
+}
+
+test "protoValueToPropertyValue: bool_val" {
+    const allocator = std.testing.allocator;
+    const val_true = schema.Value{ .kind = .{ .bool_val = true } };
+    const pv_true = try protoValueToPropertyValue(allocator, val_true, 0);
+    try std.testing.expectEqual(graph_store.PropertyValue{ .Bool = true }, pv_true);
+
+    const val_false = schema.Value{ .kind = .{ .bool_val = false } };
+    const pv_false = try protoValueToPropertyValue(allocator, val_false, 0);
+    try std.testing.expectEqual(graph_store.PropertyValue{ .Bool = false }, pv_false);
+}
+
+test "protoValueToPropertyValue: int_val" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .int_val = .{ .value = 42, .kind = .INT } } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    try std.testing.expectEqual(graph_store.PropertyValue{ .Int = 42 }, pv);
+}
+
+test "protoValueToPropertyValue: double_val" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .double_val = .{ .value = 3.14, .kind = .DOUBLE } } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    switch (pv) {
+        .Float => |f| try std.testing.expectApproxEqAbs(@as(f64, 3.14), f, 1e-10),
+        else => return error.UnexpectedType,
+    }
+}
+
+test "protoValueToPropertyValue: string_val" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .string_val = .{ .value = "hello", .kind = .STRING } } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    defer freePropertyValue(allocator, pv);
+    switch (pv) {
+        .String => |s| try std.testing.expectEqualStrings("hello", s),
+        else => return error.UnexpectedType,
+    }
+}
+
+test "protoValueToPropertyValue: depth limit exceeded" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .bool_val = true } };
+    const result = protoValueToPropertyValue(allocator, val, 65);
+    try std.testing.expectError(error.ParamsTooDeep, result);
+}
+
+test "propertyValueToProto: null round-trip" {
+    const allocator = std.testing.allocator;
+    const proto_val = try propertyValueToProto(allocator, .{ .Null = {} });
+    try std.testing.expect(proto_val.kind != null);
+    try std.testing.expectEqual(schema.ValueKind{ .null_val = .{} }, proto_val.kind.?);
+}
+
+test "propertyValueToProto: bool round-trip" {
+    const allocator = std.testing.allocator;
+    const proto_val = try propertyValueToProto(allocator, .{ .Bool = true });
+    try std.testing.expect(proto_val.kind != null);
+    switch (proto_val.kind.?) {
+        .bool_val => |b| try std.testing.expect(b),
+        else => return error.UnexpectedType,
+    }
+}
+
+test "propertyValueToProto: int round-trip" {
+    const allocator = std.testing.allocator;
+    const proto_val = try propertyValueToProto(allocator, .{ .Int = -99 });
+    try std.testing.expect(proto_val.kind != null);
+    switch (proto_val.kind.?) {
+        .int_val => |iv| try std.testing.expectEqual(@as(i64, -99), iv.value),
+        else => return error.UnexpectedType,
+    }
+}
+
+test "propertyValueToProto: string round-trip" {
+    const allocator = std.testing.allocator;
+    var proto_val = try propertyValueToProto(allocator, .{ .String = "test" });
+    defer proto_val.deinit(allocator);
+    try std.testing.expect(proto_val.kind != null);
+    switch (proto_val.kind.?) {
+        .string_val => |sv| try std.testing.expectEqualStrings("test", sv.value),
+        else => return error.UnexpectedType,
+    }
+}
+
+test "freePropertyValue: string is freed without leak" {
+    const allocator = std.testing.allocator;
+    const duped = try allocator.dupe(u8, "allocated");
+    const pv = graph_store.PropertyValue{ .String = duped };
+    freePropertyValue(allocator, pv);
+    // If this test passes with the testing allocator, no leak occurred.
+}
+
+test "freePropertyValue: non-string types are no-ops" {
+    const allocator = std.testing.allocator;
+    freePropertyValue(allocator, .{ .Null = {} });
+    freePropertyValue(allocator, .{ .Bool = true });
+    freePropertyValue(allocator, .{ .Int = 42 });
+    freePropertyValue(allocator, .{ .Float = 1.0 });
+}

@@ -1,6 +1,6 @@
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_004_EnhancedTransport; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_005_CrossShardCoordination; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=TESTED; TEST=TestCANARY_DISTRIBUTED_QUERY_006_ShardOptimization; OWNER=distributed; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-004; FEATURE="Enhanced Query Transport Integration"; ASPECT=NetworkTransport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-005; FEATURE="Cross-Shard Query Coordination"; ASPECT=QueryCoordination; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -32,6 +32,7 @@ pub const EnhancedQueryTransport = struct {
     connection_pool: ConnectionPool,
     message_handlers: MessageHandlers,
     statistics: TransportStatistics,
+    stats_mutex: std.Thread.Mutex = .{}, // PERF-D010: Thread-safe statistics access
     config: TransportConfig,
     // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
     // GAP-0054: Added active_trackers map for query tracking
@@ -149,8 +150,10 @@ pub const EnhancedQueryTransport = struct {
         // Execute query fragments in parallel
         try self.executeQueryFragments(query_id, execution_plan);
 
-        // Update statistics
+        // Update statistics (PERF-D010: thread-safe)
+        self.stats_mutex.lock();
         self.statistics.messages_sent += target_shards.len;
+        self.stats_mutex.unlock();
 
         return query_id;
     }
@@ -256,13 +259,17 @@ pub const EnhancedQueryTransport = struct {
 
         while (attempts < max_attempts) : (attempts += 1) {
             self.network_transport.sendToNode(node_id, &message) catch |err| {
+                self.stats_mutex.lock();
                 self.statistics.connection_errors += 1;
+                self.stats_mutex.unlock();
 
                 if (attempts + 1 < max_attempts) {
                     // Exponential backoff
                     const delay_ms = @as(u64, 100) << @intCast(attempts);
                     std.time.sleep(delay_ms * std.time.ns_per_ms);
+                    self.stats_mutex.lock();
                     self.statistics.retry_count += 1;
+                    self.stats_mutex.unlock();
                     continue;
                 }
 
@@ -273,9 +280,11 @@ pub const EnhancedQueryTransport = struct {
                 return err;
             };
 
-            // Success
+            // Success (PERF-D010: thread-safe)
+            self.stats_mutex.lock();
             self.statistics.messages_sent += 1;
             self.statistics.bytes_transferred += message.payload.len;
+            self.stats_mutex.unlock();
             return;
         }
     }
@@ -399,7 +408,9 @@ pub const EnhancedQueryTransport = struct {
     pub fn registerShard(self: *EnhancedQueryTransport, shard: ShardInfo) !void {
         try self.shard_registry.addShard(shard);
 
-        // Initialize shard utilization tracking
+        // Initialize shard utilization tracking (PERF-D010: thread-safe)
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         try self.statistics.shard_utilization.put(shard.shard_id, TransportStatistics.ShardUtilization{
             .queries_executed = 0,
             .avg_response_time_ms = 0.0,
@@ -416,8 +427,10 @@ pub const EnhancedQueryTransport = struct {
         });
     }
 
-    /// Get transport statistics
-    pub fn getStatistics(self: *const EnhancedQueryTransport) TransportStatistics {
+    /// Get transport statistics (PERF-D010: thread-safe snapshot)
+    pub fn getStatistics(self: *EnhancedQueryTransport) TransportStatistics {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         return self.statistics;
     }
 
@@ -444,8 +457,10 @@ pub const EnhancedQueryTransport = struct {
         return @as(u64, @intCast(std.time.milliTimestamp()));
     }
 
-    /// Update query execution statistics
+    /// Update query execution statistics (PERF-D010: thread-safe)
     fn updateQueryStatistics(self: *EnhancedQueryTransport, execution_time_ms: f64) void {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         if (self.statistics.messages_received == 0) {
             self.statistics.query_latency_ms = execution_time_ms;
         } else {
@@ -455,8 +470,10 @@ pub const EnhancedQueryTransport = struct {
         }
     }
 
-    /// Update shard utilization metrics
+    /// Update shard utilization metrics (PERF-D010: thread-safe)
     fn updateShardUtilization(self: *EnhancedQueryTransport, shard_id: u64, execution_time_ms: u64) !void {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         if (self.statistics.shard_utilization.getPtr(shard_id)) |util| {
             util.queries_executed += 1;
 
@@ -640,6 +657,8 @@ pub const EnhancedQueryTransport = struct {
 
     // Least connections - select shard with lowest active query count
     fn selectLeastConnections(self: *EnhancedQueryTransport, shards: []const u64) u64 {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         var best_shard: u64 = shards[0];
         var min_queries: u64 = std.math.maxInt(u64);
 
@@ -675,6 +694,8 @@ pub const EnhancedQueryTransport = struct {
 
     // Adaptive - consider response time, error rate, and current load
     fn selectAdaptive(self: *EnhancedQueryTransport, shards: []const u64) u64 {
+        self.stats_mutex.lock();
+        defer self.stats_mutex.unlock();
         var best_shard: u64 = shards[0];
         var best_score: f64 = std.math.inf(f64);
 
@@ -716,12 +737,16 @@ pub const EnhancedQueryTransport = struct {
         var scored_shards = try self.allocator.alloc(struct { id: u64, score: f64 }, all_shards.len);
         defer self.allocator.free(scored_shards);
 
-        for (all_shards, 0..) |shard_id, i| {
-            var score: f64 = 0;
-            if (self.statistics.shard_utilization.get(shard_id)) |util| {
-                score = util.avg_response_time_ms + @as(f64, util.error_rate) * 1000.0;
+        {
+            self.stats_mutex.lock();
+            defer self.stats_mutex.unlock();
+            for (all_shards, 0..) |shard_id, i| {
+                var score: f64 = 0;
+                if (self.statistics.shard_utilization.get(shard_id)) |util| {
+                    score = util.avg_response_time_ms + @as(f64, util.error_rate) * 1000.0;
+                }
+                scored_shards[i] = .{ .id = shard_id, .score = score };
             }
-            scored_shards[i] = .{ .id = shard_id, .score = score };
         }
 
         // Sort by score (lower is better)

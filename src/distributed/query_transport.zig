@@ -1,5 +1,5 @@
-// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-001; FEATURE="Distributed Query Transport"; ASPECT=QueryTransport; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_TRANSPORT_001_QueryTransport; OWNER=dist; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-002; FEATURE="Remote Query Execution"; ASPECT=RemoteExecution; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_TRANSPORT_002_RemoteExecution; OWNER=dist; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-001; FEATURE="Distributed Query Transport"; ASPECT=QueryTransport; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
+// CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-002; FEATURE="Remote Query Execution"; ASPECT=RemoteExecution; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
@@ -10,6 +10,7 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
+const result_utils = @import("result_utils.zig");
 const spice_wrapper = @import("parallel/spice");
 
 const logging = @import("logging");
@@ -24,16 +25,19 @@ pub const QueryTransport = struct {
     timeout_ms: u32 = 30000, // 30 second default timeout
     retry_attempts: u32 = 3,
     page_size: u32 = 1000,
+    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
 
-    pub fn init(allocator: std.mem.Allocator, network_transport: *network_transport.NetworkTransport) !QueryTransport {
+    pub fn init(allocator: std.mem.Allocator, net_transport: *network_transport.NetworkTransport) !QueryTransport {
         return QueryTransport{
             .allocator = allocator,
-            .network_transport = network_transport,
+            .network_transport = net_transport,
             .connection_pool = try ConnectionPool.init(allocator),
+            .pool = spice_wrapper.SpicePool.init(allocator, null),
         };
     }
 
     pub fn deinit(self: *QueryTransport) void {
+        self.pool.deinit();
         self.connection_pool.deinit();
     }
 
@@ -81,9 +85,7 @@ pub const QueryTransport = struct {
         defer self.allocator.free(errors);
         for (errors) |*e| e.* = null;
 
-        var pool = spice_wrapper.SpicePool.init(self.allocator, null);
-        defer pool.deinit();
-
+        // PERF-D007: Reuse struct-level pool instead of creating per-call
         const Context = struct {
             transport: *QueryTransport,
             queries: []const NodeQuery,
@@ -99,7 +101,7 @@ pub const QueryTransport = struct {
         };
 
         spice_wrapper.parallelForEach(
-            &pool,
+            &self.pool,
             0,
             queries.len,
             ctx,
@@ -573,13 +575,7 @@ const Connection = struct {
 
         // GAP-0144: Use TLS verification for inter-node communication
         // Check if insecure mode is explicitly allowed via environment variable
-        const builtin = @import("builtin");
         const allow_insecure = blk: {
-            if (builtin.mode == .Debug) {
-                // Debug builds allow insecure for testing
-                break :blk true;
-            }
-            // Production builds require explicit env var to skip TLS
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);
@@ -606,8 +602,9 @@ const Connection = struct {
         try self.quic_client.?.waitForHandshake(5);
         self.stream = try self.quic_client.?.getStream();
 
-        // HELLO handshake
-        const hello_req = schema.HelloRequest{
+        // HELLO handshake with cluster token authentication
+        const cluster_auth = @import("cluster_auth.zig");
+        const hello_req = cluster_auth.buildClusterHelloRequest(self.allocator) catch schema.HelloRequest{
             .username = "",
             .password = "",
             .tenant_id = null,
@@ -780,12 +777,7 @@ fn emitChunkFromPage(
     try handler(chunk);
 }
 
-fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    allocator.free(row.cols);
-}
+const freeBindingRow = result_utils.freeBindingRow;
 
 fn captureOrderMeta(
     allocator: std.mem.Allocator,
@@ -840,6 +832,7 @@ fn readProtoMessage(
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
     if (msg_len == 0) return error.InvalidMessage;
+    if (msg_len > 16 * 1024 * 1024) return error.FrameTooLarge;
     const msg_bytes = try allocator.alloc(u8, msg_len);
     defer allocator.free(msg_bytes);
 

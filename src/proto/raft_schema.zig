@@ -335,12 +335,18 @@ pub const RaftMessage = union(enum) {
 pub const RaftEnvelope = struct {
     term: u64 = 0,
     from: u64 = 0,
+    /// SEC-D009: Cryptographic nonce for replay protection.
+    /// Each frame carries a random nonce; receivers reject frames with previously-seen nonces.
+    nonce: u64 = 0,
     message: ?RaftMessage = null,
+    auth_token: []const u8 = "",
 
     pub const _desc_table = .{
         .term = fd(1, .{ .scalar = .uint64 }),
         .from = fd(2, .{ .scalar = .uint64 }),
+        .nonce = fd(10, .{ .scalar = .uint64 }),
         .message = fd(null, .{ .oneof = RaftMessage }),
+        .auth_token = fd(10, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *RaftEnvelope, allocator: std.mem.Allocator) void {

@@ -1134,6 +1134,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_e2e_ts_tests.step);
     test_step.dependOn(&run_ts_store_tests.step);
 
+    // SEC-D009: Nonce tracker unit tests
+    const nonce_tracker_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/distributed/nonce_tracker.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_nonce_tracker_tests = b.addRunArtifact(nonce_tracker_tests);
+    test_step.dependOn(&run_nonce_tracker_tests.step);
+
+    // SEC-D014: Raft persistent state atomic write tests
+    const raft_persistent_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/raft_persistent.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_persistent_test_mod.addImport("raft", raft_ext_mod);
+    const raft_persistent_tests = b.addTest(.{
+        .root_module = raft_persistent_test_mod,
+    });
+    const run_raft_persistent_tests = b.addRunArtifact(raft_persistent_tests);
+    test_step.dependOn(&run_raft_persistent_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");

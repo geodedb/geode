@@ -146,6 +146,8 @@ pub const PartitionAwarePlanner = struct {
     }
 };
 
+/// Deprecated: Use ClusterCoordinator from cluster.zig for production deployments.
+/// This simplified wrapper is retained for backward compatibility and lightweight tests.
 pub const DistributedCoordinator = struct {
     allocator: std.mem.Allocator,
     config: DistributedConfig,
@@ -330,6 +332,10 @@ pub const CoordinatorConfig = twophase.CoordinatorConfig;
 pub const TransactionState = twophase.TransactionState;
 pub const FederationConfig = federation.FederationConfig;
 pub const QueryCoordinator = query_coordinator.QueryCoordinator;
+
+// Production coordinators (preferred over legacy types above)
+pub const ClusterCoordinator = @import("cluster.zig").ClusterCoordinator;
+pub const EnhancedQueryCoordinator = @import("enhanced_query_coordinator.zig").EnhancedQueryCoordinator;
 
 test "distributed coordinator initialization" {
     const raft_config = raft.RaftConfig{ .node_id = "node1", .peers = &[_][]const u8{ "node2", "node3" } };

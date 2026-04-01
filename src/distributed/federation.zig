@@ -4,11 +4,24 @@ const quic = @import("../transport/quic.zig");
 const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
-const value_utilities = @import("../execution/value_utilities.zig");
-
 const logging = @import("logging");
 const log = logging.scoped("federation");
 const Attr = logging.Attr;
+
+pub const federation_merge = @import("federation_merge.zig");
+const freeBindingRow = federation_merge.freeBindingRow;
+const cloneBindingRow = federation_merge.cloneBindingRow;
+const freeSchema = federation_merge.freeSchema;
+const cloneSchema = federation_merge.cloneSchema;
+const cloneOrderKeys = federation_merge.cloneOrderKeys;
+const cloneOrderDirs = federation_merge.cloneOrderDirs;
+const cloneQueryResults = federation_merge.cloneQueryResults;
+const buildParams = federation_merge.buildParams;
+const freeParams = federation_merge.freeParams;
+const appendPageRows = federation_merge.appendPageRows;
+const captureOrderMeta = federation_merge.captureOrderMeta;
+const writeProtoMessage = federation_merge.writeProtoMessage;
+const readProtoMessage = federation_merge.readProtoMessage;
 
 /// Federation configuration
 pub const FederationConfig = struct {
@@ -43,6 +56,9 @@ pub const FederationConfig = struct {
     /// When true, query fragments are executed concurrently across shards
     /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
     enable_parallel_scatter: bool = true,
+
+    /// Tenant ID for multi-tenant federation
+    tenant_id: ?[]const u8 = null,
 };
 
 /// Remote Geode instance
@@ -174,13 +190,14 @@ pub const Connection = struct {
     /// Build HELLO request for inter-node federation authentication.
     /// GAP-0490: Reads GEODE_CLUSTER_TOKEN from environment; sends as geode-cluster user.
     // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
-    fn buildFederationHelloRequest(allocator: std.mem.Allocator) schema.HelloRequest {
+    fn buildFederationHelloRequest(allocator: std.mem.Allocator, tenant_id: ?[]const u8) schema.HelloRequest {
+        const tid = tenant_id;
         const token = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse {
             log.warn("GEODE_CLUSTER_TOKEN not set — federation connections may be rejected by auth-enabled nodes", &.{});
             return schema.HelloRequest{
                 .username = "",
                 .password = "",
-                .tenant_id = null,
+                .tenant_id = tid,
                 .client_name = "geode-federation",
                 .client_version = "",
                 .wanted_conformance = "",
@@ -191,7 +208,7 @@ pub const Connection = struct {
             return schema.HelloRequest{
                 .username = "",
                 .password = "",
-                .tenant_id = null,
+                .tenant_id = tid,
                 .client_name = "geode-federation",
                 .client_version = "",
                 .wanted_conformance = "",
@@ -200,7 +217,7 @@ pub const Connection = struct {
         return schema.HelloRequest{
             .username = "geode-cluster",
             .password = password_copy,
-            .tenant_id = null,
+            .tenant_id = tid,
             .client_name = "geode-federation",
             .client_version = "",
             .wanted_conformance = "",
@@ -248,7 +265,7 @@ pub const Connection = struct {
         // GAP-0490: Use GEODE_CLUSTER_TOKEN for inter-node authentication
         var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer hello_arena.deinit();
-        const hello_req = buildFederationHelloRequest(hello_arena.allocator());
+        const hello_req = buildFederationHelloRequest(hello_arena.allocator(), self.config.tenant_id);
         try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
 
         var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -524,103 +541,7 @@ pub const QueryResults = struct {
     }
 };
 
-fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    if (row.cols.len > 0) allocator.free(row.cols);
-}
-
-fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
-    var cols = try allocator.alloc(protocol.BindingValue, row.cols.len);
-    errdefer {
-        for (cols) |val| value_utilities.freeValue(allocator, val);
-        allocator.free(cols);
-    }
-    for (row.cols, 0..) |val, i| {
-        cols[i] = try value_utilities.duplicateValue(allocator, val);
-    }
-    return .{ .cols = cols };
-}
-
-fn freeSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) void {
-    for (schema_defs) |col| {
-        allocator.free(col.name);
-        allocator.free(col.data_type);
-    }
-    allocator.free(schema_defs);
-}
-
-fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
-    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
-    errdefer {
-        for (cols) |col| {
-            allocator.free(col.name);
-            allocator.free(col.data_type);
-        }
-        allocator.free(cols);
-    }
-    for (schema_defs, 0..) |col, i| {
-        cols[i] = .{
-            .name = try allocator.dupe(u8, col.name),
-            .data_type = try allocator.dupe(u8, col.data_type),
-        };
-    }
-    return cols;
-}
-
-fn cloneOrderKeys(allocator: std.mem.Allocator, keys: []const []const u8) ![]const []const u8 {
-    var cloned = try allocator.alloc([]const u8, keys.len);
-    errdefer {
-        for (cloned) |key| allocator.free(key);
-        allocator.free(cloned);
-    }
-    for (keys, 0..) |k, i| {
-        cloned[i] = try allocator.dupe(u8, k);
-    }
-    return cloned;
-}
-
-fn cloneOrderDirs(allocator: std.mem.Allocator, dirs: []const bool) ![]const bool {
-    var cloned = try allocator.alloc(bool, dirs.len);
-    std.mem.copyForwards(bool, cloned, dirs);
-    return cloned;
-}
-
-fn cloneQueryResults(allocator: std.mem.Allocator, results: QueryResults) !QueryResults {
-    var rows = try allocator.alloc(protocol.BindingRow, results.rows.len);
-    var idx: usize = 0;
-    errdefer {
-        for (rows[0..idx]) |row| freeBindingRow(allocator, row);
-        allocator.free(rows);
-    }
-    for (results.rows) |row| {
-        rows[idx] = try cloneBindingRow(allocator, row);
-        idx += 1;
-    }
-
-    const schema = try cloneSchema(allocator, results.schema);
-    errdefer freeSchema(allocator, schema);
-
-    const order_keys = if (results.order_keys.len > 0) try cloneOrderKeys(allocator, results.order_keys) else &.{};
-    errdefer if (order_keys.len > 0) {
-        for (order_keys) |k| allocator.free(k);
-        allocator.free(order_keys);
-    };
-
-    const order_dirs = if (results.order_dirs.len > 0) try cloneOrderDirs(allocator, results.order_dirs) else &.{};
-    errdefer if (order_dirs.len > 0) allocator.free(order_dirs);
-
-    return QueryResults{
-        .rows = rows,
-        .schema = schema,
-        .execution_time_ms = results.execution_time_ms,
-        .ordered = results.ordered,
-        .order_keys = order_keys,
-        .order_dirs = order_dirs,
-        .nulls_first = results.nulls_first,
-    };
-}
+// Clone/free helpers extracted to federation_merge.zig
 
 // Global mismatch flag moved to lightweight federation_flag module to avoid multiple root module collisions.
 const fed_flag = @import("federation_flag.zig");
@@ -1262,117 +1183,7 @@ pub const CostModel = struct {
     }
 };
 
-fn buildParams(allocator: std.mem.Allocator, values: []const protocol.Value) !std.ArrayList(schema.Param) {
-    var params = std.ArrayList(schema.Param).init(allocator);
-    try params.ensureTotalCapacity(allocator, values.len);
-    for (values, 0..) |val, idx| {
-        const name = try std.fmt.allocPrint(allocator, "p{d}", .{idx + 1});
-        const proto_val = try proto_util.valueToProto(allocator, val);
-        try params.append(allocator, schema.Param{ .name = name, .value = proto_val });
-    }
-    return params;
-}
-
-fn freeParams(allocator: std.mem.Allocator, params: *std.ArrayList(schema.Param)) void {
-    for (params.items) |*p| {
-        p.deinit(allocator);
-    }
-    params.deinit(allocator);
-}
-
-fn appendPageRows(
-    allocator: std.mem.Allocator,
-    page: schema.DataPage,
-    rows: *std.ArrayList(protocol.BindingRow),
-) !void {
-    for (page.rows.items) |row| {
-        var cols = try allocator.alloc(protocol.BindingValue, row.values.items.len);
-        errdefer {
-            for (cols) |v| value_utilities.freeValue(allocator, v);
-            allocator.free(cols);
-        }
-        for (row.values.items, 0..) |val, idx| {
-            cols[idx] = try proto_util.protoValueToValue(allocator, val, 0);
-        }
-        try rows.append(allocator, .{ .cols = cols });
-    }
-}
-
-fn captureOrderMeta(
-    allocator: std.mem.Allocator,
-    page: schema.DataPage,
-    ordered: *bool,
-    order_keys: *std.ArrayList([]const u8),
-) !void {
-    if (page.ordered) ordered.* = true;
-    if (order_keys.items.len == 0 and page.order_keys.items.len > 0) {
-        for (page.order_keys.items) |key| {
-            try order_keys.append(allocator, try allocator.dupe(u8, key));
-        }
-    }
-}
-
-fn writeProtoMessage(allocator: std.mem.Allocator, stream: *quic.QuicClientStream, msg: schema.QuicClientMessage) !void {
-    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
-    defer aw.deinit();
-
-    const packet = schema.ClientPacket{ .quic = msg };
-    try protobuf.encode(&aw.writer, allocator, packet);
-
-    const written = aw.writer.buffer[0..aw.writer.end];
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(written.len), .big);
-    try stream.writeAll(&len_buf);
-    try stream.writeAll(written);
-}
-
-fn readProtoMessage(
-    allocator: std.mem.Allocator,
-    stream: *quic.QuicClientStream,
-    client: *quic.QuicClient,
-    timeout_ms: u32,
-) !schema.QuicServerMessage {
-    var len_buf: [4]u8 = undefined;
-    var total_read: usize = 0;
-    const start = std.time.milliTimestamp();
-    while (total_read < len_buf.len) {
-        const n = stream.read(len_buf[total_read..]) catch |err| switch (err) {
-            error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
-                try client.poll(5);
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            },
-            else => return err,
-        };
-        if (n == 0) return error.EndOfStream;
-        total_read += n;
-    }
-
-    const msg_len = std.mem.readInt(u32, &len_buf, .big);
-    if (msg_len == 0) return error.InvalidMessage;
-    const msg_bytes = try allocator.alloc(u8, msg_len);
-    defer allocator.free(msg_bytes);
-
-    total_read = 0;
-    while (total_read < msg_len) {
-        const n = stream.read(msg_bytes[total_read..]) catch |err| switch (err) {
-            error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
-                try client.poll(5);
-                std.Thread.sleep(5 * std.time.ns_per_ms);
-                continue;
-            },
-            else => return err,
-        };
-        if (n == 0) return error.EndOfStream;
-        total_read += n;
-    }
-
-    var reader: std.Io.Reader = .fixed(msg_bytes);
-    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
-    return packet.quic orelse error.InvalidMessage;
-}
+// Proto I/O utilities extracted to federation_merge.zig
 
 test "federation: basic setup" {
     const ally = std.testing.allocator;

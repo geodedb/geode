@@ -38,6 +38,7 @@ pub const TxnCoordinator = struct {
     prepared_txns: std.AutoHashMap(u64, PreparedTxn),
     lock_table: std.AutoHashMap(u64, Lock),
     timeout_ms: u64 = 10_000, // Default 10 seconds
+    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across calls
 
     pub fn init(allocator: Allocator, store: *graph_store.GraphStore) !TxnCoordinator {
         return TxnCoordinator{
@@ -45,10 +46,12 @@ pub const TxnCoordinator = struct {
             .store = store,
             .prepared_txns = std.AutoHashMap(u64, PreparedTxn).init(allocator),
             .lock_table = std.AutoHashMap(u64, Lock).init(allocator),
+            .pool = spice_wrapper.SpicePool.init(allocator, null),
         };
     }
 
     pub fn deinit(self: *TxnCoordinator) void {
+        self.pool.deinit();
         var it = self.prepared_txns.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.value_ptr.write_set);
@@ -180,16 +183,14 @@ pub const TxnCoordinator = struct {
         if (operations.len == 0) return ids;
 
         if (spice_wrapper.shouldUseParallelism(operations.len, spice_wrapper.Thresholds.forEach)) {
-            var pool = spice_wrapper.SpicePool.init(self.allocator, null);
-            defer pool.deinit();
-
+            // PERF-D007: Reuse struct-level pool instead of creating per-call
             const Context = struct {
                 ops: []const dist_schema.TwoPhaseOperation,
                 out: []u64,
             };
             const ctx = Context{ .ops = operations, .out = ids };
 
-            spice_wrapper.parallelForEach(&pool, 0, operations.len, ctx, struct {
+            spice_wrapper.parallelForEach(&self.pool, 0, operations.len, ctx, struct {
                 fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
                     const op = c.ops[idx];
                     c.out[idx] = switch (op) {
