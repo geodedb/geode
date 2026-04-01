@@ -51,6 +51,8 @@ const fle_integration = @import("../fle_integration.zig");
 
 // GAP-0270: Import user management for geode.auth.* procedures
 const user_mgmt = @import("../security/user_management.zig");
+// GAP-0283: Import multi-graph security for graph.grant/revoke procedures
+const multi_graph_security = @import("../security/multi_graph_security.zig");
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=PROCEDURE_REGISTRY; STATUS=TESTED; TEST=tests/test_performance_integration.zig; OWNER=refactor; UPDATED=2026-01-15
 
@@ -5253,6 +5255,160 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
         row[1] = Value{ .Bool = report.edge_count_consistent };
         row[2] = Value{ .Int = @intCast(report.label_index_entries) };
         row[3] = Value{ .Int = @intCast(report.total_errors) };
+
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    // =========================================================================
+    // GAP-0283: geode.graph.* procedures — graph-scoped RBAC management
+    // These allow Admin users to grant/revoke per-graph role assignments
+    // via the global GraphRBACPolicy instance.
+    // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-004; FEATURE="GraphRBACEnforcement"; ASPECT=Procedures; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+    // =========================================================================
+    else if (std.mem.eql(u8, proc_name, "geode.graph.grant")) {
+        // Admin-only: geode.graph.grant(username, graph_name, role_name) -> status
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        var username: []const u8 = "";
+        var graph_name: []const u8 = "";
+        var role_name: []const u8 = "readwrite";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) graph_name = args[1].String;
+            if (args.len >= 3 and args[2].* == .String) role_name = args[2].String;
+        }
+        if (username.len == 0 or graph_name.len == 0) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.graph.grant('username', 'graph_name'[, 'role'])");
+        }
+
+        const rbac = multi_graph_security.getGlobalPolicy() orelse {
+            return try buildProcedureErrorResult(allocator, "Graph RBAC policy not initialized");
+        };
+
+        // Map role name to a role_id (hash-based, deterministic)
+        const role_id: u64 = std.hash.Wyhash.hash(0, role_name);
+        const user_id: u64 = std.hash.Wyhash.hash(0, username);
+
+        // Ensure the role has appropriate permissions registered
+        const geode_auth = @import("geode_auth");
+        if (!rbac.role_permissions.contains(role_id)) {
+            var perms = try std.ArrayList(geode_auth.Permission).initCapacity(allocator, 2);
+            // Map role name to permissions
+            if (std.ascii.eqlIgnoreCase(role_name, "admin")) {
+                try perms.append(allocator, .{ .id = role_id, .name = "graph_all", .resource = "graph", .action = .all, .conditions = null, .created_at = 0 });
+            } else if (std.ascii.eqlIgnoreCase(role_name, "readwrite")) {
+                try perms.append(allocator, .{ .id = role_id, .name = "graph_read", .resource = "graph", .action = .read, .conditions = null, .created_at = 0 });
+                try perms.append(allocator, .{ .id = role_id +% 1, .name = "graph_update", .resource = "graph", .action = .update, .conditions = null, .created_at = 0 });
+            } else if (std.ascii.eqlIgnoreCase(role_name, "readonly")) {
+                try perms.append(allocator, .{ .id = role_id, .name = "graph_read", .resource = "graph", .action = .read, .conditions = null, .created_at = 0 });
+            } else {
+                // Default: read-only for unknown role names
+                try perms.append(allocator, .{ .id = role_id, .name = "graph_read", .resource = "graph", .action = .read, .conditions = null, .created_at = 0 });
+            }
+            try rbac.role_permissions.put(role_id, perms);
+        }
+
+        rbac.assignRoleForGraph(user_id, role_id, graph_name) catch |err| {
+            log.warn("geode.graph.grant failed", &.{Attr.string("error", @errorName(err))});
+            return try buildProcedureErrorResult(allocator, "Failed to grant graph access");
+        };
+
+        log.info("Graph RBAC: granted access", &.{
+            Attr.string("username", username),
+            Attr.string("graph", graph_name),
+            Attr.string("role", role_name),
+        });
+
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "status");
+        columns[1] = try allocator.dupe(u8, "username");
+        columns[2] = try allocator.dupe(u8, "graph");
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "granted {s} on {s}", .{ role_name, graph_name }) };
+        row[1] = Value{ .Str = username };
+        row[2] = Value{ .Str = graph_name };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.graph.revoke")) {
+        // Admin-only: geode.graph.revoke(username, graph_name) -> status
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        var username: []const u8 = "";
+        var graph_name: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+            if (args.len >= 2 and args[1].* == .String) graph_name = args[1].String;
+        }
+        if (username.len == 0 or graph_name.len == 0) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.graph.revoke('username', 'graph_name')");
+        }
+
+        const rbac = multi_graph_security.getGlobalPolicy() orelse {
+            return try buildProcedureErrorResult(allocator, "Graph RBAC policy not initialized");
+        };
+
+        const user_id: u64 = std.hash.Wyhash.hash(0, username);
+        const key = multi_graph_security.GraphRoleKey.init(user_id, graph_name);
+
+        // Revoke all roles for this user+graph
+        if (rbac.graph_user_roles.getPtr(key)) |roles| {
+            // Clear all role assignments for this graph
+            roles.clearRetainingCapacity();
+        }
+
+        log.info("Graph RBAC: revoked access", &.{
+            Attr.string("username", username),
+            Attr.string("graph", graph_name),
+        });
+
+        const columns = try allocator.alloc([]const u8, 3);
+        columns[0] = try allocator.dupe(u8, "status");
+        columns[1] = try allocator.dupe(u8, "username");
+        columns[2] = try allocator.dupe(u8, "graph");
+        const row = try allocator.alloc(Value, 3);
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "revoked from {s}", .{graph_name}) };
+        row[1] = Value{ .Str = username };
+        row[2] = Value{ .Str = graph_name };
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = row;
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    } else if (std.mem.eql(u8, proc_name, "geode.graph.list_access")) {
+        // Admin-only: geode.graph.list_access(graph_name) -> user assignments
+        if (try requireAdminRole(allocator, context)) |err_result| return err_result;
+
+        var graph_name: []const u8 = "";
+        if (call_stmt.procedure == .Call) {
+            const args = call_stmt.procedure.Call.args;
+            if (args.len >= 1 and args[0].* == .String) graph_name = args[0].String;
+        }
+        if (graph_name.len == 0) {
+            return try buildProcedureErrorResult(allocator, "Usage: CALL geode.graph.list_access('graph_name')");
+        }
+
+        const columns = try allocator.alloc([]const u8, 2);
+        columns[0] = try allocator.dupe(u8, "graph");
+        columns[1] = try allocator.dupe(u8, "assignments");
+        const row = try allocator.alloc(Value, 2);
+        row[0] = Value{ .Str = graph_name };
+
+        if (multi_graph_security.getGlobalPolicy()) |rbac| {
+            // Count entries matching this graph hash
+            var count: usize = 0;
+            var it = rbac.graph_user_roles.iterator();
+            const graph_hash = std.hash.Wyhash.hash(0, graph_name);
+            while (it.next()) |entry| {
+                if (entry.key_ptr.graph_name_hash == graph_hash) {
+                    count += entry.value_ptr.items.len;
+                }
+            }
+            row[1] = Value{ .Int = @intCast(count) };
+        } else {
+            row[1] = Value{ .Int = 0 };
+        }
 
         const rows = try allocator.alloc([]Value, 1);
         rows[0] = row;

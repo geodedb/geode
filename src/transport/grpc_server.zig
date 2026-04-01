@@ -31,6 +31,8 @@ const fle_integration = geode.fle_integration;
 const rls_filter = @import("../server/rls_filter.zig");
 // S6: Auth rate limiter (parity with QUIC handler).
 const auth_rate_limiter_mod = @import("../server/auth_rate_limiter.zig");
+// GAP-0283: Graph-scoped RBAC enforcement (parity with QUIC handler).
+const multi_graph_security = geode.multi_graph_security;
 
 const logging = @import("logging");
 const log = logging.scoped("grpc");
@@ -1104,6 +1106,31 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                 const in_catalog = cat.hasGraph(requested_graph);
 
                 if (in_store or in_catalog) {
+                    // GAP-0283: Graph-scoped RBAC authorization check before binding (parity with QUIC handler).
+                    // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    const rbac_allowed = rbac_blk: {
+                        if (auth_result.role) |r| {
+                            if (r == .Admin) break :rbac_blk true;
+                        }
+                        if (multi_graph_security.getGlobalPolicy()) |rbac| {
+                            const uid = std.hash.Wyhash.hash(0, req.username);
+                            if (rbac.hasPermission(uid, requested_graph, "graph", .read)) break :rbac_blk true;
+                            const key = multi_graph_security.GraphRoleKey.init(uid, requested_graph);
+                            if (rbac.graph_user_roles.get(key)) |_| {
+                                break :rbac_blk false; // Explicit assignment but no read -> deny
+                            }
+                        }
+                        break :rbac_blk true; // No explicit denial -> allow
+                    };
+                    if (!rbac_allowed) {
+                        const resp = schema.HelloResponse{
+                            .success = false,
+                            .session_id = "",
+                            .error_message = "Access denied: insufficient permissions for graph",
+                            .capabilities = caps,
+                        };
+                        return encodeMessage(allocator, resp);
+                    }
                     resolved_graph = requested_graph;
                 } else {
                     // Graph does not exist — check if user can create it

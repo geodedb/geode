@@ -488,6 +488,25 @@ pub const GraphAuditLog = struct {
 };
 
 // ============================================================================
+// Global RBAC Policy Instance
+// GAP-0283: Singleton graph RBAC policy for production use.
+// Set during server startup; accessed by QUIC/gRPC handlers and stored procedures.
+// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-005; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalSingleton; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+// ============================================================================
+
+var g_graph_rbac_policy: ?*GraphRBACPolicy = null;
+
+/// Set the global graph RBAC policy (called from server initialization).
+pub fn setGlobalPolicy(policy: ?*GraphRBACPolicy) void {
+    g_graph_rbac_policy = policy;
+}
+
+/// Get the global graph RBAC policy.
+pub fn getGlobalPolicy() ?*GraphRBACPolicy {
+    return g_graph_rbac_policy;
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -611,4 +630,72 @@ test "GraphRBACPolicy - get all roles for graph" {
     defer allocator.free(roles);
 
     try testing.expectEqual(@as(usize, 3), roles.len);
+}
+
+test "GraphRBACPolicy - global policy singleton" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Initially null
+    try testing.expect(getGlobalPolicy() == null);
+
+    var rbac = GraphRBACPolicy.init(allocator);
+    defer rbac.deinit();
+
+    setGlobalPolicy(&rbac);
+    try testing.expect(getGlobalPolicy() != null);
+    try testing.expect(getGlobalPolicy() == &rbac);
+
+    // Clean up global state for other tests
+    setGlobalPolicy(null);
+    try testing.expect(getGlobalPolicy() == null);
+}
+
+test "GraphRBACPolicy - graph binding authorization check" {
+    // Simulates the RBAC check performed during HELLO graph binding.
+    // When a user has an explicit graph assignment with read permission, access is granted.
+    // When a user has an explicit graph assignment WITHOUT read permission, access is denied.
+    // When no explicit assignment exists, access falls through to global role (allowed).
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var rbac = GraphRBACPolicy.init(allocator);
+    defer rbac.deinit();
+
+    const user_alice = std.hash.Wyhash.hash(0, "alice");
+    const user_bob = std.hash.Wyhash.hash(0, "bob");
+    const role_reader: u64 = 200;
+    const role_none: u64 = 201; // A role with no permissions
+
+    // Set up role_reader with read permission on "graph" resource
+    var read_perms = try std.ArrayList(auth.Permission).initCapacity(allocator, 1);
+    try read_perms.append(allocator, .{ .id = 1, .name = "graph_read", .resource = "graph", .action = .read, .conditions = null, .created_at = 0 });
+    try rbac.role_permissions.put(role_reader, read_perms);
+
+    // role_none has no permissions (empty)
+    var no_perms = try std.ArrayList(auth.Permission).initCapacity(allocator, 0);
+    _ = &no_perms; // suppress unused warning
+    try rbac.role_permissions.put(role_none, no_perms);
+
+    // Alice gets reader role on "sales_graph"
+    try rbac.assignRoleForGraph(user_alice, role_reader, "sales_graph");
+
+    // Bob gets a role with no permissions on "sales_graph" (explicitly denied)
+    try rbac.assignRoleForGraph(user_bob, role_none, "sales_graph");
+
+    // Alice can read sales_graph
+    try testing.expect(rbac.hasPermission(user_alice, "sales_graph", "graph", .read));
+    // Alice cannot read other_graph (no assignment, falls through — returns false from RBAC)
+    try testing.expect(!rbac.hasPermission(user_alice, "other_graph", "graph", .read));
+
+    // Bob cannot read sales_graph (explicit assignment but no read permission)
+    try testing.expect(!rbac.hasPermission(user_bob, "sales_graph", "graph", .read));
+
+    // Check that explicit assignment exists for bob+sales_graph (used by handler to deny)
+    const bob_key = GraphRoleKey.init(user_bob, "sales_graph");
+    try testing.expect(rbac.graph_user_roles.get(bob_key) != null);
+
+    // No explicit assignment for alice on other_graph (handler falls through to global role)
+    const alice_other_key = GraphRoleKey.init(user_alice, "other_graph");
+    try testing.expect(rbac.graph_user_roles.get(alice_other_key) == null);
 }

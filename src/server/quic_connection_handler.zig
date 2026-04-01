@@ -30,6 +30,8 @@ const geode_auth = @import("geode_auth");
 const mtls_provider = geode.mtls_provider;
 // GAP-0271: Import FLE integration for role-based field access control
 const fle_integration = geode.fle_integration;
+// GAP-0283: Import multi-graph security for graph-scoped RBAC enforcement
+const multi_graph_security = geode.multi_graph_security;
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -76,6 +78,19 @@ pub fn setAuthRateLimiter(limiter: ?*auth_rate_limiter.AuthRateLimiter) void {
 /// Get the current global authentication rate limiter.
 pub fn getAuthRateLimiter() ?*auth_rate_limiter.AuthRateLimiter {
     return g_auth_rate_limiter;
+}
+
+// GAP-0283: Graph-scoped RBAC policy access — delegates to multi_graph_security global singleton.
+// CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-001; FEATURE="GraphRBACEnforcement"; ASPECT=GlobalInstance; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+
+/// Set the global graph RBAC policy (called from server/main.zig during startup).
+pub fn setGraphRbacPolicy(policy: ?*multi_graph_security.GraphRBACPolicy) void {
+    multi_graph_security.setGlobalPolicy(policy);
+}
+
+/// Get the current global graph RBAC policy.
+pub fn getGraphRbacPolicy() ?*multi_graph_security.GraphRBACPolicy {
+    return multi_graph_security.getGlobalPolicy();
 }
 
 /// GAP-0001 / #564: Delegate to shared mutation classification in query_traits.
@@ -1452,6 +1467,48 @@ fn handleClientMessage(
                     const in_catalog = cat.hasGraph(requested_graph);
 
                     if (in_store or in_catalog) {
+                        // GAP-0283: Graph-scoped RBAC authorization check before binding.
+                        // Admin bypass: admins always have access to all graphs.
+                        // If RBAC policy has graph-specific assignments, check them.
+                        // Fall back to user's global role (backward compatible).
+                        // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-002; FEATURE="GraphRBACEnforcement"; ASPECT=QuicGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                        const rbac_allowed = blk: {
+                            if (!user_mgmt.isAuthEnabled()) break :blk true; // No auth = allow
+                            const role_val = state.authenticated_role;
+                            if (role_val) |r| {
+                                const role = @as(user_mgmt.Role, @enumFromInt(r));
+                                if (role == .Admin) break :blk true; // Admin bypass
+                            }
+                            // Check graph RBAC policy if available
+                            if (multi_graph_security.getGlobalPolicy()) |rbac| {
+                                // Resolve user_id from username for RBAC lookup
+                                if (state.authenticated_user) |username| {
+                                    const uid = std.hash.Wyhash.hash(0, username);
+                                    // Check if user has any graph-specific permission (read access suffices for binding)
+                                    if (rbac.hasPermission(uid, requested_graph, "graph", .read)) break :blk true;
+                                    // If RBAC has no entry for this user+graph, fall through to global role
+                                    const key = multi_graph_security.GraphRoleKey.init(uid, requested_graph);
+                                    if (rbac.graph_user_roles.get(key)) |_| {
+                                        // Explicit graph assignment exists but no read permission — deny
+                                        break :blk false;
+                                    }
+                                }
+                            }
+                            // No graph-specific RBAC policy or no explicit denial — allow based on global role
+                            break :blk true;
+                        };
+
+                        if (!rbac_allowed) {
+                            const resp = schema.QuicServerMessage{ .hello = .{
+                                .success = false,
+                                .session_id = try gpa.dupe(u8, ""),
+                                .error_message = try gpa.dupe(u8, "Access denied: insufficient permissions for graph"),
+                                .capabilities = caps,
+                            } };
+                            try sendQuicMessage(gpa, stream, resp);
+                            return;
+                        }
+
                         // Graph exists — bind session to it
                         if (state.exec_session) |*sess| {
                             if (sess.graph) |old| gpa.free(old);
