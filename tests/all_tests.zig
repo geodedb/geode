@@ -138,7 +138,8 @@ const _test_gql_hash_parsing = @import("test_gql_hash_parsing.zig");
 const _test_hash_evaluator = @import("test_hash_evaluator.zig");
 const _e2e_hash_functions = @import("e2e_hash_functions.zig");
 
-// Distributed systems tests - 2PC, BM25, Leiden, WCOJ
+// Distributed systems tests - Raft persistence, 2PC, BM25, Leiden, WCOJ
+const _e2e_raft_persist = @import("e2e_raft_persist_snapshot_membership.zig");
 const _test_2pc_distributed = @import("test_2pc_distributed.zig");
 const _test_fulltext_bm25 = @import("test_fulltext_bm25.zig");
 const _test_leiden_community = @import("test_leiden_community.zig");
