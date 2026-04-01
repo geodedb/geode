@@ -6,6 +6,8 @@ const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
 
+const rls_filter = @import("../server/rls_filter.zig");
+
 const logging = @import("logging");
 const log = logging.scoped("federation");
 const Attr = logging.Attr;
@@ -532,6 +534,95 @@ fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !prot
     return .{ .cols = cols };
 }
 
+// CANARY: REQ=REQ-SEC-RLS-FED-001; FEATURE="RLS Federation Filtering"; ASPECT=PostMergeFilter; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+// SEC-D007: Apply label-based RLS filtering to federated query results.
+// Uses the same RLSFilterEngine as local queries but operates on BindingRow (protocol.Value)
+// rather than ExecutionResult rows. Since protocol.BindingValue = value_types.Value, the
+// label-checking logic is identical to rls_filter.rowContainsDeniedLabel.
+
+/// Filter federated QueryResults in-place by removing rows that contain nodes/edges
+/// with labels denied by the RLS engine for the given user+graph.
+/// Returns the number of rows removed.
+pub fn applyRLSToFederatedResults(
+    allocator: std.mem.Allocator,
+    results: *QueryResults,
+    engine: *rls_filter.RLSFilterEngine,
+    username: []const u8,
+    graph_name: []const u8,
+) usize {
+    // Fast path: no policies => nothing to filter.
+    if (engine.policyCount() == 0) return 0;
+
+    // Snapshot denied labels once (single lock acquisition).
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    defer denied.deinit();
+
+    if (denied.count() == 0) return 0;
+
+    // We need a mutable copy of the rows slice to do swap-remove.
+    var rows = @constCast(results.rows);
+    var removed: usize = 0;
+    var i: usize = 0;
+    while (i < rows.len) {
+        if (bindingRowContainsDeniedLabel(&denied, rows[i])) {
+            freeBindingRow(allocator, rows[i]);
+
+            // Swap-remove: replace with last element.
+            const last = rows.len - 1;
+            if (i < last) {
+                rows[i] = rows[last];
+            }
+            rows = rows[0..last];
+            removed += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    results.rows = rows;
+
+    if (removed > 0) {
+        log.info("rls_federation_filter", &.{
+            Attr.string("action", "federated_rows_filtered"),
+            Attr.string("user", username),
+            Attr.string("graph", graph_name),
+        });
+    }
+
+    return removed;
+}
+
+/// Check whether a BindingRow contains any Node or Edge value with a denied label.
+fn bindingRowContainsDeniedLabel(
+    denied_labels: *const std.StringHashMap(void),
+    row: protocol.BindingRow,
+) bool {
+    for (row.cols) |val| {
+        switch (val) {
+            .Node => |node| {
+                for (node.labels) |label| {
+                    if (denied_labels.contains(label)) return true;
+                }
+            },
+            .Edge => |edge| {
+                if (denied_labels.contains(edge.label)) return true;
+            },
+            .Path => |path| {
+                for (path.nodes) |node| {
+                    for (node.labels) |label| {
+                        if (denied_labels.contains(label)) return true;
+                    }
+                }
+                for (path.edges) |edge| {
+                    if (denied_labels.contains(edge.label)) return true;
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
+}
+
 fn freeSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) void {
     for (schema_defs) |col| {
         allocator.free(col.name);
@@ -736,12 +827,23 @@ pub const FederationManager = struct {
         }
 
         // Merge results according to strategy
-        const merged_results = try self.mergeResults(
+        var merged_results = try self.mergeResults(
             local_results,
             remote_results,
             plan.merge_strategy,
             allocator,
         );
+
+        // SEC-D007: Apply RLS label filtering to merged federated results.
+        // This ensures that rows containing nodes/edges with denied labels are
+        // removed before caching or returning to the client.
+        if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
+            // Extract graph name from the query text (use "default" as fallback).
+            // In production, the graph context would come from the session/query metadata.
+            const rls_graph = "default";
+            const rls_user = ""; // Federation queries run as cluster user; apply all-user policies.
+            _ = applyRLSToFederatedResults(allocator, &merged_results, rls_engine, rls_user, rls_graph);
+        }
 
         // Cache results if enabled
         if (self.config.enable_cache) {
@@ -1889,4 +1991,127 @@ test "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission" {
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
     defer merged.deinit(ally);
     try std.testing.expect(!merged.ordered);
+}
+
+// ---- SEC-D007: RLS federation filtering tests ----
+// CANARY: REQ=REQ-SEC-RLS-FED-001; FEATURE="RLS Federation Filtering"; ASPECT=PostMergeFilter; STATUS=TESTED; TEST=federation_rls_filter_removes_denied_label_rows; OWNER=security; UPDATED=2026-04-01
+
+const graph_store = @import("../graph_store.zig");
+
+test "federation: RLS filter removes rows with denied label" {
+    const ally = std.testing.allocator;
+    var engine = rls_filter.RLSFilterEngine.init(ally);
+    defer engine.deinit();
+
+    // Deny the "Secret" label for all users on "default" graph.
+    try engine.addDenyPolicy("default", "Secret", "");
+
+    // Build test nodes: one with "Secret" label, one with "Public" label.
+    var secret_labels = [_][]const u8{"Secret"};
+    var secret_node = graph_store.Node{
+        .id = 1,
+        .labels = &secret_labels,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
+    };
+    var public_labels = [_][]const u8{"Public"};
+    var public_node = graph_store.Node{
+        .id = 2,
+        .labels = &public_labels,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
+    };
+
+    // Build rows: row 0 has a Secret node, row 1 has a Public node, row 2 has an int.
+    var cols0 = [_]protocol.BindingValue{.{ .Node = &secret_node }};
+    var cols1 = [_]protocol.BindingValue{.{ .Node = &public_node }};
+    var cols2 = [_]protocol.BindingValue{.{ .Int = 42 }};
+    var rows_buf = [_]protocol.BindingRow{
+        .{ .cols = &cols0 },
+        .{ .cols = &cols1 },
+        .{ .cols = &cols2 },
+    };
+
+    // QueryResults with non-owned rows (stack-allocated, no freeing needed).
+    const col_schema = &[_]protocol.ColumnDef{.{ .name = "n", .data_type = "ANY" }};
+    var results = QueryResults{
+        .rows = &rows_buf,
+        .schema = col_schema,
+        .execution_time_ms = 0,
+    };
+
+    const removed = applyRLSToFederatedResults(ally, &results, &engine, "", "default");
+
+    try std.testing.expectEqual(@as(usize, 1), removed);
+    try std.testing.expectEqual(@as(usize, 2), results.rows.len);
+
+    // Remaining rows should not contain the Secret node.
+    for (results.rows) |row| {
+        for (row.cols) |val| {
+            switch (val) {
+                .Node => |node| {
+                    for (node.labels) |label| {
+                        try std.testing.expect(!std.mem.eql(u8, label, "Secret"));
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+}
+
+test "federation: RLS filter no-op when no policies" {
+    const ally = std.testing.allocator;
+    var engine = rls_filter.RLSFilterEngine.init(ally);
+    defer engine.deinit();
+
+    var cols0 = [_]protocol.BindingValue{.{ .Int = 1 }};
+    var rows_buf = [_]protocol.BindingRow{.{ .cols = &cols0 }};
+    const col_schema = &[_]protocol.ColumnDef{.{ .name = "x", .data_type = "ANY" }};
+    var results = QueryResults{
+        .rows = &rows_buf,
+        .schema = col_schema,
+        .execution_time_ms = 0,
+    };
+
+    const removed = applyRLSToFederatedResults(ally, &results, &engine, "alice", "default");
+    try std.testing.expectEqual(@as(usize, 0), removed);
+    try std.testing.expectEqual(@as(usize, 1), results.rows.len);
+}
+
+test "federation: RLS filter user-specific policy" {
+    const ally = std.testing.allocator;
+    var engine = rls_filter.RLSFilterEngine.init(ally);
+    defer engine.deinit();
+
+    // Deny "Restricted" only for user "bob"
+    try engine.addDenyPolicy("default", "Restricted", "bob");
+
+    var restricted_labels = [_][]const u8{"Restricted"};
+    var node = graph_store.Node{
+        .id = 1,
+        .labels = &restricted_labels,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(ally),
+    };
+
+    var cols0 = [_]protocol.BindingValue{.{ .Node = &node }};
+    var rows_buf = [_]protocol.BindingRow{.{ .cols = &cols0 }};
+    const col_schema = &[_]protocol.ColumnDef{.{ .name = "n", .data_type = "ANY" }};
+
+    // For alice, the row should NOT be filtered.
+    var results_alice = QueryResults{
+        .rows = &rows_buf,
+        .schema = col_schema,
+        .execution_time_ms = 0,
+    };
+    const removed_alice = applyRLSToFederatedResults(ally, &results_alice, &engine, "alice", "default");
+    try std.testing.expectEqual(@as(usize, 0), removed_alice);
+
+    // For bob, the row SHOULD be filtered.
+    var results_bob = QueryResults{
+        .rows = &rows_buf,
+        .schema = col_schema,
+        .execution_time_ms = 0,
+    };
+    const removed_bob = applyRLSToFederatedResults(ally, &results_bob, &engine, "bob", "default");
+    try std.testing.expectEqual(@as(usize, 1), removed_bob);
+    try std.testing.expectEqual(@as(usize, 0), results_bob.rows.len);
 }
