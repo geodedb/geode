@@ -866,43 +866,128 @@ pub const FederationManager = struct {
         };
     }
 
+    /// Execute remote operations in parallel using one thread per remote node.
+    /// Thread count is bounded by the number of remote operations (typically small,
+    /// limited by max_nodes in FederationConfig).
+    // CANARY: REQ=REQ-FED-PARALLEL-001; FEATURE="ParallelRemoteOps"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
     fn executeRemoteOperations(
         self: *FederationManager,
         operations: []const RemoteOperation,
         allocator: std.mem.Allocator,
     ) ![]QueryResults {
-        var results = try allocator.alloc(QueryResults, operations.len);
-        var filled: usize = 0;
+        const op_count = operations.len;
+        var results = try allocator.alloc(QueryResults, op_count);
+        for (results) |*r| {
+            r.* = QueryResults{
+                .rows = &.{},
+                .schema = &.{},
+                .execution_time_ms = 0,
+            };
+        }
         errdefer {
-            for (results[0..filled]) |*res| res.deinit(allocator);
+            for (results) |*res| res.deinit(allocator);
             allocator.free(results);
         }
 
-        // Execute operations in parallel (simplified sequential for now)
+        // For 0 or 1 operations, execute sequentially (no thread overhead)
+        if (op_count <= 1) {
+            for (operations, 0..) |op, i| {
+                results[i] = try self.executeSingleRemoteOp(op, allocator);
+            }
+            return results;
+        }
+
+        // Parallel execution: spawn one thread per remote operation
+        var errors = try allocator.alloc(?anyerror, op_count);
+        defer allocator.free(errors);
+        for (errors) |*e| e.* = null;
+
+        var threads = try allocator.alloc(?std.Thread, op_count);
+        defer allocator.free(threads);
+
         for (operations, 0..) |op, i| {
-            const node = self.remote_nodes.get(op.node_id) orelse return error.NodeNotFound;
-
-            var conn = try node.connection_pool.acquire();
-            defer node.connection_pool.release(conn);
-
-            const query = FederatedQuery{
-                .query_text = try self.operationToGQL(op.operation, allocator),
-                .parameters = &.{},
-                .target_nodes = &[_][]const u8{op.node_id},
-                .consistency_level = .eventual,
+            const ctx = RemoteOpContext{
+                .manager = self,
+                .op = &op,
+                .allocator = allocator,
+                .result = &results[i],
+                .err = &errors[i],
             };
+            threads[i] = std.Thread.spawn(.{}, executeRemoteOpThread, .{ctx}) catch |e| {
+                // If we can't spawn, fall back to sequential for this op
+                log.warn("Failed to spawn thread for remote op, executing sequentially", &.{
+                    Attr.string("node_id", op.node_id),
+                    Attr.string("error", @errorName(e)),
+                });
+                results[i] = self.executeSingleRemoteOp(op, allocator) catch |exec_err| {
+                    errors[i] = exec_err;
+                    continue;
+                };
+                threads[i] = null;
+                continue;
+            };
+        }
 
-            results[i] = try conn.executeQuery(
-                allocator,
-                node.endpoint,
-                self.config.query_timeout_ms,
-                self.config.topk_merge_batch_size,
-                query,
-            );
-            filled = i + 1;
+        // Join all threads
+        for (threads) |maybe_thread| {
+            if (maybe_thread) |thread| {
+                thread.join();
+            }
+        }
+
+        // Check for errors - report first error but return partial results
+        for (errors, 0..) |maybe_err, i| {
+            if (maybe_err) |e| {
+                log.err("Remote operation failed", &.{
+                    Attr.uint("op_index", i),
+                    Attr.string("error", @errorName(e)),
+                });
+            }
         }
 
         return results;
+    }
+
+    const RemoteOpContext = struct {
+        manager: *FederationManager,
+        op: *const RemoteOperation,
+        allocator: std.mem.Allocator,
+        result: *QueryResults,
+        err: *?anyerror,
+    };
+
+    fn executeRemoteOpThread(ctx: RemoteOpContext) void {
+        ctx.result.* = ctx.manager.executeSingleRemoteOp(ctx.op.*, ctx.allocator) catch |e| {
+            ctx.err.* = e;
+            return;
+        };
+    }
+
+    /// Execute a single remote operation (shared by both sequential and parallel paths).
+    fn executeSingleRemoteOp(
+        self: *FederationManager,
+        op: RemoteOperation,
+        allocator: std.mem.Allocator,
+    ) !QueryResults {
+        const node = self.remote_nodes.get(op.node_id) orelse return error.NodeNotFound;
+
+        var conn = try node.connection_pool.acquire();
+        defer node.connection_pool.release(conn);
+
+        const query = FederatedQuery{
+            .query_text = try self.operationToGQL(op.operation, allocator),
+            .parameters = &.{},
+            .target_nodes = &[_][]const u8{op.node_id},
+            .consistency_level = .eventual,
+        };
+
+        return try conn.executeQuery(
+            allocator,
+            node.endpoint,
+            self.config.query_timeout_ms,
+            self.config.topk_merge_batch_size,
+            query,
+        );
     }
 
     fn operationToGQL(
