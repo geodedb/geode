@@ -1,19 +1,20 @@
 // CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_040_RaftLeaderElection; BENCH=BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency; OWNER=distributed; UPDATED=2025-09-21
 //
-// Compatibility wrapper around the external raft library (gitlab.com/devnw/zig/raft).
-// Preserves the existing geode API while delegating consensus to the external library.
+// Compatibility shim over raft_consensus.RaftNode.
+// Preserves the string-based node ID API used by mod.zig:DistributedCoordinator
+// while delegating all consensus logic to the canonical raft_consensus wrapper.
 
 const std = @import("std");
-const raft_lib = @import("raft");
+const raft_consensus = @import("raft_consensus.zig");
 
-/// Raft node states
+/// Raft node states (mirrors raft_consensus.State for backward compat)
 pub const NodeState = enum {
     follower,
     candidate,
     leader,
 };
 
-/// Raft log entry
+/// Raft log entry (string-based command for the legacy API)
 pub const LogEntry = struct {
     term: u64,
     index: u64,
@@ -41,21 +42,22 @@ pub const RaftConfig = struct {
     snapshot_chunk_size: usize = 64 * 1024,
 };
 
-/// Hash a string node_id to a u64 for the external raft library.
+/// Hash a string node_id to a u64 for the inner raft_consensus node.
 fn hashNodeId(id: []const u8) u64 {
     var hasher = std.hash.Wyhash.init(0);
     hasher.update(id);
     const h = hasher.final();
-    // Ensure non-zero (raft library requires non-zero node IDs)
+    // External raft library requires non-zero node IDs
     return if (h == 0) 1 else h;
 }
 
-/// Raft consensus implementation — wraps the external raft library.
+/// Compatibility wrapper that delegates to raft_consensus.RaftNode.
+/// Accepts string node IDs and raw byte payloads, converting them to
+/// the u64-based types used by raft_consensus internally.
 pub const RaftNode = struct {
     allocator: std.mem.Allocator,
     config: RaftConfig,
-    inner: raft_lib.RaftNode,
-    storage: raft_lib.InMemoryStorage,
+    inner: *raft_consensus.RaftNode,
 
     // Volatile state for API compatibility
     state: NodeState,
@@ -63,10 +65,7 @@ pub const RaftNode = struct {
     last_applied: u64,
     current_term: u64,
 
-    // Peer ID mapping (string → u64)
-    peer_ids: []u64,
-
-    // Callbacks
+    // Callbacks (legacy API)
     apply_callback: ?*const fn ([]const u8) void,
     send_message_callback: ?*const fn ([]const u8, MessageType, []const u8) void,
 
@@ -75,47 +74,44 @@ pub const RaftNode = struct {
     enable_log_replication: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, config: RaftConfig) !RaftNode {
-        const node_id = hashNodeId(config.node_id);
-
-        // Map peer string IDs to u64
-        const peer_ids = try allocator.alloc(u64, config.peers.len);
-        for (config.peers, 0..) |peer, i| {
-            peer_ids[i] = hashNodeId(peer);
+        // Map peer string IDs to raft_consensus.Peer array
+        const peers = try allocator.alloc(raft_consensus.Peer, config.peers.len);
+        for (config.peers, 0..) |peer_str, i| {
+            peers[i] = raft_consensus.Peer{
+                .id = hashNodeId(peer_str),
+                .endpoint = peer_str,
+                .port = 0,
+                .alive = true,
+                .last_contact = 0,
+                .rpc_client = null,
+            };
         }
 
-        var storage = raft_lib.InMemoryStorage.init(allocator);
-
-        const raft_config = raft_lib.Config{
-            .id = node_id,
-            .peers = peer_ids,
-            .election_tick = @intCast(config.election_timeout_min_ms / config.heartbeat_interval_ms),
-            .heartbeat_tick = 1,
-            .snapshot_threshold = @intCast(config.log_compaction_threshold),
-            .snapshot_chunk_size = config.snapshot_chunk_size,
-            .pre_vote = true,
-        };
-
-        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage.storage());
+        const inner = try raft_consensus.RaftNode.init(
+            allocator,
+            hashNodeId(config.node_id),
+            peers,
+            config.election_timeout_min_ms,
+        );
 
         return RaftNode{
             .allocator = allocator,
             .config = config,
             .inner = inner,
-            .storage = storage,
             .state = .follower,
             .commit_index = 0,
             .last_applied = 0,
             .current_term = 0,
-            .peer_ids = peer_ids,
             .apply_callback = null,
             .send_message_callback = null,
         };
     }
 
     pub fn deinit(self: *RaftNode) void {
+        const peers = self.inner.peers;
         self.inner.deinit();
-        self.storage.deinit();
-        self.allocator.free(self.peer_ids);
+        self.allocator.destroy(self.inner);
+        self.allocator.free(peers);
     }
 
     pub fn enableFeatures(self: *RaftNode, leader_election: bool, log_replication: bool) void {
@@ -134,25 +130,25 @@ pub const RaftNode = struct {
     pub fn start(self: *RaftNode) !void {
         if (!self.enable_leader_election) {
             self.state = .leader;
+            self.syncFromInner();
             return;
         }
         self.state = .follower;
     }
 
     pub fn tick(self: *RaftNode) !void {
-        self.inner.tick(null);
-        self.drainReady();
+        try self.inner.tick();
+        self.syncFromInner();
     }
 
     pub fn handleMessage(self: *RaftNode, from: []const u8, message_type: MessageType, payload: []const u8) !void {
+        // The legacy API passes raw bytes; the inner node expects typed Messages.
+        // Wire deserialization is not yet wired, so we forward as a no-op drain
+        // to keep state synchronized (same behavior as the old implementation).
+        _ = from;
         _ = message_type;
         _ = payload;
-        const from_id = hashNodeId(from);
-        // The external library handles messages via step() with native Message types.
-        // For wire compatibility, we'd need to deserialize the payload into the
-        // appropriate raft_lib.Message type. For now, forward as a noop entry.
-        _ = from_id;
-        self.drainReady();
+        self.syncFromInner();
     }
 
     pub fn propose(self: *RaftNode, command: []const u8) !bool {
@@ -160,13 +156,13 @@ pub const RaftNode = struct {
             return false;
         }
 
-        self.inner.propose(command);
+        _ = try self.inner.proposeCommand(.{ .write = command });
 
         if (!self.enable_log_replication) {
             self.commit_index += 1;
         }
 
-        self.drainReady();
+        self.syncFromInner();
         return true;
     }
 
@@ -188,44 +184,23 @@ pub const RaftNode = struct {
         if (!self.enable_leader_election) return;
         self.state = .candidate;
         self.current_term += 1;
-        self.drainReady();
+        self.inner.startElection();
+        self.syncFromInner();
     }
 
-    /// Drain the Ready struct from the external raft library,
-    /// applying committed entries and updating local state.
-    fn drainReady(self: *RaftNode) void {
-        const rd = self.inner.ready();
-
-        // Update state from soft state
-        if (rd.soft_state) |ss| {
-            self.state = switch (ss.role) {
-                .leader => .leader,
-                .candidate => .candidate,
-                .follower => .follower,
-            };
-        }
-
-        // Update term from hard state
-        if (rd.hard_state) |hs| {
-            self.current_term = hs.current_term;
-        }
-
-        // Apply committed entries
-        for (rd.committed_entries) |entry| {
-            if (entry.kind == .normal and entry.data.len > 0) {
-                if (self.apply_callback) |callback| {
-                    callback(entry.data);
-                }
-            }
-            self.last_applied = entry.index;
-            self.commit_index = @max(self.commit_index, entry.index);
-        }
-
-        self.inner.advance(rd);
+    /// Synchronize shim state from the inner raft_consensus node.
+    fn syncFromInner(self: *RaftNode) void {
+        self.state = switch (self.inner.state) {
+            .follower => .follower,
+            .candidate => .candidate,
+            .leader => .leader,
+            .shutdown => .follower,
+        };
+        self.current_term = self.inner.current_term;
     }
 };
 
-test "raft basic init and deinit" {
+test "raft shim basic init and deinit" {
     const allocator = std.testing.allocator;
     const config = RaftConfig{
         .node_id = "node1",
@@ -237,7 +212,7 @@ test "raft basic init and deinit" {
     try std.testing.expectEqual(NodeState.follower, node.state);
 }
 
-test "raft single node leader" {
+test "raft shim single node leader" {
     const allocator = std.testing.allocator;
     const config = RaftConfig{
         .node_id = "node1",
@@ -248,4 +223,24 @@ test "raft single node leader" {
 
     try node.start();
     try std.testing.expectEqual(NodeState.leader, node.state);
+}
+
+test "raft shim delegates to raft_consensus" {
+    const allocator = std.testing.allocator;
+    const config = RaftConfig{
+        .node_id = "node1",
+        .peers = &[_][]const u8{},
+    };
+    var node = try RaftNode.init(allocator, config);
+    defer node.deinit();
+
+    // Inner node should have the same hashed ID
+    try std.testing.expectEqual(hashNodeId("node1"), node.inner.id);
+
+    // Tick should not crash
+    try node.tick();
+
+    // getLeaderInfo should work
+    const info = node.getLeaderInfo();
+    try std.testing.expectEqual(false, info.is_leader);
 }
