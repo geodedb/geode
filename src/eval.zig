@@ -54,6 +54,25 @@ fn getExecutionCallbacks() evaluator_adapter.ExecutionCallbacks {
     };
 }
 
+// GAP-0280: Global timeseries store pointer for server execution path.
+// The Store is created once at server startup (server/main.zig) and shared
+// read-only across all QUIC/gRPC connections.  eval.zig cannot import
+// execution.zig (circular dependency), so a module-level global is used --
+// the same pattern as execution_callbacks above.
+// CANARY: REQ=REQ-TIMESERIES-WIRE-001; FEATURE="TimeseriesServerWiring"; ASPECT=GlobalStore; STATUS=TESTED; TEST=src/eval.zig; OWNER=eval; UPDATED=2026-04-01
+const TimeseriesStore = @import("timeseries/timeseries.zig").Store;
+var g_timeseries_store: ?*TimeseriesStore = null;
+
+/// Set the global timeseries store (called from server/main.zig during startup).
+pub fn setGlobalTimeseriesStore(store: ?*TimeseriesStore) void {
+    g_timeseries_store = store;
+}
+
+/// Get the global timeseries store.
+pub fn getGlobalTimeseriesStore() ?*TimeseriesStore {
+    return g_timeseries_store;
+}
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use isNull from value_types module
 const isNull = value_types.isNull;
@@ -859,11 +878,24 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Time-series value lookup function
+            // GAP-0280: Resolve the store from (1) per-Env pointer, or (2) the global
+            // server-wide store set during startup.  This ensures timeseries.value()
+            // returns real data whether called from the CLI path (env.timeseries_store)
+            // or the QUIC/gRPC server path (g_timeseries_store).
             if (std.mem.eql(u8, function_name, "timeseries.value")) {
                 if (call.args.len != 3) return EvalError.InvalidArgs;
-                if (env.timeseries_store) |store_ptr| {
-                    const store = @constCast(store_ptr);
+                const maybe_store: ?*TimeseriesStore = if (env.timeseries_store) |ptr|
+                    // Safety: @constCast is required because the external timeseries
+                    // library's getSeries/hashKey methods take *Store (mutable pointer)
+                    // even though they only perform read operations.  We cannot change
+                    // the external library signature here.  The Store is effectively
+                    // read-only at query time -- writes only happen via explicit INSERT
+                    // operations which hold the store write-lock.
+                    @constCast(ptr)
+                else
+                    g_timeseries_store;
 
+                if (maybe_store) |store| {
                     const device_id_val = try evalExpr(allocator, call.args[0].*, env);
                     const metric_val = try evalExpr(allocator, call.args[1].*, env);
                     const ts_val = try evalExpr(allocator, call.args[2].*, env);
@@ -4615,4 +4647,105 @@ test "eval: tolower and toupper aliases" {
     const call2 = ast.Expr{ .Call = .{ .name = "toupper", .args = &args2, .distinct = false, .namespace = null } };
     const v2 = try evalExpr(allocator, call2, env);
     try std.testing.expect(v2 == .Str and std.mem.eql(u8, v2.Str, "HELLO"));
+}
+
+// GAP-0280: Verify timeseries.value() uses the global store when Env.timeseries_store is null.
+// This is the server execution path: the Store is set once at startup and shared across
+// all connections.  Without this wiring, timeseries.value() always returns Null on the
+// QUIC/gRPC path.
+test "eval: timeseries.value uses global store fallback" {
+    const allocator = std.testing.allocator;
+    const ts_module = @import("timeseries/timeseries.zig");
+
+    // Create a Store, insert a data point, and publish it as the global store.
+    var store = ts_module.Store.init(allocator);
+    defer store.deinit();
+
+    const key = ts_module.SeriesKey{ .device_id = 42, .metric = "temperature" };
+    try store.insertMany(key, &.{.{ .ts = 1000, .value = 72 }});
+
+    // Set the global -- simulates what server/main.zig does at startup.
+    setGlobalTimeseriesStore(&store);
+    defer setGlobalTimeseriesStore(null);
+
+    // Env has NO per-env timeseries_store -- this is the server path.
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    // Build the AST for: timeseries.value(42, 'temperature', 1000)
+    var arg_device = ast.Expr{ .Int = 42 };
+    var arg_metric = ast.Expr{ .String = "temperature" };
+    var arg_ts = ast.Expr{ .Int = 1000 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    // Must return 72, NOT Null.
+    try std.testing.expect(result == .Int);
+    try std.testing.expectEqual(@as(i64, 72), result.Int);
+}
+
+// GAP-0280: Verify timeseries.value() returns Null when no store is available.
+test "eval: timeseries.value returns null without store" {
+    const allocator = std.testing.allocator;
+
+    // Ensure global is not set.
+    setGlobalTimeseriesStore(null);
+
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{} };
+
+    var arg_device = ast.Expr{ .Int = 1 };
+    var arg_metric = ast.Expr{ .String = "cpu" };
+    var arg_ts = ast.Expr{ .Int = 100 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    try std.testing.expect(result == .Null);
+}
+
+// GAP-0280: Verify per-Env timeseries_store takes priority over global.
+test "eval: timeseries.value prefers env store over global" {
+    const allocator = std.testing.allocator;
+    const ts_module = @import("timeseries/timeseries.zig");
+
+    // Global store has value 100 for key (1, "x", 10).
+    var global_store = ts_module.Store.init(allocator);
+    defer global_store.deinit();
+    const gkey = ts_module.SeriesKey{ .device_id = 1, .metric = "x" };
+    try global_store.insertMany(gkey, &.{.{ .ts = 10, .value = 100 }});
+    setGlobalTimeseriesStore(&global_store);
+    defer setGlobalTimeseriesStore(null);
+
+    // Per-env store has value 999 for the same key.
+    var env_store = ts_module.Store.init(allocator);
+    defer env_store.deinit();
+    try env_store.insertMany(gkey, &.{.{ .ts = 10, .value = 999 }});
+
+    const env = Env{ .allocator = allocator, .names = &.{}, .values = &.{}, .timeseries_store = &env_store };
+
+    var arg_device = ast.Expr{ .Int = 1 };
+    var arg_metric = ast.Expr{ .String = "x" };
+    var arg_ts = ast.Expr{ .Int = 10 };
+    var args = [_]*ast.Expr{ &arg_device, &arg_metric, &arg_ts };
+    const call_expr = ast.Expr{ .Call = .{
+        .name = "timeseries.value",
+        .args = &args,
+        .distinct = false,
+        .namespace = null,
+    } };
+
+    const result = try evalExpr(allocator, call_expr, env);
+    // Must return 999 from env store, not 100 from global.
+    try std.testing.expect(result == .Int);
+    try std.testing.expectEqual(@as(i64, 999), result.Int);
 }

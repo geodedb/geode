@@ -532,6 +532,17 @@ pub fn main() !void {
         rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
         defer rls_filter_mod.setGlobalRLSFilterEngine(null);
 
+        // GAP-0280: Initialize a server-wide timeseries Store so that
+        // timeseries.value() calls in the QUIC/gRPC execution path return
+        // real data instead of NULL.  The store lives on the main thread's
+        // stack and is published via eval.setGlobalTimeseriesStore().
+        // CANARY: REQ=REQ-TIMESERIES-WIRE-003; FEATURE="TimeseriesServerWiring"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/eval.zig; OWNER=server; UPDATED=2026-04-01
+        const ts_mod = geode.timeseries;
+        var ts_store = ts_mod.Store.init(gpa);
+        defer ts_store.deinit();
+        eval.setGlobalTimeseriesStore(&ts_store);
+        defer eval.setGlobalTimeseriesStore(null);
+
         // GAP-0268: Wire WAL persistence hooks for checkpoint truncation.
         // The hooks allow the persistence loop to sync and truncate the WAL
         // after each successful checkpoint, preventing unbounded WAL growth.

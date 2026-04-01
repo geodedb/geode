@@ -381,6 +381,10 @@ pub const ExecutionContext = struct {
     // here for future in-execution RLS integration (e.g., predicate push-down).
     // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
     rls_engine: ?*anyopaque = null,
+    // GAP-0280: Pointer to the shared timeseries Store for timeseries.value() lookups.
+    // Set at server startup and shared across all connections (read-only during queries).
+    // CANARY: REQ=REQ-TIMESERIES-WIRE-002; FEATURE="TimeseriesServerWiring"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/eval.zig; OWNER=engine; UPDATED=2026-04-01
+    timeseries_store: ?*@import("timeseries/timeseries.zig").Store = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;

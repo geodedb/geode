@@ -113,3 +113,275 @@ test "ts: valueAt and lastValue" {
     const closest = series.valueAt(2500).?;
     try std.testing.expect(closest.ts == 2000 and closest.value == 200);
 }
+
+// ---------------------------------------------------------------------------
+// GAP-0284: SUM/FIRST/LAST aggregation tests
+// ---------------------------------------------------------------------------
+
+test "ts: sampleBy SUM aggregation" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 2, .metric = "bytes" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 11000, .value = 40 },
+        .{ .ts = 12000, .value = 50 },
+    });
+
+    const result = try st.sampleBy(key, 10000, 0, 20000, .sum, allocator);
+    defer allocator.free(result);
+
+    // Bucket [0, 10000): points 10+20+30 = 60
+    // Bucket [10000, 20000): points 40+50 = 90
+    try std.testing.expect(result.len == 2);
+    try std.testing.expectEqual(@as(i64, 60), result[0].value.?);
+    try std.testing.expectEqual(@as(i64, 90), result[1].value.?);
+}
+
+test "ts: sampleBy FIRST aggregation" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 2, .metric = "bytes" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 11000, .value = 40 },
+        .{ .ts = 12000, .value = 50 },
+    });
+
+    const result = try st.sampleBy(key, 10000, 0, 20000, .first, allocator);
+    defer allocator.free(result);
+
+    // Bucket [0, 10000): first point value = 10
+    // Bucket [10000, 20000): first point value = 40
+    try std.testing.expect(result.len == 2);
+    try std.testing.expectEqual(@as(i64, 10), result[0].value.?);
+    try std.testing.expectEqual(@as(i64, 40), result[1].value.?);
+}
+
+test "ts: sampleBy LAST aggregation" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 2, .metric = "bytes" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+        .{ .ts = 11000, .value = 40 },
+        .{ .ts = 12000, .value = 50 },
+    });
+
+    const result = try st.sampleBy(key, 10000, 0, 20000, .last, allocator);
+    defer allocator.free(result);
+
+    // Bucket [0, 10000): last point value = 30
+    // Bucket [10000, 20000): last point value = 50
+    try std.testing.expect(result.len == 2);
+    try std.testing.expectEqual(@as(i64, 30), result[0].value.?);
+    try std.testing.expectEqual(@as(i64, 50), result[1].value.?);
+}
+
+test "ts: sampleBy SUM/FIRST/LAST with empty bucket" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 3, .metric = "gap" };
+    // Points only in first bucket, second bucket empty
+    try st.insertMany(key, &.{
+        .{ .ts = 100, .value = 5 },
+        .{ .ts = 200, .value = 15 },
+    });
+
+    const sum_result = try st.sampleBy(key, 1000, 0, 2000, .sum, allocator);
+    defer allocator.free(sum_result);
+    try std.testing.expect(sum_result.len == 2);
+    try std.testing.expectEqual(@as(i64, 20), sum_result[0].value.?);
+    try std.testing.expect(sum_result[1].value == null); // empty bucket
+
+    const first_result = try st.sampleBy(key, 1000, 0, 2000, .first, allocator);
+    defer allocator.free(first_result);
+    try std.testing.expectEqual(@as(i64, 5), first_result[0].value.?);
+    try std.testing.expect(first_result[1].value == null);
+
+    const last_result = try st.sampleBy(key, 1000, 0, 2000, .last, allocator);
+    defer allocator.free(last_result);
+    try std.testing.expectEqual(@as(i64, 15), last_result[0].value.?);
+    try std.testing.expect(last_result[1].value == null);
+}
+
+// ---------------------------------------------------------------------------
+// GAP-0285: valueAt and timeBucketAvg dedicated tests
+// ---------------------------------------------------------------------------
+
+test "ts: valueAt — before first timestamp returns null" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 4, .metric = "val" };
+    try st.insertMany(key, &.{
+        .{ .ts = 5000, .value = 50 },
+        .{ .ts = 6000, .value = 60 },
+    });
+
+    const hk = st.hashKey(key);
+    const series = st.by_key.get(hk).?;
+
+    // Timestamp before all points — binary search finds nothing before
+    const result = series.valueAt(1000);
+    try std.testing.expect(result == null);
+}
+
+test "ts: valueAt — after last timestamp returns last-before point" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 4, .metric = "val" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+    });
+
+    const hk = st.hashKey(key);
+    const series = st.by_key.get(hk).?;
+
+    // Timestamp after all points — returns last point (closest before)
+    const result = series.valueAt(9999).?;
+    try std.testing.expectEqual(@as(i64, 3000), result.ts);
+    try std.testing.expectEqual(@as(i64, 30), result.value);
+}
+
+test "ts: valueAt — exact match returns exact point" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 4, .metric = "val" };
+    try st.insertMany(key, &.{
+        .{ .ts = 1000, .value = 10 },
+        .{ .ts = 2000, .value = 20 },
+        .{ .ts = 3000, .value = 30 },
+    });
+
+    const hk = st.hashKey(key);
+    const series = st.by_key.get(hk).?;
+
+    // Exact match on first, middle, and last
+    const first = series.valueAt(1000).?;
+    try std.testing.expectEqual(@as(i64, 1000), first.ts);
+    try std.testing.expectEqual(@as(i64, 10), first.value);
+
+    const mid = series.valueAt(2000).?;
+    try std.testing.expectEqual(@as(i64, 2000), mid.ts);
+    try std.testing.expectEqual(@as(i64, 20), mid.value);
+
+    const end = series.valueAt(3000).?;
+    try std.testing.expectEqual(@as(i64, 3000), end.ts);
+    try std.testing.expectEqual(@as(i64, 30), end.value);
+}
+
+test "ts: valueAt — empty series returns null" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 5, .metric = "empty" };
+    // Insert zero points — getOrCreateSeries creates the series
+    try st.insertMany(key, &.{});
+
+    const hk = st.hashKey(key);
+    const series = st.by_key.get(hk).?;
+    const result = series.valueAt(1000);
+    try std.testing.expect(result == null);
+}
+
+test "ts: timeBucketAvg — empty range returns empty" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 6, .metric = "empty_range" };
+    try st.insertMany(key, &.{
+        .{ .ts = 100, .value = 10 },
+    });
+
+    // end <= start → should return empty slice
+    const result = try st.timeBucketAvg(key, 10, 100, 100, allocator);
+    try std.testing.expectEqual(@as(usize, 0), result.len);
+
+    // Also test reversed range
+    const result2 = try st.timeBucketAvg(key, 10, 200, 100, allocator);
+    try std.testing.expectEqual(@as(usize, 0), result2.len);
+}
+
+test "ts: timeBucketAvg — single-point bucket" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 6, .metric = "single" };
+    try st.insertMany(key, &.{
+        .{ .ts = 5, .value = 42 },
+    });
+
+    // One bucket [0, 10) containing one point with value 42
+    const result = try st.timeBucketAvg(key, 10, 0, 10, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 1), result.len);
+    try std.testing.expectEqual(@as(i64, 0), result[0].ts);
+    try std.testing.expectEqual(@as(i64, 42), result[0].avg.?);
+}
+
+test "ts: timeBucketAvg — bucket with no points returns null avg" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 6, .metric = "sparse" };
+    try st.insertMany(key, &.{
+        .{ .ts = 5, .value = 100 },
+        // gap: no points in [10, 20)
+        .{ .ts = 25, .value = 200 },
+    });
+
+    const result = try st.timeBucketAvg(key, 10, 0, 30, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 3), result.len);
+    try std.testing.expectEqual(@as(i64, 100), result[0].avg.?); // bucket [0,10)
+    try std.testing.expect(result[1].avg == null); // bucket [10,20) — empty
+    try std.testing.expectEqual(@as(i64, 200), result[2].avg.?); // bucket [20,30)
+}
+
+test "ts: timeBucketAvg — boundary: point exactly at bucket start" {
+    const allocator = std.testing.allocator;
+    var st = Store.init(allocator);
+    defer st.deinit();
+
+    const key = SeriesKey{ .device_id = 6, .metric = "boundary" };
+    try st.insertMany(key, &.{
+        .{ .ts = 0, .value = 10 },
+        .{ .ts = 10, .value = 20 },
+        .{ .ts = 20, .value = 30 },
+    });
+
+    // Buckets: [0,10), [10,20), [20,30)
+    // ts=0 in bucket 0, ts=10 in bucket 1, ts=20 in bucket 2
+    const result = try st.timeBucketAvg(key, 10, 0, 30, allocator);
+    defer allocator.free(result);
+    try std.testing.expectEqual(@as(usize, 3), result.len);
+    try std.testing.expectEqual(@as(i64, 10), result[0].avg.?);
+    try std.testing.expectEqual(@as(i64, 20), result[1].avg.?);
+    try std.testing.expectEqual(@as(i64, 30), result[2].avg.?);
+}
