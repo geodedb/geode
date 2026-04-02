@@ -1035,7 +1035,43 @@ pub const StorageAdapter = struct {
         );
     }
 
+    fn loadPersistedManifestLocked(self: *StorageAdapter, graph_uuid: [16]u8) !gs.manifest.Manifest {
+        var graph_dir = try gs.graph_dir.GraphDir.open(self.allocator, self.data_dir, graph_uuid);
+        defer graph_dir.deinit();
+
+        const path_a = try graph_dir.manifestPath(self.allocator, .a);
+        defer self.allocator.free(path_a);
+
+        const path_b = try graph_dir.manifestPath(self.allocator, .b);
+        defer self.allocator.free(path_b);
+
+        const manifest_a = try gs.manifest.Manifest.readFromFile(self.allocator, path_a);
+        const manifest_b = try gs.manifest.Manifest.readFromFile(self.allocator, path_b);
+        return try gs.manifest.Manifest.selectManifest(manifest_a, manifest_b);
+    }
+
+    fn refreshRegistryHeaderNextIdsLocked(self: *StorageAdapter) !void {
+        var next_node_id: u64 = 1;
+        var next_edge_id: u64 = 1;
+
+        for (self.registry.entries.items) |entry| {
+            if (self.engines.get(entry.name)) |mg| {
+                next_node_id = @max(next_node_id, mg.engine.manifest.next_node_id);
+                next_edge_id = @max(next_edge_id, mg.engine.manifest.next_edge_id);
+                continue;
+            }
+
+            const manifest = try self.loadPersistedManifestLocked(entry.uuid);
+            next_node_id = @max(next_node_id, manifest.next_node_id);
+            next_edge_id = @max(next_edge_id, manifest.next_edge_id);
+        }
+
+        self.registry.next_node_id = next_node_id;
+        self.registry.next_edge_id = next_edge_id;
+    }
+
     fn saveRegistryLocked(self: *StorageAdapter) !void {
+        try self.refreshRegistryHeaderNextIdsLocked();
         try self.registry.saveToFile(self.registry_path);
     }
 
@@ -1426,4 +1462,43 @@ test "StorageAdapter: node and edge counts" {
 
     try std.testing.expectEqual(@as(u64, 3), try adapter.nodeCount(graph));
     try std.testing.expectEqual(@as(u64, 2), try adapter.edgeCount(graph));
+}
+
+test "StorageAdapter: registry header next ids include unloaded graphs" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        const n1 = try adapter.createNode("persisted_graph", &[_][]const u8{});
+        const n2 = try adapter.createNode("persisted_graph", &[_][]const u8{});
+        _ = try adapter.createEdge("persisted_graph", n1, n2, "REL");
+        try adapter.checkpointAll();
+    }
+
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        _ = try adapter.createNode("fresh_graph", &[_][]const u8{});
+        try adapter.checkpointAll();
+    }
+
+    const registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{path});
+    defer allocator.free(registry_path);
+
+    var registry = gs.registry.GraphRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.loadFromFile(registry_path);
+
+    try std.testing.expectEqual(@as(usize, 2), registry.graphCount());
+    try std.testing.expectEqual(@as(u64, 3), registry.next_node_id);
+    try std.testing.expectEqual(@as(u64, 2), registry.next_edge_id);
 }
