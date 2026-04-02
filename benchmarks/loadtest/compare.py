@@ -40,8 +40,8 @@ def parse_go_duration_seconds(s: str) -> float:
     return parse_go_duration(s) / 1000.0
 
 
-def load_baseline(path: str) -> dict[int, dict]:
-    """Load baseline JSONL, returning a dict keyed by concurrency."""
+def load_baseline(path: str) -> dict[tuple[str, int], dict]:
+    """Load baseline JSONL, returning a dict keyed by (scenario, concurrency)."""
     baseline = {}
     with open(path) as f:
         for lineno, line in enumerate(f, 1):
@@ -58,18 +58,23 @@ def load_baseline(path: str) -> dict[int, dict]:
                     file=sys.stderr,
                 )
                 continue
-            baseline[rec["concurrency"]] = rec
+            scenario = rec.get("scenario", "ping")
+            baseline[(scenario, rec["concurrency"])] = rec
     return baseline
 
 
-def load_current(path: str) -> dict[int, dict]:
-    """Load current Go load test JSON, returning a dict keyed by concurrency."""
+def load_current(path: str) -> tuple[str, dict[int, dict]]:
+    """Load current Go load test JSON. Returns (scenario, {concurrency: data})."""
     with open(path) as f:
         data = json.load(f)
 
+    scenario = data.get("scenario", "ping")
     current = {}
     for level in data.get("levels", []):
         c = level["concurrency"]
+        # Skip levels with no successful queries (empty latency strings)
+        if not level.get("latency_p50") or not level.get("latency_p99"):
+            continue
         dur_s = parse_go_duration_seconds(level["duration"])
         current[c] = {
             "concurrency": c,
@@ -81,11 +86,12 @@ def load_current(path: str) -> dict[int, dict]:
             "total_queries": level["total_queries"],
             "duration_s": dur_s,
         }
-    return current
+    return scenario, current
 
 
 def compare(
-    baseline: dict[int, dict],
+    baseline: dict[tuple[str, int], dict],
+    scenario: str,
     current: dict[int, dict],
     threshold_pct: float,
 ) -> tuple[list[dict], bool]:
@@ -97,10 +103,11 @@ def compare(
     results = []
     all_pass = True
 
-    concurrencies = sorted(set(baseline.keys()) | set(current.keys()))
+    base_concurrencies = {c for (s, c) in baseline if s == scenario}
+    concurrencies = sorted(base_concurrencies | set(current.keys()))
 
     for c in concurrencies:
-        base = baseline.get(c)
+        base = baseline.get((scenario, c))
         curr = current.get(c)
 
         if base is None:
@@ -152,7 +159,8 @@ def compare(
         rec = {
             "schema_version": 2,
             "kind": "LoadTest",
-            "benchmark": f"qps_c{c}",
+            "benchmark": f"{scenario}_c{c}",
+            "scenario": scenario,
             "concurrency": c,
             "qps": qps_curr,
             "qps_baseline": qps_base,
@@ -185,11 +193,12 @@ def print_report(
     results: list[dict],
     baseline_path: str,
     current_path: str,
+    scenario: str,
     all_pass: bool,
 ) -> None:
     """Print a human-readable comparison table to stderr."""
     print(file=sys.stderr)
-    print("Load Test Regression Report", file=sys.stderr)
+    print(f"Load Test Regression Report  [scenario: {scenario}]", file=sys.stderr)
     print(f"Baseline: {baseline_path}", file=sys.stderr)
     print(f"Current:  {current_path}", file=sys.stderr)
     print(file=sys.stderr)
@@ -267,14 +276,14 @@ def main() -> int:
         print(f"ERROR: no valid LoadTest entries in {args.baseline}", file=sys.stderr)
         return 1
 
-    current = load_current(args.current)
+    scenario, current = load_current(args.current)
     if not current:
         print(f"ERROR: no levels found in {args.current}", file=sys.stderr)
         return 1
 
-    results, all_pass = compare(baseline, current, args.threshold)
+    results, all_pass = compare(baseline, scenario, current, args.threshold)
 
-    print_report(results, args.baseline, args.current, all_pass)
+    print_report(results, args.baseline, args.current, scenario, all_pass)
 
     if args.output:
         out_dir = os.path.dirname(args.output)

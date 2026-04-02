@@ -11,6 +11,7 @@ Thresholds:
 
 import argparse
 import json
+import os
 import sys
 
 
@@ -54,10 +55,17 @@ def main() -> int:
         default=20.0,
         help="Threshold percentage for auto-calculated limits (default: 20)",
     )
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Append to existing baseline (replacing entries for same scenario)",
+    )
     args = parser.parse_args()
 
     with open(args.input) as f:
         data = json.load(f)
+
+    scenario = data.get("scenario", "ping")
 
     levels = data.get("levels", [])
     if not levels:
@@ -71,6 +79,9 @@ def main() -> int:
     for level in levels:
         c = level["concurrency"]
         qps = level["qps"]
+        # Skip levels with no successful queries (empty latency strings)
+        if not level.get("latency_p50") or not level.get("latency_p99"):
+            continue
         p50_ms = parse_go_duration(level["latency_p50"])
         p99_ms = parse_go_duration(level["latency_p99"])
         dur_s = parse_go_duration_seconds(level["duration"])
@@ -87,7 +98,8 @@ def main() -> int:
         rec = {
             "schema_version": 2,
             "kind": "LoadTest",
-            "benchmark": f"qps_c{c}",
+            "benchmark": f"{scenario}_c{c}",
+            "scenario": scenario,
             "concurrency": c,
             "qps": qps,
             "latency_p50_ms": round(p50_ms, 1),
@@ -100,6 +112,18 @@ def main() -> int:
             "threshold_p50_max_ms": threshold_p50_max,
         }
         records.append(rec)
+
+    if args.append and os.path.exists(args.output):
+        existing = []
+        with open(args.output) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                rec = json.loads(line)
+                if rec.get("scenario") != scenario:
+                    existing.append(rec)
+        records = existing + records
 
     with open(args.output, "w") as f:
         for rec in records:
