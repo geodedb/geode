@@ -147,8 +147,8 @@
 
         // Page-based graph storage engine
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#d0452c51abf2892193a122a41eaf67f1a099ed62",
-            .hash = "graph_storage-0.1.0-9UyJSx0TCACoEEh83_fX9fBYnLl6NOzbsbI9lrCg6DGC",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#ea03c7a0cdc3e15d55156604847df9cdc4ebc7d9",
+            .hash = "graph_storage-0.1.0-9UyJS45sCAB4BIi8XWixYA0TjR-OMd2SC-oi9oT3kDcK",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
