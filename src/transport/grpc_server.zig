@@ -20,6 +20,7 @@ const user_mgmt = geode.user_management;
 const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
 const planned_read_runtime = geode.planned_read_runtime;
+const node_scan_stream = geode.node_scan_stream;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
 // Issue #515: Backup types for new gRPC handlers
@@ -1953,6 +1954,41 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     return encodeMessage(allocator, resp);
                 },
                 .rows => {
+                    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
+                    if (!rls_active) {
+                        if (analysis.target) |target| {
+                            if (target.* == .Query) {
+                                const query_ptr = &target.Query;
+                                if (try node_scan_stream.prepare(allocator, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                    var active_stream = prepared_stream;
+                                    errdefer active_stream.deinit();
+
+                                    if (needs_store_lock) {
+                                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                        lock_released = true;
+                                    }
+
+                                    const status = try proto_util.buildStatus(allocator, "00000", active_stream.flags);
+                                    const schema_def = try active_stream.buildSchema(allocator);
+                                    var schema_resp = schema.ExecutionResponse{
+                                        .status = status,
+                                        .payload = .{ .schema = schema_def },
+                                    };
+                                    defer schema_resp.deinit(allocator);
+
+                                    state.active_node_scan_stream = active_stream;
+                                    state.active_result = true;
+                                    state.result_page_index = 0;
+                                    state.result_ordered = false;
+                                    state.result_order_keys = &.{};
+
+                                    updateTxnStateFromProgram(state, &parse_result.program);
+                                    return encodeMessage(allocator, schema_resp);
+                                }
+                            }
+                        }
+                    }
+
                     var exec_result = execution.executeProgramWithContext(allocator, &parse_result.program, exec_context) catch |err| {
                         const info = proto_util.mapError(err);
                         var resp = try buildErrorResponse(allocator, info.code, info.message, &.{}, &.{});
@@ -2067,6 +2103,33 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    // Arena allocator for pull page serialization (Issue #446)
+    var pull_arena = std.heap.ArenaAllocator.init(allocator);
+    defer pull_arena.deinit();
+    const pa = pull_arena.allocator();
+
+    if (state.active_node_scan_stream) |*active_stream| {
+        var page_result = try active_stream.buildNextPage(allocator, req.page_size);
+        defer page_result.result.deinit(allocator);
+
+        const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+        const status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+        const resp = schema.ExecutionResponse{
+            .status = status,
+            .payload = .{ .page = page },
+        };
+
+        const pull_resp = schema.PullResponse{ .response = resp };
+        const encoded_tmp = try encodeMessage(pa, pull_resp);
+        const encoded = try allocator.dupe(u8, encoded_tmp);
+
+        if (page.final) {
+            state.resetResult();
+        }
+
+        return encoded;
+    }
+
     const result_ptr = if (state.active_result_values) |*res| res else {
         var resp = try buildErrorResponse(allocator, "02000", "No active result set", &.{}, &.{});
         defer resp.deinit(allocator);
@@ -2075,11 +2138,6 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     };
 
     const start = state.result_page_index;
-
-    // Arena allocator for pull page serialization (Issue #446)
-    var pull_arena = std.heap.ArenaAllocator.init(allocator);
-    defer pull_arena.deinit();
-    const pa = pull_arena.allocator();
 
     const page = try proto_util.buildDataPage(pa, result_ptr, start, req.page_size, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;

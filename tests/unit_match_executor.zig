@@ -3,6 +3,7 @@ const geode = @import("geode");
 
 const execution = geode.execution;
 const graph_store = geode.graph_store;
+const node_scan_stream = geode.node_scan_stream;
 const planned_read_runtime = geode.planned_read_runtime;
 const Value = geode.value_types.Value;
 
@@ -335,6 +336,82 @@ test "TestCANARY_REQ_PLANNER_EXEC_010_ProfileUsesPlannedRuntimeForUnwind" {
         else => false,
     });
     try expectValueInt(profile.rows[4][1], 4);
+}
+
+// CANARY: REQ=REQ-PERF-UNORDERED-STREAM-001; FEATURE="UnorderedNodeScanStreaming"; ASPECT=Unit; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-02
+test "TestCANARY_REQ_PERF_UNORDERED_STREAM_001_NodeScanStreamPagesSimpleLimit" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    inline for (0..5) |idx| {
+        const node_id = try store.createNode(&.{"Person"});
+        try store.setNodeProperty(node_id, "rank", .{ .Int = @intCast(idx) });
+    }
+
+    var parsed = try geode.parseGql("MATCH (u:Person) RETURN u LIMIT 3", allocator);
+    defer parsed.deinit();
+
+    const query_ptr = switch (parsed.program.statements[0]) {
+        .Query => |*q| q,
+        else => return error.ExpectedQueryStatement,
+    };
+
+    var stream = (try node_scan_stream.prepare(allocator, query_ptr, h.ctx, &.{}, &.{}, &.{})) orelse return error.ExpectedQueryStatement;
+    defer stream.deinit();
+
+    var schema_def = try stream.buildSchema(allocator);
+    defer schema_def.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 1), schema_def.columns.items.len);
+    try std.testing.expectEqualStrings("u", schema_def.columns.items[0].name);
+    try std.testing.expectEqualStrings("NODE", schema_def.columns.items[0].type);
+
+    var seen = std.AutoHashMap(u64, void).init(allocator);
+    defer seen.deinit();
+
+    var page1 = try stream.buildNextPage(allocator, 2);
+    defer page1.result.deinit(allocator);
+    try std.testing.expect(!page1.final);
+    try std.testing.expectEqual(@as(usize, 2), page1.result.rows.len);
+    for (page1.result.rows) |row| {
+        try std.testing.expectEqual(@as(usize, 1), row.len);
+        switch (row[0]) {
+            .Node => |node| try seen.put(node.id, {}),
+            else => return error.UnexpectedValueTag,
+        }
+    }
+
+    var page2 = try stream.buildNextPage(allocator, 2);
+    defer page2.result.deinit(allocator);
+    try std.testing.expect(page2.final);
+    try std.testing.expectEqual(@as(usize, 1), page2.result.rows.len);
+    for (page2.result.rows) |row| {
+        switch (row[0]) {
+            .Node => |node| try seen.put(node.id, {}),
+            else => return error.UnexpectedValueTag,
+        }
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), seen.count());
+}
+
+// CANARY: REQ=REQ-PERF-UNORDERED-STREAM-002; FEATURE="UnorderedNodeScanStreaming"; ASPECT=Eligibility; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-02
+test "TestCANARY_REQ_PERF_UNORDERED_STREAM_002_NodeScanStreamRejectsOrderedQuery" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    var parsed = try geode.parseGql("MATCH (u:Person) RETURN u ORDER BY u", allocator);
+    defer parsed.deinit();
+
+    const query_ptr = switch (parsed.program.statements[0]) {
+        .Query => |*q| q,
+        else => return error.ExpectedQueryStatement,
+    };
+
+    const stream = try node_scan_stream.prepare(allocator, query_ptr, h.ctx, &.{}, &.{}, &.{});
+    try std.testing.expect(stream == null);
 }
 
 // CANARY: REQ=REQ-GQL-017; FEATURE="MatchSafetyGuards"; ASPECT=Unit; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; TEST=TestCANARY_REQ_GQL_017_InvalidHopBounds; OWNER=engine; UPDATED=2025-09-24

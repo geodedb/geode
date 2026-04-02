@@ -287,9 +287,26 @@ pub fn build(b: *std.Build) void {
     });
     const wal_ext_mod = wal_dep.module("wal");
 
-    // Graph Storage - Page-based graph storage engine
-    const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
-    const graph_storage_mod = graph_storage_dep.module("graph_storage");
+    // Graph Storage - Prefer a local checkout so Geode can iterate directly
+    // against graph-storage changes without republishing the package first.
+    const local_graph_storage_root = b.graph.env_map.get("GEODE_GRAPH_STORAGE_PATH") orelse "../../../zig/graph-storage";
+    const graph_storage_mod = blk: {
+        std.fs.cwd().access(local_graph_storage_root, .{}) catch {
+            const graph_storage_dep = b.dependency("graph_storage", .{ .target = target, .optimize = optimize });
+            break :blk graph_storage_dep.module("graph_storage");
+        };
+
+        break :blk b.createModule(.{
+            .root_source_file = .{ .cwd_relative = b.fmt("{s}/src/root.zig", .{local_graph_storage_root}) },
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "wal", .module = wal_ext_mod },
+                .{ .name = "uuid", .module = uuid_ext_mod },
+                .{ .name = "spice", .module = spice_mod },
+            },
+        });
+    };
 
     // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
     const raft_dep = b.dependency("raft", .{

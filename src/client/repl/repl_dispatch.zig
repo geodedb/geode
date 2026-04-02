@@ -449,6 +449,107 @@ fn executionResponseToJson(
     return std.json.Stringify.valueAlloc(allocator, root_value, .{});
 }
 
+fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
+    return switch (value) {
+        .null => std.json.Value.null,
+        .bool => |b| .{ .bool = b },
+        .integer => |i| .{ .integer = i },
+        .float => |f| .{ .float = f },
+        .number_string => |s| .{ .number_string = try allocator.dupe(u8, s) },
+        .string => |s| .{ .string = try allocator.dupe(u8, s) },
+        .array => |arr| blk: {
+            var out = std.json.Array.init(allocator);
+            for (arr.items) |item| {
+                try out.append(try cloneJsonValue(allocator, item));
+            }
+            break :blk .{ .array = out };
+        },
+        .object => |obj| blk: {
+            var out = std.json.ObjectMap.init(allocator);
+            var iter = obj.iterator();
+            while (iter.next()) |entry| {
+                try out.put(try allocator.dupe(u8, entry.key_ptr.*), try cloneJsonValue(allocator, entry.value_ptr.*));
+            }
+            break :blk .{ .object = out };
+        },
+    };
+}
+
+fn mergeInlinePageJson(
+    allocator: std.mem.Allocator,
+    response_json: []const u8,
+    all_rows: *std.json.Array,
+    status_class: *[]const u8,
+    status_subclass: *[]const u8,
+    status_captured: *bool,
+    additional_arr: *std.json.Array,
+    flagger_arr: *std.json.Array,
+    ordered: *bool,
+    order_keys: *std.json.Array,
+) !void {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, response_json, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+    if (!status_captured.*) {
+        status_captured.* = true;
+        if (root.get("status_class")) |status_val| {
+            if (status_val == .string and status_val.string.len > 0) {
+                status_class.* = try allocator.dupe(u8, status_val.string);
+            }
+        }
+        if (root.get("status_subclass")) |subclass_val| {
+            if (subclass_val == .string and subclass_val.string.len > 0) {
+                status_subclass.* = try allocator.dupe(u8, subclass_val.string);
+            }
+        }
+        if (root.get("additional_statuses")) |additional_val| {
+            if (additional_val == .array) {
+                for (additional_val.array.items) |item| {
+                    if (item == .string) {
+                        try additional_arr.append(.{ .string = try allocator.dupe(u8, item.string) });
+                    }
+                }
+            }
+        }
+        if (root.get("flagger_findings")) |flagger_val| {
+            if (flagger_val == .array) {
+                for (flagger_val.array.items) |item| {
+                    if (item == .string) {
+                        try flagger_arr.append(.{ .string = try allocator.dupe(u8, item.string) });
+                    }
+                }
+            }
+        }
+    }
+
+    if (root.get("rows")) |rows_val| {
+        if (rows_val == .array) {
+            for (rows_val.array.items) |row| {
+                try all_rows.append(try cloneJsonValue(allocator, row));
+            }
+        }
+    }
+
+    if (root.get("ordered")) |ordered_val| {
+        if (ordered_val == .bool and ordered_val.bool) {
+            ordered.* = true;
+        }
+    }
+
+    if (order_keys.items.len == 0) {
+        if (root.get("order_keys")) |order_keys_val| {
+            if (order_keys_val == .array) {
+                for (order_keys_val.array.items) |item| {
+                    if (item == .string) {
+                        try order_keys.append(.{ .string = try allocator.dupe(u8, item.string) });
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// CANARY: REQ=REQ-SHELL-RECONNECT-001; FEATURE="ShellAutoReconnect"; ASPECT=ReconnectionConfig; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
 /// Configuration for automatic reconnection with exponential backoff
 pub const ReconnectionConfig = struct {
@@ -504,6 +605,12 @@ pub const ClientSession = struct {
     /// CANARY: REQ=REQ-INLINE-RESULTS-001; FEATURE="InlineResultsHandling"; ASPECT=SchemaResponseFlag; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
     /// Tracks if last response was a schema (meaning inline page may follow)
     received_schema_response: bool = false,
+    /// Cached inline page JSON emitted immediately after schema.
+    /// This lets pullAll merge inline rows with later PULL pages instead of
+    /// dropping the first page or issuing redundant pulls for fully-inline
+    /// result sets.
+    inline_page_response: ?[]u8 = null,
+    inline_page_final: bool = false,
     /// CANARY: REQ=REQ-SHELL-RECONNECT-003; FEATURE="ShellAutoReconnect"; ASPECT=SessionState; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     reconnect_config: ReconnectionConfig = .{},
     pending_txn_state: PendingTransactionState = .{},
@@ -555,6 +662,7 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+        self.clearInlinePageResponse();
         self.last_payload_kind = .none;
     }
 
@@ -568,6 +676,7 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+        self.clearInlinePageResponse();
         if (self.session_id) |sid| {
             self.allocator.free(sid);
             self.session_id = null;
@@ -605,6 +714,14 @@ pub const ClientSession = struct {
         }
     }
 
+    fn clearInlinePageResponse(self: *ClientSession) void {
+        if (self.inline_page_response) |resp| {
+            self.allocator.free(resp);
+            self.inline_page_response = null;
+        }
+        self.inline_page_final = false;
+    }
+
     /// CANARY: REQ=REQ-INLINE-RESULTS-003; FEATURE="InlineResultsHandling"; ASPECT=ConsumeInlinePage; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
     /// Consume inline page response if the server sent one after a schema response.
     /// The server's inline_results_enabled feature sends both schema and page in sequence.
@@ -623,15 +740,15 @@ pub const ClientSession = struct {
         self.received_schema_response = false;
 
         // Read the inline page that the server sends immediately after the schema.
-        // The server always sends this when inline_results is enabled, so we must
-        // consume it to keep the protocol synchronized. Use enough retries to
-        // handle server load spikes (e.g., concurrent data ingest).
+        // Large result sets can take noticeable time to serialize, so wait long
+        // enough to cover the user's normal query latency and cache the page for
+        // pullAll to merge later.
         var retry_count: usize = 0;
-        const max_retries: usize = 200; // 200 * 10ms = 2s max wait
+        const max_retries: usize = 600; // 600 * 50ms = 30s max wait
         while (retry_count < max_retries) : (retry_count += 1) {
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    std.Thread.sleep(50 * std.time.ns_per_ms);
                     continue;
                 }
                 // Any other error - just return, no inline page
@@ -658,21 +775,14 @@ pub const ClientSession = struct {
                     if (exec_resp.payload) |payload| {
                         switch (payload) {
                             .page => |page| {
-                                // Successfully consumed inline page
-                                // Update last_response with page data for display
-                                if (self.last_response) |old| {
-                                    self.allocator.free(old);
-                                }
-                                // Store the page response as last_response
-                                self.last_response = executionResponseToJson(self.allocator, exec_resp, self.last_columns) catch null;
+                                // Successfully consumed inline page. Cache it so
+                                // pullAll can merge the first inline page with any
+                                // later PULL pages or return it directly if it was
+                                // the full result set.
+                                self.clearInlinePageResponse();
+                                self.inline_page_response = executionResponseToJson(self.allocator, exec_resp, self.last_columns) catch null;
+                                self.inline_page_final = page.final;
                                 self.allocator.free(response);
-
-                                // CANARY: REQ=REQ-INLINE-RESULTS-007; FEATURE="InlineResultsHandling"; ASPECT=FinalPageDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
-                                // If the inline page is final (all data delivered), set last_payload_kind
-                                // to prevent subsequent PULL calls which would fail with "no active result set"
-                                if (page.final) {
-                                    self.last_payload_kind = .none;
-                                }
                                 return;
                             },
                             else => {
@@ -1043,6 +1153,7 @@ pub const ClientSession = struct {
             self.allocator.free(resp);
             self.last_response = null;
         }
+        self.clearInlinePageResponse();
 
         const ResponseHandler = struct {
             fn handle(session: *ClientSession, raw: []u8) !void {
@@ -1467,6 +1578,12 @@ pub const ClientSession = struct {
 
         const page_size: u32 = 0; // 0 -> server default page size
         var done = false;
+
+        if (self.inline_page_response) |inline_json| {
+            defer self.clearInlinePageResponse();
+            try mergeInlinePageJson(a, inline_json, &all_rows, &status_class, &status_subclass, &status_captured, &additional_arr, &flagger_arr, &ordered, &order_keys);
+            done = self.inline_page_final;
+        }
 
         while (!done) : (request_id += 1) {
             const pull_req = proto_schema.PullRequest{
@@ -3737,6 +3854,166 @@ fn splitOnce(allocator: std.mem.Allocator, text: []const u8, delimiter: u8) ![2]
 
 const testing = std.testing;
 
+const ScriptedTransportConnection = struct {
+    allocator: std.mem.Allocator,
+    responses: [][]u8,
+    next_response: usize = 0,
+    writes: std.ArrayList([]u8),
+
+    fn create(allocator: std.mem.Allocator, responses: []const []u8) !*TransportConnection {
+        const ctx = try allocator.create(ScriptedTransportConnection);
+        errdefer allocator.destroy(ctx);
+
+        const owned_responses = try allocator.alloc([]u8, responses.len);
+        errdefer allocator.free(owned_responses);
+        for (responses, 0..) |resp, i| {
+            owned_responses[i] = resp;
+        }
+
+        ctx.* = .{
+            .allocator = allocator,
+            .responses = owned_responses,
+            .writes = try std.ArrayList([]u8).initCapacity(allocator, 0),
+        };
+        errdefer ctx.writes.deinit(allocator);
+
+        const conn = try allocator.create(TransportConnection);
+        conn.* = .{
+            .writeAllFn = writeAll,
+            .readLineFn = readLine,
+            .deinitFn = deinit,
+            .context = ctx,
+            .allocator = allocator,
+        };
+        return conn;
+    }
+
+    fn get(self: *TransportConnection) *ScriptedTransportConnection {
+        const ctx = self.context orelse unreachable;
+        return @ptrCast(@alignCast(ctx));
+    }
+
+    fn writeAll(self: *TransportConnection, data: []const u8) !void {
+        const ctx = get(self);
+        try ctx.writes.append(ctx.allocator, try ctx.allocator.dupe(u8, data));
+    }
+
+    fn readLine(self: *TransportConnection, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+        _ = max_size;
+        const ctx = get(self);
+        if (ctx.next_response >= ctx.responses.len) return error.EndOfStream;
+
+        const response = ctx.responses[ctx.next_response];
+        ctx.next_response += 1;
+        return allocator.dupe(u8, response);
+    }
+
+    fn deinit(self: *TransportConnection) void {
+        const ctx = get(self);
+        for (ctx.responses) |resp| ctx.allocator.free(resp);
+        ctx.allocator.free(ctx.responses);
+        for (ctx.writes.items) |write| ctx.allocator.free(write);
+        ctx.writes.deinit(ctx.allocator);
+        ctx.allocator.destroy(ctx);
+        if (self.allocator) |allocator| allocator.destroy(self);
+    }
+};
+
+fn emptyStatusStrings(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
+    return std.ArrayList([]const u8).initCapacity(allocator, 0);
+}
+
+fn buildStatusForTest(allocator: std.mem.Allocator) !proto_schema.Status {
+    return .{
+        .status_class = try allocator.dupe(u8, "00000"),
+        .additional_statuses = try emptyStatusStrings(allocator),
+        .flagger_findings = try emptyStatusStrings(allocator),
+    };
+}
+
+fn buildColumnForTest(allocator: std.mem.Allocator, name: []const u8, ty: []const u8) !proto_schema.ColumnDefinition {
+    return .{
+        .name = try allocator.dupe(u8, name),
+        .type = try allocator.dupe(u8, ty),
+    };
+}
+
+fn buildIntRowForTest(allocator: std.mem.Allocator, value: i64) !proto_schema.Row {
+    var values = try std.ArrayList(proto_schema.Value).initCapacity(allocator, 1);
+    try values.append(allocator, .{
+        .kind = .{ .int_val = .{ .value = value } },
+    });
+    return .{ .values = values };
+}
+
+fn buildSchemaResponseMessageForTest(allocator: std.mem.Allocator) ![]u8 {
+    var columns = try std.ArrayList(proto_schema.ColumnDefinition).initCapacity(allocator, 1);
+    try columns.append(allocator, try buildColumnForTest(allocator, "n", "INTEGER"));
+
+    var resp = proto_schema.ExecutionResponse{
+        .status = try buildStatusForTest(allocator),
+        .payload = .{ .schema = .{ .columns = columns } },
+    };
+    defer resp.deinit(allocator);
+
+    return encodeServerPacketBody(allocator, .{ .execute = resp });
+}
+
+fn buildExecutePageMessageForTest(allocator: std.mem.Allocator, values: []const i64, final: bool) ![]u8 {
+    var rows = try std.ArrayList(proto_schema.Row).initCapacity(allocator, values.len);
+    for (values) |value| {
+        try rows.append(allocator, try buildIntRowForTest(allocator, value));
+    }
+
+    var resp = proto_schema.ExecutionResponse{
+        .status = try buildStatusForTest(allocator),
+        .payload = .{ .page = .{
+            .rows = rows,
+            .final = final,
+            .ordered = false,
+            .order_keys = try emptyStatusStrings(allocator),
+        } },
+    };
+    defer resp.deinit(allocator);
+
+    return encodeServerPacketBody(allocator, .{ .execute = resp });
+}
+
+fn buildPullPageMessageForTest(allocator: std.mem.Allocator, values: []const i64, final: bool) ![]u8 {
+    var rows = try std.ArrayList(proto_schema.Row).initCapacity(allocator, values.len);
+    for (values) |value| {
+        try rows.append(allocator, try buildIntRowForTest(allocator, value));
+    }
+
+    var pull_resp = proto_schema.PullResponse{
+        .response = .{
+            .status = try buildStatusForTest(allocator),
+            .payload = .{ .page = .{
+                .rows = rows,
+                .final = final,
+                .ordered = false,
+                .order_keys = try emptyStatusStrings(allocator),
+            } },
+        },
+    };
+    defer pull_resp.deinit(allocator);
+
+    return encodeServerPacketBody(allocator, .{ .pull = pull_resp });
+}
+
+fn parseRowCountForTest(allocator: std.mem.Allocator, json_text: []const u8) !usize {
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_text, .{});
+    defer parsed.deinit();
+
+    const rows_value = parsed.value.object.get("rows") orelse return error.InvalidResponse;
+    if (rows_value != .array) return error.InvalidResponse;
+    return rows_value.array.items.len;
+}
+
+fn scriptedTransportStubConnect(_: std.mem.Allocator, _: []const u8) anyerror!*TransportConnection {
+    return error.NotConnected;
+}
+
 test "TestShellAuthDetection_AuthenticationRequiredInResponse" {
     // Issue #387: Test that "Authentication required" is detected in server response
     const auth_required_response = "{\"status_class\":\"42000\",\"type\":\"ERROR\",\"message\":\"Authentication required\"}";
@@ -4540,6 +4817,61 @@ test "TestClientSession_DefaultReconnectConfig" {
 
     try testing.expectEqual(@as(u32, 5), session.reconnect_config.max_attempts);
     try testing.expect(session.reconnect_config.prompt_for_txn_recovery);
+}
+
+test "TestClientSession_PullAll_MergesInlinePageWithPulledPages" {
+    const allocator = testing.allocator;
+
+    const schema_msg = try buildSchemaResponseMessageForTest(allocator);
+    const inline_msg = try buildExecutePageMessageForTest(allocator, &.{1}, false);
+    const pull_msg = try buildPullPageMessageForTest(allocator, &.{ 2, 3 }, true);
+
+    const conn = try ScriptedTransportConnection.create(allocator, &.{ schema_msg, inline_msg, pull_msg });
+    const transport = Transport{ .connectFn = scriptedTransportStubConnect };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    session.connected = true;
+    session.connection = conn;
+    session.session_id = try allocator.dupe(u8, "sess");
+
+    try session.runGql("MATCH (n) RETURN n");
+
+    var sink = std.ArrayList(u8).empty;
+    defer sink.deinit(allocator);
+    try session.pullAll(&sink);
+
+    try testing.expectEqual(@as(usize, 3), try parseRowCountForTest(allocator, sink.items));
+
+    const scripted = ScriptedTransportConnection.get(conn);
+    try testing.expectEqual(@as(usize, 2), scripted.writes.items.len);
+}
+
+test "TestClientSession_PullAll_UsesFinalInlinePageWithoutPull" {
+    const allocator = testing.allocator;
+
+    const schema_msg = try buildSchemaResponseMessageForTest(allocator);
+    const inline_msg = try buildExecutePageMessageForTest(allocator, &.{ 1, 2 }, true);
+
+    const conn = try ScriptedTransportConnection.create(allocator, &.{ schema_msg, inline_msg });
+    const transport = Transport{ .connectFn = scriptedTransportStubConnect };
+    var session = try ClientSession.init(allocator, "localhost:3141", &transport);
+    defer session.deinit();
+
+    session.connected = true;
+    session.connection = conn;
+    session.session_id = try allocator.dupe(u8, "sess");
+
+    try session.runGql("MATCH (n) RETURN n");
+
+    var sink = std.ArrayList(u8).empty;
+    defer sink.deinit(allocator);
+    try session.pullAll(&sink);
+
+    try testing.expectEqual(@as(usize, 2), try parseRowCountForTest(allocator, sink.items));
+
+    const scripted = ScriptedTransportConnection.get(conn);
+    try testing.expectEqual(@as(usize, 1), scripted.writes.items.len);
 }
 
 // ============================================================================

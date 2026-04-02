@@ -22,6 +22,7 @@ const txn_undo_log = geode.txn_undo_log;
 const diagnostics = geode.diagnostics;
 const user_mgmt = geode.user_management;
 const planned_read_runtime = geode.planned_read_runtime;
+const node_scan_stream = geode.node_scan_stream;
 // Issue #444: Import AST cache to wire into parse hot path
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -2043,6 +2044,69 @@ fn handleClientMessage(
                     // GAP-0260: Non-txn saves deferred to background persistence thread
                 },
                 .rows => {
+                    const rls_active = rls_filter.getGlobalRLSFilterEngine() != null and state.authenticated_user != null;
+                    if (!rls_active) {
+                        if (analysis.target) |target| {
+                            if (target.* == .Query) {
+                                const query_ptr = &target.Query;
+                                if (try node_scan_stream.prepare(gpa, query_ptr, exec_context, bindings.names, bindings.values, flags.items)) |prepared_stream| {
+                                    var active_stream = prepared_stream;
+                                    errdefer active_stream.deinit();
+
+                                    if (needs_store_lock) {
+                                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                        lock_released = true;
+                                    }
+
+                                    {
+                                        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+                                        defer schema_arena.deinit();
+                                        const sa = schema_arena.allocator();
+                                        const status = try proto_util.buildStatus(sa, "00000", active_stream.flags);
+                                        const schema_def = try active_stream.buildSchema(sa);
+                                        const schema_resp = schema.ExecutionResponse{
+                                            .status = status,
+                                            .payload = .{ .schema = schema_def },
+                                        };
+                                        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+                                    }
+
+                                    var page_final = false;
+                                    if (state.inline_results_enabled) {
+                                        const inline_max = if (state.inline_results_max_rows == 0) active_stream.slot_ids.len else state.inline_results_max_rows;
+                                        var page_result = try active_stream.buildNextPage(gpa, inline_max);
+                                        defer page_result.result.deinit(gpa);
+
+                                        var page_arena = std.heap.ArenaAllocator.init(gpa);
+                                        defer page_arena.deinit();
+                                        const pa = page_arena.allocator();
+                                        const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+                                        page_final = page_result.final;
+                                        const page_status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+                                        const page_resp = schema.ExecutionResponse{
+                                            .status = page_status,
+                                            .payload = .{ .page = page },
+                                        };
+                                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                                    }
+
+                                    if (!state.inline_results_enabled or !page_final) {
+                                        state.active_node_scan_stream = active_stream;
+                                        state.active_result = true;
+                                        state.result_page_index = 0;
+                                        state.result_ordered = false;
+                                        state.result_order_keys = &.{};
+                                    } else {
+                                        active_stream.deinit();
+                                    }
+
+                                    updateTxnStateFromProgram(state, &parse_result.program);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+
                     var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
@@ -2146,19 +2210,53 @@ fn handleClientMessage(
             }
         },
         .pull => |pull_req| {
-            if (state.active_result_values == null) {
-                try sendPullError(gpa, stream, "02000", "no active result set", &.{}, &.{});
-                return;
-            }
-
             const page_size = pull_req.page_size;
-            const start = state.result_page_index;
-            const result = &state.active_result_values.?;
 
             // Arena allocator for pull page serialization (Issue #446)
             var pull_arena = std.heap.ArenaAllocator.init(gpa);
             defer pull_arena.deinit();
             const pa = pull_arena.allocator();
+
+            if (state.active_node_scan_stream) |*active_stream| {
+                var page_result = try active_stream.buildNextPage(gpa, page_size);
+                defer page_result.result.deinit(gpa);
+
+                const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
+
+                if (state.telemetry_paging) {
+                    var ps_buf: [32]u8 = undefined;
+                    const ps_str = std.fmt.bufPrint(&ps_buf, "{d}", .{page_size}) catch "0";
+                    var rows_buf: [32]u8 = undefined;
+                    const rows_str = std.fmt.bufPrint(&rows_buf, "{d}", .{page.rows.items.len}) catch "0";
+                    log.info("telemetry", &.{
+                        Attr.string("type", "TELEMETRY"),
+                        Attr.string("event", "PULL_PAGE"),
+                        Attr.string("page_size", ps_str),
+                        Attr.string("rows_emitted", rows_str),
+                        Attr.string("final", if (page.final) "true" else "false"),
+                    });
+                }
+
+                const status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+                const resp = schema.ExecutionResponse{
+                    .status = status,
+                    .payload = .{ .page = page },
+                };
+                try sendQuicMessage(pa, stream, .{ .pull = .{ .response = resp } });
+
+                if (page.final) {
+                    state.resetResult();
+                }
+                return;
+            }
+
+            if (state.active_result_values == null) {
+                try sendPullError(gpa, stream, "02000", "no active result set", &.{}, &.{});
+                return;
+            }
+
+            const start = state.result_page_index;
+            const result = &state.active_result_values.?;
 
             const page = try proto_util.buildDataPage(pa, result, start, page_size, state.result_ordered, state.result_order_keys);
             state.result_page_index = start + page.rows.items.len;

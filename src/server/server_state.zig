@@ -235,6 +235,7 @@ pub const UnionMetrics = struct {
 
 // Additional imports needed for ServerState (use relative imports since this file is part of geode module)
 const execution = @import("../execution.zig");
+const node_scan_stream = @import("node_scan_stream.zig");
 const mvcc = @import("txn/mvcc.zig");
 const query_plan_cache = @import("query_plan_cache.zig");
 // Note: query_ast_cache type reference is opaque to avoid circular dependency with lib.zig
@@ -259,6 +260,7 @@ pub const ServerState = struct {
     active_result: bool = false,
     // Optional value-backed result set for protobuf paging.
     active_result_values: ?execution.ExecutionResult = null,
+    active_node_scan_stream: ?node_scan_stream.NodeScanStream = null,
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
@@ -360,6 +362,10 @@ pub const ServerState = struct {
         if (self.active_result_values) |*res| {
             res.deinit(self.allocator);
             self.active_result_values = null;
+        }
+        if (self.active_node_scan_stream) |*stream| {
+            stream.deinit();
+            self.active_node_scan_stream = null;
         }
         for (self.result_order_keys) |key| {
             self.allocator.free(key);

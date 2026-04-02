@@ -20,7 +20,6 @@ const server_main = @import("../server/main.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
-const spice_wrapper = @import("parallel/spice");
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
 const transport_response = geode.cli_transport_response;
@@ -175,7 +174,7 @@ fn printQueryUsage() void {
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
-        "  --page-size <n>        Page size for results (default: 1000)\n" ++
+        "  --page-size <n>        Page size for results (default: 250)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
@@ -699,23 +698,63 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     try server_main.main();
 }
 
+const QueryDeadlineState = struct {
+    last_progress_ns: std.atomic.Value(i64),
+    done: std.atomic.Value(bool),
+
+    fn init() QueryDeadlineState {
+        return .{
+            .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(std.time.nanoTimestamp()))),
+            .done = std.atomic.Value(bool).init(false),
+        };
+    }
+
+    fn touch(self: *QueryDeadlineState) void {
+        self.last_progress_ns.store(@as(i64, @intCast(std.time.nanoTimestamp())), .release);
+    }
+
+    fn finish(self: *QueryDeadlineState) void {
+        self.done.store(true, .release);
+    }
+};
+
+var active_query_deadline_state: ?*QueryDeadlineState = null;
+
+fn touchActiveQueryDeadlineWatchdog() void {
+    if (active_query_deadline_state) |state| {
+        state.touch();
+    }
+}
+
+fn finishActiveQueryDeadlineWatchdog() void {
+    if (active_query_deadline_state) |state| {
+        state.finish();
+    }
+}
+
 /// Issue #424: Process-level deadline watchdog for the query command.
-/// Spawned as a background thread, sleeps for `timeout_secs` then terminates
-/// the process with an error message and exit code 1. This ensures the CLI
-/// never hangs indefinitely on aarch64 Docker or any other environment where
-/// QUIC handshakes, TLS negotiation, or TCP connects block forever.
-fn deadlineWatchdog(timeout_secs: u32) void {
-    std.Thread.sleep(@as(u64, timeout_secs) * std.time.ns_per_s);
-    const stderr = std.fs.File{ .handle = getStderrHandle() catch {
+/// Fires only when no transport-level progress has been observed for
+/// `timeout_secs`, instead of enforcing a hard wall-clock deadline.
+fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
+    const timeout_ns = @as(i64, @intCast(timeout_secs)) * std.time.ns_per_s;
+
+    while (!state.done.load(.acquire)) {
+        std.Thread.sleep(100 * std.time.ns_per_ms);
+        if (state.done.load(.acquire)) return;
+
+        const last_progress_ns = state.last_progress_ns.load(.acquire);
+        if (@as(i64, @intCast(std.time.nanoTimestamp())) - last_progress_ns < timeout_ns) continue;
+
+        const stderr = std.fs.File{ .handle = getStderrHandle() catch {
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        } };
+        _ = stderr.writeAll("Error: query timed out after ") catch {};
+        var buf: [20]u8 = undefined;
+        const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
+        _ = stderr.writeAll(timeout_str) catch {};
+        _ = stderr.writeAll(" seconds\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
-    } };
-    _ = stderr.writeAll("Error: query timed out after ") catch {};
-    // Write the timeout value
-    var buf: [20]u8 = undefined;
-    const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
-    _ = stderr.writeAll(timeout_str) catch {};
-    _ = stderr.writeAll(" seconds\n") catch {};
-    std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
 }
 
 // Issue #417: DSN (Data Source Name) parsing for --dsn flag
@@ -829,7 +868,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 30; // Default 30 second timeout (QUIC handshake can be slow)
     var retry_count: u32 = 0; // Default no retries
-    var page_size: u32 = 1000; // Default page size for PULL requests
+    var page_size: u32 = 250; // Default page size for PULL requests
     var use_saved_session = true; // Auto-load saved session by default
     // Issue #417: DSN connection string
     var dsn: ?[]const u8 = null;
@@ -1317,7 +1356,13 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         // Use generous estimate: 1 chunk per ~250 statements minimum, capped at 10 minutes.
         const estimated_chunks = @max(1, statements.items.len / 250);
         const chunked_deadline = @min(600, timeout_secs * @as(u32, @intCast(estimated_chunks + 1)));
-        _ = std.Thread.spawn(.{}, deadlineWatchdog, .{chunked_deadline}) catch {};
+        var chunked_deadline_state = QueryDeadlineState.init();
+        active_query_deadline_state = &chunked_deadline_state;
+        defer {
+            chunked_deadline_state.finish();
+            active_query_deadline_state = null;
+        }
+        _ = std.Thread.spawn(.{}, deadlineWatchdog, .{ chunked_deadline, &chunked_deadline_state }) catch {};
         try executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
             .statements = statements.items,
@@ -1338,8 +1383,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         return;
     }
 
-    // Issue #424: Start a process-level deadline watchdog thread for single queries.
-    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{timeout_secs}) catch {};
+    // Issue #424: Start a progress-based deadline watchdog for single queries.
+    var query_deadline_state = QueryDeadlineState.init();
+    active_query_deadline_state = &query_deadline_state;
+    defer {
+        query_deadline_state.finish();
+        active_query_deadline_state = null;
+    }
+    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{ timeout_secs, &query_deadline_state }) catch {};
 
     // Execute query via QUIC or gRPC connection
     params_owned = false;
@@ -1502,7 +1553,7 @@ const QuicQueryOptions = struct {
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake (set from both --graph and DSN)
-    page_size: u32 = 1000,
+    page_size: u32 = 250,
     params: std.ArrayList(schema.Param),
     role: ?[]const u8 = null, // GAP-0271: FLE role for field-level access control
 };
@@ -1517,7 +1568,7 @@ const GrpcQueryOptions = struct {
     password: ?[]const u8 = null,
     graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake
-    page_size: u32 = 1000,
+    page_size: u32 = 250,
     params: std.ArrayList(schema.Param),
 };
 
@@ -1681,6 +1732,7 @@ fn grpcReadFrame(allocator: std.mem.Allocator, stream: std.net.Stream) !H2Frame 
     while (total < 9) {
         const n = try stream.read(header[total..]);
         if (n == 0) return error.ConnectionClosed;
+        touchActiveQueryDeadlineWatchdog();
         total += n;
     }
 
@@ -1702,6 +1754,7 @@ fn grpcReadFrame(allocator: std.mem.Allocator, stream: std.net.Stream) !H2Frame 
         while (read_total < length) {
             const n = try stream.read(payload[read_total..]);
             if (n == 0) return error.ConnectionClosed;
+            touchActiveQueryDeadlineWatchdog();
             read_total += n;
         }
     }
@@ -2119,6 +2172,8 @@ fn executeQueryOnGrpc(
         _ = resp_arena.reset(.retain_capacity);
     }
 
+    finishActiveQueryDeadlineWatchdog();
+
     if (std.mem.eql(u8, format, "dot")) {
         if (all_rows_text) |rows| {
             try outputDotFormatFromRows(allocator, rows.items, stdout);
@@ -2302,7 +2357,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .password = opts.password,
                 .graph = opts.graph,
                 .graph_for_hello = opts.graph_for_hello,
-                .page_size = 1000,
+                .page_size = 250,
                 .params = empty_params,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
@@ -2323,7 +2378,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .client_key_path = opts.client_key_path,
                 .graph = opts.graph,
                 .graph_for_hello = opts.graph_for_hello,
-                .page_size = 1000,
+                .page_size = 250,
                 .params = empty_params,
                 .role = opts.role,
             }) catch |err| {
@@ -2523,6 +2578,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
             return err;
         };
         if (n == 0) return error.EndOfStream;
+        touchActiveQueryDeadlineWatchdog();
         total_read += n;
     }
 
@@ -2547,6 +2603,7 @@ fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic
             return err;
         };
         if (n == 0) return error.EndOfStream;
+        touchActiveQueryDeadlineWatchdog();
         total_read += n;
     }
 
@@ -2785,65 +2842,11 @@ fn executeQueryOnConnection(
             rows_list: *std.ArrayList(std.ArrayList([]const u8)),
             mode: TextMode,
         ) !void {
-            const row_count = page.rows.items.len;
-            if (row_count == 0) return;
+            if (page.rows.items.len == 0) return;
 
-            // Use a higher threshold to avoid spice parallelMap memory corruption
-            // on smaller result sets (see proto_util.zig buildDataPage fix)
-            const cli_parallel_threshold: usize = 512;
-            if (spice_wrapper.shouldUseParallelism(row_count, cli_parallel_threshold)) {
-                var pool = spice_wrapper.SpicePool.init(alloc, null);
-                pool.start();
-                defer pool.deinit();
-
-                var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = alloc };
-                const safe_alloc = ts_alloc.allocator();
-
-                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator, mode: TextMode };
-                const RowResult = struct { row: std.ArrayList([]const u8), err: ?anyerror, allocator: std.mem.Allocator };
-
-                const inputs = try alloc.alloc(RowInput, row_count);
-                defer alloc.free(inputs);
-                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc, .mode = mode };
-
-                const results = try alloc.alloc(RowResult, row_count);
-                defer alloc.free(results);
-                for (results) |*r| r.* = .{ .row = std.ArrayList([]const u8).initCapacity(safe_alloc, 0) catch unreachable, .err = null, .allocator = safe_alloc };
-
-                try pool.map(RowInput, RowResult, inputs, results, struct {
-                    fn map(ctx: spice_wrapper.TaskContext, input: RowInput, out: *RowResult) void {
-                        _ = ctx;
-                        const a = input.allocator;
-                        var row_values = std.ArrayList([]const u8).initCapacity(a, input.row.values.items.len) catch {
-                            out.* = .{ .row = std.ArrayList([]const u8).initCapacity(a, 0) catch unreachable, .err = error.OutOfMemory, .allocator = a };
-                            return;
-                        };
-
-                        for (input.row.values.items) |v| {
-                            const cell_str = valueToString(a, v, input.mode) catch |err| {
-                                out.* = .{ .row = row_values, .err = err, .allocator = a };
-                                return;
-                            };
-                            row_values.append(a, cell_str) catch |err| {
-                                out.* = .{ .row = row_values, .err = err, .allocator = a };
-                                return;
-                            };
-                        }
-
-                        out.* = .{ .row = row_values, .err = null, .allocator = a };
-                    }
-                }.map);
-
-                for (results) |*res| {
-                    if (res.err) |err| {
-                        for (res.row.items) |cell| res.allocator.free(cell);
-                        res.row.deinit(res.allocator);
-                        return err;
-                    }
-                    try rows_list.append(alloc, res.row);
-                }
-                return;
-            }
+            // Match the server-side data page fix: row materialization is cheap,
+            // while the Spice thread-pool path has produced corrupted large-page
+            // results in CLI rendering.
 
             for (page.rows.items) |row| {
                 var row_values = try std.ArrayList([]const u8).initCapacity(alloc, row.values.items.len);
@@ -2866,65 +2869,11 @@ fn executeQueryOnConnection(
             page: schema.DataPage,
             rows_list: *std.ArrayList(std.ArrayList(std.json.Value)),
         ) !void {
-            const row_count = page.rows.items.len;
-            if (row_count == 0) return;
+            if (page.rows.items.len == 0) return;
 
-            // Use a higher threshold to avoid spice parallelMap memory corruption
-            // on smaller result sets (see proto_util.zig buildDataPage fix)
-            const cli_parallel_threshold: usize = 512;
-            if (spice_wrapper.shouldUseParallelism(row_count, cli_parallel_threshold)) {
-                var pool = spice_wrapper.SpicePool.init(alloc, null);
-                pool.start();
-                defer pool.deinit();
-
-                var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = alloc };
-                const safe_alloc = ts_alloc.allocator();
-
-                const RowInput = struct { row: schema.Row, allocator: std.mem.Allocator };
-                const RowResult = struct { row: std.ArrayList(std.json.Value), err: ?anyerror, allocator: std.mem.Allocator };
-
-                const inputs = try alloc.alloc(RowInput, row_count);
-                defer alloc.free(inputs);
-                for (page.rows.items, 0..) |row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc };
-
-                const results = try alloc.alloc(RowResult, row_count);
-                defer alloc.free(results);
-                for (results) |*r| r.* = .{ .row = std.ArrayList(std.json.Value).initCapacity(safe_alloc, 0) catch unreachable, .err = null, .allocator = safe_alloc };
-
-                try pool.map(RowInput, RowResult, inputs, results, struct {
-                    fn map(ctx: spice_wrapper.TaskContext, input: RowInput, out: *RowResult) void {
-                        _ = ctx;
-                        const a = input.allocator;
-                        var row_values = std.ArrayList(std.json.Value).initCapacity(a, input.row.values.items.len) catch {
-                            out.* = .{ .row = std.ArrayList(std.json.Value).initCapacity(a, 0) catch unreachable, .err = error.OutOfMemory, .allocator = a };
-                            return;
-                        };
-
-                        for (input.row.values.items) |v| {
-                            const cell_val = protoValueToJson(a, v) catch |err| {
-                                out.* = .{ .row = row_values, .err = err, .allocator = a };
-                                return;
-                            };
-                            row_values.append(a, cell_val) catch |err| {
-                                out.* = .{ .row = row_values, .err = err, .allocator = a };
-                                return;
-                            };
-                        }
-
-                        out.* = .{ .row = row_values, .err = null, .allocator = a };
-                    }
-                }.map);
-
-                for (results) |*res| {
-                    if (res.err) |err| {
-                        for (res.row.items) |val| freeJsonValue(res.allocator, val);
-                        res.row.deinit(res.allocator);
-                        return err;
-                    }
-                    try rows_list.append(alloc, res.row);
-                }
-                return;
-            }
+            // Match the server-side data page fix: sequential JSON conversion is
+            // reliable, and large pages do not justify risking ownership
+            // corruption in the parallel row conversion path.
 
             for (page.rows.items) |row| {
                 var row_values = try std.ArrayList(std.json.Value).initCapacity(alloc, row.values.items.len);
@@ -3215,6 +3164,8 @@ fn executeQueryOnConnection(
     }
 
     // Output final result based on format
+    finishActiveQueryDeadlineWatchdog();
+
     if (std.mem.eql(u8, format, "dot")) {
         // CANARY: REQ=REQ-CLI-DOT-002; FEATURE="DotFormat"; ASPECT=GraphvizOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
         // DOT format for Graphviz visualization

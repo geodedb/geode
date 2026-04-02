@@ -2502,7 +2502,6 @@ REQ-INLINE-RESULTS-003,InlineResultsHandling,ConsumeInlinePage,IMPL,,,cli,2026-0
 REQ-INLINE-RESULTS-004,InlineResultsHandling,ConsumeAfterSchema,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INLINE-RESULTS-005,InlineResultsHandling,ConsumeAfterSchema,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INLINE-RESULTS-006,InlineResultsHandling,ConsumeAfterSchema,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
-REQ-INLINE-RESULTS-007,InlineResultsHandling,FinalPageDetection,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INPUT-SECURITY-001,InputSecurity,SQLInjection,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-INPUT-SECURITY-002,InputSecurity,XSSPrevention,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-INPUT-SECURITY-003,InputSecurity,PathTraversal,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
@@ -3288,6 +3287,9 @@ REQ-PERF-THREAD-POOL-001,ThreadPool,QueryExecution,TESTED,,,transport,2026-04-01
 REQ-PERF-THREAD-POOL-002,ThreadPool,WorkerManagement,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-003,ThreadPool,QueryWorkItem,TESTED,,,transport,2026-04-01,src/transport/thread_pool.zig
 REQ-PERF-THREAD-POOL-BUILD-001,ThreadPool,BuildIntegration,IMPL,,,build,2026-04-01,build.zig
+REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,TransportFastPath,IMPL,,,engine,2026-04-02,src/server/node_scan_stream.zig
+REQ-PERF-UNORDERED-STREAM-001,UnorderedNodeScanStreaming,Unit,TESTED,,,engine,2026-04-02,tests/unit_match_executor.zig
+REQ-PERF-UNORDERED-STREAM-002,UnorderedNodeScanStreaming,Eligibility,TESTED,,,engine,2026-04-02,tests/unit_match_executor.zig
 REQ-PERF-WAL-001,WriteAheadLog,DeltaPersistence,TESTED,,,storage,2026-03-31,src/wal.zig
 REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_wal.zig
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig

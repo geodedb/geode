@@ -207,7 +207,17 @@ pub fn buildDataPage(
     }
 
     const end = @min(start + page_len, result.rows.len);
-    const row_count = end - start;
+    return buildDataPageFromRows(allocator, result.rows[start..end], end == result.rows.len, ordered, order_keys);
+}
+
+pub fn buildDataPageFromRows(
+    allocator: std.mem.Allocator,
+    rows_slice: []const []const value_types.Value,
+    final: bool,
+    ordered: bool,
+    order_keys: []const []const u8,
+) !schema.DataPage {
+    const row_count = rows_slice.len;
 
     var rows = std.ArrayList(schema.Row).initCapacity(allocator, row_count) catch return error.OutOfMemory;
     try rows.resize(allocator, row_count);
@@ -219,9 +229,9 @@ pub fn buildDataPage(
     // conversion is lightweight (mostly string duplication), and the cost of
     // creating/destroying a thread pool per data page exceeds any parallelism
     // benefit for typical workloads.
-    for (start..end, 0..) |row_idx, i| {
-        var values = std.ArrayList(schema.Value).initCapacity(allocator, result.rows[row_idx].len) catch return error.OutOfMemory;
-        for (result.rows[row_idx]) |val| {
+    for (rows_slice, 0..) |row_values, i| {
+        var values = std.ArrayList(schema.Value).initCapacity(allocator, row_values.len) catch return error.OutOfMemory;
+        for (row_values) |val| {
             const proto_val = try valueToProto(allocator, val);
             try values.append(allocator, proto_val);
         }
@@ -230,7 +240,7 @@ pub fn buildDataPage(
 
     return schema.DataPage{
         .rows = rows,
-        .final = end == result.rows.len,
+        .final = final,
         .ordered = ordered,
         .order_keys = try dupOrderKeys(allocator, order_keys),
     };
