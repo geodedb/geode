@@ -256,7 +256,8 @@ def main() -> int:
     parser.add_argument(
         "--current",
         required=True,
-        help="Path to current Go load test JSON",
+        nargs="+",
+        help="Path(s) to current Go load test JSON file(s)",
     )
     parser.add_argument(
         "--threshold",
@@ -276,25 +277,40 @@ def main() -> int:
         print(f"ERROR: no valid LoadTest entries in {args.baseline}", file=sys.stderr)
         return 1
 
-    scenario, current = load_current(args.current)
-    if not current:
-        print(f"ERROR: no levels found in {args.current}", file=sys.stderr)
+    all_results = []
+    overall_pass = True
+
+    for current_path in args.current:
+        if not os.path.exists(current_path):
+            print(f"WARNING: skipping missing file {current_path}", file=sys.stderr)
+            continue
+
+        scenario, current = load_current(current_path)
+        if not current:
+            print(f"WARNING: no levels found in {current_path}, skipping", file=sys.stderr)
+            continue
+
+        results, all_pass = compare(baseline, scenario, current, args.threshold)
+        all_results.extend(results)
+        if not all_pass:
+            overall_pass = False
+
+        print_report(results, args.baseline, current_path, scenario, all_pass)
+
+    if not all_results:
+        print("ERROR: no results from any current file", file=sys.stderr)
         return 1
-
-    results, all_pass = compare(baseline, scenario, current, args.threshold)
-
-    print_report(results, args.baseline, args.current, scenario, all_pass)
 
     if args.output:
         out_dir = os.path.dirname(args.output)
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
         with open(args.output, "w") as f:
-            for rec in results:
+            for rec in all_results:
                 f.write(json.dumps(rec, separators=(",", ":")) + "\n")
         print(f"Comparison written to {args.output}", file=sys.stderr)
 
-    return 0 if all_pass else 1
+    return 0 if overall_pass else 1
 
 
 if __name__ == "__main__":

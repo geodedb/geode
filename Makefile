@@ -390,14 +390,14 @@ bench-timeseries: ## Run timeseries benchmarks
 loadtest-compare: ## Compare load test results against baseline
 	python3 benchmarks/loadtest/compare.py \
 		--baseline benchmarks/loadtest/baseline.jsonl \
-		--current ../geode-test-harness/reports/loadtest_go.json
+		--current $(wildcard ../geode-test-harness/reports/loadtest_ping.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_point_read.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_one_hop.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_two_hop.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_fan_out.json)
 
-loadtest-save-baseline: ## Save current load test results as new baseline
-	python3 benchmarks/loadtest/save_baseline.py \
-		--input ../geode-test-harness/reports/loadtest_go.json \
-		--output benchmarks/loadtest/baseline.jsonl
-
-loadtest-save-all-baselines: ## Save baselines for all scenarios
+loadtest-save-baseline: ## Save current load test results as new baseline (all scenarios)
+	@rm -f benchmarks/loadtest/baseline.jsonl
 	@for scenario in ping point_read one_hop two_hop fan_out; do \
 		if [ -f ../geode-test-harness/reports/loadtest_$${scenario}.json ]; then \
 			python3 benchmarks/loadtest/save_baseline.py \
