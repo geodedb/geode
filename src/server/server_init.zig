@@ -84,6 +84,7 @@ pub const InitContext = struct {
                 sm.graph_persist_user_create = &graphPersistUserCreate;
                 sm.graph_persist_login_state = &graphPersistLoginState;
                 sm.graph_persist_password = &graphPersistPassword;
+                sm.graph_persist_role_membership = &graphPersistRoleMembership;
             }
         }
 
@@ -250,6 +251,11 @@ pub fn initialize(
             };
 
             if (agm.hasAuthRecords()) {
+                if (std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+                    allocator.free(env_pw);
+                    log.info("GEODE_ADMIN_PASSWORD ignored because auth records already exist", &.{});
+                } else |_| {}
+
                 // Verify HMAC chain integrity
                 agm.verifyChain(&kr.key) catch |err| {
                     log.err("AUTH TAMPER DETECTED - auth chain verification failed", &.{
@@ -390,6 +396,24 @@ fn hydrateSecurityManagerFromGraph(
 ) !geode_auth.SecurityManager {
     var sm = try geode_auth.SecurityManager.initEmpty(allocator);
 
+    // Hydrate roles first so user-role memberships can be restored without side effects.
+    var role_count: usize = 0;
+    var role_it = agm.storage.roleIterator();
+    while (role_it.next()) |record| {
+        const role = geode_auth.Role{
+            .id = record.id,
+            .name = try allocator.dupe(u8, record.getName()),
+            .description = try allocator.dupe(u8, record.getDescription()),
+            .permissions = try std.ArrayList(geode_auth.PermissionId).initCapacity(allocator, 0),
+            .created_at = record.created_at,
+            .is_system = record.is_system,
+            .priority = record.priority,
+            .parent_role = if (record.parent_role == 0) null else record.parent_role,
+        };
+        try sm.roles.put(record.id, role);
+        role_count += 1;
+    }
+
     // Hydrate users from auth graph storage
     var user_count: usize = 0;
     var it = agm.storage.userIterator();
@@ -405,8 +429,27 @@ fn hydrateSecurityManagerFromGraph(
             record.password_reset_required,
             record.mfa_enabled,
             record.getMFASecret(),
+            record.auth_version,
+            record.getAttributesJson(),
         );
         user_count += 1;
+    }
+
+    var assignment_count: usize = 0;
+    var membership_it = agm.storage.userIterator();
+    while (membership_it.next()) |record| {
+        const role_ids = try agm.storage.listUserRoleIds(allocator, record.id);
+        defer allocator.free(role_ids);
+
+        if (role_ids.len == 0) continue;
+        var entry = try sm.rbac.user_roles.getOrPut(record.id);
+        if (!entry.found_existing) {
+            entry.value_ptr.* = try std.ArrayList(geode_auth.RoleId).initCapacity(allocator, role_ids.len);
+        }
+        for (role_ids) |role_id| {
+            try entry.value_ptr.append(allocator, role_id);
+            assignment_count += 1;
+        }
     }
 
     // Set auth_graph_mgr and hmac_key on SecurityManager for future runtime mutations (Task 5)
@@ -417,7 +460,9 @@ fn hydrateSecurityManagerFromGraph(
     }
 
     log.info("Hydrated SecurityManager from auth graph", &.{
+        Attr.int("role_count", @intCast(role_count)),
         Attr.int("user_count", @intCast(user_count)),
+        Attr.int("assignment_count", @intCast(assignment_count)),
     });
 
     return sm;
@@ -450,12 +495,35 @@ fn graphPersistLoginState(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_
     };
 }
 
-fn graphPersistPassword(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) callconv(.auto) void {
+fn graphPersistPassword(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) callconv(.auto) u64 {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
-    agm.updateUserPassword(hmac_key, user_id, new_password_hash) catch |err| {
+    return agm.updateUserPassword(hmac_key, user_id, new_password_hash) catch |err| {
         log.warn("Failed to persist password change to auth graph", &.{
             Attr.string("error", @errorName(err)),
             Attr.uint("user_id", user_id),
         });
+        return 0;
     };
+}
+
+fn graphPersistRoleMembership(opaque_agm: *anyopaque, hmac_key: *const [32]u8, user_id: u64, role_id: u64, assign: bool) callconv(.auto) u64 {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
+    return if (assign)
+        agm.assignUserRole(hmac_key, user_id, role_id) catch |err| {
+            log.warn("Failed to persist role assignment to auth graph", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("user_id", user_id),
+                Attr.uint("role_id", role_id),
+            });
+            return 0;
+        }
+    else
+        agm.revokeUserRole(hmac_key, user_id, role_id) catch |err| {
+            log.warn("Failed to persist role revoke to auth graph", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("user_id", user_id),
+                Attr.uint("role_id", role_id),
+            });
+            return 0;
+        };
 }

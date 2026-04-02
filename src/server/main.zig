@@ -33,6 +33,7 @@ const metrics_server = @import("../monitoring/metrics_server.zig");
 // Import backup manager (M3.1 Phase 3 modularization)
 const backup_manager = geode.backup_manager;
 const SimplifiedBackupManager = backup_manager.SimplifiedBackupManager;
+const user_storage = @import("user_storage");
 // Import index catalog (M3.1 Phase 3 modularization)
 const index_catalog = @import("index_catalog.zig");
 // Import server flags (M3.1 Phase 3 modularization)
@@ -46,6 +47,73 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
+
+fn authRoleFromRecord(record: user_storage.UserStorageBackend.UserRecord) geode.user_management.Role {
+    return if (record.is_superuser) .Admin else .ReadWrite;
+}
+
+fn duplicatePersistentUser(allocator: std.mem.Allocator, record: user_storage.UserStorageBackend.UserRecord) !geode.user_management.User {
+    return .{
+        .username = try allocator.dupe(u8, record.getUsername()),
+        .password_hash = try allocator.dupe(u8, record.getPasswordHash()),
+        .email = try allocator.dupe(u8, record.getEmail()),
+        .role = authRoleFromRecord(record),
+        .created_at = record.created_at,
+        .last_login = if (record.last_login != 0) record.last_login else null,
+        .active = record.is_active,
+        .password_reset_required = record.password_reset_required,
+        .auth_version = record.auth_version,
+    };
+}
+
+fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?geode.user_management.User {
+    geode.graph_store.acquireStoreLock();
+    defer geode.graph_store.releaseStoreLock();
+
+    const store = geode.graph_store.getGlobalStore(allocator);
+    const record = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, username) orelse return null;
+    return try duplicatePersistentUser(allocator, record);
+}
+
+fn persistentAuthUsersExist(_: ?*anyopaque) anyerror!bool {
+    geode.graph_store.acquireStoreLock();
+    defer geode.graph_store.releaseStoreLock();
+
+    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
+    return user_storage.UserStorageBackend.hasUserRecordsInGraph(store);
+}
+
+fn lookupPersistentAuthVersion(_: ?*anyopaque, username: []const u8) anyerror!?u64 {
+    geode.graph_store.acquireStoreLock();
+    defer geode.graph_store.releaseStoreLock();
+
+    const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
+    return user_storage.UserStorageBackend.findUserAuthVersionByUsernameInGraph(store, username);
+}
+
+fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]geode.user_management.User {
+    geode.graph_store.acquireStoreLock();
+    defer geode.graph_store.releaseStoreLock();
+
+    const store = geode.graph_store.getGlobalStore(allocator);
+    const records = try user_storage.UserStorageBackend.listUsersFromGraph(allocator, store);
+    defer allocator.free(records);
+
+    const users = try allocator.alloc(geode.user_management.User, records.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (users[0..initialized]) |*user| {
+            user.deinit(allocator);
+        }
+        allocator.free(users);
+    }
+
+    for (records, 0..) |record, i| {
+        users[i] = try duplicatePersistentUser(allocator, record);
+        initialized += 1;
+    }
+    return users;
+}
 
 // CANARY: REQ=REQ-PERF-ASYNC-CONN-001; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPool; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0202: Async connection handling context for thread pool execution
@@ -299,19 +367,9 @@ pub fn main() !void {
         std.debug.print("[startup] certificates ready ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
     }
 
-    // Initialize AuditLogger (Phase 2 Spec Compliance)
-    // Audit logging is disabled by default; enable via GEODE_AUDIT_ENABLED=1
-    var audit_config = audit.AuditLogger.Config{};
-
-    // Check for audit enable flag
-    const audit_enable_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_ENABLED") catch null;
-    defer if (audit_enable_env) |e| gpa.free(e);
-    if (audit_enable_env) |e| {
-        if (std.mem.eql(u8, e, "1") or std.mem.eql(u8, e, "true")) {
-            audit_config.enabled = true;
-            log.info("Audit logging enabled via GEODE_AUDIT_ENABLED", &.{});
-        }
-    }
+    // Initialize AuditLogger.
+    // Security-graph mutations are audited by default; Debug builds may still opt out.
+    var audit_config = audit.AuditLogger.Config{ .enabled = true };
 
     // Check for audit disable flag — only allowed in Debug builds.
     const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
@@ -327,19 +385,26 @@ pub fn main() !void {
         }
     }
 
+    var default_audit_path: ?[]u8 = null;
+    defer if (default_audit_path) |p| gpa.free(p);
     const audit_path_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_LOG_PATH") catch null;
     defer if (audit_path_env) |p| gpa.free(p);
     if (audit_path_env) |p| {
         audit_config.file_path = p;
+    } else if (data_dir) |dir| {
+        default_audit_path = try std.fmt.allocPrint(gpa, "{s}/audit.jsonl", .{dir});
+        audit_config.file_path = default_audit_path.?;
     }
 
     // Create heap-allocated audit logger to ensure stability
     var audit_logger = try gpa.create(audit.AuditLogger);
     audit_logger.* = try audit.AuditLogger.init(gpa, audit_config);
     defer {
+        audit.setGlobalAuditLogger(null);
         audit_logger.deinit();
         gpa.destroy(audit_logger);
     }
+    audit.setGlobalAuditLogger(audit_logger);
 
     // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
     phase_start = std.time.milliTimestamp();
@@ -358,37 +423,24 @@ pub fn main() !void {
 
     std.debug.print("[startup] server initialized ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
 
-    // Sync users from auth graph store into the in-memory user store so that
-    // authenticate() can find users created by bootstrapDefaultAdmin().
     phase_start = std.time.milliTimestamp();
     if (init_ctx.auth_graph_mgr) |agm| {
-        var it = agm.storage.userIterator();
-        while (it.next()) |record| {
-            const username = record.getUsername();
-            if (username.len == 0) continue;
-            const role: user_mgmt.Role = if (record.is_superuser) .Admin else .ReadWrite;
-            user_mgmt.createUserWithHash(
-                gpa,
-                username,
-                record.getPasswordHash(),
-                record.getEmail(),
-                role,
-                record.password_reset_required,
-            ) catch |err| {
-                log.warn("Failed to sync auth graph user to in-memory store", &.{
-                    Attr.string("username", username),
-                    Attr.string("error", @errorName(err)),
-                });
-            };
-        }
+        _ = agm;
+        user_mgmt.setPersistentUserResolver(.{
+            .lookup_fn = lookupPersistentAuthUser,
+            .has_users_fn = persistentAuthUsersExist,
+            .list_fn = listPersistentAuthUsers,
+            .auth_version_fn = lookupPersistentAuthVersion,
+        });
+        log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
+    } else {
+        user_mgmt.setPersistentUserResolver(null);
+        user_mgmt.ensureDefaultUser(gpa) catch |err| {
+            log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
     }
-
-    // Create a default admin user if no users were loaded from the auth graph.
-    user_mgmt.ensureDefaultUser(gpa) catch |err| {
-        log.err("Failed to create default users", &.{Attr.string("error", @errorName(err))});
-        return err;
-    };
-    std.debug.print("[startup] user sync complete ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+    std.debug.print("[startup] auth cache configured ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
     const env_spill_threshold = init_ctx.env_config.spill_threshold;

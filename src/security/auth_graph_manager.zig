@@ -11,7 +11,9 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const graph_store = @import("geode").graph_store;
+const geode = @import("geode");
+const graph_store = geode.graph_store;
+const audit_mod = geode.security.audit;
 const auth_hmac = @import("auth_lib").hmac;
 const geode_auth = @import("geode_auth");
 const user_storage = @import("user_storage");
@@ -647,6 +649,52 @@ pub const AuthGraphManager = struct {
         try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
     }
 
+    fn logSecurityGraphMutation(self: *Self, event_type: audit_mod.AuditEventType, action: []const u8, user_id: u64, username: []const u8, details: ?[]const u8) void {
+        audit_mod.logSecurityGraphEvent(self.allocator, .{
+            .event_type = event_type,
+            .action = action,
+            .user_id = user_id,
+            .username = username,
+            .details = details,
+        });
+    }
+
+    pub fn upsertUserState(self: *Self, hmac_key: *const [32]u8, opts: UserStorageBackend.ManagedUserUpsert) !u64 {
+        const version = try self.storage.upsertManagedUser(opts);
+        try self.recomputeAndStoreUserHmac(opts.user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "UPSERT_USER_STATE", opts.user_id, opts.username, null);
+        return version;
+    }
+
+    pub fn assignUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const changed = try self.storage.assignUserRole(user_id, role_id);
+        if (!changed) {
+            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
+            return record.auth_version;
+        }
+        const version = try self.storage.bumpUserAuthVersion(user_id);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        self.logSecurityGraphMutation(.configuration_change, "ASSIGN_ROLE", user_id, record.getUsername(), null);
+        return version;
+    }
+
+    pub fn revokeUserRole(self: *Self, hmac_key: *const [32]u8, user_id: u64, role_id: u64) !u64 {
+        const changed = try self.storage.revokeUserRole(user_id, role_id);
+        if (!changed) {
+            const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
+            return record.auth_version;
+        }
+        const version = try self.storage.bumpUserAuthVersion(user_id);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        const record = self.storage.getUser(user_id) orelse return error.UserNotFound;
+        self.logSecurityGraphMutation(.configuration_change, "REVOKE_ROLE", user_id, record.getUsername(), null);
+        return version;
+    }
+
     // -- Runtime Mutation Persistence (called via SecurityManager callbacks) --
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-006; FEATURE="Runtime Auth Graph Persistence"; ASPECT=LoginState; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
@@ -666,15 +714,18 @@ pub const AuthGraphManager = struct {
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-007; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     /// Update a user record's password hash in the graph store.
     /// Recomputes the record HMAC and reseals the chain.
-    pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !void {
+    pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
         var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
         record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
         record.password_changed_at = std.time.milliTimestamp();
         record.updated_at = std.time.milliTimestamp();
+        record.auth_version += 1;
         try self.storage.user_cache.put(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
         try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "UPDATE_PASSWORD", user_id, record.getUsername(), null);
+        return record.auth_version;
     }
 };
 
@@ -730,10 +781,15 @@ fn computeUserHmac(hmac_key: *const [32]u8, record: *const UserStorageBackend.Us
     const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
     var failed_buf: [10]u8 = undefined;
     const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
+    var auth_version_buf: [20]u8 = undefined;
+    const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
 
     const mfa_secret = record.getMFASecret() orelse "";
+    const attributes_json = record.getAttributesJson() orelse "";
 
     const props = [_]auth_hmac.KeyValue{
+        .{ .key = "attributes_json", .value = attributes_json },
+        .{ .key = "auth_version", .value = auth_version_str },
         .{ .key = "created_at", .value = created_str },
         .{ .key = "email", .value = record.getEmail() },
         .{ .key = "failed_login_attempts", .value = failed_str },

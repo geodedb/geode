@@ -54,6 +54,7 @@ pub const User = struct {
     last_login: ?i64,
     active: bool,
     password_reset_required: bool = false,
+    auth_version: u64 = 1,
 
     pub fn deinit(self: *User, allocator: std.mem.Allocator) void {
         allocator.free(self.username);
@@ -65,19 +66,199 @@ pub const User = struct {
 pub const AuthResult = struct {
     role: Role,
     password_reset_required: bool,
+    auth_version: u64,
 };
 
-/// Global user store - in-memory for now
+pub const PersistentUserResolver = struct {
+    ctx: ?*anyopaque = null,
+    lookup_fn: *const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?User,
+    has_users_fn: *const fn (ctx: ?*anyopaque) anyerror!bool,
+    list_fn: ?*const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]User = null,
+    auth_version_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!?u64 = null,
+};
+
+const CachedUserNode = struct {
+    user: User,
+    prev: ?*CachedUserNode = null,
+    next: ?*CachedUserNode = null,
+};
+
+const UserCache = struct {
+    allocator: std.mem.Allocator,
+    entries: std.StringHashMap(*CachedUserNode),
+    head: ?*CachedUserNode = null,
+    tail: ?*CachedUserNode = null,
+    max_entries: usize,
+
+    fn init(allocator: std.mem.Allocator, max_entries: usize) UserCache {
+        return .{
+            .allocator = allocator,
+            .entries = std.StringHashMap(*CachedUserNode).init(allocator),
+            .max_entries = @max(@as(usize, 1), max_entries),
+        };
+    }
+
+    fn deinit(self: *UserCache) void {
+        var node = self.head;
+        while (node) |current| {
+            const next = current.next;
+            current.user.deinit(self.allocator);
+            self.allocator.destroy(current);
+            node = next;
+        }
+        self.entries.deinit();
+        self.head = null;
+        self.tail = null;
+    }
+
+    fn get(self: *UserCache, username: []const u8) ?*CachedUserNode {
+        const node = self.entries.get(username) orelse return null;
+        self.promote(node);
+        return node;
+    }
+
+    fn putOrUpdate(self: *UserCache, user: User) !*CachedUserNode {
+        if (self.entries.get(user.username)) |existing| {
+            self.promote(existing);
+            self.allocator.free(user.username);
+            self.allocator.free(existing.user.password_hash);
+            self.allocator.free(existing.user.email);
+            existing.user.password_hash = user.password_hash;
+            existing.user.email = user.email;
+            existing.user.role = user.role;
+            existing.user.created_at = user.created_at;
+            existing.user.last_login = user.last_login;
+            existing.user.active = user.active;
+            existing.user.password_reset_required = user.password_reset_required;
+            existing.user.auth_version = user.auth_version;
+            return existing;
+        }
+
+        const node = try self.allocator.create(CachedUserNode);
+        node.* = .{ .user = user };
+        try self.entries.put(node.user.username, node);
+        self.insertHead(node);
+        if (self.entries.count() > self.max_entries) {
+            self.evictTail();
+        }
+        return node;
+    }
+
+    fn remove(self: *UserCache, username: []const u8) bool {
+        const removed = self.entries.fetchRemove(username) orelse return false;
+        const node = removed.value;
+        self.unlink(node);
+        node.user.deinit(self.allocator);
+        self.allocator.destroy(node);
+        return true;
+    }
+
+    fn snapshot(self: *UserCache) ![]const User {
+        if (self.entries.count() == 0) return &[_]User{};
+
+        const result = try self.allocator.alloc(User, self.entries.count());
+        var i: usize = 0;
+        var node = self.head;
+        while (node) |current| {
+            result[i] = current.user;
+            i += 1;
+            node = current.next;
+        }
+        return result;
+    }
+
+    fn insertHead(self: *UserCache, node: *CachedUserNode) void {
+        node.prev = null;
+        node.next = self.head;
+        if (self.head) |head| head.prev = node;
+        self.head = node;
+        if (self.tail == null) self.tail = node;
+    }
+
+    fn promote(self: *UserCache, node: *CachedUserNode) void {
+        if (self.head == node) return;
+        self.unlink(node);
+        self.insertHead(node);
+    }
+
+    fn unlink(self: *UserCache, node: *CachedUserNode) void {
+        if (node.prev) |prev| {
+            prev.next = node.next;
+        } else {
+            self.head = node.next;
+        }
+        if (node.next) |next| {
+            next.prev = node.prev;
+        } else {
+            self.tail = node.prev;
+        }
+        node.prev = null;
+        node.next = null;
+    }
+
+    fn evictTail(self: *UserCache) void {
+        const node = self.tail orelse return;
+        const key = node.user.username;
+        _ = self.entries.fetchRemove(key);
+        self.unlink(node);
+        node.user.deinit(self.allocator);
+        self.allocator.destroy(node);
+    }
+};
+
+const AuthSnapshot = struct {
+    password_hash: []u8,
+    role: Role,
+    password_reset_required: bool,
+    active: bool,
+    auth_version: u64,
+};
+
+/// Global user store - LRU cache backed by optional persistent resolver.
 var user_store_mutex = std.Thread.Mutex{};
-var user_store: ?std.StringHashMap(User) = null;
+var user_store: ?UserCache = null;
 var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var persistent_resolver: ?PersistentUserResolver = null;
+
+const default_auth_cache_entries: usize = 256;
+
+fn authCacheCapacity(allocator: std.mem.Allocator) usize {
+    const env_val = std.process.getEnvVarOwned(allocator, "GEODE_AUTH_CACHE_SIZE") catch return default_auth_cache_entries;
+    defer allocator.free(env_val);
+    return std.fmt.parseInt(usize, env_val, 10) catch default_auth_cache_entries;
+}
+
+fn currentCacheAllocator() std.mem.Allocator {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    if (user_store) |*store| return store.allocator;
+    return std.heap.c_allocator;
+}
 
 pub fn initUserStore(allocator: std.mem.Allocator) !void {
     user_store_mutex.lock();
     defer user_store_mutex.unlock();
 
     if (user_store == null) {
-        user_store = std.StringHashMap(User).init(allocator);
+        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
+    }
+}
+
+pub fn setPersistentUserResolver(resolver: ?PersistentUserResolver) void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    persistent_resolver = resolver;
+}
+
+pub fn setCacheCapacityForTesting(max_entries: usize) !void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store) |*store| {
+        store.max_entries = @max(@as(usize, 1), max_entries);
+        while (store.entries.count() > store.max_entries) {
+            store.evictTail();
+        }
     }
 }
 
@@ -94,14 +275,10 @@ pub fn deinitUserStore() void {
     defer user_store_mutex.unlock();
 
     if (user_store) |*store| {
-        var iter = store.iterator();
-        while (iter.next()) |entry| {
-            var user = entry.value_ptr.*;
-            user.deinit(store.allocator);
-        }
         store.deinit();
         user_store = null;
     }
+    persistent_resolver = null;
 }
 
 /// Hash password using the canonical Argon2id implementation with OWASP parameters.
@@ -128,32 +305,34 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
     defer user_store_mutex.unlock();
 
     if (user_store == null) {
-        try initUserStore(allocator);
+        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
     }
 
     var store = &user_store.?;
+    const store_allocator = store.allocator;
 
     // Check if user already exists
-    if (store.contains(username)) {
+    if (store.entries.contains(username)) {
         return error.UserAlreadyExists;
     }
 
     // Hash password
-    const password_hash = try hashPassword(allocator, password);
+    const password_hash = try hashPassword(store_allocator, password);
 
     // Create user
     const user = User{
-        .username = try allocator.dupe(u8, username),
+        .username = try store_allocator.dupe(u8, username),
         .password_hash = password_hash,
-        .email = try allocator.dupe(u8, email),
+        .email = try store_allocator.dupe(u8, email),
         .role = role,
         .created_at = std.time.timestamp(),
         .last_login = null,
         .active = true,
         .password_reset_required = password_reset_required,
+        .auth_version = 1,
     };
 
-    try store.put(try allocator.dupe(u8, username), user);
+    _ = try store.putOrUpdate(user);
 }
 
 /// Create a user with a pre-hashed password (for syncing from auth graph store).
@@ -163,69 +342,43 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
     defer user_store_mutex.unlock();
 
     if (user_store == null) {
-        try initUserStore(allocator);
+        user_store = UserCache.init(allocator, authCacheCapacity(allocator));
     }
 
     var store = &user_store.?;
+    const store_allocator = store.allocator;
 
     // Skip if user already exists
-    if (store.contains(username)) {
+    if (store.entries.contains(username)) {
         return;
     }
 
     const user = User{
-        .username = try allocator.dupe(u8, username),
-        .password_hash = try allocator.dupe(u8, password_hash),
-        .email = try allocator.dupe(u8, email),
+        .username = try store_allocator.dupe(u8, username),
+        .password_hash = try store_allocator.dupe(u8, password_hash),
+        .email = try store_allocator.dupe(u8, email),
         .role = role,
         .created_at = std.time.timestamp(),
         .last_login = null,
         .active = true,
         .password_reset_required = password_reset_required,
+        .auth_version = 1,
     };
 
-    try store.put(try allocator.dupe(u8, username), user);
+    _ = try store.putOrUpdate(user);
 }
 
 /// Authenticate user with username and password.
 /// The Argon2id verification (10-50ms) runs OUTSIDE the mutex to avoid
 /// serializing all auth operations behind a single lock.
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
-    // Phase 1: Acquire lock, copy user data, release lock.
-    const lookup = blk: {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
-
-        if (user_store == null) {
-            break :blk error.Unauthenticated;
-        }
-
-        var store = &user_store.?;
-
-        // Get user from in-memory store (populated from graph store at startup)
-        const user = store.get(username) orelse break :blk error.Unauthenticated;
-
-        // Check if user is active
-        if (!user.active) {
-            break :blk error.Unauthenticated;
-        }
-
-        // Copy password hash and auth result to stack-local storage.
-        // The hash is a pointer into the HashMap value — safe to read while
-        // we hold the lock, but we must copy it before releasing.
-        break :blk .{
-            .password_hash = user.password_hash,
-            .role = user.role,
-            .password_reset_required = user.password_reset_required,
-        };
-    };
-
-    const user_data = lookup catch return error.Unauthenticated;
+    const user_data = try getAuthSnapshot(username) orelse return error.Unauthenticated;
+    defer std.heap.c_allocator.free(user_data.password_hash);
 
     // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
-    // If the user was deleted between phase 1 and phase 2, the worst case
-    // is that we verify against a now-stale hash and return success for a
-    // deleted user — the caller should re-check session validity.
+    if (!user_data.active) {
+        return error.Unauthenticated;
+    }
     if (!verifyPassword(password, user_data.password_hash)) {
         return error.Unauthenticated;
     }
@@ -233,6 +386,7 @@ pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
     return AuthResult{
         .role = user_data.role,
         .password_reset_required = user_data.password_reset_required,
+        .auth_version = user_data.auth_version,
     };
 }
 
@@ -249,33 +403,18 @@ pub fn hasPermission(role: Role, permission: Permission) bool {
 
 /// Get user by username
 pub fn getUser(username: []const u8) ?User {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
-
-    if (user_store == null) return null;
-
-    return user_store.?.get(username);
+    return getUserInternal(username) catch null;
 }
 
 /// GAP-0270: List all users in the in-memory store
 pub fn listUsers() ![]const User {
+    try loadAllUsersFromResolver();
+
     user_store_mutex.lock();
     defer user_store_mutex.unlock();
 
     if (user_store == null) return &[_]User{};
-    const store = &user_store.?;
-    var count: usize = 0;
-    var iter = store.iterator();
-    while (iter.next()) |_| count += 1;
-    if (count == 0) return &[_]User{};
-    const result = try store.allocator.alloc(User, count);
-    var i: usize = 0;
-    var iter2 = store.iterator();
-    while (iter2.next()) |entry| {
-        result[i] = entry.value_ptr.*;
-        i += 1;
-    }
-    return result;
+    return user_store.?.snapshot();
 }
 
 /// GAP-0270: Delete a user from the in-memory store
@@ -284,39 +423,56 @@ pub fn deleteUser(username: []const u8) !void {
     defer user_store_mutex.unlock();
 
     if (user_store == null) return error.Unauthenticated;
-    var store = &user_store.?;
-    if (!store.contains(username)) return error.Unauthenticated;
-    _ = store.fetchRemove(username);
+    if (!user_store.?.remove(username)) return error.Unauthenticated;
 }
 
 /// Check if any users exist
 pub fn hasUsers() bool {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    const resolver = blk: {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
 
-    if (user_store == null) return false;
-    return user_store.?.count() > 0;
+        if (user_store != null and user_store.?.entries.count() > 0) return true;
+        break :blk persistent_resolver;
+    };
+
+    if (resolver) |r| {
+        return r.has_users_fn(r.ctx) catch false;
+    }
+    return false;
 }
 
 /// Update a user's password and clear the password_reset_required flag.
 /// The new password must not match the current password (prevents reuse).
 pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, new_password: []const u8) !void {
+    _ = allocator;
+    if (!try ensureUserCached(username)) return error.Unauthenticated;
+
     user_store_mutex.lock();
     defer user_store_mutex.unlock();
 
     if (user_store == null) return error.Unauthenticated;
-    var store = &user_store.?;
-    const user_ptr = store.getPtr(username) orelse return error.Unauthenticated;
+    const store_allocator = user_store.?.allocator;
+    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
 
     // Reject if new password matches current password
-    if (verifyPassword(new_password, user_ptr.password_hash)) {
+    if (verifyPassword(new_password, user_ptr.user.password_hash)) {
         return error.PasswordReuse;
     }
 
     // Free the old password hash before replacing
-    allocator.free(user_ptr.password_hash);
-    user_ptr.password_hash = try hashPassword(allocator, new_password);
-    user_ptr.password_reset_required = false;
+    store_allocator.free(user_ptr.user.password_hash);
+    user_ptr.user.password_hash = try hashPassword(store_allocator, new_password);
+    user_ptr.user.password_reset_required = false;
+    user_ptr.user.auth_version += 1;
+}
+
+pub fn invalidateCachedUser(username: []const u8) void {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    if (user_store) |*store| {
+        _ = store.remove(username);
+    }
 }
 
 /// Generate a cryptographically secure random password
@@ -338,6 +494,10 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
 /// GAP-0104 SECURITY FIX: Removed hardcoded credentials. Uses environment variables
 /// or generates cryptographically secure random passwords that are logged once on first startup.
 pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
+    if (persistentResolverEnabled()) {
+        return;
+    }
+
     if (!hasUsers()) {
         // Get credentials from environment variables (no hardcoded fallback)
         const admin_user = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {
@@ -377,4 +537,385 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
             });
         }
     }
+}
+
+fn persistentResolverEnabled() bool {
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    return persistent_resolver != null;
+}
+
+fn resolvePersistentUser(allocator: std.mem.Allocator, username: []const u8) !?User {
+    const resolver = blk: {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
+        break :blk persistent_resolver;
+    };
+
+    if (resolver) |r| {
+        return r.lookup_fn(r.ctx, allocator, username);
+    }
+    return null;
+}
+
+fn resolvePersistentAuthVersion(username: []const u8) !?u64 {
+    const resolver = blk: {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
+        break :blk persistent_resolver;
+    };
+
+    if (resolver) |r| {
+        if (r.auth_version_fn) |lookup| {
+            return lookup(r.ctx, username);
+        }
+    }
+    return null;
+}
+
+fn loadAllUsersFromResolver() !void {
+    const resolver = blk: {
+        user_store_mutex.lock();
+        defer user_store_mutex.unlock();
+        break :blk persistent_resolver;
+    };
+
+    if (resolver == null or resolver.?.list_fn == null) return;
+    const cache_allocator = currentCacheAllocator();
+    const loaded = try resolver.?.list_fn.?(resolver.?.ctx, cache_allocator);
+    defer cache_allocator.free(loaded);
+
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) {
+        user_store = UserCache.init(cache_allocator, authCacheCapacity(cache_allocator));
+    }
+
+    for (loaded) |user| {
+        _ = user_store.?.putOrUpdate(user) catch |err| {
+            var owned = user;
+            owned.deinit(cache_allocator);
+            return err;
+        };
+    }
+}
+
+fn ensureUserCached(username: []const u8) !bool {
+    user_store_mutex.lock();
+    if (user_store) |*store| {
+        if (store.get(username) != null) {
+            user_store_mutex.unlock();
+            return true;
+        }
+    }
+    user_store_mutex.unlock();
+
+    const cache_allocator = currentCacheAllocator();
+    const resolved = try resolvePersistentUser(cache_allocator, username);
+    if (resolved == null) return false;
+
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    if (user_store == null) {
+        user_store = UserCache.init(cache_allocator, authCacheCapacity(cache_allocator));
+    }
+    _ = try user_store.?.putOrUpdate(resolved.?);
+    return true;
+}
+
+fn refreshCachedUserIfStale(username: []const u8) !bool {
+    if (!try ensureUserCached(username)) return false;
+
+    const persistent_version = try resolvePersistentAuthVersion(username);
+    if (persistent_version == null) return true;
+
+    var cached_version: ?u64 = null;
+    user_store_mutex.lock();
+    if (user_store) |*store| {
+        if (store.get(username)) |node| {
+            cached_version = node.user.auth_version;
+        }
+    }
+    user_store_mutex.unlock();
+
+    if (cached_version == null or cached_version.? == persistent_version.?) return true;
+
+    invalidateCachedUser(username);
+    return ensureUserCached(username);
+}
+
+pub fn currentAuthVersion(username: []const u8) !?u64 {
+    if (try resolvePersistentAuthVersion(username)) |version| {
+        return version;
+    }
+    if (!try ensureUserCached(username)) return null;
+
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return cached.user.auth_version;
+}
+
+pub fn isSessionAuthCurrent(username: []const u8, session_auth_version: u64) !bool {
+    const current_version = try currentAuthVersion(username) orelse return false;
+    return current_version == session_auth_version;
+}
+
+fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
+    if (!try refreshCachedUserIfStale(username)) return null;
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return AuthSnapshot{
+        .password_hash = try std.heap.c_allocator.dupe(u8, cached.user.password_hash),
+        .role = cached.user.role,
+        .password_reset_required = cached.user.password_reset_required,
+        .active = cached.user.active,
+        .auth_version = cached.user.auth_version,
+    };
+}
+
+fn getUserInternal(username: []const u8) !?User {
+    if (!try refreshCachedUserIfStale(username)) return null;
+    user_store_mutex.lock();
+    defer user_store_mutex.unlock();
+
+    if (user_store == null) return null;
+    const cached = user_store.?.entries.get(username) orelse return null;
+    return cached.user;
+}
+
+const testing = std.testing;
+
+const TestUserDef = struct {
+    username: []const u8,
+    password: []const u8,
+    email: []const u8,
+    role: Role = .ReadWrite,
+    active: bool = true,
+    password_reset_required: bool = false,
+    auth_version: u64 = 1,
+};
+
+const TestResolverState = struct {
+    users: []const TestUserDef,
+    lookup_calls: usize = 0,
+    list_calls: usize = 0,
+    has_users: bool = true,
+
+    fn lookup(ctx: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?User {
+        const self: *TestResolverState = @ptrCast(@alignCast(ctx orelse return null));
+        self.lookup_calls += 1;
+        for (self.users) |entry| {
+            if (std.mem.eql(u8, entry.username, username)) {
+                return .{
+                    .username = try allocator.dupe(u8, entry.username),
+                    .password_hash = try hashPassword(allocator, entry.password),
+                    .email = try allocator.dupe(u8, entry.email),
+                    .role = entry.role,
+                    .created_at = 0,
+                    .last_login = null,
+                    .active = entry.active,
+                    .password_reset_required = entry.password_reset_required,
+                    .auth_version = entry.auth_version,
+                };
+            }
+        }
+        return null;
+    }
+
+    fn hasUsers(ctx: ?*anyopaque) anyerror!bool {
+        const self: *TestResolverState = @ptrCast(@alignCast(ctx orelse return false));
+        return self.has_users;
+    }
+
+    fn listUsers(ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]User {
+        const self: *TestResolverState = @ptrCast(@alignCast(ctx orelse return allocator.alloc(User, 0)));
+        self.list_calls += 1;
+
+        const users = try allocator.alloc(User, self.users.len);
+        var initialized: usize = 0;
+        errdefer {
+            for (users[0..initialized]) |*user| {
+                user.deinit(allocator);
+            }
+            allocator.free(users);
+        }
+
+        for (self.users, 0..) |entry, i| {
+            users[i] = .{
+                .username = try allocator.dupe(u8, entry.username),
+                .password_hash = try hashPassword(allocator, entry.password),
+                .email = try allocator.dupe(u8, entry.email),
+                .role = entry.role,
+                .created_at = 0,
+                .last_login = null,
+                .active = entry.active,
+                .password_reset_required = entry.password_reset_required,
+                .auth_version = entry.auth_version,
+            };
+            initialized += 1;
+        }
+        return users;
+    }
+
+    fn authVersion(ctx: ?*anyopaque, username: []const u8) anyerror!?u64 {
+        const self: *TestResolverState = @ptrCast(@alignCast(ctx orelse return null));
+        for (self.users) |entry| {
+            if (std.mem.eql(u8, entry.username, username)) {
+                return entry.auth_version;
+            }
+        }
+        return null;
+    }
+};
+
+test "authenticate uses persistent resolver and caches result" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var state = TestResolverState{
+        .users = &[_]TestUserDef{
+            .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .Admin },
+        },
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    const first = try authenticate("alice", "Password1!");
+    try testing.expectEqual(Role.Admin, first.role);
+    try testing.expectEqual(@as(usize, 1), state.lookup_calls);
+
+    const second = try authenticate("alice", "Password1!");
+    try testing.expectEqual(Role.Admin, second.role);
+    try testing.expectEqual(@as(usize, 1), state.lookup_calls);
+}
+
+test "isSessionAuthCurrent detects persistent auth version bump" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var users = [_]TestUserDef{
+        .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .ReadWrite, .auth_version = 1 },
+    };
+    var state = TestResolverState{
+        .users = users[0..],
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    const auth = try authenticate("alice", "Password1!");
+    try testing.expect(try isSessionAuthCurrent("alice", auth.auth_version));
+
+    users[0].auth_version = 2;
+    try testing.expect(!(try isSessionAuthCurrent("alice", auth.auth_version)));
+}
+
+test "authenticate refreshes cached role after persistent auth version bump" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var users = [_]TestUserDef{
+        .{ .username = "alice", .password = "Password1!", .email = "alice@example.com", .role = .ReadWrite, .auth_version = 1 },
+    };
+    var state = TestResolverState{
+        .users = users[0..],
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    const first = try authenticate("alice", "Password1!");
+    try testing.expectEqual(Role.ReadWrite, first.role);
+    try testing.expectEqual(@as(usize, 1), state.lookup_calls);
+
+    users[0].role = .Admin;
+    users[0].auth_version = 2;
+
+    const second = try authenticate("alice", "Password1!");
+    try testing.expectEqual(Role.Admin, second.role);
+    try testing.expectEqual(@as(usize, 2), state.lookup_calls);
+    try testing.expectEqual(@as(u64, 2), second.auth_version);
+}
+
+test "auth cache evicts least recently used user" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+    try setCacheCapacityForTesting(2);
+
+    var state = TestResolverState{
+        .users = &[_]TestUserDef{
+            .{ .username = "alice", .password = "Password1!", .email = "alice@example.com" },
+            .{ .username = "bob", .password = "Password2!", .email = "bob@example.com" },
+            .{ .username = "carol", .password = "Password3!", .email = "carol@example.com" },
+        },
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    _ = try authenticate("alice", "Password1!");
+    _ = try authenticate("bob", "Password2!");
+    _ = try authenticate("alice", "Password1!");
+    _ = try authenticate("carol", "Password3!");
+    try testing.expectEqual(@as(usize, 3), state.lookup_calls);
+
+    _ = try authenticate("bob", "Password2!");
+    try testing.expectEqual(@as(usize, 4), state.lookup_calls);
+}
+
+test "ensureDefaultUser is ignored when persistent resolver is configured" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+
+    var state = TestResolverState{
+        .users = &[_]TestUserDef{},
+        .has_users = false,
+    };
+    setPersistentUserResolver(.{
+        .ctx = &state,
+        .lookup_fn = TestResolverState.lookup,
+        .has_users_fn = TestResolverState.hasUsers,
+        .list_fn = TestResolverState.listUsers,
+        .auth_version_fn = TestResolverState.authVersion,
+    });
+
+    try ensureDefaultUser(testing.allocator);
+    try testing.expectError(error.Unauthenticated, authenticate("geode", "irrelevant-password"));
+    try testing.expectEqual(@as(usize, 1), state.lookup_calls);
 }

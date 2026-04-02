@@ -43,6 +43,68 @@ const ExportEventJson = struct {
 pub const AuditEvent = rls.AuditLogger.AuditEvent;
 pub const AuditEventType = rls.AuditLogger.AuditEvent.EventType;
 
+pub const SecurityGraphEvent = struct {
+    event_type: AuditEventType = .configuration_change,
+    action: []const u8,
+    user_id: u64 = 0,
+    username: []const u8 = "",
+    details: ?[]const u8 = null,
+};
+
+pub var global_audit_logger: ?*AuditLogger = null;
+pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
+
+pub fn setGlobalAuditLogger(logger: ?*AuditLogger) void {
+    global_audit_logger_mutex.lock();
+    defer global_audit_logger_mutex.unlock();
+    global_audit_logger = logger;
+}
+
+pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) void {
+    global_audit_logger_mutex.lock();
+    const logger = global_audit_logger;
+    global_audit_logger_mutex.unlock();
+    if (logger == null or !logger.?.enabled) return;
+
+    var detail_map = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var it = detail_map.iterator();
+        while (it.next()) |entry| allocator.free(entry.value_ptr.*);
+        detail_map.deinit();
+    }
+
+    if (event.username.len != 0) {
+        detail_map.put("username", allocator.dupe(u8, event.username) catch return) catch return;
+    }
+    if (event.details) |details| {
+        detail_map.put("details", allocator.dupe(u8, details) catch return) catch return;
+    }
+
+    var audit_event = AuditEvent{
+        .timestamp = std.time.milliTimestamp(),
+        .event_type = event.event_type,
+        .severity = .info,
+        .user_id = event.user_id,
+        .session_id = "",
+        .resource = .{
+            .type = "graph",
+            .id = "__geode_security",
+            .name = "__geode_security",
+            .graph = "__geode_security",
+            .table = null,
+        },
+        .action = event.action,
+        .result = .success,
+        .details = detail_map,
+    };
+    logger.?.appendAuditEvent(&audit_event) catch |err| {
+        log.warn("Failed to append security graph audit event", &.{
+            Attr.string("action", event.action),
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
 pub const AuditLogger = struct {
     const DigestBuf = std.ArrayList([32]u8);
     allocator: Allocator,
@@ -105,6 +167,7 @@ pub const AuditLogger = struct {
                 .truncate = false,
                 .read = true, // Needed for initFromTail
                 .exclusive = false,
+                .mode = 0o600,
             }) catch |err| {
                 return err;
             };
@@ -158,8 +221,52 @@ pub const AuditLogger = struct {
             return;
         }
 
-        log.err("Signing keys missing - GEODE_AUDIT_PUB/SEC required", &.{});
-        return error.SigningKeysMissing;
+        try self.loadOrCreateFileBackedKeys();
+    }
+
+    fn loadOrCreateFileBackedKeys(self: *AuditLogger) !void {
+        const pub_path = try std.fmt.allocPrint(self.allocator, "{s}.pub", .{self.config.file_path});
+        defer self.allocator.free(pub_path);
+        const sec_path = try std.fmt.allocPrint(self.allocator, "{s}.key", .{self.config.file_path});
+        defer self.allocator.free(sec_path);
+
+        const pub_hex = std.fs.cwd().readFileAlloc(self.allocator, pub_path, 64) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        defer if (pub_hex) |bytes| self.allocator.free(bytes);
+
+        const sec_hex = std.fs.cwd().readFileAlloc(self.allocator, sec_path, 128) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        defer if (sec_hex) |bytes| self.allocator.free(bytes);
+
+        if (pub_hex != null and sec_hex != null) {
+            if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
+                return error.ConfigError;
+            }
+            var kp: Ed25519.KeyPair = undefined;
+            _ = try std.fmt.hexToBytes(&kp.public_key.bytes, pub_hex.?);
+            _ = try std.fmt.hexToBytes(&kp.secret_key.bytes, sec_hex.?);
+            self.signing_key = kp;
+            return;
+        }
+
+        const kp = Ed25519.KeyPair.generate();
+        const generated_pub = std.fmt.bytesToHex(kp.public_key.bytes, .lower);
+        const generated_sec = std.fmt.bytesToHex(kp.secret_key.bytes, .lower);
+
+        const pub_file = try std.fs.cwd().createFile(pub_path, .{ .truncate = true, .mode = 0o600 });
+        defer pub_file.close();
+        try pub_file.writeAll(&generated_pub);
+
+        const sec_file = try std.fs.cwd().createFile(sec_path, .{ .truncate = true, .mode = 0o600 });
+        defer sec_file.close();
+        try sec_file.writeAll(&generated_sec);
+
+        self.signing_key = kp;
+        log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
     }
 
     fn initFromTail(self: *AuditLogger) !void {

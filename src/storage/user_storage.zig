@@ -15,6 +15,7 @@ const ROLE_LABEL = "Role";
 const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";
 const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
+const HAS_ROLE_EDGE = "HAS_ROLE";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
@@ -67,6 +68,9 @@ pub const UserStorageBackend = struct {
         hash_algorithm_len: u16,
         is_default_user: bool, // auto-created admin flag
         password_reset_required: bool, // force password change on next login
+        auth_version: u64, // monotonic session invalidation version
+        attributes_json: [2048]u8,
+        attributes_json_len: u16,
         // Variable-length attributes section follows (unused in GraphStore backend)
         attributes_len: u32,
 
@@ -89,6 +93,11 @@ pub const UserStorageBackend = struct {
 
         pub fn getHashAlgorithm(self: *const UserRecord) []const u8 {
             return self.hash_algorithm[0..self.hash_algorithm_len];
+        }
+
+        pub fn getAttributesJson(self: *const UserRecord) ?[]const u8 {
+            if (self.attributes_json_len == 0) return null;
+            return self.attributes_json[0..self.attributes_json_len];
         }
     };
 
@@ -238,35 +247,80 @@ pub const UserStorageBackend = struct {
         if (nodes_opt == null) return;
 
         for (nodes_opt.?) |node_id| {
-            const node = self.store.getNodePtr(node_id) orelse continue;
-            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
-
-            const id_val = getIntProp(self.store, node_id, "id", -1);
-            if (id_val < 0) continue;
-            const user_id: u64 = @intCast(id_val);
-
-            var record = blankUserRecord(user_id);
-            record.username_len = copyIntoField(&record.username, getStringProp(self.store, node_id, "username", ""));
-            record.email_len = copyIntoField(&record.email, getStringProp(self.store, node_id, "email", ""));
-            record.password_hash_len = copyIntoField(&record.password_hash, getStringProp(self.store, node_id, "password_hash", ""));
-            _ = copyIntoField(&record.salt, getStringProp(self.store, node_id, "salt", ""));
-            record.is_active = getBoolProp(self.store, node_id, "is_active", true);
-            record.is_superuser = getBoolProp(self.store, node_id, "is_superuser", false);
-            record.mfa_enabled = getBoolProp(self.store, node_id, "mfa_enabled", false);
-            record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(self.store, node_id, "mfa_secret", ""));
-            record.failed_login_attempts = @intCast(@max(0, getIntProp(self.store, node_id, "failed_login_attempts", 0)));
-            record.lockout_until = getIntProp(self.store, node_id, "lockout_until", 0);
-            record.last_login = getIntProp(self.store, node_id, "last_login", 0);
-            record.created_at = getIntProp(self.store, node_id, "created_at", std.time.milliTimestamp());
-            record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
-            record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(self.store, node_id, "hash_algorithm", ""));
-            record.is_default_user = getBoolProp(self.store, node_id, "is_default_user", false);
-            record.password_reset_required = getBoolProp(self.store, node_id, "password_reset_required", false);
-            record.password_changed_at = getIntProp(self.store, node_id, "password_changed_at", 0);
-
-            try self.user_cache.put(user_id, record);
-            try self.user_nodes.put(user_id, node_id);
+            const record = loadUserRecordFromNode(self.store, node_id) orelse continue;
+            try self.user_cache.put(record.id, record);
+            try self.user_nodes.put(record.id, node_id);
         }
+    }
+
+    fn loadUserRecordFromNode(store: *graph_store.GraphStore, node_id: u64) ?UserRecord {
+        const node = store.getNodePtr(node_id) orelse return null;
+        if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) return null;
+
+        const id_val = getIntProp(store, node_id, "id", -1);
+        if (id_val < 0) return null;
+        const user_id: u64 = @intCast(id_val);
+
+        var record = blankUserRecord(user_id);
+        record.username_len = copyIntoField(&record.username, getStringProp(store, node_id, "username", ""));
+        record.email_len = copyIntoField(&record.email, getStringProp(store, node_id, "email", ""));
+        record.password_hash_len = copyIntoField(&record.password_hash, getStringProp(store, node_id, "password_hash", ""));
+        _ = copyIntoField(&record.salt, getStringProp(store, node_id, "salt", ""));
+        record.is_active = getBoolProp(store, node_id, "is_active", true);
+        record.is_superuser = getBoolProp(store, node_id, "is_superuser", false);
+        record.mfa_enabled = getBoolProp(store, node_id, "mfa_enabled", false);
+        record.mfa_secret_len = copyIntoField(&record.mfa_secret, getStringProp(store, node_id, "mfa_secret", ""));
+        record.failed_login_attempts = @intCast(@max(0, getIntProp(store, node_id, "failed_login_attempts", 0)));
+        record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
+        record.last_login = getIntProp(store, node_id, "last_login", 0);
+        record.created_at = getIntProp(store, node_id, "created_at", std.time.milliTimestamp());
+        record.updated_at = getIntProp(store, node_id, "updated_at", record.created_at);
+        record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(store, node_id, "hash_algorithm", ""));
+        record.is_default_user = getBoolProp(store, node_id, "is_default_user", false);
+        record.password_reset_required = getBoolProp(store, node_id, "password_reset_required", false);
+        record.auth_version = @intCast(@max(1, getIntProp(store, node_id, "auth_version", 1)));
+        record.attributes_json_len = copyIntoField(&record.attributes_json, getStringProp(store, node_id, "attributes_json", ""));
+        record.password_changed_at = getIntProp(store, node_id, "password_changed_at", 0);
+        return record;
+    }
+
+    pub fn hasUserRecordsInGraph(store: *graph_store.GraphStore) bool {
+        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
+        return nodes_opt != null and nodes_opt.?.len > 0;
+    }
+
+    pub fn findUserByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?UserRecord {
+        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
+        if (nodes_opt == null) return null;
+
+        for (nodes_opt.?) |node_id| {
+            const record = loadUserRecordFromNode(store, node_id) orelse continue;
+            if (std.mem.eql(u8, record.getUsername(), username)) {
+                return record;
+            }
+        }
+        return null;
+    }
+
+    pub fn listUsersFromGraph(allocator: Allocator, store: *graph_store.GraphStore) ![]UserRecord {
+        const nodes_opt = store.getNodesByLabel(SECURITY_GRAPH_NAME, USER_LABEL);
+        if (nodes_opt == null or nodes_opt.?.len == 0) {
+            return allocator.alloc(UserRecord, 0);
+        }
+
+        var records = std.ArrayList(UserRecord).empty;
+        defer records.deinit(allocator);
+
+        for (nodes_opt.?) |node_id| {
+            const record = loadUserRecordFromNode(store, node_id) orelse continue;
+            try records.append(allocator, record);
+        }
+        return records.toOwnedSlice(allocator);
+    }
+
+    pub fn findUserAuthVersionByUsernameInGraph(store: *graph_store.GraphStore, username: []const u8) ?u64 {
+        const record = findUserByUsernameInGraph(store, username) orelse return null;
+        return @max(@as(u64, 1), record.auth_version);
     }
 
     fn loadRolesFromGraph(self: *Self) !void {
@@ -364,6 +418,7 @@ pub const UserStorageBackend = struct {
         _ = copyIntoField(&record.salt, salt);
         record.created_at = std.time.milliTimestamp();
         record.updated_at = record.created_at;
+        record.auth_version = 1;
 
         try self.user_cache.put(user_id, record);
         try self.upsertUserNode(record);
@@ -371,6 +426,7 @@ pub const UserStorageBackend = struct {
 
     pub fn updateUser(self: *Self, user_id: u64, email: ?[]const u8, password_hash: ?[]const u8, is_active: ?bool, mfa_enabled: ?bool, mfa_secret: ?[]const u8) !void {
         var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        var bump_auth_version = false;
 
         if (email) |e| {
             if (e.len > 127) return error.FieldTooLong;
@@ -379,21 +435,169 @@ pub const UserStorageBackend = struct {
 
         if (password_hash) |ph| {
             if (ph.len > 127) return error.FieldTooLong;
+            if (!std.mem.eql(u8, record.getPasswordHash(), ph)) {
+                bump_auth_version = true;
+                record.password_changed_at = std.time.milliTimestamp();
+            }
             record.password_hash_len = copyIntoField(&record.password_hash, ph);
         }
 
-        if (is_active) |active| record.is_active = active;
-        if (mfa_enabled) |enabled| record.mfa_enabled = enabled;
+        if (is_active) |active| {
+            if (record.is_active != active) bump_auth_version = true;
+            record.is_active = active;
+        }
+        if (mfa_enabled) |enabled| {
+            if (record.mfa_enabled != enabled) bump_auth_version = true;
+            record.mfa_enabled = enabled;
+        }
 
         if (mfa_secret) |secret| {
             if (secret.len > 63) return error.FieldTooLong;
+            if (record.getMFASecret()) |existing| {
+                if (!std.mem.eql(u8, existing, secret)) bump_auth_version = true;
+            } else {
+                bump_auth_version = true;
+            }
             record.mfa_secret_len = copyIntoField(&record.mfa_secret, secret);
         }
 
         record.updated_at = std.time.milliTimestamp();
+        if (bump_auth_version) {
+            record.auth_version += 1;
+        }
 
         try self.user_cache.put(user_id, record);
         try self.upsertUserNode(record);
+    }
+
+    pub const ManagedUserUpsert = struct {
+        user_id: u64,
+        username: []const u8,
+        email: []const u8,
+        password_hash: []const u8,
+        is_active: bool = true,
+        is_superuser: bool = false,
+        mfa_enabled: bool = false,
+        mfa_secret: ?[]const u8 = null,
+        password_reset_required: bool = false,
+        attributes_json: ?[]const u8 = null,
+        bump_auth_version: bool = false,
+    };
+
+    pub fn upsertManagedUser(self: *Self, opts: ManagedUserUpsert) !u64 {
+        if (opts.username.len > 63 or opts.email.len > 127 or opts.password_hash.len > 255) {
+            return error.FieldTooLong;
+        }
+        if (opts.mfa_secret) |secret| {
+            if (secret.len > 63) return error.FieldTooLong;
+        }
+        if (opts.attributes_json) |attrs| {
+            if (attrs.len > 2047) return error.FieldTooLong;
+        }
+
+        var record = self.user_cache.get(opts.user_id) orelse blankUserRecord(opts.user_id);
+        const is_new_record = self.user_cache.get(opts.user_id) == null;
+
+        record.username_len = copyIntoField(&record.username, opts.username);
+        record.email_len = copyIntoField(&record.email, opts.email);
+        const password_hash_changed = !std.mem.eql(u8, record.getPasswordHash(), opts.password_hash);
+        record.password_hash_len = copyIntoField(&record.password_hash, opts.password_hash);
+        record.is_active = opts.is_active;
+        record.is_superuser = opts.is_superuser;
+        record.mfa_enabled = opts.mfa_enabled;
+        record.password_reset_required = opts.password_reset_required;
+        record.mfa_secret_len = if (opts.mfa_secret) |secret| copyIntoField(&record.mfa_secret, secret) else 0;
+        if (opts.attributes_json) |attrs| {
+            record.attributes_json_len = copyIntoField(&record.attributes_json, attrs);
+        } else {
+            @memset(record.attributes_json[0..], 0);
+            record.attributes_json_len = 0;
+        }
+
+        const now = std.time.milliTimestamp();
+        if (is_new_record) {
+            record.created_at = now;
+            record.auth_version = 1;
+        }
+        if ((opts.bump_auth_version or password_hash_changed) and !is_new_record) {
+            record.auth_version = record.auth_version + 1;
+        }
+        if (password_hash_changed) {
+            record.password_changed_at = now;
+        }
+        record.updated_at = now;
+
+        try self.user_cache.put(opts.user_id, record);
+        try self.upsertUserNode(record);
+        return record.auth_version;
+    }
+
+    pub fn bumpUserAuthVersion(self: *Self, user_id: u64) !u64 {
+        var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
+        record.auth_version += 1;
+        record.updated_at = std.time.milliTimestamp();
+        try self.user_cache.put(user_id, record);
+        try self.upsertUserNode(record);
+        return record.auth_version;
+    }
+
+    pub fn assignUserRole(self: *Self, user_id: u64, role_id: u64) !bool {
+        const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
+        const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
+
+        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+            for (edge_ids) |edge_id| {
+                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
+                if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
+                if (edge.to_id == role_node_id) return false;
+            }
+        }
+
+        _ = try self.store.createEdgeWithGraph(user_node_id, role_node_id, HAS_ROLE_EDGE, SECURITY_GRAPH_NAME);
+        return true;
+    }
+
+    pub fn revokeUserRole(self: *Self, user_id: u64, role_id: u64) !bool {
+        const user_node_id = self.user_nodes.get(user_id) orelse return error.UserNotFound;
+        const role_node_id = self.role_nodes.get(role_id) orelse return error.RoleNotFound;
+
+        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+            for (edge_ids) |edge_id| {
+                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
+                if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
+                if (edge.to_id == role_node_id) {
+                    self.store.deleteEdge(edge_id);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    pub fn listUserRoleIds(self: *Self, allocator: Allocator, user_id: u64) ![]u64 {
+        const user_node_id = self.user_nodes.get(user_id) orelse return allocator.alloc(u64, 0);
+        var result = std.ArrayList(u64).empty;
+        defer result.deinit(allocator);
+
+        if (self.store.getOutgoingEdgeIds(user_node_id)) |edge_ids| {
+            for (edge_ids) |edge_id| {
+                const edge = self.store.getEdgePtr(edge_id) orelse continue;
+                if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH_NAME)) continue;
+                if (!std.mem.eql(u8, edge.label, HAS_ROLE_EDGE)) continue;
+
+                var it = self.role_nodes.iterator();
+                while (it.next()) |entry| {
+                    if (entry.value_ptr.* == edge.to_id) {
+                        try result.append(allocator, entry.key_ptr.*);
+                        break;
+                    }
+                }
+            }
+        }
+
+        return result.toOwnedSlice(allocator);
     }
 
     pub fn removeUser(self: *Self, user_id: u64) !void {
@@ -440,10 +644,15 @@ pub const UserStorageBackend = struct {
         const last_login_str = std.fmt.bufPrint(&last_login_buf, "{d}", .{record.last_login}) catch "0";
         var failed_buf: [10]u8 = undefined;
         const failed_str = std.fmt.bufPrint(&failed_buf, "{d}", .{record.failed_login_attempts}) catch "0";
+        var auth_version_buf: [20]u8 = undefined;
+        const auth_version_str = std.fmt.bufPrint(&auth_version_buf, "{d}", .{record.auth_version}) catch "0";
 
         const mfa_secret = record.getMFASecret() orelse "";
+        const attributes_json = record.getAttributesJson() orelse "";
 
         const props = [_]auth_hmac.KeyValue{
+            .{ .key = "attributes_json", .value = attributes_json },
+            .{ .key = "auth_version", .value = auth_version_str },
             .{ .key = "created_at", .value = created_str },
             .{ .key = "email", .value = email },
             .{ .key = "failed_login_attempts", .value = failed_str },
@@ -699,6 +908,9 @@ pub const UserStorageBackend = struct {
             .hash_algorithm_len = 0,
             .is_default_user = false,
             .password_reset_required = false,
+            .auth_version = 1,
+            .attributes_json = [_]u8{0} ** 2048,
+            .attributes_json_len = 0,
             .attributes_len = 0,
         };
     }
@@ -808,6 +1020,8 @@ pub const UserStorageBackend = struct {
         try self.store.setNodeProperty(node_id, "mfa_enabled", .{ .Bool = record.mfa_enabled });
         if (record.getMFASecret()) |mfa| {
             try self.store.setNodeProperty(node_id, "mfa_secret", .{ .String = mfa });
+        } else {
+            self.store.removeNodeProperty(node_id, "mfa_secret");
         }
         try self.store.setNodeProperty(node_id, "failed_login_attempts", .{ .Int = record.failed_login_attempts });
         try self.store.setNodeProperty(node_id, "lockout_until", .{ .Int = record.lockout_until });
@@ -819,6 +1033,12 @@ pub const UserStorageBackend = struct {
         }
         try self.store.setNodeProperty(node_id, "is_default_user", .{ .Bool = record.is_default_user });
         try self.store.setNodeProperty(node_id, "password_reset_required", .{ .Bool = record.password_reset_required });
+        try self.store.setNodeProperty(node_id, "auth_version", .{ .Int = safeI64(record.auth_version) });
+        if (record.getAttributesJson()) |attrs| {
+            try self.store.setNodeProperty(node_id, "attributes_json", .{ .String = attrs });
+        } else {
+            self.store.removeNodeProperty(node_id, "attributes_json");
+        }
         try self.store.setNodeProperty(node_id, "password_changed_at", .{ .Int = record.password_changed_at });
     }
 

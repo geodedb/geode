@@ -1195,10 +1195,12 @@ pub const CdcControlResponse = struct {
 // ============================================================================
 pub const BackupRequest = struct {
     backup_type: []const u8 = "",
+    session_id: []const u8 = "",
     compress: bool = false,
 
     pub const _desc_table = .{
         .backup_type = fd(1, .{ .scalar = .string }),
+        .session_id = fd(2, .{ .scalar = .string }),
         .compress = fd(3, .{ .scalar = .bool }),
     };
 
@@ -1234,10 +1236,12 @@ pub const BackupResponse = struct {
 pub const RestoreRequest = struct {
     target_time: []const u8 = "",
     confirm: bool = false,
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .target_time = fd(1, .{ .scalar = .string }),
         .confirm = fd(2, .{ .scalar = .bool }),
+        .session_id = fd(3, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *RestoreRequest, allocator: std.mem.Allocator) void {
@@ -1268,10 +1272,12 @@ pub const RestoreResponse = struct {
 pub const UploadBackupRequest = struct {
     size_bytes: u64 = 0,
     checksum: []const u8 = "",
+    session_id: []const u8 = "",
 
     pub const _desc_table = .{
         .size_bytes = fd(1, .{ .scalar = .uint64 }),
         .checksum = fd(2, .{ .scalar = .string }),
+        .session_id = fd(3, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *UploadBackupRequest, allocator: std.mem.Allocator) void {

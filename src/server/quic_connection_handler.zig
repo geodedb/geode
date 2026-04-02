@@ -420,6 +420,8 @@ pub const SharedConnState = struct {
     authenticated_user: ?[]const u8 = null,
     /// Authenticated role (u8 enum value of user_mgmt.Role).
     authenticated_role: ?u8 = null,
+    /// Authenticated auth_version captured at HELLO.
+    authenticated_auth_version: u64 = 0,
     /// Whether the user must reset their password.
     password_reset_required: bool = false,
     /// Session graph binding (owned, heap-allocated). Null if not bound.
@@ -456,6 +458,7 @@ pub const SharedConnState = struct {
             self.authenticated_user = try self.allocator.dupe(u8, u);
         }
         self.authenticated_role = state.authenticated_role;
+        self.authenticated_auth_version = state.authenticated_auth_version;
         self.password_reset_required = state.password_reset_required;
         self.graph_bound = state.graph_bound;
         if (state.exec_session) |sess| {
@@ -474,6 +477,27 @@ pub const SharedConnState = struct {
     pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
         self.streams_mu.lock();
         defer self.streams_mu.unlock();
+
+        const usernames_equal = blk: {
+            if (self.authenticated_user) |current| {
+                if (state.authenticated_user) |next| {
+                    break :blk std.mem.eql(u8, current, next);
+                }
+            }
+            break :blk self.authenticated_user == null and state.authenticated_user == null;
+        };
+        if (!usernames_equal) {
+            if (self.authenticated_user) |user| {
+                self.allocator.free(user);
+                self.authenticated_user = null;
+            }
+            if (state.authenticated_user) |user| {
+                self.authenticated_user = try self.allocator.dupe(u8, user);
+            }
+        }
+        self.authenticated_role = state.authenticated_role;
+        self.authenticated_auth_version = state.authenticated_auth_version;
+        self.password_reset_required = state.password_reset_required;
 
         if (self.current_graph) |graph| {
             self.allocator.free(graph);
@@ -494,6 +518,12 @@ const StreamHandlerContext = struct {
     transport: *quic_transport.QuicTransport,
     stream: *quic_transport.QuicStream,
     conn_state: *SharedConnState,
+};
+
+const SessionAuthStatus = enum {
+    ok,
+    missing,
+    invalidated,
 };
 
 /// Entry point for additional (non-first) stream handler threads.
@@ -534,6 +564,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         state.authenticated_user = gpa.dupe(u8, u) catch null;
     }
     state.authenticated_role = cs.authenticated_role;
+    state.authenticated_auth_version = cs.authenticated_auth_version;
     state.password_reset_required = cs.password_reset_required;
 
     // Bind to the same graph as the connection.
@@ -1356,6 +1387,44 @@ fn handleAlterUserSetPassword(
     try sendQuicMessage(gpa, stream, .{ .execute = resp });
 }
 
+fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) void {
+    state.resetResult();
+    if (state.in_txn) {
+        graph_store.acquireStoreWriteLock();
+        defer graph_store.releaseStoreWriteLock();
+        const store = graph_store.getGlobalStore(gpa);
+        txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
+            log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+    state.in_txn = false;
+    state.txn_id = 0;
+    state.current_user_id = null;
+    if (state.authenticated_user) |user| {
+        gpa.free(user);
+        state.authenticated_user = null;
+    }
+    if (state.authenticated_password) |password| {
+        @memset(@constCast(password), 0);
+        gpa.free(password);
+        state.authenticated_password = null;
+    }
+    state.authenticated_role = null;
+    state.authenticated_auth_version = 0;
+    state.password_reset_required = false;
+}
+
+fn validateSessionAuth(gpa: std.mem.Allocator, state: *ServerState) !SessionAuthStatus {
+    if (!user_mgmt.isAuthEnabled()) return .ok;
+    const username = state.authenticated_user orelse return .missing;
+    if (state.authenticated_auth_version == 0) return .ok;
+    if (try user_mgmt.isSessionAuthCurrent(username, state.authenticated_auth_version)) {
+        return .ok;
+    }
+    invalidateAuthenticatedSession(gpa, state);
+    return .invalidated;
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -1405,6 +1474,7 @@ fn handleClientMessage(
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_role = @intFromEnum(user_mgmt.Role.ReadWrite);
+                state.authenticated_auth_version = 0;
                 // GAP-0293: Zero plaintext password — federation auth complete, no need to retain
                 state.authenticated_password = null;
                 // GAP-0490: mTLS enforcement for federation connections (opportunistic — log only)
@@ -1449,6 +1519,7 @@ fn handleClientMessage(
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
                 state.authenticated_role = @intFromEnum(auth_result.role);
+                state.authenticated_auth_version = auth_result.auth_version;
                 state.password_reset_required = auth_result.password_reset_required;
                 // GAP-0293: Zero plaintext password immediately after successful auth.
                 // Authentication has already completed — no need to retain password in memory.
@@ -1665,9 +1736,16 @@ fn handleClientMessage(
 
             state.resetResult();
 
-            if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
-                try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
-                return;
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing => {
+                    try sendExecuteError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
+                    return;
+                },
+                .invalidated => {
+                    try sendExecuteError(gpa, stream, "28000", "Session invalidated due to credential or role change", &.{}, &.{});
+                    return;
+                },
             }
 
             // Handle ALTER USER SET PASSWORD — intercept before GQL parser since
@@ -2239,6 +2317,18 @@ fn handleClientMessage(
             }
         },
         .pull => |pull_req| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing => {
+                    try sendPullError(gpa, stream, "28000", "Authentication required", &.{}, &.{});
+                    return;
+                },
+                .invalidated => {
+                    try sendPullError(gpa, stream, "28000", "Session invalidated due to credential or role change", &.{}, &.{});
+                    return;
+                },
+            }
+
             const page_size = pull_req.page_size;
 
             // Arena allocator for pull page serialization (Issue #446)
@@ -2320,6 +2410,13 @@ fn handleClientMessage(
         },
         .begin => |bg| {
             _ = bg;
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                else => {
+                    try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
+                    return;
+                },
+            }
             if (state.in_txn) {
                 try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, ""), .tx_id = try gpa.dupe(u8, "") } });
                 return;
@@ -2334,6 +2431,13 @@ fn handleClientMessage(
             try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, "sess"), .tx_id = tx_id_str } });
         },
         .commit => |_| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                else => {
+                    try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
+                    return;
+                },
+            }
             if (state.in_txn) {
                 txn_undo_log.getGlobalUndoLog(gpa).commit();
                 state.global_commit_ts += 1;
@@ -2345,6 +2449,13 @@ fn handleClientMessage(
             }
         },
         .rollback => |_| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                else => {
+                    try sendQuicMessage(gpa, stream, .{ .rollback = .{ .success = false } });
+                    return;
+                },
+            }
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
                 graph_store.acquireStoreWriteLock();
@@ -2362,6 +2473,13 @@ fn handleClientMessage(
         },
         .savepoint => |sp_req| {
             // CANARY: REQ=REQ-TXN-SAVEPOINT-004; FEATURE="TransactionSavepoints"; ASPECT=QuicSavepoint; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                else => {
+                    try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
+                    return;
+                },
+            }
             if (!state.in_txn) {
                 try sendQuicMessage(gpa, stream, .{ .savepoint = .{ .success = false } });
             } else {
@@ -2375,6 +2493,13 @@ fn handleClientMessage(
         },
         .rollback_to => |rt_req| {
             // CANARY: REQ=REQ-TXN-SAVEPOINT-005; FEATURE="TransactionSavepoints"; ASPECT=QuicRollbackTo; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-01
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                else => {
+                    try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
+                    return;
+                },
+            }
             if (!state.in_txn) {
                 try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
             } else {
@@ -2418,6 +2543,17 @@ fn handleClientMessage(
             }
         },
         .backup => |backup_req| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing => {
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = try gpa.dupe(u8, "Authentication required") } });
+                    return;
+                },
+                .invalidated => {
+                    try sendQuicMessage(gpa, stream, .{ .backup = .{ .success = false, .message = try gpa.dupe(u8, "Session invalidated due to credential or role change") } });
+                    return;
+                },
+            }
             // S2: Require Admin role for backup operations
             if (user_mgmt.isAuthEnabled()) {
                 const is_admin = if (state.authenticated_role) |r|
@@ -2510,6 +2646,17 @@ fn handleClientMessage(
             }
         },
         .restore => |restore_req| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing => {
+                    try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = try gpa.dupe(u8, "Authentication required") } });
+                    return;
+                },
+                .invalidated => {
+                    try sendQuicMessage(gpa, stream, .{ .restore = .{ .success = false, .message = try gpa.dupe(u8, "Session invalidated due to credential or role change") } });
+                    return;
+                },
+            }
             // S2: Require Admin role for restore operations
             if (user_mgmt.isAuthEnabled()) {
                 const is_admin = if (state.authenticated_role) |r|
@@ -2569,6 +2716,17 @@ fn handleClientMessage(
             } });
         },
         .upload_backup => |upload_req| {
+            switch (try validateSessionAuth(gpa, state)) {
+                .ok => {},
+                .missing => {
+                    try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Authentication required") } });
+                    return;
+                },
+                .invalidated => {
+                    try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = false, .message = try gpa.dupe(u8, "Session invalidated due to credential or role change") } });
+                    return;
+                },
+            }
             // S2: Require Admin role for backup upload operations
             if (user_mgmt.isAuthEnabled()) {
                 const is_admin = if (state.authenticated_role) |r|

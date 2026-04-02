@@ -56,6 +56,19 @@ const SessionEntry = struct {
     mutex: std.Thread.Mutex = .{},
 };
 
+const SessionAuthStatus = enum {
+    ok,
+    missing,
+    invalidated,
+};
+
+const AdminSessionStatus = enum {
+    ok,
+    missing,
+    invalidated,
+    forbidden,
+};
+
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);
@@ -125,6 +138,7 @@ const SessionStore = struct {
         tenant_id: ?[]const u8,
         graph: ?[]const u8,
         pwd_reset_required: bool,
+        auth_version: u64,
     ) ![]const u8 {
         const session_id = try generateSessionId(self.allocator);
         const state = try initServerState(self.allocator, self.config);
@@ -137,6 +151,7 @@ const SessionStore = struct {
         if (role) |r| {
             state.authenticated_role = @intFromEnum(r);
         }
+        state.authenticated_auth_version = auth_version;
         // GAP-0284: Persist password_reset_required flag so execute handler can enforce it.
         state.password_reset_required = pwd_reset_required;
         if (tenant_id) |tenant| {
@@ -251,6 +266,70 @@ fn deinitServerState(state: *server_state.ServerState) void {
         alloc.free(entry.value_ptr.name);
     }
     state.graph_types.deinit();
+}
+
+fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_state.ServerState) void {
+    state.resetResult();
+    if (state.in_txn) {
+        graph_store.acquireStoreWriteLock();
+        defer graph_store.releaseStoreWriteLock();
+        const store_ptr = graph_store.getGlobalStore(allocator);
+        txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
+            log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+    state.in_txn = false;
+    state.txn_id = 0;
+    state.current_user_id = null;
+    if (state.authenticated_user) |u| {
+        allocator.free(u);
+        state.authenticated_user = null;
+    }
+    if (state.authenticated_password) |p| {
+        @memset(@constCast(p), 0);
+        allocator.free(p);
+        state.authenticated_password = null;
+    }
+    state.authenticated_role = null;
+    state.authenticated_auth_version = 0;
+    state.password_reset_required = false;
+}
+
+fn validateSessionAuth(allocator: std.mem.Allocator, state: *server_state.ServerState) !SessionAuthStatus {
+    if (!user_mgmt.isAuthEnabled()) return .ok;
+    const username = state.authenticated_user orelse return .missing;
+    if (state.authenticated_auth_version == 0) return .ok;
+    if (try user_mgmt.isSessionAuthCurrent(username, state.authenticated_auth_version)) {
+        return .ok;
+    }
+    invalidateAuthenticatedSession(allocator, state);
+    return .invalidated;
+}
+
+fn authorizeAdminSession(session_id: []const u8, allocator: std.mem.Allocator) !AdminSessionStatus {
+    if (!user_mgmt.isAuthEnabled()) return .ok;
+    if (session_id.len == 0) return .missing;
+    const store = getSessionStore() orelse return .missing;
+    const entry = store.getEntry(session_id) orelse {
+        throttleInvalidSessionProbe();
+        return .missing;
+    };
+
+    entry.mutex.lock();
+    defer entry.mutex.unlock();
+    const state = entry.state;
+
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        .missing => return .missing,
+        .invalidated => return .invalidated,
+    }
+
+    const role_raw = state.authenticated_role orelse return .forbidden;
+    const role = @as(user_mgmt.Role, @enumFromInt(role_raw));
+    if (role != .Admin) return .forbidden;
+    if (state.authenticated_user == null) return .missing;
+    return .ok;
 }
 
 fn buildErrorResponse(
@@ -1218,7 +1297,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             Attr.string("client", req.client_name),
         });
         // Grant federation-level session with ReadWrite role
-        const session_id = try store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false);
+        const session_id = try store.createSession(req.username, "", .ReadWrite, req.tenant_id, null, false, 0);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -1399,7 +1478,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             fle_integration.setCurrentUserRole(null);
         }
 
-        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required);
+        const session_id = try store.createSession(req.username, req.password, auth_result.role, req.tenant_id, resolved_graph, auth_result.password_reset_required, auth_result.auth_version);
         const resp = schema.HelloResponse{
             .success = true,
             .session_id = try allocator.dupe(u8, session_id),
@@ -1486,7 +1565,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
         }
     }
 
-    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false);
+    const session_id = try store.createSession("", "", null, req.tenant_id, noauth_resolved_graph, false, 0);
     const resp = schema.HelloResponse{
         .success = true,
         .session_id = try allocator.dupe(u8, session_id),
@@ -1532,10 +1611,18 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
     state.resetResult();
 
-    if (user_mgmt.isAuthEnabled() and state.authenticated_user == null) {
-        var resp = try buildErrorResponse(allocator, "28000", "Authentication required", &.{}, &.{});
-        defer resp.deinit(allocator);
-        return encodeMessage(allocator, resp);
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        .missing => {
+            var resp = try buildErrorResponse(allocator, "28000", "Authentication required", &.{}, &.{});
+            defer resp.deinit(allocator);
+            return encodeMessage(allocator, resp);
+        },
+        .invalidated => {
+            var resp = try buildErrorResponse(allocator, "28000", "Session invalidated due to credential or role change", &.{}, &.{});
+            defer resp.deinit(allocator);
+            return encodeMessage(allocator, resp);
+        },
     }
 
     // GAP-0284: Handle ALTER USER SET PASSWORD — intercept before GQL parser since
@@ -2103,6 +2190,22 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        .missing => {
+            var resp = try buildErrorResponse(allocator, "28000", "Authentication required", &.{}, &.{});
+            defer resp.deinit(allocator);
+            const pull_resp = schema.PullResponse{ .response = resp };
+            return encodeMessage(allocator, pull_resp);
+        },
+        .invalidated => {
+            var resp = try buildErrorResponse(allocator, "28000", "Session invalidated due to credential or role change", &.{}, &.{});
+            defer resp.deinit(allocator);
+            const pull_resp = schema.PullResponse{ .response = resp };
+            return encodeMessage(allocator, pull_resp);
+        },
+    }
+
     // Arena allocator for pull page serialization (Issue #446)
     var pull_arena = std.heap.ArenaAllocator.init(allocator);
     defer pull_arena.deinit();
@@ -2187,6 +2290,14 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        else => {
+            const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
+            return encodeMessage(allocator, resp);
+        },
+    }
+
     if (state.in_txn) {
         const resp = schema.BeginResponse{ .session_id = "", .tx_id = "" };
         return encodeMessage(allocator, resp);
@@ -2232,6 +2343,14 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        else => {
+            const resp = schema.CommitResponse{ .success = false };
+            return encodeMessage(allocator, resp);
+        },
+    }
+
     if (state.in_txn) {
         txn_undo_log.getGlobalUndoLog(allocator).commit();
         state.global_commit_ts += 1;
@@ -2271,6 +2390,14 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
     entry.mutex.lock();
     defer entry.mutex.unlock();
     const state = entry.state;
+
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        else => {
+            const resp = schema.RollbackResponse{ .success = false };
+            return encodeMessage(allocator, resp);
+        },
+    }
 
     if (state.in_txn) {
         const store_ptr = graph_store.getGlobalStore(allocator);
@@ -2320,6 +2447,14 @@ fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
     defer entry.mutex.unlock();
     const state = entry.state;
 
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        else => {
+            const resp = schema.SavepointResponse{ .success = false };
+            return encodeMessage(allocator, resp);
+        },
+    }
+
     if (!state.in_txn) {
         const resp = schema.SavepointResponse{ .success = false };
         return encodeMessage(allocator, resp);
@@ -2361,6 +2496,14 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
     entry.mutex.lock();
     defer entry.mutex.unlock();
     const state = entry.state;
+
+    switch (try validateSessionAuth(allocator, state)) {
+        .ok => {},
+        else => {
+            const resp = schema.RollbackToResponse{ .success = false };
+            return encodeMessage(allocator, resp);
+        },
+    }
 
     if (!state.in_txn) {
         const resp = schema.RollbackToResponse{ .success = false };
@@ -2444,10 +2587,6 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 }
 
 fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
-    // GAP-0255: Acquire shared store lock for backup consistency (parity with QUIC handler).
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
-
     var reader: std.Io.Reader = .fixed(request_bytes);
     var req = protobuf.decode(schema.BackupRequest, &reader, allocator) catch {
         const resp = schema.BackupResponse{
@@ -2457,6 +2596,35 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     };
     defer req.deinit(allocator);
+
+    switch (try authorizeAdminSession(req.session_id, allocator)) {
+        .ok => {},
+        .missing => {
+            const resp = schema.BackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Authentication required"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .invalidated => {
+            const resp = schema.BackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Session invalidated due to credential or role change"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .forbidden => {
+            const resp = schema.BackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Permission denied: Admin role required for backup operations"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+    }
+
+    // GAP-0255: Acquire shared store lock for backup consistency (parity with QUIC handler).
+    graph_store.acquireStoreLock();
+    defer graph_store.releaseStoreLock();
 
     const backup_dir = "./server_backups";
     var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
@@ -2504,6 +2672,31 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     };
     defer req.deinit(allocator);
+
+    switch (try authorizeAdminSession(req.session_id, allocator)) {
+        .ok => {},
+        .missing => {
+            const resp = schema.RestoreResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Authentication required"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .invalidated => {
+            const resp = schema.RestoreResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Session invalidated due to credential or role change"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .forbidden => {
+            const resp = schema.RestoreResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Permission denied: Admin role required for restore operations"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+    }
 
     if (!req.confirm) {
         const resp = schema.RestoreResponse{
@@ -2561,6 +2754,31 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         return encodeMessage(allocator, resp);
     };
     defer req.deinit(allocator);
+
+    switch (try authorizeAdminSession(req.session_id, allocator)) {
+        .ok => {},
+        .missing => {
+            const resp = schema.UploadBackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Authentication required"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .invalidated => {
+            const resp = schema.UploadBackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Session invalidated due to credential or role change"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+        .forbidden => {
+            const resp = schema.UploadBackupResponse{
+                .success = false,
+                .message = try allocator.dupe(u8, "Permission denied: Admin role required for backup upload"),
+            };
+            return encodeMessage(allocator, resp);
+        },
+    }
 
     if (req.size_bytes == 0 or req.checksum.len == 0) {
         const resp = schema.UploadBackupResponse{

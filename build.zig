@@ -1713,6 +1713,7 @@ pub fn build(b: *std.Build) void {
     user_storage_mod.addImport("logging", logging_mod);
     user_storage_mod.addImport("geode", root_mod);
     user_storage_mod.addImport("auth_lib", auth_ext_mod);
+    geode_exe.root_module.addImport("user_storage", user_storage_mod);
 
     // Create auth graph manager module (orchestration layer for HMAC auth)
     const auth_graph_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_graph_manager.zig"), .target = target, .optimize = optimize });
@@ -1744,6 +1745,7 @@ pub fn build(b: *std.Build) void {
 
     const user_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_manager.zig"), .target = target, .optimize = optimize });
     user_manager_mod.addImport("geode_auth", auth_mod);
+    user_manager_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     user_manager_mod.addImport("rls", rls_mod);
     user_manager_mod.addImport("user_storage", user_storage_mod);
     user_manager_mod.addImport("logging", logging_mod);
@@ -2181,7 +2183,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     auth_enforcement_test_mod.addImport("logging", logging_mod);
+    auth_enforcement_test_mod.addImport("geode_auth", auth_mod);
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
+    auth_enforcement_tests.linkLibC();
     test_step.dependOn(&auth_enforcement_tests.step);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28

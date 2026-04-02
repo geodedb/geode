@@ -40,6 +40,7 @@ pub const User = struct {
     attributes: std.StringHashMap([]const u8),
     // CANARY: REQ=REQ-AUTH-POLICY-001; FEATURE="Password Reset Tracking"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_POLICY_001_ForceReset; OWNER=security; UPDATED=2025-09-30
     password_reset_required: bool = false,
+    auth_version: u64 = 1,
     is_default_user: bool = false,
     password_set_by_env: bool = false,
     // Rate limiting fields for brute force protection
@@ -335,7 +336,13 @@ pub const SecurityManager = struct {
 
     /// Callback to persist password change to the auth graph.
     /// Args: opaque_ctx, hmac_key, user_id, new_password_hash
-    graph_persist_password: ?*const fn (*anyopaque, *const [32]u8, u64, []const u8) callconv(.auto) void = null,
+    /// Returns the new auth_version, or 0 on failure.
+    graph_persist_password: ?*const fn (*anyopaque, *const [32]u8, u64, []const u8) callconv(.auto) u64 = null,
+
+    /// Callback to persist role membership changes to the auth graph.
+    /// Args: opaque_ctx, hmac_key, user_id, role_id, assign
+    /// Returns the new auth_version, or 0 on failure.
+    graph_persist_role_membership: ?*const fn (*anyopaque, *const [32]u8, u64, u64, bool) callconv(.auto) u64 = null,
 
     pub fn init(a: Allocator) !Self {
         var sm = Self{
@@ -381,8 +388,55 @@ pub const SecurityManager = struct {
     // CANARY: REQ=REQ-AUTH-GRAPH-WIRE-003; FEATURE="AuthGraphManager Integration"; ASPECT=HydrateUser; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     /// Add a user to in-memory maps from external data (e.g. AuthGraphManager).
     /// The password_hash is already hashed; no policy validation is performed.
-    pub fn hydrateUser(self: *Self, id: UserId, username: []const u8, email: []const u8, password_hash: []const u8, is_superuser: bool, is_active: bool, is_default_user: bool, password_reset_required: bool, mfa_enabled: bool, mfa_secret: ?[]const u8) !void {
-        const attrs = std.StringHashMap([]const u8).init(self.allocator);
+    pub fn hydrateUser(
+        self: *Self,
+        id: UserId,
+        username: []const u8,
+        email: []const u8,
+        password_hash: []const u8,
+        is_superuser: bool,
+        is_active: bool,
+        is_default_user: bool,
+        password_reset_required: bool,
+        mfa_enabled: bool,
+        mfa_secret: ?[]const u8,
+        auth_version: u64,
+        attributes_json: ?[]const u8,
+    ) !void {
+        var attrs = std.StringHashMap([]const u8).init(self.allocator);
+        errdefer {
+            var it = attrs.iterator();
+            while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            attrs.deinit();
+        }
+
+        if (attributes_json) |raw_attrs| {
+            var parsed: ?std.json.Parsed(std.json.Value) = std.json.parseFromSlice(std.json.Value, self.allocator, raw_attrs, .{}) catch |err| blk: {
+                log.warn("Failed to parse hydrated user attributes", &.{
+                    Attr.uint("user_id", id),
+                    Attr.string("error", @errorName(err)),
+                });
+                break :blk null;
+            };
+            defer if (parsed) |*p| p.deinit();
+
+            if (parsed) |p| {
+                if (p.value == .object) {
+                    var it = p.value.object.iterator();
+                    while (it.next()) |entry| {
+                        if (entry.value_ptr.* != .string) continue;
+                        try attrs.put(
+                            try self.allocator.dupe(u8, entry.key_ptr.*),
+                            try self.allocator.dupe(u8, entry.value_ptr.string),
+                        );
+                    }
+                }
+            }
+        }
+
         const user = User{
             .id = id,
             .username = try self.allocator.dupe(u8, username),
@@ -397,6 +451,7 @@ pub const SecurityManager = struct {
             .mfa_secret = if (mfa_secret) |s| try self.allocator.dupe(u8, s) else null,
             .attributes = attrs,
             .password_reset_required = password_reset_required,
+            .auth_version = @max(@as(u64, 1), auth_version),
             .is_default_user = is_default_user,
             .password_set_by_env = false,
         };
@@ -422,11 +477,20 @@ pub const SecurityManager = struct {
     }
 
     /// Persist a password change to the auth graph store.
-    fn persistPasswordToGraph(self: *Self, user_id: u64, new_password_hash: []const u8) void {
-        const agm_ptr = self.auth_graph_mgr orelse return;
-        const hk = &(self.hmac_key orelse return);
-        const cb = self.graph_persist_password orelse return;
-        cb(agm_ptr, hk, user_id, new_password_hash);
+    fn persistPasswordToGraph(self: *Self, user_id: u64, new_password_hash: []const u8) ?u64 {
+        const agm_ptr = self.auth_graph_mgr orelse return null;
+        const hk = &(self.hmac_key orelse return null);
+        const cb = self.graph_persist_password orelse return null;
+        const version = cb(agm_ptr, hk, user_id, new_password_hash);
+        return if (version == 0) null else version;
+    }
+
+    fn persistRoleMembershipToGraph(self: *Self, user_id: u64, role_id: u64, assign: bool) ?u64 {
+        const agm_ptr = self.auth_graph_mgr orelse return null;
+        const hk = &(self.hmac_key orelse return null);
+        const cb = self.graph_persist_role_membership orelse return null;
+        const version = cb(agm_ptr, hk, user_id, role_id, assign);
+        return if (version == 0) null else version;
     }
 
     pub fn deinit(self: *Self) void {
@@ -763,6 +827,14 @@ pub const SecurityManager = struct {
         if (!entry.found_existing) entry.value_ptr.* = try std.ArrayList(RoleId).initCapacity(self.allocator, 0);
         for (entry.value_ptr.items) |r| if (r == role_id) return;
         try entry.value_ptr.append(self.allocator, role_id);
+        if (self.users.getPtr(user_id)) |user| {
+            if (self.persistRoleMembershipToGraph(user_id, role_id, true)) |version| {
+                user.auth_version = version;
+            } else {
+                user.auth_version += 1;
+            }
+            user.updated_at = std.time.milliTimestamp();
+        }
         try self.audit_log.logRoleAssigned(user_id, role_id);
     }
     pub fn revokeRole(self: *Self, user_id: UserId, role_id: RoleId) !void {
@@ -770,6 +842,14 @@ pub const SecurityManager = struct {
         for (roles_list.items, 0..) |rid, i| {
             if (rid == role_id) {
                 _ = roles_list.orderedRemove(i);
+                if (self.users.getPtr(user_id)) |user| {
+                    if (self.persistRoleMembershipToGraph(user_id, role_id, false)) |version| {
+                        user.auth_version = version;
+                    } else {
+                        user.auth_version += 1;
+                    }
+                    user.updated_at = std.time.milliTimestamp();
+                }
                 try self.audit_log.logRoleRevoked(user_id, role_id);
                 return;
             }
@@ -1151,10 +1231,13 @@ pub const SecurityManager = struct {
         user.password_hash = new_hash;
         user.password_reset_required = false;
         user.updated_at = std.time.milliTimestamp();
+        user.auth_version += 1;
 
         // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
         // Best-effort: persist new password hash to auth graph store for durability.
-        self.persistPasswordToGraph(user_id, new_hash);
+        if (self.persistPasswordToGraph(user_id, new_hash)) |version| {
+            user.auth_version = version;
+        }
 
         try self.audit_log.append(.user_updated, user_id, "Password updated", .{});
     }

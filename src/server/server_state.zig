@@ -347,6 +347,7 @@ pub const ServerState = struct {
     authenticated_password: ?[]const u8 = null,
     // Type is user_management.Role but we use u8 enum value to avoid circular dep
     authenticated_role: ?u8 = null,
+    authenticated_auth_version: u64 = 0,
     // Whether the authenticated user must change their password before running queries
     password_reset_required: bool = false,
 

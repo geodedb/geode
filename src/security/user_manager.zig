@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
+const auth_graph_manager = @import("auth_graph_manager");
 const rls = @import("rls");
 const user_storage = @import("user_storage");
 const logging = @import("logging");
@@ -106,7 +107,7 @@ pub const UserManager = struct {
 
         // Persist to storage
         const user_ptr2 = self.security_manager.users.getPtr(user_id).?;
-        try self.persistUser(user_ptr2.*);
+        try self.persistUser(user_ptr2, false);
 
         // Build response
         var response_roles = std.ArrayList([]const u8).empty;
@@ -185,7 +186,8 @@ pub const UserManager = struct {
         user.updated_at = std.time.milliTimestamp();
 
         // Persist changes
-        try self.persistUser(user.*);
+        const bump_auth_version = request.password != null or request.attributes != null or request.is_active != null or request.mfa_enabled != null;
+        try self.persistUser(user, bump_auth_version);
     }
 
     pub fn deleteUser(self: *Self, user_id: auth.UserId) !void {
@@ -517,14 +519,100 @@ pub const UserManager = struct {
     }
 
     // Storage persistence
-    fn persistUser(self: *Self, user: auth.User) !void {
-        try self.user_storage.persistUser(
-            user.id,
-            user.username,
-            user.email,
-            user.password_hash,
-            "", // Salt is included in Argon2id hash
-        );
+    fn writeJsonString(writer: anytype, value: []const u8) !void {
+        try writer.writeByte('"');
+        for (value) |byte| {
+            switch (byte) {
+                '"' => try writer.writeAll("\\\""),
+                '\\' => try writer.writeAll("\\\\"),
+                '\n' => try writer.writeAll("\\n"),
+                '\r' => try writer.writeAll("\\r"),
+                '\t' => try writer.writeAll("\\t"),
+                0x08 => try writer.writeAll("\\b"),
+                0x0C => try writer.writeAll("\\f"),
+                else => {
+                    if (byte < 0x20) {
+                        try writer.print("\\u{X:0>4}", .{@as(u16, byte)});
+                    } else {
+                        try writer.writeByte(byte);
+                    }
+                },
+            }
+        }
+        try writer.writeByte('"');
+    }
+
+    fn serializeUserAttributes(self: *Self, user: *const auth.User) !?[]u8 {
+        if (user.attributes.count() == 0) return null;
+
+        var keys = std.ArrayList([]const u8).empty;
+        defer keys.deinit(self.allocator);
+
+        var it = user.attributes.iterator();
+        while (it.next()) |entry| {
+            try keys.append(self.allocator, entry.key_ptr.*);
+        }
+
+        const SortCtx = struct {
+            fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.order(u8, a, b) == .lt;
+            }
+        };
+        std.mem.sortUnstable([]const u8, keys.items, {}, SortCtx.lessThan);
+
+        var buf = std.ArrayList(u8).empty;
+        errdefer buf.deinit(self.allocator);
+        var writer = buf.writer(self.allocator);
+
+        try writer.writeByte('{');
+        for (keys.items, 0..) |key, i| {
+            if (i != 0) try writer.writeByte(',');
+            try writeJsonString(&writer, key);
+            try writer.writeByte(':');
+            try writeJsonString(&writer, user.attributes.get(key).?);
+        }
+        try writer.writeByte('}');
+
+        return try buf.toOwnedSlice(self.allocator);
+    }
+
+    fn persistUser(self: *Self, user: *auth.User, bump_auth_version: bool) !void {
+        const attrs_json = try self.serializeUserAttributes(user);
+        defer if (attrs_json) |json| self.allocator.free(json);
+
+        if (self.security_manager.auth_graph_mgr) |opaque_agm| {
+            if (self.security_manager.hmac_key) |hmac_key| {
+                const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(opaque_agm));
+                user.auth_version = try agm.upsertUserState(&hmac_key, .{
+                    .user_id = user.id,
+                    .username = user.username,
+                    .email = user.email,
+                    .password_hash = user.password_hash,
+                    .is_active = user.is_active,
+                    .is_superuser = user.is_superuser,
+                    .mfa_enabled = user.mfa_enabled,
+                    .mfa_secret = user.mfa_secret,
+                    .password_reset_required = user.password_reset_required,
+                    .attributes_json = attrs_json,
+                    .bump_auth_version = bump_auth_version,
+                });
+                return;
+            }
+        }
+
+        user.auth_version = try self.user_storage.upsertManagedUser(.{
+            .user_id = user.id,
+            .username = user.username,
+            .email = user.email,
+            .password_hash = user.password_hash,
+            .is_active = user.is_active,
+            .is_superuser = user.is_superuser,
+            .mfa_enabled = user.mfa_enabled,
+            .mfa_secret = user.mfa_secret,
+            .password_reset_required = user.password_reset_required,
+            .attributes_json = attrs_json,
+            .bump_auth_version = bump_auth_version,
+        });
     }
 
     fn removeUserFromStorage(self: *Self, user_id: auth.UserId) !void {
