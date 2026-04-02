@@ -377,7 +377,6 @@ REQ-BINARY-PERSIST-003,BinaryPersistence,MainImports,IMPL,,,server,2026-02-02,sr
 REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-03-27,src/graph_store.zig
 REQ-BINARY-PERSIST-DIRTY-002,BinaryPersistence,ConditionalSave,IMPL,,,storage,2026-03-28,src/graph_store.zig
 REQ-BINARY-PERSIST-EDGE-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
-REQ-BINARY-PERSIST-NODE-002,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-PATH-001,BinaryPersistence,PathResolution,EXEMPT,,,storage,2026-03-28,src/graph_store.zig
 REQ-BINDING-VALUE-001,ComplexTypeBinding,Types,TESTED,,,core,2026-01-25,src/exec.zig
 REQ-BM25-INDEX-OPTIMIZER-001,BM25 IndexOptimizer Integration,CostEstimation,TESTED,,,fts,2025-10-05,tests/test_bm25_index_optimizer.zig

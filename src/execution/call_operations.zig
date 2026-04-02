@@ -62,8 +62,6 @@ fn executeCallUnsnapshotted(allocator: std.mem.Allocator, call_stmt: ast.CallSta
 /// Execute CALL statement (either procedure or subquery)
 /// Routes to appropriate handler based on call statement type
 pub fn executeCallStatement(allocator: std.mem.Allocator, call_stmt: ast.CallStatement, context: ExecutionContext) anyerror!ExecutionResult {
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
     if (query_traits.isMutatingCallStatement(&call_stmt)) {
         return try executeCallUnsnapshotted(allocator, call_stmt, context);
     }

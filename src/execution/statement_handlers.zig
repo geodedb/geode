@@ -51,8 +51,6 @@ fn listNodeLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) 
 // Extracted statement handlers (SHOW, FOR, VALUES, EXPLAIN, PROFILE) from execution.zig for better modularity (M1 Phase 7)
 
 pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: ExecutionContext) !ExecutionResult {
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
     // M2: Get catalog from context via dependency injection
     const cat = getCatalog(allocator, context);
     const writable_store = graph_store.getWritableGlobalStore(allocator);

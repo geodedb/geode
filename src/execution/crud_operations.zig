@@ -1441,8 +1441,6 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
     const store = graph_store.getWritableGlobalStore(allocator);
     var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
     defer if (read_session) |*session| session.deinit();
@@ -1751,8 +1749,6 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
     const store = graph_store.getWritableGlobalStore(allocator);
     var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
     defer if (read_session) |*session| session.deinit();
