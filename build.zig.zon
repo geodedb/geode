@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#d7ade732f2d7b32919d009b62f66e1c1d52cefad",
-            .hash = "quic-0.1.11-gBIqUYzhNQB1I0zs49tXqF0obwuW_E2LhWotj0kCZZEj",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#eb0733871abdb55164f4ff46320af60e59b991d1",
+            .hash = "quic-0.1.11-gBIqUdXhNQBVyrCunVVidzwvUSQPcP1kTDT7MYWGAiep",
         },
 
         // =======================================================================
@@ -141,8 +141,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#789619b8d25544cd90d6df7fb64514c764402237",
-            .hash = "wal-0.1.0-EqPqps5bAwDOHEK3FnHbVJcazN726E759W4LnmmqWPdc",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#bbba4b9a66c8dcc576f6932687a3e7a2a84974dc",
+            .hash = "wal-0.1.0-EqPqpuyTAwCE7t1JjvjLT7k8t0NFsPDFIWEJ4AEMEX1U",
         },
 
         // Page-based graph storage engine
@@ -153,8 +153,8 @@
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git#7eba8b7016d681d8626eef79910e5ad81ce47246",
-            .hash = "raft-0.1.0-PqJyviS9BAAVBzzSLHKZM35j_fNcSmUm7tUhT1Xde3rO",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git#ea8fbbd4e48001a03af5eca49f8268c610e314ec",
+            .hash = "raft-0.1.0-PqJyvkNCBACjoZFAj6zbFbS34oSK6-vWrefceScAmxxJ",
         },
 
         // =======================================================================
@@ -163,20 +163,20 @@
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git#314313a1f8bbe820f0379c59b82603dd9fea1832",
-            .hash = "audit-0.1.0-J9TtCJVFAgCJ_FH3zOW75BWipls6mIj9trapcC-Xda0j",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git#6afedb73cb7f794d895abb3c3614d6a81988cc83",
+            .hash = "audit-0.1.0-J9TtCCQhAwCed_BuOaShB2sYqYr5sjRA94KZVv7lmBRT",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#5b79fe44ca8f534d354e06dfacd552c5e2012599",
-            .hash = "hnsw-0.1.0-wYzByzHnAACXSO9Xy-08qU8ifBWY8VHHrtrOYM9HrtC-",
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#0a7c4a2397ab0dadc29de10ae1577fe47bc4ecf6",
+            .hash = "hnsw-0.1.0-wYzBy6QQAQBOHl_sUs2L3XsQCANa4yhJ_HDLFS_KZ5k0",
         },
 
         // R-tree - Spatial index with bounding-box search
         .rtree = .{
-            .url = "git+https://gitlab.com/devnw/zig/rtree.git#7341d9470647c1d84eb96a422ba5e979d6bdd70a",
-            .hash = "rtree-0.1.0-kIpcHy-1AABSBpjL0F_LQbvs2h7tB39ann_jTpCEfEuh",
+            .url = "git+https://gitlab.com/devnw/zig/rtree.git#24f5986527b46f983390277f5e02c38a8f7c2464",
+            .hash = "rtree-0.1.0-kIpcH5waAQCaVsXM94KXn7lgOm0xlEUjevgrTP0lCNkZ",
         },
 
 
@@ -194,8 +194,8 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git#4335d60d57934aaa458e4a100d79f030ad50a1ed",
-            .hash = "gql-0.1.0-T1ANDSpCCADgAzBT9hd8r00U0lpMbvZ2TmuFfgllEF26",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git#805ae1d7c78f4a3685b4a70bb4984eec0a4c1dc8",
+            .hash = "gql-0.1.0-T1ANDYaLCACAXSOwFR6zExiNbIUxHPHQim8JsG02YvsS",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
