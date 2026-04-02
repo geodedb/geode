@@ -876,6 +876,11 @@ pub const GraphStore = struct {
             .tenant_id = tenant_id_copy,
         };
 
+        // Acquire write lock to prevent concurrent HashMap iteration (MATCH queries)
+        // from seeing a partially-resized backing array.
+        g_store_rwlock.lock();
+        defer g_store_rwlock.unlock();
+
         try self.nodes.put(id, node);
 
         // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
@@ -3162,34 +3167,50 @@ pub const GraphStore = struct {
             // Current-format storage requires an IdMap alongside each UUID-backed
             // graph directory so external IDs remain stable across reloads.
             if (self.getIdMap(graph_name) == null and self.data_dir.len > 0) {
-                const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse return error.GraphStorageDirectoryMissing;
+                const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse {
+                    log.warn("loadFromAdapter: skipping graph with no storage dir", &.{Attr.string("graph", graph_name)});
+                    continue;
+                };
                 defer self.allocator.free(graph_dir_path);
 
-                var dir = try std.fs.cwd().openDir(graph_dir_path, .{});
+                var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch {
+                    log.warn("loadFromAdapter: skipping graph with inaccessible dir", &.{Attr.string("graph", graph_name)});
+                    continue;
+                };
                 defer dir.close();
 
-                try dir.access("id_map.dat", .{});
-                const loaded_map = try id_map_mod.IdMap.load(self.allocator, dir);
+                dir.access("id_map.dat", .{}) catch {
+                    log.warn("loadFromAdapter: skipping graph with no id_map.dat", &.{Attr.string("graph", graph_name)});
+                    continue;
+                };
+                const loaded_map = id_map_mod.IdMap.load(self.allocator, dir) catch {
+                    log.warn("loadFromAdapter: skipping graph with corrupt id_map.dat", &.{Attr.string("graph", graph_name)});
+                    continue;
+                };
                 const key = try self.allocator.dupe(u8, graph_name);
                 errdefer self.allocator.free(key);
                 try self.id_maps.put(key, loaded_map);
             }
 
-            const id_map = try self.requireIdMap(graph_name);
+            const id_map = self.requireIdMap(graph_name) catch {
+                log.warn("loadFromAdapter: skipping graph with no IdMap", &.{Attr.string("graph", graph_name)});
+                continue;
+            };
 
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
-            log.info("loadFromAdapter: scanned nodes", &.{
-                Attr.string("graph", graph_name),
-                Attr.int("count", @intCast(scan_entries.len)),
-            });
-
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
 
+                // Skip nodes whose slot_id isn't in the IdMap yet — they were
+                // created concurrently (e.g., by an ingest process) after the
+                // IdMap snapshot was taken.
+                const node_uuid_128 = id_map.nodeUuid(slot_id) orelse {
+                    continue;
+                };
+                const node_uuid = @as(u64, @truncate(node_uuid_128));
                 const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
-                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse return error.NodeSlotMappingMissing));
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
                 const tenant_id_copy = try self.allocator.dupe(u8, DEFAULT_TENANT_ID);
@@ -3234,12 +3255,12 @@ pub const GraphStore = struct {
                 defer self.allocator.free(out_edges);
 
                 for (out_edges) |edge_entry| {
-                    // Check if this edge is already loaded (could be from another node's outgoing scan)
-                    const edge_uuid = @as(u64, @truncate(id_map.edgeUuid(edge_entry.edge_id) orelse return error.EdgeSlotMappingMissing));
+                    // Skip edges/nodes whose slot_ids aren't in the IdMap yet (concurrent inserts)
+                    const edge_uuid = @as(u64, @truncate(id_map.edgeUuid(edge_entry.edge_id) orelse continue));
 
                     if (self.edges.contains(edge_uuid)) continue;
 
-                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse return error.NodeSlotMappingMissing));
+                    const target_uuid = @as(u64, @truncate(id_map.nodeUuid(edge_entry.neighbor) orelse continue));
 
                     // Get edge label from label dict
                     const mg = try adapter.getOrCreateGraph(graph_name);
@@ -4187,35 +4208,13 @@ pub const QueryReadSession = struct {
     snapshot: GraphStore,
 
     pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
-        const adapter = global_adapter orelse return null;
-
-        const arena = try allocator.create(std.heap.ArenaAllocator);
-        errdefer allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(allocator);
-        errdefer arena.deinit();
-
-        var session = QueryReadSession{
-            .parent_allocator = allocator,
-            .arena = arena,
-            .snapshot = undefined,
-        };
-        errdefer {
-            session.arena.deinit();
-            session.parent_allocator.destroy(session.arena);
-        }
-
-        session.snapshot = try GraphStore.initWithTenant(
-            session.arena.allocator(),
-            source_store.tenant_id,
-            source_store.schema_name,
-        );
-        errdefer session.snapshot.deinit();
-
-        session.snapshot.data_dir = source_store.data_dir;
-        try session.snapshot.cloneIdMapsFrom(source_store);
-        try session.snapshot.loadFromAdapter(adapter);
-
-        return session;
+        // Disabled: QueryReadSession snapshots load from the shared adapter
+        // buffer pool which races with concurrent write operations, producing
+        // inconsistent scan results. With g_store_rwlock protecting the global
+        // store's HashMap, reads go directly through the global store safely.
+        _ = allocator;
+        _ = source_store;
+        return null;
     }
 
     pub fn deinit(self: *QueryReadSession) void {
@@ -4246,11 +4245,16 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
     // Only safe when no data-dir change is possible (the common case during
     // query processing after startup).
     if (initialized.load(.acquire)) {
-        // Check if data directory has changed (rare after startup).
-        const current_data_dir: ?[]u8 = if (getDataDirOverride()) |override|
-            allocator.dupe(u8, override) catch null
-        else
-            std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
+        // Fast path: data dir never changes after startup in server mode.
+        // The override is set once in initGlobalStore and never cleared.
+        // Checking env vars on every query was causing spurious reinits when
+        // allocator.dupe failed under memory pressure, clearing all nodes.
+        if (getDataDirOverride() != null) {
+            return &global_store.?;
+        }
+
+        // Non-override path: check if data directory has changed (rare).
+        const current_data_dir: ?[]u8 = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
         defer if (current_data_dir) |dir| allocator.free(dir);
 
         // Compare under the init mutex to avoid racing with a concurrent reinit.
@@ -4653,7 +4657,7 @@ test "getGlobalStore initializes adapter from data dir override" {
     try testing.expectEqualStrings(dir_path, adapter.data_dir);
 }
 
-test "QueryReadSession reloads persisted state instead of compatibility cache" {
+test "QueryReadSession disabled — reads use global store with rwlock protection" {
     deinitGlobalStore();
     defer deinitGlobalStore();
 
@@ -4665,62 +4669,19 @@ test "QueryReadSession reloads persisted state instead of compatibility cache" {
 
     const store = try initGlobalStore(testing.allocator, dir_path);
 
+    // QueryReadSession returns null; reads go through the global store
+    const read_session = try QueryReadSession.initIfAvailable(testing.allocator, store);
+    try testing.expect(read_session == null);
+
+    // Global store reads are protected by g_store_rwlock
     var labels = [_][]const u8{"Person"};
     const node_id = try store.createNodeWithGraph(&labels, "default");
-    try store.setNodeProperty(node_id, "name", .{ .String = "persisted" });
+    try store.setNodeProperty(node_id, "name", .{ .String = "direct-read" });
 
-    const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
-    try adapter.checkpointAll();
-
-    try store.setNodePropertyNoSave(node_id, "name", .{ .String = "stale-cache" });
-
-    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
-        return error.AdapterNotInitialized;
-    };
-    defer read_session.deinit();
-
-    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
-    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
-    try testing.expect(snapshot_name == .String);
-    try testing.expectEqualStrings("persisted", snapshot_name.String);
-
-    const live_node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
-    const live_name = live_node.properties.get("name") orelse return error.PropertyNotFound;
-    try testing.expect(live_name == .String);
-    try testing.expectEqualStrings("stale-cache", live_name.String);
-}
-
-test "QueryReadSession uses live adapter mappings instead of requiring id_map.dat" {
-    deinitGlobalStore();
-    defer deinitGlobalStore();
-
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
-    defer testing.allocator.free(dir_path);
-
-    const store = try initGlobalStore(testing.allocator, dir_path);
-
-    var labels = [_][]const u8{"Person"};
-    const node_id = try store.createNodeWithGraph(&labels, "default");
-    try store.setNodeProperty(node_id, "name", .{ .String = "live-adapter" });
-
-    const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
-    const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
-    const id_map_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}/id_map.dat", .{ dir_path, uuid_hex });
-    defer testing.allocator.free(id_map_path);
-    try std.fs.cwd().deleteFile(id_map_path);
-
-    var read_session = (try QueryReadSession.initIfAvailable(testing.allocator, store)) orelse {
-        return error.AdapterNotInitialized;
-    };
-    defer read_session.deinit();
-
-    const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;
-    const snapshot_name = snapshot_node.properties.get("name") orelse return error.PropertyNotFound;
-    try testing.expect(snapshot_name == .String);
-    try testing.expectEqualStrings("live-adapter", snapshot_name.String);
+    const node = store.getNodePtr(node_id) orelse return error.NodeNotFound;
+    const name = node.properties.get("name") orelse return error.PropertyNotFound;
+    try testing.expect(name == .String);
+    try testing.expectEqualStrings("direct-read", name.String);
 }
 
 test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {

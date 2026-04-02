@@ -386,8 +386,9 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
-    // CANARY: REQ=REQ-GQL-MATCH-CALL-BINDING; FEATURE="MatchCallBinding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-13
-    // Fix: Handle multiple comma-separated MATCH patterns and bind all matched nodes
+    // Acquire shared read lock to prevent concurrent HashMap resizes
+    graph_store.acquireStoreLock();
+    defer graph_store.releaseStoreLock();
 
     const store = graph_store.getWritableGlobalStore(allocator);
     var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
@@ -3239,6 +3240,11 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
+    // Acquire shared read lock to prevent concurrent HashMap resizes
+    // (from CREATE operations) from invalidating our node iterators.
+    graph_store.acquireStoreLock();
+    defer graph_store.releaseStoreLock();
+
     const writable_store = graph_store.getWritableGlobalStore(allocator);
     // Skip read snapshots for MATCH+CREATE queries: the result contains Node
     // pointers that reference the snapshot store.  The snapshot is freed when

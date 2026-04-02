@@ -1056,7 +1056,6 @@ pub const ClientSession = struct {
                 switch (msg_union) {
                     .execute => |exec_resp| {
                         session.last_payload_kind = .none;
-                        // CANARY: REQ=REQ-INLINE-RESULTS-002; FEATURE="InlineResultsHandling"; ASPECT=SchemaDetection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-05
                         // Reset schema response flag - will be set true only for schema payloads
                         session.received_schema_response = false;
                         if (exec_resp.payload) |payload| {

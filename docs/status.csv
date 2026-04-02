@@ -2034,7 +2034,6 @@ REQ-GQL-MATCH-CALL-005,MatchCallIntegration,YieldAndReturn,TESTED,,,engine,2025-
 REQ-GQL-MATCH-CALL-006,MatchCallIntegration,OrderByAndLimit,TESTED,,,engine,2025-10-08,tests/test_match_call_integration.zig
 REQ-GQL-MATCH-CALL-007,MatchCallIntegration,LabelMatching,TESTED,,,engine,2025-10-08,tests/test_match_call_integration.zig
 REQ-GQL-MATCH-CALL-008,MatchCallIntegration,DirectNodeIdFallback,TESTED,,,engine,2025-10-08,tests/test_match_call_integration.zig
-REQ-GQL-MATCH-CALL-BINDING,MatchCallBinding,Execution,TESTED,,,execution,2025-10-13,src/execution/match_operations.zig
 REQ-GQL-MEAN-DISTANCE-001,MeanDistance,Statistics,EXEMPT,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
 REQ-GQL-MEAN-DISTANCE-001,Statistics,MeanDistance,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_engine.zig
 REQ-GQL-MFA-002,MFA authentication enforcement,SECURITY,TESTED,,,security,2025-09-26,tests/unit_mfa_enforcement.zig
@@ -2500,7 +2499,6 @@ REQ-INDEX-003,IndexManagement,ScopedDeletion,TESTED,,,storage,2025-10-14,src/exe
 REQ-INDEX-LOOKUP-001,Index,IndexLookup,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-INIT-CONTEXT-REGRESSION-001,InitContextPointerSafety,SegfaultPrevention,TESTED,,,server,2026-02-11,tests/test_init_context_regression.zig
 REQ-INLINE-RESULTS-001,InlineResultsHandling,SchemaResponseFlag,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
-REQ-INLINE-RESULTS-002,InlineResultsHandling,SchemaDetection,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INLINE-RESULTS-003,InlineResultsHandling,ConsumeInlinePage,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INLINE-RESULTS-004,InlineResultsHandling,ConsumeAfterSchema,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
 REQ-INLINE-RESULTS-005,InlineResultsHandling,ConsumeAfterSchema,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
