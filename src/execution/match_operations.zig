@@ -1328,8 +1328,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             for (label_node_ids.items) |node_id| {
                 const left_node = store.nodes.getPtr(node_id) orelse continue;
 
-                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
                 for (outgoing_edges) |edge| {
                     if (rel_type) |rt| {
@@ -1370,8 +1370,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const right_node = store.nodes.getPtr(node_id) orelse continue;
 
                 // Find edges TO this right node (for outgoing/right direction from left)
-                const incoming_to_right = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesTo(right_node.id) else &[_]graph_store.Edge{};
-                const outgoing_from_right = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesFrom(right_node.id) else &[_]graph_store.Edge{};
+                const incoming_to_right = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesTo(allocator, right_node.id) else &[_]graph_store.Edge{};
+                const outgoing_from_right = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesFrom(allocator, right_node.id) else &[_]graph_store.Edge{};
 
                 for (incoming_to_right) |edge| {
                     if (rel_type) |rt| {
@@ -1403,8 +1403,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else if (rel_type) |rt| {
             // #558: No labels at all but relationship type present — use edge type scan
-            const typed_edges = store.getEdgesByType(rt);
-            defer if (typed_edges.len > 0) store.allocator.free(typed_edges);
+            const typed_edges = store.getEdgesByType(allocator, rt);
+            defer if (typed_edges.len > 0) allocator.free(typed_edges);
 
             for (typed_edges) |edge| {
                 const from_node = store.nodes.getPtr(edge.from_id) orelse continue;
@@ -1435,8 +1435,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
-                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
                 for (outgoing_edges) |edge| {
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
@@ -1509,8 +1509,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
             if (left_node) |ln| {
                 // Find edges from this node matching the relationship type and direction
-                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(ln.id) else &[_]graph_store.Edge{};
-                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(ln.id) else &[_]graph_store.Edge{};
+                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, ln.id) else &[_]graph_store.Edge{};
+                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, ln.id) else &[_]graph_store.Edge{};
 
                 // Process outgoing edges
                 for (outgoing_edges) |edge| {
@@ -1560,8 +1560,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (!matchesLabels(new_left_node, left_labels)) continue;
 
                     // Find matching edges from this node based on direction
-                    const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(new_left_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(new_left_node.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, new_left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, new_left_node.id) else &[_]graph_store.Edge{};
 
                     // Process outgoing edges
                     for (outgoing_edges) |edge| {
@@ -1957,8 +1957,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
         // For each left node, find matching relationships and right nodes
         for (base_nodes.items) |left_node| {
-            const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-            const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+            const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+            const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
             // Process outgoing edges
             for (outgoing_edges) |edge| {
@@ -2330,8 +2330,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
                     const right_labels = hop.right.labels;
                     const rel_direction = hop.rel.dir;
-                    const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(source_node.?.id) else &[_]graph_store.Edge{};
-                    const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(source_node.?.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges = if (rel_direction == .right or rel_direction == .undirected) store.getEdgesFrom(allocator, source_node.?.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (rel_direction == .left or rel_direction == .undirected) store.getEdgesTo(allocator, source_node.?.id) else &[_]graph_store.Edge{};
 
                     // Process outgoing edges
                     const right_props = hop.right.props;
@@ -3444,9 +3444,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             };
 
                             const edges = if (hop_direction == 'l')
-                                store.getEdgesTo(curr_node.id)
+                                store.getEdgesTo(allocator, curr_node.id)
                             else
-                                store.getEdgesFrom(curr_node.id);
+                                store.getEdgesFrom(allocator, curr_node.id);
 
                             for (edges) |edge| {
                                 if (hop.rel.types.len > 0) {
@@ -3720,8 +3720,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=GroupByEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
                     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edges_1 = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges_1 = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges_1 = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_1 = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
                     // Helper to process edges with the given target node ID extractor
                     const EdgeSets = struct { outgoing: []const graph_store.Edge, incoming: []const graph_store.Edge };
@@ -4348,8 +4348,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=AggregationEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
                     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edges_agg = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges_agg = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges_agg = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_agg = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
                     // Process outgoing edges (use to_id as target)
                     for (outgoing_edges_agg) |edge| {
@@ -5826,8 +5826,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     // Standard single-hop edge traversal
                     // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
                     // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edges_std = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(left_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges_std = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(left_node.id) else &[_]graph_store.Edge{};
+                    const outgoing_edges_std = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                    const incoming_edges_std = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
                     // Note: edges are allocated by store's allocator, don't free here
 
                     // Process outgoing edges (use to_id as target)

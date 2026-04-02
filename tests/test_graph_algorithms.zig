@@ -130,7 +130,7 @@ test "Graph store - get outgoing edges" {
     _ = try store.createEdge(center, spoke3, "CONNECTS");
 
     // Get outgoing edges from center
-    const outgoing = store.getEdgesFrom(center);
+    const outgoing = store.getEdgesFrom(allocator, center);
     defer allocator.free(outgoing);
 
     // Should have 3 outgoing edges

@@ -2277,16 +2277,16 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; OWNER=perf; UPDATED=2026-02-12
     // Issue #392: Get all edges connected to a node (O(1) lookup instead of O(edges) scan)
     // Issue #450: Use HashSet for O(1) deduplication instead of O(m*n) linear scan
-    pub fn getEdgesForNode(self: *const GraphStore, node_id: u64) std.ArrayList(u64) {
+    pub fn getEdgesForNode(self: *const GraphStore, allocator: std.mem.Allocator, node_id: u64) std.ArrayList(u64) {
         var result = std.ArrayList(u64).empty;
-        var seen = std.AutoHashMap(u64, void).init(self.allocator);
+        var seen = std.AutoHashMap(u64, void).init(allocator);
         defer seen.deinit();
 
         // Get outgoing edges
         if (self.outgoing_edges.get(node_id)) |outgoing| {
             for (outgoing.items) |edge_id| {
                 seen.put(edge_id, {}) catch continue;
-                result.append(self.allocator, edge_id) catch continue;
+                result.append(allocator, edge_id) catch continue;
             }
         }
 
@@ -2295,7 +2295,7 @@ pub const GraphStore = struct {
             for (incoming.items) |edge_id| {
                 if (!seen.contains(edge_id)) {
                     seen.put(edge_id, {}) catch continue;
-                    result.append(self.allocator, edge_id) catch continue;
+                    result.append(allocator, edge_id) catch continue;
                 }
             }
         }
@@ -2448,7 +2448,9 @@ pub const GraphStore = struct {
         }
     }
 
-    pub fn getEdgesByType(self: *GraphStore, edge_type: []const u8) []Edge {
+    // Accepts caller-provided allocator to avoid concurrent threads contending
+    // on self.allocator (same class of bug as GAP-0425 getNodesByLabels fix).
+    pub fn getEdgesByType(self: *GraphStore, allocator: std.mem.Allocator, edge_type: []const u8) []Edge {
         var count: usize = 0;
         var iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
@@ -2457,7 +2459,7 @@ pub const GraphStore = struct {
             }
         }
 
-        const result = self.allocator.alloc(Edge, count) catch return &.{};
+        const result = allocator.alloc(Edge, count) catch return &.{};
         var i: usize = 0;
         iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
@@ -2469,28 +2471,28 @@ pub const GraphStore = struct {
         return result;
     }
 
-    pub fn getEdgesFrom(self: *GraphStore, node_id: u64) []Edge {
+    pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result = std.ArrayList(Edge){};
         if (self.outgoing_edges.get(node_id)) |outgoing| {
             for (outgoing.items) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
-                    result.append(self.allocator, edge) catch continue;
+                    result.append(allocator, edge) catch continue;
                 }
             }
         }
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        return result.toOwnedSlice(allocator) catch &.{};
     }
 
-    pub fn getEdgesTo(self: *GraphStore, node_id: u64) []Edge {
+    pub fn getEdgesTo(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result = std.ArrayList(Edge){};
         if (self.incoming_edges.get(node_id)) |incoming| {
             for (incoming.items) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
-                    result.append(self.allocator, edge) catch continue;
+                    result.append(allocator, edge) catch continue;
                 }
             }
         }
-        return result.toOwnedSlice(self.allocator) catch &.{};
+        return result.toOwnedSlice(allocator) catch &.{};
     }
 
     /// DEPRECATED: Legacy ExtValue writer stub — was used by graph_store.dat serialization.
@@ -4810,7 +4812,7 @@ test "TestEdgeAdjacencyIndex" {
     try testing.expect(incoming3.?.items.len == 2);
 
     // Test getEdgesForNode
-    var edges_for_node1 = store.getEdgesForNode(node1);
+    var edges_for_node1 = store.getEdgesForNode(testing.allocator, node1);
     defer edges_for_node1.deinit(testing.allocator);
     try testing.expect(edges_for_node1.items.len == 2);
 }

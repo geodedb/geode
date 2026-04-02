@@ -1816,8 +1816,8 @@ pub fn expandVariableLengthPathsWithMode(
         // For forward traversal (right): get edges FROM this node (outgoing)
         // For reverse traversal (left): get edges TO this node (incoming)
         // For undirected: get both
-        const outgoing_edges = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(last_node_id) else &[_]graph_store.Edge{};
-        const incoming_edges = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(last_node_id) else &[_]graph_store.Edge{};
+        const outgoing_edges = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, last_node_id) else &[_]graph_store.Edge{};
+        const incoming_edges = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, last_node_id) else &[_]graph_store.Edge{};
         var expanded = false;
 
         // Process outgoing edges (forward direction)
