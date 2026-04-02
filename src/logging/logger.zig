@@ -11,9 +11,16 @@ pub const Logger = slog.Logger;
 pub const Handler = slog.Handler;
 pub const Clock = slog.Clock;
 
+/// Stable storage for the stderr writer so that the AnyWriter's internal
+/// context pointer remains valid for the lifetime of the process.
+/// Without this, .deprecatedWriter().any() captures a pointer to a
+/// stack-local GenericWriter that is destroyed when the function returns,
+/// causing a dangling-pointer crash under concurrent logging (DESTADDRREQ).
+var g_stderr_writer: std.fs.File.DeprecatedWriter = std.fs.File.stderr().deprecatedWriter();
+
 /// Get stderr writer as AnyWriter compatible with Zig 0.15.1+
 fn getStderrWriter() std.io.AnyWriter {
-    return std.fs.File.stderr().deprecatedWriter().any();
+    return g_stderr_writer.any();
 }
 
 /// Output format for log messages
