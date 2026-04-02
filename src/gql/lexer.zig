@@ -34,7 +34,7 @@ pub const Lexer = struct {
             // Potential Unicode identifier - decode manually to avoid std lib assertions
             const cp = decodeUtf8Codepoint(self.src, self.idx) orelse {
                 // Invalid UTF-8, treat as invalid token
-                self.advance();
+                // mkTok handles idx advancement — no separate advance() needed
                 return self.mkTok(.invalid, 1);
             };
             if (t.isIdentifierStart(cp)) return self.scanIdentifierOrKeyword();
@@ -43,8 +43,7 @@ pub const Lexer = struct {
 
         if (self.matchSingle()) |tokv| return tokn(tokv);
 
-        // invalid byte
-        self.advance();
+        // invalid byte — mkTok handles idx advancement
         return self.mkTok(.invalid, 1);
     }
 
