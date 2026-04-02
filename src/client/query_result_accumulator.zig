@@ -568,10 +568,12 @@ fn outputDotFormatFromRows(
     rows: []const std.ArrayList([]const u8),
     stdout: anytype,
 ) !void {
-    try stdout.writeAll("digraph G {\n");
-    try stdout.writeAll("  rankdir=LR;\n");
-    try stdout.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
-    try stdout.writeAll("  edge [fontsize=10];\n\n");
+    var out = stdout;
+
+    try out.writeAll("digraph G {\n");
+    try out.writeAll("  rankdir=LR;\n");
+    try out.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
+    try out.writeAll("  edge [fontsize=10];\n\n");
 
     var seen_nodes = std.StringHashMap(void).init(allocator);
     defer {
@@ -597,11 +599,11 @@ fn outputDotFormatFromRows(
                     const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
                     defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
 
-                    try stdout.writeAll("  \"");
-                    try stdout.writeAll(node_id);
-                    try stdout.writeAll("\" [label=\"");
-                    try stdout.writeAll(label);
-                    try stdout.writeAll("\"];\n");
+                    try out.writeAll("  \"");
+                    try out.writeAll(node_id);
+                    try out.writeAll("\" [label=\"");
+                    try out.writeAll(label);
+                    try out.writeAll("\"];\n");
                 }
             } else if (obj.get("label") orelse obj.get("type")) |type_val| {
                 if (type_val != .string) continue;
@@ -614,16 +616,16 @@ fn outputDotFormatFromRows(
                     getDotIdString(allocator, obj.get("end_node")) orelse continue;
                 defer allocator.free(end_id);
 
-                try stdout.writeAll("  \"");
-                try stdout.writeAll(start_id);
-                try stdout.writeAll("\" -> \"");
-                try stdout.writeAll(end_id);
-                try stdout.writeAll("\" [label=\"");
-                try stdout.writeAll(type_val.string);
-                try stdout.writeAll("\"];\n");
+                try out.writeAll("  \"");
+                try out.writeAll(start_id);
+                try out.writeAll("\" -> \"");
+                try out.writeAll(end_id);
+                try out.writeAll("\" [label=\"");
+                try out.writeAll(type_val.string);
+                try out.writeAll("\"];\n");
             }
         }
     }
 
-    try stdout.writeAll("}\n");
+    try out.writeAll("}\n");
 }

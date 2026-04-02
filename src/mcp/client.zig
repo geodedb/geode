@@ -433,7 +433,7 @@ pub const GeodeClient = struct {
         try self.ensureConnected();
 
         const session_id = self.session_id orelse "";
-        var param_list = try parseParamsJson(self.allocator, params);
+        const param_list = try parseParamsJson(self.allocator, params);
         const McpProtocolAdapter = struct {
             client: *Self,
 
@@ -455,7 +455,7 @@ pub const GeodeClient = struct {
                 const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
                 const timeout_ms = @as(u32, @intCast(@max(timeout_secs, 1) * 1000));
                 while (true) {
-                    var packet = adapter_self.client.readProtoMessage(alloc, timeout_ms) catch |err| switch (err) {
+                    const packet = adapter_self.client.readProtoMessage(alloc, timeout_ms) catch |err| switch (err) {
                         GeodeClientError.StreamError => return error.EndOfStream,
                         else => return err,
                     };
@@ -668,13 +668,14 @@ test "GeodeClient endpoint parsing" {
 }
 
 test "JSON library handles escaping" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Verify JSON library properly escapes special characters
-    const TestMessage = struct { text: []const u8 };
-    const message = TestMessage{ .text = "say \"hello\"\nworld" };
-    const result = try std.json.Stringify.valueAlloc(allocator, message, .{});
-    defer allocator.free(result);
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("text", .{ .string = try allocator.dupe(u8, "say \"hello\"\nworld") });
+    const result = try std.json.Stringify.valueAlloc(allocator, std.json.Value{ .object = obj }, .{});
 
     // Should contain escaped quotes and newline
     try std.testing.expect(std.mem.indexOf(u8, result, "\\\"hello\\\"") != null);
@@ -716,13 +717,14 @@ test "GeodeClient getConfig returns valid JSON" {
 }
 
 test "JSON library unicode passthrough" {
-    const allocator = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
     // Verify JSON library handles unicode correctly
-    const TestMessage = struct { text: []const u8 };
-    const message = TestMessage{ .text = "Hello 世界 🌍" };
-    const result = try std.json.Stringify.valueAlloc(allocator, message, .{});
-    defer allocator.free(result);
+    var obj = std.json.ObjectMap.init(allocator);
+    try obj.put("text", .{ .string = try allocator.dupe(u8, "Hello 世界 🌍") });
+    const result = try std.json.Stringify.valueAlloc(allocator, std.json.Value{ .object = obj }, .{});
 
     // Unicode should be present in output
     try std.testing.expect(std.mem.indexOf(u8, result, "Hello 世界 🌍") != null);

@@ -42,6 +42,9 @@ pub fn renderTransportResponseWithStreams(
     rows_json: ?*std.ArrayList(std.ArrayList(std.json.Value)),
     view: TransportResponseView,
 ) !bool {
+    var out = stdout;
+    var err_out = stderr;
+
     if (std.mem.eql(u8, format, "json")) {
         // Use an arena allocator for the JSON tree structure (ObjectMaps, Arrays,
         // duped string keys/values). Row json.Values from protoValueToJson are
@@ -128,36 +131,36 @@ pub fn renderTransportResponseWithStreams(
 
         const root_value = std.json.Value{ .object = root };
         const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
-        try stdout.writeAll(json_out);
-        try stdout.writeAll("\n");
+        try out.writeAll(json_out);
+        try out.writeAll("\n");
         return view.has_error or (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00"));
     }
 
     if (view.has_error) {
         if (view.error_message.len > 0) {
-            try stderr.writeAll("Error: ");
-            try stderr.writeAll(view.error_message);
-            try stderr.writeAll("\n");
+            try err_out.writeAll("Error: ");
+            try err_out.writeAll(view.error_message);
+            try err_out.writeAll("\n");
         } else if (view.error_status.len > 0) {
-            try stderr.writeAll("Error (");
-            try stderr.writeAll(view.error_status);
-            try stderr.writeAll(")\n");
+            try err_out.writeAll("Error (");
+            try err_out.writeAll(view.error_status);
+            try err_out.writeAll(")\n");
         }
         return true;
     }
 
     if (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00")) {
-        try stderr.writeAll("Error (");
-        try stderr.writeAll(view.status_class);
-        try stderr.writeAll(")\n");
+        try err_out.writeAll("Error (");
+        try err_out.writeAll(view.status_class);
+        try err_out.writeAll(")\n");
         return true;
     }
 
     if (view.result_kind != .rows) {
         if (view.result_payload) |payload| {
-            try stdout.writeAll(payload);
+            try out.writeAll(payload);
             if (payload.len == 0 or payload[payload.len - 1] != '\n') {
-                try stdout.writeAll("\n");
+                try out.writeAll("\n");
             }
         }
         return false;
@@ -167,30 +170,30 @@ pub fn renderTransportResponseWithStreams(
         if (rows_text) |rows| {
             // CSV header
             for (view.columns, 0..) |col, i| {
-                if (i > 0) _ = stdout.writeAll(",") catch {};
-                _ = stdout.writeAll(col.name) catch {};
+                if (i > 0) _ = out.writeAll(",") catch {};
+                _ = out.writeAll(col.name) catch {};
             }
-            _ = stdout.writeAll("\n") catch {};
+            _ = out.writeAll("\n") catch {};
             // CSV rows
             for (rows.items) |row| {
                 for (row.items, 0..) |cell, i| {
-                    if (i > 0) _ = stdout.writeAll(",") catch {};
+                    if (i > 0) _ = out.writeAll(",") catch {};
                     // Quote fields containing comma, newline, or quote
                     if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                        _ = stdout.writeAll("\"") catch {};
+                        _ = out.writeAll("\"") catch {};
                         for (cell) |c| {
                             if (c == '"') {
-                                _ = stdout.writeAll("\"\"") catch {};
+                                _ = out.writeAll("\"\"") catch {};
                             } else {
-                                _ = stdout.write(&[_]u8{c}) catch {};
+                                _ = out.write(&[_]u8{c}) catch {};
                             }
                         }
-                        _ = stdout.writeAll("\"") catch {};
+                        _ = out.writeAll("\"") catch {};
                     } else {
-                        _ = stdout.writeAll(cell) catch {};
+                        _ = out.writeAll(cell) catch {};
                     }
                 }
-                _ = stdout.writeAll("\n") catch {};
+                _ = out.writeAll("\n") catch {};
             }
         }
         return false;
@@ -218,51 +221,52 @@ pub fn renderTransportResponseWithStreams(
             }
 
             const printSeparator = struct {
-                fn f(out: anytype, widths: []const usize) void {
-                    _ = out.writeAll("+") catch {};
+                fn f(writer: anytype, widths: []const usize) void {
+                    var out_writer = writer;
+                    _ = out_writer.writeAll("+") catch {};
                     for (widths) |w| {
-                        for (0..w + 2) |_| _ = out.writeAll("-") catch {};
-                        _ = out.writeAll("+") catch {};
+                        for (0..w + 2) |_| _ = out_writer.writeAll("-") catch {};
+                        _ = out_writer.writeAll("+") catch {};
                     }
-                    _ = out.writeAll("\n") catch {};
+                    _ = out_writer.writeAll("\n") catch {};
                 }
             }.f;
 
-            printSeparator(stdout, col_widths.items);
+            printSeparator(out, col_widths.items);
 
-            _ = stdout.writeAll("|") catch {};
+            _ = out.writeAll("|") catch {};
             for (view.columns, 0..) |col, i| {
-                _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(col.name) catch {};
+                _ = out.writeAll(" ") catch {};
+                _ = out.writeAll(col.name) catch {};
                 const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
-                for (col.name.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                _ = stdout.writeAll(" |") catch {};
+                for (col.name.len..width) |_| _ = out.writeAll(" ") catch {};
+                _ = out.writeAll(" |") catch {};
             }
-            _ = stdout.writeAll("\n") catch {};
+            _ = out.writeAll("\n") catch {};
 
-            printSeparator(stdout, col_widths.items);
+            printSeparator(out, col_widths.items);
 
             for (rows.items) |row| {
-                _ = stdout.writeAll("|") catch {};
+                _ = out.writeAll("|") catch {};
                 for (row.items, 0..) |cell, i| {
-                    _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(cell) catch {};
+                    _ = out.writeAll(" ") catch {};
+                    _ = out.writeAll(cell) catch {};
                     const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                    for (cell.len..width) |_| _ = stdout.writeAll(" ") catch {};
-                    _ = stdout.writeAll(" |") catch {};
+                    for (cell.len..width) |_| _ = out.writeAll(" ") catch {};
+                    _ = out.writeAll(" |") catch {};
                 }
-                _ = stdout.writeAll("\n") catch {};
+                _ = out.writeAll("\n") catch {};
             }
 
-            printSeparator(stdout, col_widths.items);
+            printSeparator(out, col_widths.items);
 
             const row_count = rows.items.len;
             if (row_count == 1) {
-                _ = stdout.writeAll("(1 row)\n") catch {};
+                _ = out.writeAll("(1 row)\n") catch {};
             } else {
                 const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
                 defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-                _ = stdout.writeAll(count_str) catch {};
+                _ = out.writeAll(count_str) catch {};
             }
         }
     }

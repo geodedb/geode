@@ -1671,7 +1671,7 @@ fn executeQueryOnGrpc(
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
 
     // 1. Handshake — send HelloRequest, read HelloResponse
-    var hello_resp = grpc_query_transport.hello(
+    const hello_resp = grpc_query_transport.hello(
         allocator,
         stream,
         .{
@@ -1722,7 +1722,7 @@ fn executeQueryOnGrpc(
     allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
     if (allocated_query) |scoped| final_query = scoped;
 
-    var owned_params = params;
+    const owned_params = params;
     defer finishActiveQueryDeadlineWatchdog();
 
     var grpc_adapter = grpc_query_transport.StreamingQueryAdapter{

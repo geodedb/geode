@@ -82,9 +82,10 @@ fn syncSessionStateFromResult(
     }
     try root.put("flagger_findings", .{ .array = flagger });
 
+    const root_value = std.json.Value{ .object = root };
     session.last_response = try std.json.Stringify.valueAlloc(
         session.allocator,
-        .{ .object = root },
+        root_value,
         .{},
     );
 }
