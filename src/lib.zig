@@ -270,6 +270,11 @@ pub const repl = struct {
 
 // Shared CLI transport response formatter abstraction.
 pub const cli_transport_response = @import("cli/transport_response.zig");
+pub const query_result_accumulator = @import("client/query_result_accumulator.zig");
+pub const quic_query_runner = @import("client/quic_query_runner.zig");
+pub const query_runner = @import("client/query_runner.zig");
+pub const query_scope = @import("client/query_scope.zig");
+pub const grpc_query_transport = @import("client/grpc_query_transport.zig");
 
 // Extend planner module
 pub const planner_wcoj = @import("planner/wcoj.zig");

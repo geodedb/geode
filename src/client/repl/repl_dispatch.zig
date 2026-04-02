@@ -9,13 +9,14 @@ const protobuf = @import("protobuf");
 const proto_schema = @import("schema");
 const explain_payload = @import("../../server/explain_payload.zig");
 const profile_payload = @import("../../server/profile_payload.zig");
+const transport_response = @import("../../cli/transport_response.zig");
+const query_result_accumulator = @import("../query_result_accumulator.zig");
+const query_runner = @import("../query_runner.zig");
+const query_scope = @import("../query_scope.zig");
 
 const spice_wrapper = @import("parallel/spice");
 
-const ColumnInfo = struct {
-    name: []const u8,
-    type: []const u8,
-};
+const ColumnInfo = query_result_accumulator.ColumnInfo;
 
 /// Validate a graph name to prevent GQL injection (S5).
 /// Graph names must match [a-zA-Z_][a-zA-Z0-9_]*.
@@ -31,10 +32,61 @@ fn isValidGraphName(name: []const u8) bool {
     return true;
 }
 
-fn gqlStartsWithUseGraph(gql: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, gql, " \t\r\n");
-    if (trimmed.len < 9) return false;
-    return std.ascii.eqlIgnoreCase(trimmed[0..9], "USE GRAPH");
+fn clearSessionLastResponse(session: *ClientSession) void {
+    if (session.last_response) |resp| {
+        session.allocator.free(resp);
+        session.last_response = null;
+    }
+}
+
+fn syncSessionStateFromResult(
+    session: *ClientSession,
+    result: *const query_result_accumulator.ResultAccumulator,
+) !void {
+    clearSessionLastResponse(session);
+    session.last_payload_kind = switch (result.result_kind) {
+        .explain => .explain,
+        .profile => .profile,
+        .rows => if (result.rowCount() > 0 or result.view().columns.len > 0) .rows else .none,
+    };
+
+    if (!result.indicatesFailure()) return;
+
+    var root = std.json.ObjectMap.init(session.allocator);
+    errdefer query_result_accumulator.freeJsonValue(session.allocator, .{ .object = root });
+
+    try root.put("status_class", .{ .string = try session.allocator.dupe(u8, result.status_class) });
+    if (result.status_subclass.len > 0) {
+        try root.put("status_subclass", .{ .string = try session.allocator.dupe(u8, result.status_subclass) });
+    }
+    if (result.has_error) {
+        if (result.error_message.len > 0) {
+            const message = try session.allocator.dupe(u8, result.error_message);
+            try root.put("error", .{ .string = message });
+            try root.put("message", .{ .string = try session.allocator.dupe(u8, result.error_message) });
+        }
+        if (result.error_status.len > 0) {
+            try root.put("error_code", .{ .string = try session.allocator.dupe(u8, result.error_status) });
+        }
+    }
+
+    var additional = std.json.Array.init(session.allocator);
+    for (result.additional_statuses.items) |item| {
+        try additional.append(.{ .string = try session.allocator.dupe(u8, item) });
+    }
+    try root.put("additional_statuses", .{ .array = additional });
+
+    var flagger = std.json.Array.init(session.allocator);
+    for (result.flagger_findings.items) |item| {
+        try flagger.append(.{ .string = try session.allocator.dupe(u8, item) });
+    }
+    try root.put("flagger_findings", .{ .array = flagger });
+
+    session.last_response = try std.json.Stringify.valueAlloc(
+        session.allocator,
+        .{ .object = root },
+        .{},
+    );
 }
 
 const LastPayloadKind = enum {
@@ -2237,29 +2289,13 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             const use_stmt = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s};", .{graph_name});
             defer state.allocator.free(use_stmt);
             try executeGql(state, use_stmt);
-
-            // Check if server returned an error before updating local state
-            var has_error = false;
-            if (state.session.last_response) |response| {
-                // Check for error status codes (4xxxx or 5xxxx) which indicate graph not found, etc.
-                if (std.mem.indexOf(u8, response, "\"status_class\":\"4") != null or
-                    std.mem.indexOf(u8, response, "\"status_class\":\"5") != null)
-                {
-                    has_error = true;
-                }
+            if (state.current_graph) |old| {
+                state.allocator.free(old);
             }
-
-            // Only update local state if server accepted the graph switch
-            if (!has_error) {
-                if (state.current_graph) |old| {
-                    state.allocator.free(old);
-                }
-                state.current_graph = try state.allocator.dupe(u8, graph_name);
-                var buf: [256]u8 = undefined;
-                const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
-                try stdout.writeAll(msg);
-            }
-            // Error message is already displayed by executeGql
+            state.current_graph = try state.allocator.dupe(u8, graph_name);
+            var buf: [256]u8 = undefined;
+            const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
+            try stdout.writeAll(msg);
         } else {
             const stderr = platform.getStderrHandle();
             try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
@@ -2379,10 +2415,8 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // REPL queries may execute on fresh transport streams, so carry the selected graph
     // forward explicitly unless this request already starts with USE GRAPH.
     if (state.current_graph) |graph| {
-        if (!gqlStartsWithUseGraph(gql)) {
-            owned_scoped_gql = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s}; {s}", .{ graph, gql });
-            scoped_gql = owned_scoped_gql.?;
-        }
+        owned_scoped_gql = try query_scope.prependGraphContextIfNeeded(state.allocator, gql, graph);
+        if (owned_scoped_gql) |scoped| scoped_gql = scoped;
     }
 
     // CRITICAL FIX: Move to new line before displaying results
@@ -2427,18 +2461,75 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     // Execute query via QUIC with automatic reconnection on connection errors
     var retry_count: u32 = 0;
     const max_retries: u32 = 1; // Only retry once after reconnection
+    const format_str: []const u8 = switch (state.format) {
+        .table => "table",
+        .csv => "csv",
+        .json => "json",
+    };
+
+    const ShellProtocolAdapter = struct {
+        session: *ClientSession,
+
+        fn sendClientMessage(proto: *query_runner.ProtocolClient, allocator: std.mem.Allocator, msg: proto_schema.QuicClientMessage) !void {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            if (!self.session.connected or self.session.connection == null) return error.NotConnected;
+
+            const encoded = try encodeClientPacket(allocator, msg);
+            defer allocator.free(encoded);
+            try self.session.connection.?.writeAll(encoded);
+        }
+
+        fn readServerMessage(proto: *query_runner.ProtocolClient, allocator: std.mem.Allocator, timeout_secs: u32) !proto_schema.QuicServerMessage {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            if (!self.session.connected or self.session.connection == null) return error.NotConnected;
+
+            var read_retry_count: usize = 0;
+            const read_max_retries: usize = @max(@as(usize, timeout_secs), 1) * 20;
+            const response = while (read_retry_count < read_max_retries) : (read_retry_count += 1) {
+                if (checkForInterrupt()) {
+                    return error.Interrupted;
+                }
+
+                break self.session.connection.?.readLine(allocator, 0) catch |err| {
+                    if (err == error.WouldBlock) {
+                        std.Thread.sleep(50 * std.time.ns_per_ms);
+                        continue;
+                    }
+                    return err;
+                };
+            } else {
+                return error.WouldBlock;
+            };
+            defer allocator.free(response);
+
+            const packet = decodeServerPacket(allocator, response) catch return error.InvalidResponse;
+            return packet.quic orelse error.InvalidResponse;
+        }
+    };
 
     while (retry_count <= max_retries) : (retry_count += 1) {
-        state.session.runGql(scoped_gql) catch |err| {
+        var adapter = ShellProtocolAdapter{ .session = state.session };
+        var protocol_client = query_runner.ProtocolClient{
+            .context = &adapter,
+            .sendClientMessageFn = ShellProtocolAdapter.sendClientMessage,
+            .readServerMessageFn = ShellProtocolAdapter.readServerMessage,
+        };
+
+        const empty_params = std.ArrayList(proto_schema.Param){};
+        var result = query_runner.collectQuery(state.allocator, &protocol_client, .{
+            .session_id = state.session.session_id orelse "",
+            .query_text = scoped_gql,
+            .format = format_str,
+            .timeout_secs = 30,
+            .page_size = query_runner.default_page_size,
+            .params = empty_params,
+        }) catch |err| {
             // CANARY: REQ=REQ-SHELL-WOULDBLOCK-002; FEATURE="SuppressWouldBlock"; ASPECT=RunGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-            // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
             if (err == error.WouldBlock) {
                 return;
             }
 
-            // Check if this is a connection error that can be recovered
             if (ClientSession.isConnectionError(err) and retry_count < max_retries) {
-                // Attempt reconnection and transaction recovery
                 const should_retry = handleConnectionError(state, err) catch |handle_err| {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
@@ -2447,20 +2538,14 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 };
 
                 if (should_retry) {
-                    // Reset timer for retry
                     timer = std.time.Timer.start() catch return error.QueryExecutionFailed;
-                    continue; // Retry the query
+                    continue;
                 }
             }
 
-            // Non-recoverable error or reconnection failed
-            // CANARY: REQ=REQ-SHELL-INTERRUPT-032; FEATURE="SourceInterrupt"; ASPECT=PropagateInterrupt; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
-            // For Interrupted errors, propagate to caller so they can handle rollback
             if (err == error.Interrupted) {
                 return err;
             }
-            // For other errors, print and return error so caller can track
-            // Provide user-friendly error messages for common errors
             if (err == error.InvalidResponse) {
                 try stderr.writeAll("Error: Server returned an invalid response (protocol mismatch or server error)\r\n");
             } else if (err == error.ConnectionReset or err == error.BrokenPipe) {
@@ -2474,119 +2559,35 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             }
             return error.QueryExecutionFailed;
         };
+        defer result.deinit();
+        try syncSessionStateFromResult(state.session, &result);
 
-        // Query succeeded, break out of retry loop
-        break;
-    }
-
-    // Check if the schema response indicates an error - if so, don't PULL
-    var has_error = false;
-    if (state.session.last_response) |schema_response| {
-        // Check for error status codes (4xxxx or 5xxxx)
-        if (std.mem.indexOf(u8, schema_response, "\"status_class\":\"4") != null or
-            std.mem.indexOf(u8, schema_response, "\"status_class\":\"5") != null)
-        {
-            has_error = true;
-        }
-    }
-
-    // If we dropped the current graph and execution succeeded, reset to default
-    if (dropped_current_graph and !has_error) {
-        if (state.current_graph) |old| {
-            state.allocator.free(old);
-        }
-        state.current_graph = null;
-    }
-
-    // Get response data from QUIC client (only if no error in schema)
-    var response_data = std.ArrayList(u8).empty;
-    defer response_data.deinit(state.allocator);
-
-    if (!has_error and state.session.last_payload_kind == .rows) {
-        // CANARY: REQ=REQ-SHELL-RECONNECT-012; FEATURE="ShellAutoReconnect"; ASPECT=PullAllWithReconnect; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
-        // Use pullAll to get the complete response with reconnection handling
-        state.session.pullAll(&response_data) catch |err| {
-            // Check if we at least got a schema response with an error
-            if (state.session.last_response) |schema_response| {
-                if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-                    return error.QueryExecutionFailed; // Error was displayed
-                }
+        const has_error = result.indicatesFailure();
+        if (dropped_current_graph and !has_error) {
+            if (state.current_graph) |old| {
+                state.allocator.free(old);
             }
-            // CANARY: REQ=REQ-SHELL-WOULDBLOCK-003; FEATURE="SuppressWouldBlock"; ASPECT=PullAllError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
-            // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
-            if (err == error.WouldBlock) {
-                return;
-            }
+            state.current_graph = null;
+        }
 
-            // Check if this is a connection error
-            if (ClientSession.isConnectionError(err)) {
-                // Attempt reconnection
-                const should_retry = handleConnectionError(state, err) catch |handle_err| {
-                    var buf: [256]u8 = undefined;
-                    const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
-                    stderr.writeAll(msg) catch {};
-                    return error.QueryExecutionFailed;
-                };
-
-                if (should_retry) {
-                    // Note: We can't retry pullAll without re-executing the query
-                    // Inform the user they need to re-run the query
-                    try stderr.writeAll("Connection lost while fetching results. Please re-run your query.\r\n");
-                }
+        if (suppress) {
+            if (has_error) {
                 return error.QueryExecutionFailed;
             }
-
-            // Provide user-friendly error messages for common errors
-            if (err == error.InvalidResponse) {
-                try stderr.writeAll("Error: Failed to fetch results (invalid server response)\r\n");
-            } else if (err == error.ConnectionReset or err == error.BrokenPipe) {
-                try stderr.writeAll("Error: Connection lost while fetching results\r\n");
-            } else if (err == error.Timeout) {
-                try stderr.writeAll("Error: Timed out while fetching results\r\n");
-            } else {
-                try stderr.writeAll("Error fetching results: ");
-                try stderr.writeAll(@errorName(err));
-                try stderr.writeAll("\r\n");
-            }
-            return error.QueryExecutionFailed;
-        };
-    }
-
-    // Stop timing and calculate duration
-    const duration_ns = timer.read();
-    const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
-
-    // Display schema response only when it carries errors or non-row payloads
-    if (state.session.last_response) |schema_response| {
-        const should_display = has_error or state.session.last_payload_kind != .rows;
-        if (should_display) {
-            // When suppressing output (batch mode), only signal errors without verbose output
-            if (suppress) {
-                if (has_error) {
-                    return error.QueryExecutionFailed;
-                }
-                // Non-error, non-row payloads during batch execution - silently skip
-            } else {
-                if (try extractAndDisplayResult(state.allocator, schema_response, stdout, stderr, state.format)) {
-                    // Return QueryExecutionFailed error so callers can track error counts
-                    return error.QueryExecutionFailed;
-                }
+        } else {
+            if (try result.render(stdout, stderr)) {
+                return error.QueryExecutionFailed;
             }
         }
-    }
 
-    // Format and output the response data (rows payload)
-    if (response_data.items.len > 0 and !suppress) {
-        if (try extractAndDisplayResult(state.allocator, response_data.items, stdout, stderr, state.format)) {
-            return error.QueryExecutionFailed;
+        if (state.show_timing and !suppress) {
+            const duration_ns = timer.read();
+            const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
+            var buf: [256]u8 = undefined;
+            const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
+            try stdout.writeAll(timing_msg);
         }
-    }
-
-    // Display timing information
-    if (state.show_timing and !suppress) {
-        var buf: [256]u8 = undefined;
-        const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
-        try stdout.writeAll(timing_msg);
+        return;
     }
 }
 
@@ -4595,15 +4596,15 @@ test "TestIsIdentifierChar_NonIdentifier" {
 }
 
 test "TestGqlStartsWithUseGraph_LeadingWhitespace" {
-    try testing.expect(gqlStartsWithUseGraph("  \n\tUSE GRAPH abs_eagle; MATCH (n) RETURN COUNT(n);"));
+    try testing.expect(query_scope.startsWithUseGraph("  \n\tUSE GRAPH test_graph_ctx; MATCH (n) RETURN COUNT(n);"));
 }
 
 test "TestGqlStartsWithUseGraph_CaseInsensitive" {
-    try testing.expect(gqlStartsWithUseGraph("use graph abs_eagle;"));
+    try testing.expect(query_scope.startsWithUseGraph("use graph test_graph_ctx;"));
 }
 
 test "TestGqlStartsWithUseGraph_OtherStatement" {
-    try testing.expect(!gqlStartsWithUseGraph("MATCH (n) RETURN COUNT(n);"));
+    try testing.expect(!query_scope.startsWithUseGraph("MATCH (n) RETURN COUNT(n);"));
 }
 
 // CANARY: REQ=REQ-SHELL-RECONNECT-015; FEATURE="ShellAutoReconnect"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29

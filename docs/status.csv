@@ -507,7 +507,6 @@ REQ-CLI-CHUNKED-EXEC-005,ChunkedExecution,OptionsStruct,IMPL,,,cli,2026-02-02,sr
 REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-13,src/cli/main.zig
 REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
-REQ-CLI-DOT-002,DotFormat,GraphvizOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-DOT-003,DotFormat,RowBasedOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,IMPL,,,cli,2026-01-31,src/cli/main.zig
@@ -529,6 +528,17 @@ REQ-CLI-REFACTOR-001,CLI Library Migration,FlagParsing,IMPL,,,cli,2026-04-01,src
 REQ-CLI-ROLE-CMD-001,Role CLI Commands,RoleManagement,TESTED,,,security,2026-01-15,src/security/user_manager.zig
 REQ-CLI-ROUTE-001,Query Option Auto-routing,CommandDispatch,TESTED,,,cli,2025-10-04,tests/query_option_autorouting_regression_test.sh
 REQ-CLI-SESSION-001,CLISession,Management,TESTED,,,cli,2026-02-04,src/cli/session_cli.zig
+REQ-CLI-SHARED-QUERY-001,ShellQuerySharedPath,ParityTesting,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-002,ShellQuerySharedPath,GraphScopingParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-003,ShellQuerySharedPath,LargeOrderedStreamingParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-004,ShellQuerySharedPath,ExplainProfileParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-005,ShellQuerySharedPath,ErrorPayloadParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-006,ShellQuerySharedPath,BatchFileSourceParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-007,ShellQuerySharedPath,QueryFileParity,TESTED,,,cli,2026-04-02,tests/test_query_shell_shared_path.zig
+REQ-CLI-SHARED-QUERY-008,ClientTransportSharedPath,ParameterBindingParity,TESTED,,,cli,2026-04-02,tests/test_protocol_client_shared_path.zig
+REQ-CLI-SHARED-QUERY-009,ClientTransportSharedPath,LargeOrderedParity,TESTED,,,cli,2026-04-02,tests/test_protocol_client_shared_path.zig
+REQ-CLI-SHARED-QUERY-010,ClientTransportSharedPath,TransportExecutionParity,TESTED,,,cli,2026-04-02,tests/test_protocol_client_shared_path.zig
+REQ-CLI-SHARED-QUERY-011,ClientTransportSharedPath,ErrorPayloadParity,TESTED,,,cli,2026-04-02,tests/test_protocol_client_shared_path.zig
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,TESTED,,,cli,2026-01-15,src/cli/main.zig
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedBinary,IMPL,,,cli,2026-02-03,src/cli/main.zig
 REQ-CLI-SUBPROCESS-ELIMINATION-001,CLI Subprocess Elimination,UnifiedEntry,IMPL,,,build,2026-02-03,build.zig
@@ -3629,7 +3639,6 @@ REQ-SHELL-INTERRUPT-024,SourceInterrupt,DrainForRollback,IMPL,,,cli,2026-01-30,s
 REQ-SHELL-INTERRUPT-025,SourceInterrupt,DrainAllForRollback,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-026,SourceInterrupt,RollbackScaledTimeout,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-030,SourceInterrupt,RollbackScalingTests,TESTED,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
-REQ-SHELL-INTERRUPT-032,SourceInterrupt,PropagateInterrupt,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-033,SourceInterrupt,DrainWithSpinner,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-INTERRUPT-034,SourceInterrupt,QuicReadLineTimeout,IMPL,,,transport,2026-01-30,src/transport/quic.zig
 REQ-SHELL-INTERRUPT-035,SourceInterrupt,DisconnectForRollback,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
@@ -3669,7 +3678,6 @@ REQ-SHELL-RECONNECT-008,ShellAutoReconnect,RestoreGraphContext,TESTED,,,cli,2026
 REQ-SHELL-RECONNECT-009,ShellAutoReconnect,TransactionRecoveryPrompt,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-010,ShellAutoReconnect,HandleConnectionError,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-011,ShellAutoReconnect,ExecuteWithRetry,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
-REQ-SHELL-RECONNECT-012,ShellAutoReconnect,PullAllWithReconnect,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
 REQ-SHELL-RECONNECT-013,ShellAutoReconnect,TxnStatementCount,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig
 REQ-SHELL-RECONNECT-014,ShellAutoReconnect,CacheCredentialsOnAuth,TESTED,,,cli,2026-01-29,src/client/repl/repl_loop.zig
 REQ-SHELL-RECONNECT-015,ShellAutoReconnect,UnitTests,TESTED,,,cli,2026-01-29,src/client/repl/repl_dispatch.zig
@@ -3687,7 +3695,6 @@ REQ-SHELL-TXN-ERROR-002,TransactionErrorDetails,CommitWithRetry,IMPL,,,cli,2026-
 REQ-SHELL-TXN-ERROR-003,TransactionErrorDetails,RollbackWithRetry,IMPL,,,cli,2026-01-30,src/client/repl/repl_dispatch.zig
 REQ-SHELL-WOULDBLOCK-001,SuppressWouldBlock,ReplLoopError,IMPL,,,cli,2026-01-28,src/client/repl/repl_loop.zig
 REQ-SHELL-WOULDBLOCK-002,SuppressWouldBlock,RunGqlError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
-REQ-SHELL-WOULDBLOCK-003,SuppressWouldBlock,PullAllError,IMPL,,,cli,2026-01-28,src/client/repl/repl_dispatch.zig
 REQ-SHOW-CONSTRAINTS-001,SHOW CONSTRAINTS,CatalogList,TESTED,,,catalog,2026-01-13,src/schema/catalog.zig
 REQ-SHOW-CONSTRAINTS-002,SHOW CONSTRAINTS,StatementHandler,TESTED,,,execution,2026-01-13,src/execution/statement_handlers.zig
 REQ-SHOW-CONSTRAINTS-002,StatementHandler,ShowConstraints,TESTED,,,execution,2026-01-16,tests/test_gap_0193_batch2_misc.zig

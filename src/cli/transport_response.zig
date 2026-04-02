@@ -30,6 +30,18 @@ pub fn renderTransportResponse(
     rows_json: ?*std.ArrayList(std.ArrayList(std.json.Value)),
     view: TransportResponseView,
 ) !void {
+    _ = try renderTransportResponseWithStreams(allocator, stdout, stdout, format, rows_text, rows_json, view);
+}
+
+pub fn renderTransportResponseWithStreams(
+    allocator: std.mem.Allocator,
+    stdout: anytype,
+    stderr: anytype,
+    format: []const u8,
+    rows_text: ?*std.ArrayList(std.ArrayList([]const u8)),
+    rows_json: ?*std.ArrayList(std.ArrayList(std.json.Value)),
+    view: TransportResponseView,
+) !bool {
     if (std.mem.eql(u8, format, "json")) {
         // Use an arena allocator for the JSON tree structure (ObjectMaps, Arrays,
         // duped string keys/values). Row json.Values from protoValueToJson are
@@ -118,7 +130,37 @@ pub fn renderTransportResponse(
         const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
         try stdout.writeAll(json_out);
         try stdout.writeAll("\n");
-        return;
+        return view.has_error or (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00"));
+    }
+
+    if (view.has_error) {
+        if (view.error_message.len > 0) {
+            try stderr.writeAll("Error: ");
+            try stderr.writeAll(view.error_message);
+            try stderr.writeAll("\n");
+        } else if (view.error_status.len > 0) {
+            try stderr.writeAll("Error (");
+            try stderr.writeAll(view.error_status);
+            try stderr.writeAll(")\n");
+        }
+        return true;
+    }
+
+    if (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00")) {
+        try stderr.writeAll("Error (");
+        try stderr.writeAll(view.status_class);
+        try stderr.writeAll(")\n");
+        return true;
+    }
+
+    if (view.result_kind != .rows) {
+        if (view.result_payload) |payload| {
+            try stdout.writeAll(payload);
+            if (payload.len == 0 or payload[payload.len - 1] != '\n') {
+                try stdout.writeAll("\n");
+            }
+        }
+        return false;
     }
 
     if (std.mem.eql(u8, format, "csv")) {
@@ -151,7 +193,7 @@ pub fn renderTransportResponse(
                 _ = stdout.writeAll("\n") catch {};
             }
         }
-        return;
+        return false;
     }
 
     if (std.mem.eql(u8, format, "table")) {
@@ -224,4 +266,5 @@ pub fn renderTransportResponse(
             }
         }
     }
+    return false;
 }

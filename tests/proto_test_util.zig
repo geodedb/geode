@@ -3,8 +3,11 @@ const builtin = @import("builtin");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const quic = @import("transport/quic");
-const grpc_client = @import("grpc_client");
-const profile_payload = @import("geode").profile_payload;
+const geode = @import("geode");
+const profile_payload = geode.profile_payload;
+const grpc_query_transport = geode.grpc_query_transport;
+const query_runner = geode.query_runner;
+const query_result_accumulator = geode.query_result_accumulator;
 const posix = std.posix;
 
 // ============================================================================
@@ -320,6 +323,129 @@ pub const ExecResult = struct {
         if (self.error_message) |m| allocator.free(m);
     }
 };
+
+fn dupeStringSliceList(allocator: std.mem.Allocator, items: []const []const u8) ![][]const u8 {
+    var out = try allocator.alloc([]const u8, items.len);
+    errdefer {
+        for (out[0..items.len]) |item| allocator.free(item);
+        allocator.free(out);
+    }
+    for (items, 0..) |item, idx| {
+        out[idx] = try allocator.dupe(u8, item);
+    }
+    return out;
+}
+
+fn jsonValueToU64(value: std.json.Value) !u64 {
+    return switch (value) {
+        .integer => |num| std.math.cast(u64, num) orelse return error.InvalidResultJson,
+        .number_string => |num| try std.fmt.parseInt(u64, num, 10),
+        .string => |num| try std.fmt.parseInt(u64, num, 10),
+        else => error.InvalidResultJson,
+    };
+}
+
+fn jsonValueToTest(allocator: std.mem.Allocator, value: std.json.Value) !TestValue {
+    return switch (value) {
+        .null => .null,
+        .bool => |flag| .{ .bool = flag },
+        .integer => |num| .{ .int = num },
+        .float => |num| .{ .double = num },
+        .number_string => |num| blk: {
+            if (std.fmt.parseInt(i64, num, 10)) |parsed| {
+                break :blk .{ .int = parsed };
+            } else |_| {
+                break :blk .{ .string = try allocator.dupe(u8, num) };
+            }
+        },
+        .string => |text| .{ .string = try allocator.dupe(u8, text) },
+        .array => .other,
+        .object => |obj| blk: {
+            if (obj.get("labels")) |labels_val| {
+                const props_val = obj.get("properties") orelse return .other;
+                const id_val = obj.get("id") orelse return .other;
+                if (labels_val != .array or props_val != .object) return .other;
+                break :blk .{ .node = .{
+                    .id = try jsonValueToU64(id_val),
+                    .label_count = labels_val.array.items.len,
+                    .property_count = props_val.object.count(),
+                } };
+            }
+            if (obj.get("label")) |label_val| {
+                const from_id_val = obj.get("from_id") orelse return .other;
+                const to_id_val = obj.get("to_id") orelse return .other;
+                const id_val = obj.get("id") orelse return .other;
+                if (label_val != .string) return .other;
+                break :blk .{ .edge = .{
+                    .id = try jsonValueToU64(id_val),
+                    .from_id = try jsonValueToU64(from_id_val),
+                    .to_id = try jsonValueToU64(to_id_val),
+                    .label = try allocator.dupe(u8, label_val.string),
+                } };
+            }
+            if (obj.get("nodes")) |nodes_val| {
+                const edges_val = obj.get("edges") orelse return .other;
+                if (nodes_val != .array or edges_val != .array) return .other;
+                break :blk .{ .path = .{
+                    .node_count = nodes_val.array.items.len,
+                    .edge_count = edges_val.array.items.len,
+                } };
+            }
+            break :blk .other;
+        },
+    };
+}
+
+fn execResultFromAccumulator(
+    allocator: std.mem.Allocator,
+    result: *const query_result_accumulator.ResultAccumulator,
+) !ExecResult {
+    const row_count = if (result.rows_json) |rows_json| rows_json.items.len else 0;
+    var rows = try allocator.alloc([]TestValue, row_count);
+    errdefer {
+        for (rows[0..row_count]) |row| {
+            for (row) |cell| {
+                switch (cell) {
+                    .string => |text| allocator.free(text),
+                    .edge => |edge| allocator.free(edge.label),
+                    else => {},
+                }
+            }
+            allocator.free(row);
+        }
+        allocator.free(rows);
+    }
+
+    if (result.rows_json) |rows_json| {
+        for (rows_json.items, 0..) |row_values, row_idx| {
+            rows[row_idx] = try allocator.alloc(TestValue, row_values.items.len);
+            for (row_values.items, 0..) |value, col_idx| {
+                rows[row_idx][col_idx] = try jsonValueToTest(allocator, value);
+            }
+        }
+    }
+
+    var columns = try allocator.alloc([]const u8, result.columns.items.len);
+    errdefer {
+        for (columns[0..result.columns.items.len]) |column| allocator.free(column);
+        allocator.free(columns);
+    }
+    for (result.columns.items, 0..) |column, idx| {
+        columns[idx] = try allocator.dupe(u8, column.name);
+    }
+
+    return .{
+        .status_class = try allocator.dupe(u8, result.status_class),
+        .additional_statuses = try dupeStringSliceList(allocator, result.additional_statuses.items),
+        .flagger_findings = try dupeStringSliceList(allocator, result.flagger_findings.items),
+        .columns = columns,
+        .rows = rows,
+        .ordered = result.ordered,
+        .order_keys = try dupeStringSliceList(allocator, result.order_keys.items),
+        .error_code = if (result.has_error and result.error_status.len > 0) try allocator.dupe(u8, result.error_status) else null,
+        .error_message = if (result.has_error and result.error_message.len > 0) try allocator.dupe(u8, result.error_message) else null,
+    };
+}
 
 pub const HelloResult = struct {
     success: bool,
@@ -767,143 +893,59 @@ pub const QuicProtoClient = struct {
         page_size: u32,
     ) !ExecResult {
         try self.ensureHello(allocator);
-        var params_list = params;
-        defer {
-            for (params_list.items) |*param| {
-                param.deinit(allocator);
+        const QuicProtocolAdapter = struct {
+            client: *QuicProtoClient,
+
+            fn sendClientMessage(
+                proto: *query_runner.ProtocolClient,
+                alloc: std.mem.Allocator,
+                msg: schema.QuicClientMessage,
+            ) !void {
+                _ = alloc;
+                const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
+                try adapter_self.client.writeMessage(msg);
             }
-            params_list.deinit(allocator);
-        }
 
-        const req = schema.ExecuteRequest{
-            .session_id = self.session_id,
-            .query = query,
-            .params = params_list,
-        };
-        try self.writeMessage(.{ .execute = req });
-
-        var columns = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (columns.items) |c| allocator.free(c);
-            columns.deinit();
-        }
-
-        var rows = std.array_list.Managed([]TestValue).init(allocator);
-        errdefer {
-            for (rows.items) |row| {
-                for (row) |cell| {
-                    switch (cell) {
-                        .string => |s| allocator.free(s),
-                        .edge => |e| allocator.free(e.label),
+            fn readServerMessage(
+                proto: *query_runner.ProtocolClient,
+                alloc: std.mem.Allocator,
+                timeout_secs: u32,
+            ) !schema.QuicServerMessage {
+                const adapter_self: *@This() = @ptrCast(@alignCast(proto.context));
+                const timeout_ms = @as(u32, @intCast(@max(timeout_secs, 1) * 1000));
+                while (true) {
+                    const packet = adapter_self.client.readPacket(alloc, timeout_ms) catch |err| {
+                        if (err == error.EndOfStream) return error.EndOfStream;
+                        return err;
+                    };
+                    const msg = packet.quic orelse return error.InvalidMessage;
+                    switch (msg) {
+                        .execute, .pull, .hello => return msg,
+                        .ping => {},
                         else => {},
                     }
                 }
-                allocator.free(row);
             }
-            rows.deinit();
-        }
-
-        var ordered = false;
-        var order_keys = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (order_keys.items) |k| allocator.free(k);
-            order_keys.deinit();
-        }
-
-        var status_class: []const u8 = try allocator.dupe(u8, "");
-        var additional_statuses: [][]const u8 = try allocator.alloc([]const u8, 0);
-        var flagger_findings: [][]const u8 = try allocator.alloc([]const u8, 0);
-        var error_code: ?[]const u8 = null;
-        var error_message: ?[]const u8 = null;
-
-        var schema_received = false;
-        while (!schema_received and error_code == null) {
-            var packet = try self.readPacket(allocator, 5000);
-            defer packet.deinit(allocator);
-
-            const msg = packet.quic orelse return error.InvalidMessage;
-            if (msg != .execute) continue; // Skip non-execute messages (ping, hello, etc.)
-            const exec_resp = msg.execute;
-            const status = try copyStatus(allocator, exec_resp.status.?);
-            allocator.free(status_class);
-            allocator.free(additional_statuses);
-            allocator.free(flagger_findings);
-            status_class = status.status_class;
-            additional_statuses = status.additional;
-            flagger_findings = status.flagger;
-
-            if (exec_resp.payload) |payload| switch (payload) {
-                .schema => |schema_def| {
-                    for (schema_def.columns.items) |col| {
-                        try columns.append(try allocator.dupe(u8, col.name));
-                    }
-                    schema_received = true;
-                },
-                .page => |p| {
-                    ordered = ordered or p.ordered;
-                    if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                        for (p.order_keys.items) |k| try order_keys.append(try allocator.dupe(u8, k));
-                    }
-                    try appendRows(allocator, &rows, p);
-                    if (!p.final) {
-                        schema_received = true;
-                    }
-                },
-                .@"error" => |e| {
-                    error_code = try allocator.dupe(u8, e.code);
-                    error_message = try allocator.dupe(u8, e.message);
-                },
-                else => {},
-            };
-        }
-
-        if (error_code == null) {
-            var done = false;
-            var request_id: u64 = 1;
-            while (!done) : (request_id += 1) {
-                const pull_req = schema.PullRequest{ .request_id = request_id, .page_size = page_size, .session_id = self.session_id };
-                try self.writeMessage(.{ .pull = pull_req });
-
-                var packet = try self.readPacket(allocator, 5000);
-                defer packet.deinit(allocator);
-
-                const msg = packet.quic orelse return error.InvalidMessage;
-                const exec_resp = switch (msg) {
-                    .pull => |p| p.response orelse return error.InvalidMessage,
-                    .execute => |e| e,
-                    else => continue, // Skip non-execute/pull messages (ping, hello, etc.)
-                };
-
-                if (exec_resp.payload) |payload| switch (payload) {
-                    .page => |p| {
-                        ordered = ordered or p.ordered;
-                        if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                            for (p.order_keys.items) |k| try order_keys.append(try allocator.dupe(u8, k));
-                        }
-                        try appendRows(allocator, &rows, p);
-                        if (p.final) done = true;
-                    },
-                    .@"error" => |e| {
-                        error_code = try allocator.dupe(u8, e.code);
-                        error_message = try allocator.dupe(u8, e.message);
-                        done = true;
-                    },
-                    else => {},
-                };
-            }
-        }
-
-        return .{
-            .status_class = status_class,
-            .additional_statuses = additional_statuses,
-            .flagger_findings = flagger_findings,
-            .columns = try columns.toOwnedSlice(),
-            .rows = try rows.toOwnedSlice(),
-            .ordered = ordered,
-            .order_keys = try order_keys.toOwnedSlice(),
-            .error_code = error_code,
-            .error_message = error_message,
         };
+
+        var adapter = QuicProtocolAdapter{ .client = self };
+        var protocol_client = query_runner.ProtocolClient{
+            .context = &adapter,
+            .sendClientMessageFn = QuicProtocolAdapter.sendClientMessage,
+            .readServerMessageFn = QuicProtocolAdapter.readServerMessage,
+        };
+
+        var result = try query_runner.collectQuery(allocator, &protocol_client, .{
+            .session_id = self.session_id,
+            .query_text = query,
+            .format = "json",
+            .timeout_secs = 5,
+            .page_size = page_size,
+            .params = params,
+        });
+        defer result.deinit();
+
+        return try execResultFromAccumulator(allocator, &result);
     }
 
     pub fn executeProfileJson(
@@ -934,17 +976,29 @@ pub const QuicProtoClient = struct {
 
 pub const GrpcProtoClient = struct {
     allocator: std.mem.Allocator,
-    client: grpc_client.GrpcClient,
+    stream: std.net.Stream,
     session_id: []const u8 = "",
 
     pub fn connect(allocator: std.mem.Allocator, addr: []const u8) !GrpcProtoClient {
         const parsed = try parseAddr(addr);
-        const client = try grpc_client.GrpcClient.init(allocator, parsed.host, parsed.port);
-        return .{ .allocator = allocator, .client = client };
+        const deadline = std.time.milliTimestamp() + 10_000;
+        var last_err: anyerror = error.ConnectionRefused;
+        while (std.time.milliTimestamp() < deadline) {
+            const stream = grpc_query_transport.connectPlaintext(allocator, parsed.host, parsed.port, 5, .{}) catch |err| {
+                last_err = err;
+                std.time.sleep(100 * std.time.ns_per_ms);
+                continue;
+            };
+            return .{
+                .allocator = allocator,
+                .stream = stream,
+            };
+        }
+        return last_err;
     }
 
     pub fn deinit(self: *GrpcProtoClient) void {
-        self.client.deinit();
+        self.stream.close();
         if (self.session_id.len > 0) {
             self.allocator.free(self.session_id);
         }
@@ -957,42 +1011,22 @@ pub const GrpcProtoClient = struct {
         if (!hello_result.success) return error.AuthenticationFailed;
     }
 
-    fn encodePacket(allocator: std.mem.Allocator, msg: schema.QuicClientMessage) ![]u8 {
-        var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 1024) catch return error.OutOfMemory;
-        errdefer aw.deinit();
-        const packet = schema.ClientPacket{ .quic = msg };
-        try protobuf.encode(&aw.writer, allocator, packet);
-        const out = try allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
-        aw.deinit();
-        return out;
-    }
-
-    fn decodePacket(allocator: std.mem.Allocator, bytes: []const u8) !schema.ServerPacket {
-        var reader: std.Io.Reader = .fixed(bytes);
-        return protobuf.decode(schema.ServerPacket, &reader, allocator);
-    }
-
-    fn call(self: *GrpcProtoClient, msg: schema.QuicClientMessage) !schema.ServerPacket {
-        const req_bytes = try encodePacket(self.allocator, msg);
-        defer self.allocator.free(req_bytes);
-        const resp_bytes = try self.client.call("Packet", req_bytes, .none);
-        defer self.allocator.free(resp_bytes);
-        return decodePacket(self.allocator, resp_bytes);
-    }
-
     pub fn hello(self: *GrpcProtoClient, allocator: std.mem.Allocator, username: []const u8, password: []const u8) !HelloResult {
-        var packet = try self.call(.{ .hello = .{
-            .username = username,
-            .password = password,
-            .client_name = "grpc-test",
-            .client_version = "1.0",
-            .wanted_conformance = "test",
-        } });
-        defer packet.deinit(allocator);
+        const resp = try grpc_query_transport.hello(
+            allocator,
+            self.stream,
+            .{
+                .username = username,
+                .password = password,
+            },
+            .{},
+        );
+        defer {
+            var resp_copy = resp;
+            resp_copy.deinit(allocator);
+        }
 
-        const msg = packet.quic orelse return error.InvalidResponse;
-        if (msg != .hello) return error.InvalidResponse;
-        const resp = msg.hello;
+        grpc_query_transport.drainUnaryStream(allocator, self.stream, .{});
 
         const session_id = try allocator.dupe(u8, resp.session_id);
         if (self.session_id.len > 0) allocator.free(self.session_id);
@@ -1048,139 +1082,20 @@ pub const GrpcProtoClient = struct {
         page_size: u32,
     ) !ExecResult {
         try self.ensureHello(allocator);
-        var params_list = params;
-        defer {
-            for (params_list.items) |*param| {
-                param.deinit(allocator);
-            }
-            params_list.deinit(allocator);
-        }
+        var adapter = grpc_query_transport.StreamingQueryAdapter{ .stream = self.stream };
+        var transport = adapter.asTransport();
 
-        var packet = try self.call(.{ .execute = .{
+        var result = try query_runner.collectQueryWithTransport(allocator, &transport, .{
             .session_id = self.session_id,
-            .query = query,
-            .params = params_list,
-        } });
-        defer packet.deinit(allocator);
+            .query_text = query,
+            .format = "json",
+            .timeout_secs = 5,
+            .page_size = page_size,
+            .params = params,
+        });
+        defer result.deinit();
 
-        const msg = packet.quic orelse return error.InvalidResponse;
-        if (msg != .execute) return error.InvalidResponse;
-        const exec_resp = msg.execute;
-
-        var columns = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (columns.items) |c| allocator.free(c);
-            columns.deinit();
-        }
-
-        var rows = std.array_list.Managed([]TestValue).init(allocator);
-        errdefer {
-            for (rows.items) |row| {
-                for (row) |cell| {
-                    switch (cell) {
-                        .string => |s| allocator.free(s),
-                        .edge => |e| allocator.free(e.label),
-                        else => {},
-                    }
-                }
-                allocator.free(row);
-            }
-            rows.deinit();
-        }
-
-        var ordered = false;
-        var order_keys = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (order_keys.items) |k| allocator.free(k);
-            order_keys.deinit();
-        }
-
-        var status_class: []const u8 = "00000";
-        var additional_statuses = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (additional_statuses.items) |s| allocator.free(s);
-            additional_statuses.deinit();
-        }
-        var flagger_findings = std.array_list.Managed([]const u8).init(allocator);
-        errdefer {
-            for (flagger_findings.items) |s| allocator.free(s);
-            flagger_findings.deinit();
-        }
-
-        var error_code: ?[]const u8 = null;
-        var error_message: ?[]const u8 = null;
-
-        if (exec_resp.status) |status| {
-            status_class = try allocator.dupe(u8, status.status_class);
-            for (status.additional_statuses.items) |s| {
-                try additional_statuses.append(try allocator.dupe(u8, s));
-            }
-            for (status.flagger_findings.items) |s| {
-                try flagger_findings.append(try allocator.dupe(u8, s));
-            }
-        } else {
-            status_class = try allocator.dupe(u8, "00000");
-        }
-
-        if (exec_resp.payload) |payload| switch (payload) {
-            .schema => |schema_def| {
-                for (schema_def.columns.items) |col| {
-                    try columns.append(try allocator.dupe(u8, col.name));
-                }
-            },
-            .@"error" => |err| {
-                error_code = try allocator.dupe(u8, err.code);
-                error_message = try allocator.dupe(u8, err.message);
-            },
-            else => {},
-        };
-
-        // Pull pages
-        var request_id: u64 = 1;
-        var done = false;
-        while (!done and error_code == null) : (request_id += 1) {
-            var pull_packet = try self.call(.{ .pull = .{
-                .request_id = request_id,
-                .page_size = page_size,
-                .session_id = self.session_id,
-            } });
-            defer pull_packet.deinit(allocator);
-
-            const pull_msg = pull_packet.quic orelse return error.InvalidResponse;
-            if (pull_msg != .pull) return error.InvalidResponse;
-            const pull_resp = pull_msg.pull;
-            const pull_exec = pull_resp.response orelse break;
-
-            if (pull_exec.payload) |payload| switch (payload) {
-                .page => |page| {
-                    ordered = ordered or page.ordered;
-                    if (page.order_keys.items.len > 0 and order_keys.items.len == 0) {
-                        for (page.order_keys.items) |k| {
-                            try order_keys.append(try allocator.dupe(u8, k));
-                        }
-                    }
-                    try appendRows(allocator, &rows, page);
-                    if (page.final) done = true;
-                },
-                .@"error" => |err| {
-                    error_code = try allocator.dupe(u8, err.code);
-                    error_message = try allocator.dupe(u8, err.message);
-                },
-                else => {},
-            };
-        }
-
-        return .{
-            .status_class = status_class,
-            .additional_statuses = try allocator.dupe([]const u8, additional_statuses.items),
-            .flagger_findings = try allocator.dupe([]const u8, flagger_findings.items),
-            .columns = try allocator.dupe([]const u8, columns.items),
-            .rows = try allocator.dupe([]TestValue, rows.items),
-            .ordered = ordered,
-            .order_keys = try allocator.dupe([]const u8, order_keys.items),
-            .error_code = error_code,
-            .error_message = error_message,
-        };
+        return try execResultFromAccumulator(allocator, &result);
     }
 };
 

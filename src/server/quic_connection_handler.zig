@@ -2765,10 +2765,10 @@ test "SharedConnState syncGraphFromState updates inherited graph" {
     state.exec_session = execution.SessionState.init(allocator);
     defer if (state.exec_session) |*session| session.deinit();
 
-    state.exec_session.?.graph = try allocator.dupe(u8, "abs_eagle");
+    state.exec_session.?.graph = try allocator.dupe(u8, "test_graph_inherited");
     try shared.syncGraphFromState(&state);
     try std.testing.expect(shared.current_graph != null);
-    try std.testing.expectEqualStrings("abs_eagle", shared.current_graph.?);
+    try std.testing.expectEqualStrings("test_graph_inherited", shared.current_graph.?);
 
     allocator.free(state.exec_session.?.graph.?);
     state.exec_session.?.graph = try allocator.dupe(u8, "__geode_security");
@@ -2787,7 +2787,7 @@ test "SharedConnState syncGraphFromState clears inherited graph on reset" {
     state.exec_session = execution.SessionState.init(allocator);
     defer if (state.exec_session) |*session| session.deinit();
 
-    state.exec_session.?.graph = try allocator.dupe(u8, "abs_eagle");
+    state.exec_session.?.graph = try allocator.dupe(u8, "test_graph_inherited");
     try shared.syncGraphFromState(&state);
     try std.testing.expect(shared.current_graph != null);
 

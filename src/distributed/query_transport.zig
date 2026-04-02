@@ -10,12 +10,50 @@ const schema = @import("schema");
 const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
+const query_runner = @import("../client/query_runner.zig");
 const result_utils = @import("result_utils.zig");
 const spice_wrapper = @import("parallel/spice");
 
 const logging = @import("logging");
 const log = logging.scoped("query_transport");
 const Attr = logging.Attr;
+
+const ConnectionProtocolAdapter = struct {
+    stream: *quic.QuicClientStream,
+    quic_client: *quic.QuicClient,
+    timeout_ms: u32,
+
+    fn asProtocolClient(self: *@This()) query_runner.ProtocolClient {
+        return .{
+            .context = self,
+            .sendClientMessageFn = sendClientMessage,
+            .readServerMessageFn = readServerMessage,
+        };
+    }
+
+    fn sendClientMessage(
+        proto: *query_runner.ProtocolClient,
+        allocator: std.mem.Allocator,
+        msg: schema.QuicClientMessage,
+    ) !void {
+        const self: *@This() = @ptrCast(@alignCast(proto.context));
+        try writeProtoMessage(allocator, self.stream, msg);
+    }
+
+    fn readServerMessage(
+        proto: *query_runner.ProtocolClient,
+        allocator: std.mem.Allocator,
+        timeout_secs: u32,
+    ) !schema.QuicServerMessage {
+        const self: *@This() = @ptrCast(@alignCast(proto.context));
+        const requested_ms_u64 = @max(@as(u64, timeout_secs), 1) * 1000;
+        const requested_ms: u32 = if (requested_ms_u64 > std.math.maxInt(u32))
+            std.math.maxInt(u32)
+        else
+            @intCast(requested_ms_u64);
+        return try readProtoMessage(allocator, self.stream, self.quic_client, @min(self.timeout_ms, requested_ms));
+    }
+};
 
 /// Query-specific transport for distributed execution
 pub const QueryTransport = struct {
@@ -273,15 +311,7 @@ const Connection = struct {
             return error.NotConnected;
         }
 
-        var params = try buildParams(allocator, query.parameters);
-        defer freeParams(allocator, &params);
-
-        const exec_req = schema.ExecuteRequest{
-            .session_id = self.session_id.?,
-            .query = query.query_text,
-            .params = params,
-        };
-        try writeProtoMessage(allocator, self.stream.?, .{ .execute = exec_req });
+        const params = try buildParams(allocator, query.parameters);
 
         var columns = std.ArrayList(protocol.ColumnDef).init(allocator);
         errdefer {
@@ -303,128 +333,86 @@ const Connection = struct {
         }
 
         var ordered = false;
-        var schema_received = false;
-        var saw_inline_page = false;
-        var inline_final = false;
-        var need_pull = false;
+        const ResultsConsumer = struct {
+            allocator: std.mem.Allocator,
+            columns: *std.ArrayList(protocol.ColumnDef),
+            rows: *std.ArrayList(protocol.BindingRow),
+            order_keys: *std.ArrayList([]const u8),
+            ordered: *bool,
 
-        var loop_arena = std.heap.ArenaAllocator.init(allocator);
-        defer loop_arena.deinit();
-
-        while (!schema_received) {
-            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
-                if (err == error.EndOfStream or err == error.Timeout) break;
-                return err;
-            };
-
-            switch (resp) {
-                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                    .schema => |s| {
-                        schema_received = true;
-                        for (s.columns.items) |col| {
-                            const name = try allocator.dupe(u8, col.name);
-                            const dtype = if (col.type.len > 0)
-                                try allocator.dupe(u8, col.type)
-                            else
-                                try allocator.dupe(u8, "ANY");
-                            try columns.append(allocator, .{ .name = name, .data_type = dtype });
-                        }
-                    },
-                    .page => |p| {
-                        saw_inline_page = true;
-                        try captureOrderMeta(allocator, p, &ordered, &order_keys);
-                        try appendPageRows(allocator, p, &rows);
-                        if (p.final) {
-                            inline_final = true;
-                        } else {
-                            need_pull = true;
-                        }
-                    },
-                    .@"error" => |e| return error.RemoteExecutionFailed,
-                    .explain, .profile => return error.Unsupported,
-                    .metrics, .heartbeat => {},
-                },
-                .hello => |h| if (!h.success) return error.AuthFailed,
-                else => {},
-            }
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-
-        if (!saw_inline_page and !inline_final) {
-            const maybe_resp: ?schema.QuicServerMessage = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, 1) catch |err| switch (err) {
-                error.Timeout, error.EndOfStream => null,
-                else => return err,
-            };
-            if (maybe_resp) |resp| switch (resp) {
-                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                    .page => |p| {
-                        saw_inline_page = true;
-                        try captureOrderMeta(allocator, p, &ordered, &order_keys);
-                        try appendPageRows(allocator, p, &rows);
-                        if (p.final) {
-                            inline_final = true;
-                        } else {
-                            need_pull = true;
-                        }
-                    },
-                    .@"error" => return error.RemoteExecutionFailed,
-                    else => {},
-                },
-                else => {},
-            };
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-
-        if (!inline_final or need_pull) {
-            var request_id: u64 = 1;
-            var done = false;
-            while (!done) : (request_id += 1) {
-                const pull_req = schema.PullRequest{
-                    .request_id = request_id,
-                    .page_size = page_size,
-                    .session_id = self.session_id.?,
-                };
-                try writeProtoMessage(allocator, self.stream.?, .{ .pull = pull_req });
-
-                const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
-                    if (err == error.EndOfStream) break;
-                    return err;
-                };
-
-                switch (resp) {
-                    .pull => |pull_resp| {
-                        const exec_resp = pull_resp.response orelse break;
-                        if (exec_resp.payload) |val| switch (val) {
-                            .page => |p| {
-                                try captureOrderMeta(allocator, p, &ordered, &order_keys);
-                                try appendPageRows(allocator, p, &rows);
-                                if (p.final) done = true;
+            fn handleEvent(
+                consumer: *query_runner.QueryEventConsumer,
+                allocator_: std.mem.Allocator,
+                event: query_runner.QueryEvent,
+                request_id: u64,
+            ) !query_runner.QueryEventSummary {
+                _ = request_id;
+                const self: *@This() = @ptrCast(@alignCast(consumer.context));
+                _ = self.allocator;
+                return switch (event) {
+                    .hello_failure => error.AuthFailed,
+                    .execute => |exec_resp| blk: {
+                        if (exec_resp.payload) |payload| switch (payload) {
+                            .schema => |s| {
+                                for (s.columns.items) |col| {
+                                    const name = try allocator_.dupe(u8, col.name);
+                                    const dtype = if (col.type.len > 0)
+                                        try allocator_.dupe(u8, col.type)
+                                    else
+                                        try allocator_.dupe(u8, "ANY");
+                                    try self.columns.append(allocator_, .{ .name = name, .data_type = dtype });
+                                }
+                                break :blk .{ .schema_received = true };
+                            },
+                            .page => |page| {
+                                try captureOrderMeta(allocator_, page, self.ordered, self.order_keys);
+                                try appendPageRows(allocator_, page, self.rows);
+                                break :blk .{
+                                    .saw_page = true,
+                                    .page_final = page.final,
+                                };
                             },
                             .@"error" => return error.RemoteExecutionFailed,
-                            else => {},
+                            .explain, .profile => return error.Unsupported,
+                            .metrics, .heartbeat => {},
                         };
+                        break :blk .{};
                     },
-                    .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                        .page => |p| {
-                            try captureOrderMeta(allocator, p, &ordered, &order_keys);
-                            try appendPageRows(allocator, p, &rows);
-                            if (p.final) done = true;
-                        },
-                        .@"error" => return error.RemoteExecutionFailed,
-                        else => {},
-                    },
-                    else => {},
-                }
-
-                _ = loop_arena.reset(.retain_capacity);
+                };
             }
-        }
+        };
+
+        var adapter = ConnectionProtocolAdapter{
+            .stream = self.stream.?,
+            .quic_client = &self.quic_client.?,
+            .timeout_ms = timeout_ms,
+        };
+        var protocol_client = adapter.asProtocolClient();
+        var consumer_state = ResultsConsumer{
+            .allocator = allocator,
+            .columns = &columns,
+            .rows = &rows,
+            .order_keys = &order_keys,
+            .ordered = &ordered,
+        };
+        var consumer = query_runner.QueryEventConsumer{
+            .context = &consumer_state,
+            .handleEventFn = ResultsConsumer.handleEvent,
+        };
+
+        try query_runner.consumeQuery(allocator, &protocol_client, .{
+            .session_id = self.session_id.?,
+            .query_text = query.query_text,
+            .format = "json",
+            .timeout_secs = @max(@as(u32, @intCast((@as(u64, timeout_ms) + 999) / 1000)), 1),
+            .page_size = page_size,
+            .params = params,
+        }, &consumer);
 
         const rows_slice = try rows.toOwnedSlice(allocator);
         const schema_slice = try columns.toOwnedSlice(allocator);
         const order_keys_slice = try order_keys.toOwnedSlice(allocator);
+        self.last_activity = std.time.milliTimestamp();
 
         return federation.QueryResults{
             .rows = rows_slice,
@@ -449,119 +437,60 @@ const Connection = struct {
             return error.NotConnected;
         }
 
-        var params = try buildParams(allocator, query.parameters);
-        defer freeParams(allocator, &params);
+        const params = try buildParams(allocator, query.parameters);
+        const StreamConsumer = struct {
+            handler: ResultHandler,
 
-        const exec_req = schema.ExecuteRequest{
-            .session_id = self.session_id.?,
-            .query = query.query_text,
-            .params = params,
+            fn handleEvent(
+                consumer: *query_runner.QueryEventConsumer,
+                allocator_: std.mem.Allocator,
+                event: query_runner.QueryEvent,
+                request_id: u64,
+            ) !query_runner.QueryEventSummary {
+                const self: *@This() = @ptrCast(@alignCast(consumer.context));
+                return switch (event) {
+                    .hello_failure => error.AuthFailed,
+                    .execute => |exec_resp| blk: {
+                        if (exec_resp.payload) |payload| switch (payload) {
+                            .schema => break :blk .{ .schema_received = true },
+                            .page => |page| {
+                                try emitChunkFromPage(allocator_, page, self.handler, request_id);
+                                break :blk .{
+                                    .saw_page = true,
+                                    .page_final = page.final,
+                                };
+                            },
+                            .@"error" => return error.RemoteExecutionFailed,
+                            .explain, .profile => return error.Unsupported,
+                            .metrics, .heartbeat => {},
+                        };
+                        break :blk .{};
+                    },
+                };
+            }
         };
-        try writeProtoMessage(allocator, self.stream.?, .{ .execute = exec_req });
 
-        var loop_arena = std.heap.ArenaAllocator.init(allocator);
-        defer loop_arena.deinit();
+        var adapter = ConnectionProtocolAdapter{
+            .stream = self.stream.?,
+            .quic_client = &self.quic_client.?,
+            .timeout_ms = timeout_ms,
+        };
+        var protocol_client = adapter.asProtocolClient();
+        var consumer_state = StreamConsumer{ .handler = handler };
+        var consumer = query_runner.QueryEventConsumer{
+            .context = &consumer_state,
+            .handleEventFn = StreamConsumer.handleEvent,
+        };
 
-        var saw_inline_page = false;
-        var inline_final = false;
-        var need_pull = false;
-
-        while (true) {
-            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
-                if (err == error.EndOfStream or err == error.Timeout) break;
-                return err;
-            };
-
-            switch (resp) {
-                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                    .page => |p| {
-                        saw_inline_page = true;
-                        try emitChunkFromPage(allocator, p, handler, 0);
-                        if (p.final) {
-                            inline_final = true;
-                        } else {
-                            need_pull = true;
-                        }
-                        break;
-                    },
-                    .@"error" => return error.RemoteExecutionFailed,
-                    .explain, .profile => return error.Unsupported,
-                    else => {},
-                },
-                .hello => |h| if (!h.success) return error.AuthFailed,
-                else => {},
-            }
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-
-        if (!saw_inline_page and !inline_final) {
-            const maybe_resp: ?schema.QuicServerMessage = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, 1) catch |err| switch (err) {
-                error.Timeout, error.EndOfStream => null,
-                else => return err,
-            };
-            if (maybe_resp) |resp| switch (resp) {
-                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                    .page => |p| {
-                        saw_inline_page = true;
-                        try emitChunkFromPage(allocator, p, handler, 0);
-                        if (p.final) {
-                            inline_final = true;
-                        } else {
-                            need_pull = true;
-                        }
-                    },
-                    .@"error" => return error.RemoteExecutionFailed,
-                    else => {},
-                },
-                else => {},
-            };
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-
-        if (inline_final and !need_pull) return;
-
-        var request_id: u64 = 1;
-        var done = false;
-        while (!done) : (request_id += 1) {
-            const pull_req = schema.PullRequest{
-                .request_id = request_id,
-                .page_size = page_size,
-                .session_id = self.session_id.?,
-            };
-            try writeProtoMessage(allocator, self.stream.?, .{ .pull = pull_req });
-
-            const resp = readProtoMessage(loop_arena.allocator(), self.stream.?, &self.quic_client.?, timeout_ms) catch |err| {
-                if (err == error.EndOfStream) break;
-                return err;
-            };
-
-            switch (resp) {
-                .pull => |pull_resp| {
-                    const exec_resp = pull_resp.response orelse break;
-                    if (exec_resp.payload) |val| switch (val) {
-                        .page => |p| {
-                            try emitChunkFromPage(allocator, p, handler, request_id);
-                            if (p.final) done = true;
-                        },
-                        .@"error" => return error.RemoteExecutionFailed,
-                        else => {},
-                    };
-                },
-                .execute => |exec_resp| if (exec_resp.payload) |val| switch (val) {
-                    .page => |p| {
-                        try emitChunkFromPage(allocator, p, handler, request_id);
-                        if (p.final) done = true;
-                    },
-                    .@"error" => return error.RemoteExecutionFailed,
-                    else => {},
-                },
-                else => {},
-            }
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
+        try query_runner.consumeQuery(allocator, &protocol_client, .{
+            .session_id = self.session_id.?,
+            .query_text = query.query_text,
+            .format = "json",
+            .timeout_secs = @max(@as(u32, @intCast((@as(u64, timeout_ms) + 999) / 1000)), 1),
+            .page_size = page_size,
+            .params = params,
+        }, &consumer);
+        self.last_activity = std.time.milliTimestamp();
     }
 
     // GAP-0144: Secure TLS connections for distributed queries

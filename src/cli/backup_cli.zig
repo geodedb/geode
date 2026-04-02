@@ -2,6 +2,7 @@ const std = @import("std");
 const build_options = @import("build_options");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
+const query_runner = geode.query_runner;
 // Import backup types directly from storage/backup module
 const backup_types = @import("storage/backup");
 const BackupHeader = backup_types.BackupHeader;
@@ -991,61 +992,83 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     const session_id = session_id_buf orelse return error.ApplyFailed;
     defer ctx.allocator.free(session_id);
 
-    const params = std.ArrayList(schema.Param){};
-    const exec_req = schema.ExecuteRequest{
-        .session_id = session_id,
-        .query = script,
-        .params = params,
-    };
-    try writeProtoMessage(ctx.allocator, stream, .{ .execute = exec_req });
+    const MigrationProtocolAdapter = struct {
+        stream: *quic.QuicClientStream,
+        quic_client: *quic.QuicClient,
+        timeout_ms: u64,
 
-    _ = arena.reset(.retain_capacity);
-    const exec_resp_msg = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
-    switch (exec_resp_msg) {
-        .execute => |exec_resp| {
-            if (exec_resp.payload) |payload| switch (payload) {
-                .@"error" => return error.ApplyFailed,
-                .schema => {},
-                else => {},
-            };
-        },
-        else => return error.ApplyFailed,
-    }
-
-    var request_id: u64 = 1;
-    var done = false;
-    while (!done) : (request_id += 1) {
-        const pull_req = schema.PullRequest{
-            .request_id = request_id,
-            .page_size = 0,
-            .session_id = session_id,
-        };
-        try writeProtoMessage(ctx.allocator, stream, .{ .pull = pull_req });
-
-        _ = arena.reset(.retain_capacity);
-        const pull_resp_msg = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
-        switch (pull_resp_msg) {
-            .pull => |pull_resp| {
-                const exec_resp = pull_resp.response orelse return error.ApplyFailed;
-                if (exec_resp.payload) |payload| switch (payload) {
-                    .page => |p| done = p.final,
-                    .@"error" => return error.ApplyFailed,
-                    else => {},
-                };
-            },
-            .execute => |exec_resp| {
-                // When inline_results_enabled is true the server delivers results
-                // inline via an extra .execute message before responding to PULL.
-                // Read it here just like executeQueryOnConnection does.
-                if (exec_resp.payload) |payload| switch (payload) {
-                    .page => |p| done = p.final,
-                    .@"error" => return error.ApplyFailed,
-                    else => {},
-                };
-            },
-            else => return error.ApplyFailed,
+        fn sendClientMessage(
+            proto: *query_runner.ProtocolClient,
+            allocator: std.mem.Allocator,
+            msg: schema.QuicClientMessage,
+        ) !void {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            try writeProtoMessage(allocator, self.stream, msg);
         }
-    }
+
+        fn readServerMessage(
+            proto: *query_runner.ProtocolClient,
+            allocator: std.mem.Allocator,
+            timeout_secs: u32,
+        ) !schema.QuicServerMessage {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            const requested_ms = @max(@as(u64, timeout_secs), 1) * 1000;
+            return try readProtoMessage(allocator, self.quic_client, self.stream, @min(self.timeout_ms, requested_ms));
+        }
+    };
+
+    const MigrationConsumer = struct {
+        fn handleEvent(
+            consumer: *query_runner.QueryEventConsumer,
+            allocator: std.mem.Allocator,
+            event: query_runner.QueryEvent,
+            request_id: u64,
+        ) !query_runner.QueryEventSummary {
+            _ = consumer;
+            _ = allocator;
+            _ = request_id;
+            return switch (event) {
+                .hello_failure => error.ApplyFailed,
+                .execute => |exec_resp| blk: {
+                    if (exec_resp.payload) |payload| switch (payload) {
+                        .schema => break :blk .{ .schema_received = true },
+                        .page => |page| break :blk .{
+                            .saw_page = true,
+                            .page_final = page.final,
+                        },
+                        .@"error" => return error.ApplyFailed,
+                        .explain, .profile => return error.ApplyFailed,
+                        .metrics, .heartbeat => {},
+                    };
+                    break :blk .{};
+                },
+            };
+        }
+    };
+
+    var adapter = MigrationProtocolAdapter{
+        .stream = stream,
+        .quic_client = quic_client,
+        .timeout_ms = 5000,
+    };
+    var protocol_client = query_runner.ProtocolClient{
+        .context = &adapter,
+        .sendClientMessageFn = MigrationProtocolAdapter.sendClientMessage,
+        .readServerMessageFn = MigrationProtocolAdapter.readServerMessage,
+    };
+    var consumer = query_runner.QueryEventConsumer{
+        .context = &adapter,
+        .handleEventFn = MigrationConsumer.handleEvent,
+    };
+
+    try query_runner.consumeQuery(ctx.allocator, &protocol_client, .{
+        .session_id = session_id,
+        .query_text = script,
+        .format = "json",
+        .timeout_secs = 5,
+        .page_size = query_runner.default_page_size,
+        .params = std.ArrayList(schema.Param){},
+    }, &consumer);
 }
 
 // CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11

@@ -20,20 +20,16 @@ const server_main = @import("../server/main.zig");
 const protobuf = @import("protobuf");
 const json_lib = @import("json");
 const schema = @import("schema");
-const explain_payload = geode.explain_payload;
-const profile_payload = geode.profile_payload;
-const transport_response = geode.cli_transport_response;
-const ColumnInfo = transport_response.ColumnInfo;
-const QueryResultKind = transport_response.QueryResultKind;
-const TransportResponseView = transport_response.TransportResponseView;
-const renderTransportResponse = transport_response.renderTransportResponse;
+const query_runner = geode.query_runner;
+const query_scope = geode.query_scope;
+const grpc_query_transport = geode.grpc_query_transport;
 const stdio_util = @import("../utils/stdio.zig");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
-const default_stream_page_size: u32 = 128;
+const default_stream_page_size: u32 = query_runner.default_page_size;
 
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -1625,32 +1621,17 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 
     while (attempts < max_attempts) : (attempts += 1) {
         // Connect via raw TCP
-        const tcp_stream = std.net.tcpConnectToHost(allocator, host, port) catch |err| {
+        const tcp_stream = grpc_query_transport.connectPlaintext(
+            allocator,
+            host,
+            port,
+            timeout_secs,
+            .{ .on_progress = touchActiveQueryDeadlineWatchdog },
+        ) catch |err| {
             last_error = @errorName(err);
             continue;
         };
         defer tcp_stream.close();
-
-        // Issue #424: Set socket-level read/write timeouts so blocking I/O
-        // operations will fail instead of hanging forever on aarch64 Docker.
-        setTcpSocketTimeouts(tcp_stream, timeout_secs);
-
-        // Send HTTP/2 connection preface
-        _ = tcp_stream.write("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n") catch |err| {
-            last_error = @errorName(err);
-            continue;
-        };
-        // Send empty SETTINGS frame
-        grpcWriteFrame(tcp_stream, H2_SETTINGS, 0, 0, &.{}) catch |err| {
-            last_error = @errorName(err);
-            continue;
-        };
-
-        // Read server's initial SETTINGS (and ACK ours)
-        grpcDrainInitialSettings(allocator, tcp_stream) catch |err| {
-            last_error = @errorName(err);
-            continue;
-        };
 
         // Execute query on the gRPC connection
         params_transferred = true;
@@ -1669,213 +1650,6 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     std.process.exit(@intFromEnum(ExitCode.general_error));
 }
 
-// HTTP/2 frame type constants for gRPC framing
-const H2_DATA: u8 = 0x0;
-const H2_HEADERS: u8 = 0x1;
-const H2_RST_STREAM: u8 = 0x3;
-const H2_SETTINGS: u8 = 0x4;
-const H2_PING: u8 = 0x6;
-const H2_GOAWAY: u8 = 0x7;
-const H2_WINDOW_UPDATE: u8 = 0x8;
-
-/// Read and ACK initial SETTINGS frames from the server during HTTP/2 handshake.
-fn grpcDrainInitialSettings(allocator: std.mem.Allocator, stream: std.net.Stream) !void {
-    // Read frames until we get a SETTINGS ACK (confirming our preface was accepted)
-    var got_settings_ack = false;
-    var iterations: usize = 0;
-    while (!got_settings_ack and iterations < 10) : (iterations += 1) {
-        const frame = try grpcReadFrame(allocator, stream);
-        defer allocator.free(frame.payload);
-
-        if (frame.frame_type == H2_SETTINGS) {
-            const is_ack = (frame.flags & 0x1) != 0;
-            if (is_ack) {
-                got_settings_ack = true;
-            } else {
-                // ACK the server's SETTINGS
-                try grpcWriteFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
-            }
-        } else if (frame.frame_type == H2_WINDOW_UPDATE) {
-            // Ignore WINDOW_UPDATE during handshake
-        } else {
-            // Unexpected frame type during handshake, skip
-        }
-    }
-}
-
-/// Write a raw HTTP/2 frame directly to the underlying TCP stream of a gRPC client.
-fn grpcWriteFrame(stream: std.net.Stream, frame_type: u8, flags: u8, stream_id: u31, payload: []const u8) !void {
-    const length: u24 = @intCast(payload.len);
-    var header: [9]u8 = undefined;
-    header[0] = @intCast((length >> 16) & 0xFF);
-    header[1] = @intCast((length >> 8) & 0xFF);
-    header[2] = @intCast(length & 0xFF);
-    header[3] = frame_type;
-    header[4] = flags;
-    header[5] = @intCast((@as(u32, stream_id) >> 24) & 0x7F);
-    header[6] = @intCast((@as(u32, stream_id) >> 16) & 0xFF);
-    header[7] = @intCast((@as(u32, stream_id) >> 8) & 0xFF);
-    header[8] = @intCast(@as(u32, stream_id) & 0xFF);
-
-    _ = try stream.write(&header);
-    if (payload.len > 0) {
-        _ = try stream.write(payload);
-    }
-}
-
-/// Read a raw HTTP/2 frame from the underlying TCP stream of a gRPC client.
-const H2Frame = struct { frame_type: u8, flags: u8, stream_id: u31, payload: []u8 };
-
-fn grpcReadFrame(allocator: std.mem.Allocator, stream: std.net.Stream) !H2Frame {
-    var header: [9]u8 = undefined;
-    // Read exactly 9 bytes
-    var total: usize = 0;
-    while (total < 9) {
-        const n = try stream.read(header[total..]);
-        if (n == 0) return error.ConnectionClosed;
-        touchActiveQueryDeadlineWatchdog();
-        total += n;
-    }
-
-    const length: u24 = (@as(u24, header[0]) << 16) | (@as(u24, header[1]) << 8) | @as(u24, header[2]);
-    const frame_type = header[3];
-    const flags = header[4];
-    const stream_id: u31 = @intCast(
-        (@as(u32, header[5] & 0x7F) << 24) |
-            (@as(u32, header[6]) << 16) |
-            (@as(u32, header[7]) << 8) |
-            @as(u32, header[8]),
-    );
-
-    const payload = try allocator.alloc(u8, length);
-    errdefer allocator.free(payload);
-
-    if (length > 0) {
-        var read_total: usize = 0;
-        while (read_total < length) {
-            const n = try stream.read(payload[read_total..]);
-            if (n == 0) return error.ConnectionClosed;
-            touchActiveQueryDeadlineWatchdog();
-            read_total += n;
-        }
-    }
-
-    return .{ .frame_type = frame_type, .flags = flags, .stream_id = stream_id, .payload = payload };
-}
-
-/// Send an RPC request over gRPC: HEADERS (with :path) + DATA (with gRPC framing).
-fn grpcSendRequest(allocator: std.mem.Allocator, stream: std.net.Stream, method_path: []const u8, message: []const u8, stream_id: u31) !void {
-    // Build minimal HPACK-encoded HEADERS
-    var hdr_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-    defer hdr_buf.deinit(allocator);
-
-    // :method: POST (indexed, static table index 3)
-    try hdr_buf.append(allocator, 0x83);
-    // :scheme: http (indexed, static table index 6)
-    try hdr_buf.append(allocator, 0x86);
-    // :path: method_path (literal without indexing, name index 4)
-    try hdr_buf.append(allocator, 0x04);
-    try hdr_buf.append(allocator, @intCast(method_path.len));
-    try hdr_buf.appendSlice(allocator, method_path);
-    // content-type: application/grpc (literal with incremental indexing, name index 31)
-    try hdr_buf.append(allocator, 0x40 | 31);
-    try hdr_buf.append(allocator, 16);
-    try hdr_buf.appendSlice(allocator, "application/grpc");
-
-    // Write HEADERS frame (END_HEADERS, no END_STREAM)
-    try grpcWriteFrame(stream, H2_HEADERS, 0x4, stream_id, hdr_buf.items);
-
-    // Write DATA frame with gRPC framing: [1 byte compressed][4 bytes BE length][protobuf]
-    const grpc_msg_len: u32 = @intCast(message.len);
-    const grpc_frame = try allocator.alloc(u8, 5 + message.len);
-    defer allocator.free(grpc_frame);
-    grpc_frame[0] = 0; // not compressed
-    grpc_frame[1] = @intCast((grpc_msg_len >> 24) & 0xFF);
-    grpc_frame[2] = @intCast((grpc_msg_len >> 16) & 0xFF);
-    grpc_frame[3] = @intCast((grpc_msg_len >> 8) & 0xFF);
-    grpc_frame[4] = @intCast(grpc_msg_len & 0xFF);
-    @memcpy(grpc_frame[5..], message);
-
-    // Send DATA with END_STREAM (client is done sending for this request)
-    try grpcWriteFrame(stream, H2_DATA, 0x1, stream_id, grpc_frame);
-}
-
-/// Read a gRPC response message from the transport.
-/// Skips HEADERS, SETTINGS, WINDOW_UPDATE, PING frames.
-/// Returns the protobuf payload (gRPC 5-byte header stripped) or null if stream ended.
-fn grpcReadResponse(allocator: std.mem.Allocator, stream: std.net.Stream) !?[]const u8 {
-    while (true) {
-        const frame = grpcReadFrame(allocator, stream) catch |err| {
-            if (err == error.ConnectionClosed) return null;
-            return err;
-        };
-        const frame_type = frame.frame_type;
-        const flags = frame.flags;
-        const payload = frame.payload;
-
-        if (frame_type == H2_DATA) {
-            if (payload.len >= 5) {
-                // Strip gRPC 5-byte header
-                const msg_len = (@as(u32, payload[1]) << 24) |
-                    (@as(u32, payload[2]) << 16) |
-                    (@as(u32, payload[3]) << 8) |
-                    @as(u32, payload[4]);
-
-                if (payload.len >= 5 + msg_len) {
-                    const result = try allocator.alloc(u8, msg_len);
-                    @memcpy(result, payload[5 .. 5 + msg_len]);
-                    allocator.free(payload);
-                    return result;
-                }
-            }
-            // Empty DATA or malformed
-            if (payload.len == 0) {
-                allocator.free(payload);
-                if (flags & 0x1 != 0) return null; // END_STREAM
-                continue;
-            }
-            return payload;
-        } else if (frame_type == H2_HEADERS) {
-            const end_stream = (flags & 0x1) != 0;
-            allocator.free(payload);
-            if (end_stream) return null; // TRAILERS with END_STREAM = stream done
-            continue;
-        } else if (frame_type == H2_SETTINGS) {
-            const is_ack = (flags & 0x1) != 0;
-            if (!is_ack) {
-                try grpcWriteFrame(stream, H2_SETTINGS, 0x1, 0, &.{});
-            }
-            allocator.free(payload);
-            continue;
-        } else if (frame_type == H2_WINDOW_UPDATE) {
-            allocator.free(payload);
-            continue;
-        } else if (frame_type == H2_PING) {
-            const is_ack = (flags & 0x1) != 0;
-            if (!is_ack) {
-                try grpcWriteFrame(stream, H2_PING, 0x1, 0, payload);
-            }
-            allocator.free(payload);
-            continue;
-        } else if (frame_type == H2_RST_STREAM or frame_type == H2_GOAWAY) {
-            allocator.free(payload);
-            return null;
-        } else {
-            allocator.free(payload);
-            continue;
-        }
-    }
-}
-
-/// Encode a protobuf message into bytes.
-fn grpcEncodeMessage(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
-    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
-    defer aw.deinit();
-    try protobuf.encode(&aw.writer, allocator, msg);
-    const written_data = aw.writer.buffer[0..aw.writer.end];
-    return allocator.dupe(u8, written_data);
-}
-
 /// Execute a query on a gRPC transport connection, producing identical output to executeQueryOnConnection.
 fn executeQueryOnGrpc(
     allocator: std.mem.Allocator,
@@ -1890,37 +1664,27 @@ fn executeQueryOnGrpc(
     page_size: u32,
     timeout_secs: u32,
 ) !void {
-    _ = page_size;
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
     // 2. Process-level deadline watchdog thread started in cmdQuery
-    _ = timeout_secs;
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
 
     // 1. Handshake — send HelloRequest, read HelloResponse
-    const hello_req = schema.HelloRequest{
-        .username = username orelse "",
-        .password = password orelse "",
-        .tenant_id = null,
-        .graph = graph_for_hello,
-    };
-    const hello_bytes = try grpcEncodeMessage(allocator, hello_req);
-    defer allocator.free(hello_bytes);
-    try grpcSendRequest(allocator, stream, "/geode.GeodeService/Handshake", hello_bytes, 1);
-
-    const hello_resp_bytes = grpcReadResponse(allocator, stream) catch |err| {
+    var hello_resp = grpc_query_transport.hello(
+        allocator,
+        stream,
+        .{
+            .username = username,
+            .password = password,
+            .graph = graph_for_hello,
+        },
+        .{ .on_progress = touchActiveQueryDeadlineWatchdog },
+    ) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: gRPC handshake failed: {}\n", .{err}) catch "Error: gRPC handshake failed\n";
         _ = stderr_handle.writeAll(msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
-    } orelse {
-        _ = stderr_handle.writeAll("Error: Empty handshake response\n") catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer allocator.free(hello_resp_bytes);
-
-    var hello_reader: std.Io.Reader = .fixed(hello_resp_bytes);
-    const hello_resp = try protobuf.decode(schema.HelloResponse, &hello_reader, allocator);
     defer {
         var resp_copy = hello_resp;
         resp_copy.deinit(allocator);
@@ -1941,12 +1705,11 @@ fn executeQueryOnGrpc(
     defer if (session_id_owned) |sid| allocator.free(sid);
 
     // Drain remaining frames from the Handshake RPC (TRAILERS etc.)
-    while (true) {
-        const extra = grpcReadResponse(allocator, stream) catch break;
-        if (extra) |data| {
-            allocator.free(data);
-        } else break;
-    }
+    grpc_query_transport.drainUnaryStream(
+        allocator,
+        stream,
+        .{ .on_progress = touchActiveQueryDeadlineWatchdog },
+    );
 
     // 2. Execute query — send ExecuteRequest, read streaming ExecutionResponses
 
@@ -1956,285 +1719,29 @@ fn executeQueryOnGrpc(
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
 
-    if (graph) |g| {
-        allocated_query = try std.fmt.allocPrint(allocator, "USE GRAPH {s}; {s}", .{ g, query_text });
-        final_query = allocated_query.?;
-    }
+    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
+    if (allocated_query) |scoped| final_query = scoped;
 
     var owned_params = params;
-    defer {
-        for (owned_params.items) |*param| {
-            param.deinit(allocator);
-        }
-        owned_params.deinit(allocator);
-    }
+    defer finishActiveQueryDeadlineWatchdog();
 
-    // Need a new TCP connection for the Execute RPC (HTTP/2 stream reuse on stream 1
-    // is not supported by the minimal transport — the server loops readMessage() on the
-    // same connection, so we can reuse stream 1 by sending another HEADERS+DATA).
-    // Actually, the grpc_zig transport's writeFrame always writes to the underlying TCP,
-    // and readFrame always reads from it, so serial RPCs work on the same connection.
-
-    const exec_session_id = try allocator.dupe(u8, session_id);
-    defer allocator.free(exec_session_id);
-    const query_copy = try allocator.dupe(u8, final_query);
-    defer allocator.free(query_copy);
-    const exec_req = schema.ExecuteRequest{
-        .session_id = exec_session_id,
-        .query = query_copy,
-        .params = owned_params,
+    var grpc_adapter = grpc_query_transport.StreamingQueryAdapter{
+        .stream = stream,
+        .hooks = .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     };
-    const exec_bytes = try grpcEncodeMessage(allocator, exec_req);
-    defer allocator.free(exec_bytes);
-    try grpcSendRequest(allocator, stream, "/geode.GeodeService/Execute", exec_bytes, 3);
+    var grpc_transport = grpc_adapter.asTransport();
 
-    // 3. Read streaming responses and format output
-    var columns = try std.ArrayList(ColumnInfo).initCapacity(allocator, 16);
-    defer {
-        for (columns.items) |col| {
-            allocator.free(col.name);
-            allocator.free(col.type);
-        }
-        columns.deinit(allocator);
-    }
+    var result = try query_runner.collectQueryWithTransport(allocator, &grpc_transport, .{
+        .session_id = session_id,
+        .query_text = final_query,
+        .format = format,
+        .timeout_secs = timeout_secs,
+        .page_size = page_size,
+        .params = owned_params,
+    });
+    defer result.deinit();
 
-    var result_kind: QueryResultKind = .rows;
-    var result_payload: ?[]const u8 = null;
-    defer if (result_payload) |payload| allocator.free(payload);
-
-    const wants_json = std.mem.eql(u8, format, "json");
-    const wants_dot = std.mem.eql(u8, format, "dot");
-
-    var all_rows_text: ?std.ArrayList(std.ArrayList([]const u8)) = null;
-    var all_rows_json: ?std.ArrayList(std.ArrayList(std.json.Value)) = null;
-
-    if (wants_json) {
-        all_rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);
-    } else {
-        all_rows_text = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 64);
-    }
-    defer {
-        if (all_rows_text) |*rows| {
-            for (rows.items) |*row| {
-                for (row.items) |cell| allocator.free(cell);
-                row.deinit(allocator);
-            }
-            rows.deinit(allocator);
-        }
-        if (all_rows_json) |*rows| {
-            for (rows.items) |*row| {
-                for (row.items) |val| freeJsonValue(allocator, val);
-                row.deinit(allocator);
-            }
-            rows.deinit(allocator);
-        }
-    }
-
-    var ordered: bool = false;
-    var order_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (order_keys.items) |key| allocator.free(key);
-        order_keys.deinit(allocator);
-    }
-
-    var status_class: []const u8 = try allocator.dupe(u8, "00000");
-    defer allocator.free(status_class);
-    var status_subclass: []const u8 = "";
-    var status_subclass_owned = false;
-    defer if (status_subclass_owned) allocator.free(status_subclass);
-    var additional_statuses = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (additional_statuses.items) |s| allocator.free(s);
-        additional_statuses.deinit(allocator);
-    }
-    var flagger_findings = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (flagger_findings.items) |s| allocator.free(s);
-        flagger_findings.deinit(allocator);
-    }
-    var status_captured = false;
-
-    var has_error: bool = false;
-    var error_message: []const u8 = "";
-    var error_status: []const u8 = "58000";
-    var error_message_allocated = false;
-    var error_status_allocated = false;
-    defer {
-        if (error_message_allocated) allocator.free(error_message);
-        if (error_status_allocated) allocator.free(error_status);
-    }
-
-    const TextMode = enum { display, dot };
-    // Reuse the same RowAppender and captureStatus closures defined in executeQueryOnConnection
-    // by directly inlining the logic here.
-
-    // Read all streaming response messages from the Execute RPC
-    var resp_arena = std.heap.ArenaAllocator.init(allocator);
-    defer resp_arena.deinit();
-
-    while (true) {
-        const resp_bytes = grpcReadResponse(resp_arena.allocator(), stream) catch break;
-        if (resp_bytes == null) break; // Stream ended
-
-        const bytes = resp_bytes.?;
-        var rdr: std.Io.Reader = .fixed(bytes);
-        const exec_resp = protobuf.decode(schema.ExecutionResponse, &rdr, resp_arena.allocator()) catch break;
-
-        // Capture status
-        if (!status_captured) {
-            if (exec_resp.status) |status| {
-                status_captured = true;
-                allocator.free(status_class);
-                status_class = try allocator.dupe(u8, status.status_class);
-                if (status_subclass_owned) {
-                    allocator.free(status_subclass);
-                    status_subclass_owned = false;
-                }
-                if (status.status_subclass.len > 0) {
-                    status_subclass = try allocator.dupe(u8, status.status_subclass);
-                    status_subclass_owned = true;
-                } else {
-                    status_subclass = "";
-                }
-                for (status.additional_statuses.items) |s| {
-                    try additional_statuses.append(allocator, try allocator.dupe(u8, s));
-                }
-                for (status.flagger_findings.items) |s| {
-                    try flagger_findings.append(allocator, try allocator.dupe(u8, s));
-                }
-            }
-        }
-
-        if (exec_resp.payload) |val| {
-            switch (val) {
-                .schema => |s| {
-                    for (s.columns.items) |col| {
-                        const name_copy = try allocator.dupe(u8, col.name);
-                        const type_copy = if (col.type.len > 0)
-                            try allocator.dupe(u8, col.type)
-                        else
-                            try allocator.dupe(u8, "ANY");
-                        try columns.append(allocator, .{ .name = name_copy, .type = type_copy });
-                    }
-                },
-                .page => |p| {
-                    if (p.ordered) ordered = true;
-                    if (order_keys.items.len == 0 and p.order_keys.items.len > 0) {
-                        for (p.order_keys.items) |key| {
-                            try order_keys.append(allocator, try allocator.dupe(u8, key));
-                        }
-                    }
-                    if (wants_json) {
-                        if (all_rows_json) |*rows| {
-                            for (p.rows.items) |row| {
-                                var row_values = try std.ArrayList(std.json.Value).initCapacity(allocator, row.values.items.len);
-                                for (row.values.items) |v| {
-                                    const cell_val = try protoValueToJson(allocator, v);
-                                    try row_values.append(allocator, cell_val);
-                                }
-                                try rows.append(allocator, row_values);
-                            }
-                        }
-                    } else if (all_rows_text) |*rows| {
-                        const mode: TextMode = if (wants_dot) .dot else .display;
-                        for (p.rows.items) |row| {
-                            var row_values = try std.ArrayList([]const u8).initCapacity(allocator, row.values.items.len);
-                            for (row.values.items) |v| {
-                                const cell_str = try grpcValueToString(allocator, v, mode);
-                                try row_values.append(allocator, cell_str);
-                            }
-                            try rows.append(allocator, row_values);
-                        }
-                    }
-                },
-                .@"error" => |e| {
-                    has_error = true;
-                    error_message = try allocator.dupe(u8, e.message);
-                    error_message_allocated = true;
-                    if (e.code.len > 0) {
-                        error_status = try allocator.dupe(u8, e.code);
-                        error_status_allocated = true;
-                    }
-                },
-                .explain => |ex| {
-                    result_kind = .explain;
-                    if (result_payload) |prev| allocator.free(prev);
-                    result_payload = try explain_payload.explainPayloadToJson(allocator, ex);
-                },
-                .profile => |prof| {
-                    result_kind = .profile;
-                    if (result_payload) |prev| allocator.free(prev);
-                    result_payload = try profile_payload.profilePayloadToJson(allocator, prof);
-                },
-                .metrics, .heartbeat => {},
-            }
-        }
-
-        _ = resp_arena.reset(.retain_capacity);
-    }
-
-    finishActiveQueryDeadlineWatchdog();
-
-    if (std.mem.eql(u8, format, "dot")) {
-        if (all_rows_text) |rows| {
-            try outputDotFormatFromRows(allocator, rows.items, stdout);
-        }
-    } else {
-        const rows_text_ptr: ?*std.ArrayList(std.ArrayList([]const u8)) = if (all_rows_text) |*rows| rows else null;
-        const rows_json_ptr: ?*std.ArrayList(std.ArrayList(std.json.Value)) = if (all_rows_json) |*rows| rows else null;
-        try renderTransportResponse(
-            allocator,
-            stdout,
-            format,
-            rows_text_ptr,
-            rows_json_ptr,
-            .{
-                .columns = columns.items,
-                .ordered = ordered,
-                .order_keys = order_keys.items,
-                .status_class = status_class,
-                .status_subclass = status_subclass,
-                .additional_statuses = additional_statuses.items,
-                .flagger_findings = flagger_findings.items,
-                .has_error = has_error,
-                .error_message = error_message,
-                .error_status = error_status,
-                .result_kind = result_kind,
-                .result_payload = result_payload,
-            },
-        );
-    }
-}
-
-/// Value to string for gRPC path (mirrors the inner RowAppender.valueToString in executeQueryOnConnection)
-fn grpcValueToString(allocator: std.mem.Allocator, v: schema.Value, mode: anytype) ![]const u8 {
-    if (v.kind) |k| {
-        return switch (k) {
-            .string_val => |str| try allocator.dupe(u8, str.value),
-            .int_val => |i| try std.fmt.allocPrint(allocator, "{d}", .{i.value}),
-            .double_val => |d| try std.fmt.allocPrint(allocator, "{d}", .{d.value}),
-            .bool_val => |b| try allocator.dupe(u8, if (b) "true" else "false"),
-            .null_val => try allocator.dupe(u8, "null"),
-            .decimal_val => |dec| blk: {
-                const repr = if (dec.orig_repr.len > 0) dec.orig_repr else dec.coeff;
-                break :blk try allocator.dupe(u8, repr);
-            },
-            .bytes_val => |bv| blk: {
-                const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(bv.value.len));
-                _ = std.base64.standard.Encoder.encode(out, bv.value);
-                break :blk out;
-            },
-            else => blk: {
-                if (mode == .dot) {
-                    break :blk try valueToJsonString(allocator, v);
-                }
-                const json_val = try protoValueToJson(allocator, v);
-                defer freeJsonValue(allocator, json_val);
-                break :blk try formatJsonValueCompact(allocator, json_val);
-            },
-        };
-    }
-    return allocator.dupe(u8, "null");
+    _ = try result.render(stdout, stderr_handle);
 }
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
@@ -2424,11 +1931,7 @@ fn isTransactionEnd(trimmed: []const u8) bool {
 
 /// Check if a trimmed statement is a USE GRAPH statement
 fn isUseGraphStmt(trimmed: []const u8) bool {
-    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
-    if (stmt.len < 9) return false; // "USE GRAPH" is 9 chars minimum
-    // Check prefix case-insensitively
-    if (std.ascii.eqlIgnoreCase(stmt[0..9], "USE GRAPH")) return true;
-    return false;
+    return query_scope.startsWithUseGraph(trimmed);
 }
 
 fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void {
@@ -2725,479 +2228,49 @@ fn executeQueryOnConnection(
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
 
-    if (graph) |g| {
-        allocated_query = try std.fmt.allocPrint(allocator, "USE GRAPH {s}; {s}", .{ g, query_text });
-        final_query = allocated_query.?;
-    }
+    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
+    if (allocated_query) |scoped| final_query = scoped;
 
-    var owned_params = params;
-    defer {
-        for (owned_params.items) |*param| {
-            param.deinit(allocator);
-        }
-        owned_params.deinit(allocator);
-    }
+    const QuicProtocolAdapter = struct {
+        quic_client: *quic.QuicClient,
+        stream: *quic.QuicClientStream,
+        timeout_secs: u32,
 
-    // Send query using Protobuf (ExecuteRequest)
-    const exec_session_id = try allocator.dupe(u8, session_id);
-    defer allocator.free(exec_session_id);
-    const query_copy = try allocator.dupe(u8, final_query);
-    defer allocator.free(query_copy);
-    const run_gql_req = schema.ExecuteRequest{
-        .session_id = exec_session_id,
-        .query = query_copy,
-        .params = owned_params,
-    };
-
-    try writeProtoMessage(allocator, stream, .{ .execute = run_gql_req });
-    log.debug("Client query sent successfully", &.{});
-
-    // For JSON/table/csv/dot output, accumulate results before outputting
-    var columns = try std.ArrayList(ColumnInfo).initCapacity(allocator, 16);
-    defer {
-        for (columns.items) |col| {
-            allocator.free(col.name);
-            allocator.free(col.type);
-        }
-        columns.deinit(allocator);
-    }
-
-    var result_kind: QueryResultKind = .rows;
-    var result_payload: ?[]const u8 = null;
-    defer if (result_payload) |payload| allocator.free(payload);
-
-    const wants_json = std.mem.eql(u8, format, "json");
-    const wants_dot = std.mem.eql(u8, format, "dot");
-
-    // Use ArrayLists to store all rows (text or json depending on output format)
-    var all_rows_text: ?std.ArrayList(std.ArrayList([]const u8)) = null;
-    var all_rows_json: ?std.ArrayList(std.ArrayList(std.json.Value)) = null;
-
-    if (wants_json) {
-        all_rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);
-    } else {
-        all_rows_text = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 64);
-    }
-    defer {
-        if (all_rows_text) |*rows| {
-            for (rows.items) |*row| {
-                for (row.items) |cell| {
-                    allocator.free(cell);
-                }
-                row.deinit(allocator);
-            }
-            rows.deinit(allocator);
-        }
-        if (all_rows_json) |*rows| {
-            for (rows.items) |*row| {
-                for (row.items) |val| freeJsonValue(allocator, val);
-                row.deinit(allocator);
-            }
-            rows.deinit(allocator);
-        }
-    }
-    var ordered: bool = false;
-    var order_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (order_keys.items) |key| allocator.free(key);
-        order_keys.deinit(allocator);
-    }
-
-    var status_class: []const u8 = try allocator.dupe(u8, "00000");
-    defer allocator.free(status_class);
-    var status_subclass: []const u8 = "";
-    var status_subclass_owned = false;
-    defer if (status_subclass_owned) allocator.free(status_subclass);
-    var additional_statuses = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (additional_statuses.items) |s| allocator.free(s);
-        additional_statuses.deinit(allocator);
-    }
-    var flagger_findings = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    defer {
-        for (flagger_findings.items) |s| allocator.free(s);
-        flagger_findings.deinit(allocator);
-    }
-    var status_captured = false;
-
-    var has_error: bool = false;
-    var error_message: []const u8 = "";
-    var error_status: []const u8 = "58000";
-    var error_message_allocated = false;
-    var error_status_allocated = false;
-    defer {
-        if (error_message_allocated) allocator.free(error_message);
-        if (error_status_allocated) allocator.free(error_status);
-    }
-
-    const TextMode = enum { display, dot };
-    // Issue #469: Deduplicated — delegates to shared grpcValueToString
-    const RowAppender = struct {
-        fn valueToString(alloc: std.mem.Allocator, v: schema.Value, mode: TextMode) ![]const u8 {
-            return grpcValueToString(alloc, v, mode);
+        fn sendClientMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            try writeProtoMessage(alloc, self.stream, msg);
         }
 
-        fn appendPageText(
-            alloc: std.mem.Allocator,
-            page: schema.DataPage,
-            rows_list: *std.ArrayList(std.ArrayList([]const u8)),
-            mode: TextMode,
-        ) !void {
-            if (page.rows.items.len == 0) return;
-
-            // Match the server-side data page fix: row materialization is cheap,
-            // while the Spice thread-pool path has produced corrupted large-page
-            // results in CLI rendering.
-
-            for (page.rows.items) |row| {
-                var row_values = try std.ArrayList([]const u8).initCapacity(alloc, row.values.items.len);
-                errdefer {
-                    for (row_values.items) |cell| alloc.free(cell);
-                    row_values.deinit(alloc);
-                }
-
-                for (row.values.items) |v| {
-                    const cell_str = try valueToString(alloc, v, mode);
-                    try row_values.append(alloc, cell_str);
-                }
-
-                try rows_list.append(alloc, row_values);
-            }
-        }
-
-        fn appendPageJson(
-            alloc: std.mem.Allocator,
-            page: schema.DataPage,
-            rows_list: *std.ArrayList(std.ArrayList(std.json.Value)),
-        ) !void {
-            if (page.rows.items.len == 0) return;
-
-            // Match the server-side data page fix: sequential JSON conversion is
-            // reliable, and large pages do not justify risking ownership
-            // corruption in the parallel row conversion path.
-
-            for (page.rows.items) |row| {
-                var row_values = try std.ArrayList(std.json.Value).initCapacity(alloc, row.values.items.len);
-                errdefer {
-                    for (row_values.items) |val| freeJsonValue(alloc, val);
-                    row_values.deinit(alloc);
-                }
-
-                for (row.values.items) |v| {
-                    const cell_val = try protoValueToJson(alloc, v);
-                    try row_values.append(alloc, cell_val);
-                }
-
-                try rows_list.append(alloc, row_values);
-            }
+        fn readServerMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, timeout: u32) !schema.QuicServerMessage {
+            const self: *@This() = @ptrCast(@alignCast(proto.context));
+            const effective_timeout = if (timeout == 0) self.timeout_secs else timeout;
+            return try readProtoMessage(alloc, self.stream, self.quic_client, effective_timeout);
         }
     };
 
-    const captureOrderMeta = struct {
-        fn apply(
-            alloc: std.mem.Allocator,
-            page: schema.DataPage,
-            ordered_flag: *bool,
-            keys: *std.ArrayList([]const u8),
-        ) !void {
-            if (page.ordered) ordered_flag.* = true;
-            if (keys.items.len == 0 and page.order_keys.items.len > 0) {
-                for (page.order_keys.items) |key| {
-                    try keys.append(alloc, try alloc.dupe(u8, key));
-                }
-            }
-        }
+    var adapter = QuicProtocolAdapter{
+        .quic_client = quic_client,
+        .stream = stream,
+        .timeout_secs = timeout_secs,
+    };
+    var protocol_client = query_runner.ProtocolClient{
+        .context = &adapter,
+        .sendClientMessageFn = QuicProtocolAdapter.sendClientMessage,
+        .readServerMessageFn = QuicProtocolAdapter.readServerMessage,
     };
 
-    const captureStatus = struct {
-        fn apply(
-            alloc: std.mem.Allocator,
-            status_opt: ?schema.Status,
-            status_out: *[]const u8,
-            status_subclass_out: *[]const u8,
-            subclass_owned: *bool,
-            additional_out: *std.ArrayList([]const u8),
-            flagger_out: *std.ArrayList([]const u8),
-            captured: *bool,
-        ) !void {
-            if (captured.*) return;
-            if (status_opt == null) return;
-            const status = status_opt.?;
-            captured.* = true;
-            alloc.free(status_out.*);
-            status_out.* = try alloc.dupe(u8, status.status_class);
-            if (subclass_owned.*) {
-                alloc.free(status_subclass_out.*);
-                subclass_owned.* = false;
-            }
-            if (status.status_subclass.len > 0) {
-                status_subclass_out.* = try alloc.dupe(u8, status.status_subclass);
-                subclass_owned.* = true;
-            } else {
-                status_subclass_out.* = "";
-            }
-            for (status.additional_statuses.items) |s| {
-                try additional_out.append(alloc, try alloc.dupe(u8, s));
-            }
-            for (status.flagger_findings.items) |s| {
-                try flagger_out.append(alloc, try alloc.dupe(u8, s));
-            }
-        }
-    };
+    var result = try query_runner.collectQuery(allocator, &protocol_client, .{
+        .session_id = session_id,
+        .query_text = final_query,
+        .format = format,
+        .timeout_secs = timeout_secs,
+        .page_size = page_size,
+        .params = params,
+    });
+    defer result.deinit();
+    defer finishActiveQueryDeadlineWatchdog();
 
-    // Receive responses loop
-    var loop_arena = std.heap.ArenaAllocator.init(allocator);
-    defer loop_arena.deinit();
-
-    var schema_received = false;
-    var saw_inline_page = false;
-    var inline_final = false;
-    var need_pull = false;
-
-    while (!schema_received and !has_error) {
-        const loop_allocator = loop_arena.allocator();
-
-        const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
-            if (err == error.EndOfStream) {
-                // GAP-0260: If we never received any execute response (no schema),
-                // the connection was dropped before the server processed our query.
-                // Return ConnectionFailed so the caller can retry.
-                if (!status_captured) {
-                    return error.ConnectionFailed;
-                }
-                break;
-            }
-            return err;
-        };
-
-        switch (resp) {
-            .execute => |exec_resp| {
-                try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
-                if (exec_resp.payload) |val| {
-                    switch (val) {
-                        .schema => |s| {
-                            for (s.columns.items) |col| {
-                                const name_copy = try allocator.dupe(u8, col.name);
-                                const type_copy = if (col.type.len > 0)
-                                    try allocator.dupe(u8, col.type)
-                                else
-                                    try allocator.dupe(u8, "ANY");
-                                try columns.append(allocator, .{ .name = name_copy, .type = type_copy });
-                            }
-                            schema_received = true;
-                        },
-                        .page => |p| {
-                            saw_inline_page = true;
-                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            if (wants_json) {
-                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
-                            } else if (all_rows_text) |*rows| {
-                                const mode: TextMode = if (wants_dot) .dot else .display;
-                                try RowAppender.appendPageText(allocator, p, rows, mode);
-                            }
-                            if (p.final) {
-                                inline_final = true;
-                            } else {
-                                need_pull = true;
-                            }
-                        },
-                        .@"error" => |e| {
-                            has_error = true;
-                            error_message = try allocator.dupe(u8, e.message);
-                            error_message_allocated = true;
-                            if (e.code.len > 0) {
-                                error_status = try allocator.dupe(u8, e.code);
-                                error_status_allocated = true;
-                            }
-                        },
-                        .explain => |ex| {
-                            result_kind = .explain;
-                            if (result_payload) |prev| allocator.free(prev);
-                            result_payload = try explain_payload.explainPayloadToJson(allocator, ex);
-                            schema_received = true;
-                        },
-                        .profile => |prof| {
-                            result_kind = .profile;
-                            if (result_payload) |prev| allocator.free(prev);
-                            result_payload = try profile_payload.profilePayloadToJson(allocator, prof);
-                            schema_received = true;
-                        },
-                        .metrics, .heartbeat => {},
-                    }
-                }
-            },
-            .hello => |h| {
-                if (!h.success) {
-                    has_error = true;
-                    error_message = try allocator.dupe(u8, h.error_message);
-                    error_message_allocated = true;
-                    error_status = "28000";
-                }
-                schema_received = true;
-            },
-            .ping => {},
-            else => {},
-        }
-
-        _ = loop_arena.reset(.retain_capacity);
-    }
-
-    if (!has_error and !saw_inline_page) {
-        const loop_allocator = loop_arena.allocator();
-        const maybe_inline = readProtoMessage(loop_allocator, stream, quic_client, 1) catch |err| blk: {
-            if (err == error.Timeout or err == error.EndOfStream) break :blk null;
-            return err;
-        };
-
-        if (maybe_inline) |resp| {
-            switch (resp) {
-                .execute => |exec_resp| {
-                    if (exec_resp.payload) |val| switch (val) {
-                        .page => |p| {
-                            saw_inline_page = true;
-                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            if (wants_json) {
-                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
-                            } else if (all_rows_text) |*rows| {
-                                const mode: TextMode = if (wants_dot) .dot else .display;
-                                try RowAppender.appendPageText(allocator, p, rows, mode);
-                            }
-                            if (p.final) {
-                                inline_final = true;
-                            } else {
-                                need_pull = true;
-                            }
-                        },
-                        .@"error" => |e| {
-                            has_error = true;
-                            error_message = try allocator.dupe(u8, e.message);
-                            error_message_allocated = true;
-                            if (e.code.len > 0) {
-                                error_status = try allocator.dupe(u8, e.code);
-                                error_status_allocated = true;
-                            }
-                        },
-                        else => {},
-                    };
-                },
-                else => {},
-            }
-        }
-
-        _ = loop_arena.reset(.retain_capacity);
-    }
-
-    var request_id: u64 = 1;
-    if (!has_error and result_kind == .rows and (!inline_final or need_pull)) {
-        var done = false;
-
-        while (!done and !has_error) : (request_id += 1) {
-            const pull_req = schema.PullRequest{
-                .request_id = request_id,
-                .page_size = page_size,
-                .session_id = session_id,
-            };
-            try writeProtoMessage(allocator, stream, .{ .pull = pull_req });
-
-            const loop_allocator = loop_arena.allocator();
-            const resp = readProtoMessage(loop_allocator, stream, quic_client, timeout_secs) catch |err| {
-                if (err == error.EndOfStream) break;
-                return err;
-            };
-
-            switch (resp) {
-                .pull => |pull_resp| {
-                    const exec_resp = pull_resp.response orelse break;
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
-                    if (exec_resp.payload) |val| switch (val) {
-                        .page => |p| {
-                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            if (wants_json) {
-                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
-                            } else if (all_rows_text) |*rows| {
-                                const mode: TextMode = if (wants_dot) .dot else .display;
-                                try RowAppender.appendPageText(allocator, p, rows, mode);
-                            }
-                            if (p.final) done = true;
-                        },
-                        .@"error" => |e| {
-                            has_error = true;
-                            error_message = try allocator.dupe(u8, e.message);
-                            error_message_allocated = true;
-                            if (e.code.len > 0) {
-                                error_status = try allocator.dupe(u8, e.code);
-                                error_status_allocated = true;
-                            }
-                        },
-                        else => {},
-                    };
-                },
-                .execute => |exec_resp| {
-                    try captureStatus.apply(allocator, exec_resp.status, &status_class, &status_subclass, &status_subclass_owned, &additional_statuses, &flagger_findings, &status_captured);
-                    if (exec_resp.payload) |val| switch (val) {
-                        .page => |p| {
-                            try captureOrderMeta.apply(allocator, p, &ordered, &order_keys);
-                            if (wants_json) {
-                                if (all_rows_json) |*rows| try RowAppender.appendPageJson(allocator, p, rows);
-                            } else if (all_rows_text) |*rows| {
-                                const mode: TextMode = if (wants_dot) .dot else .display;
-                                try RowAppender.appendPageText(allocator, p, rows, mode);
-                            }
-                            if (p.final) done = true;
-                        },
-                        .@"error" => |e| {
-                            has_error = true;
-                            error_message = try allocator.dupe(u8, e.message);
-                            error_message_allocated = true;
-                            if (e.code.len > 0) {
-                                error_status = try allocator.dupe(u8, e.code);
-                                error_status_allocated = true;
-                            }
-                        },
-                        else => {},
-                    };
-                },
-                else => {},
-            }
-
-            _ = loop_arena.reset(.retain_capacity);
-        }
-    }
-
-    // Output final result based on format
-    finishActiveQueryDeadlineWatchdog();
-
-    if (std.mem.eql(u8, format, "dot")) {
-        // CANARY: REQ=REQ-CLI-DOT-002; FEATURE="DotFormat"; ASPECT=GraphvizOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-        // DOT format for Graphviz visualization
-        if (all_rows_text) |rows| {
-            try outputDotFormatFromRows(allocator, rows.items, stdout);
-        }
-    } else {
-        const rows_text_ptr: ?*std.ArrayList(std.ArrayList([]const u8)) = if (all_rows_text) |*rows| rows else null;
-        const rows_json_ptr: ?*std.ArrayList(std.ArrayList(std.json.Value)) = if (all_rows_json) |*rows| rows else null;
-        try renderTransportResponse(
-            allocator,
-            stdout,
-            format,
-            rows_text_ptr,
-            rows_json_ptr,
-            .{
-                .columns = columns.items,
-                .ordered = ordered,
-                .order_keys = order_keys.items,
-                .status_class = status_class,
-                .status_subclass = status_subclass,
-                .additional_statuses = additional_statuses.items,
-                .flagger_findings = flagger_findings.items,
-                .has_error = has_error,
-                .error_message = error_message,
-                .error_status = error_status,
-                .result_kind = result_kind,
-                .result_payload = result_payload,
-            },
-        );
-    }
+    _ = try result.render(stdout, stderr_handle);
 
     // GAP-0272: Server-side errors (parse errors, execution errors) are
     // rendered to stdout with the error status. The CLI exits 0 because

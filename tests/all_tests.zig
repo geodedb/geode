@@ -32,6 +32,8 @@ const _unit_match_executor_guards = @import("unit_match_executor_guards.zig");
 const _test_match_operations_parity_campaign = @import("test_match_operations_parity_campaign.zig");
 const _benchmark_match_operations_campaign = @import("benchmark_match_operations_campaign.zig");
 const _test_cli_transport_response_parity = @import("test_cli_transport_response_parity.zig");
+const _test_query_shell_shared_path = @import("test_query_shell_shared_path.zig");
+const _test_protocol_client_shared_path = @import("test_protocol_client_shared_path.zig");
 // CDC enhanced guardrail tests
 const _cdc_guardrail_reset = @import("cdc_guardrail_reset.zig");
 const _cdc_guardrail_ts_monotonic = @import("cdc_guardrail_timestamps_monotonic.zig");
