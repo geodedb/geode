@@ -199,7 +199,7 @@ pub fn consumeQueryWithTransport(
         if (!saw_inline_page) {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
-            const maybe_event = transport.nextEvent(arena.allocator(), 1) catch |err| blk: {
+            const maybe_event = transport.nextEvent(arena.allocator(), opts.timeout_secs) catch |err| blk: {
                 if (err == error.Timeout or err == error.WouldBlock or err == error.EndOfStream) {
                     break :blk null;
                 }

@@ -2180,8 +2180,13 @@ fn handleClientMessage(
 
                                     var page_final = false;
                                     if (state.inline_results_enabled) inline_blk: {
-                                        const inline_max = if (state.inline_results_max_rows == 0) active_stream.slot_ids.len else state.inline_results_max_rows;
+                                        const inline_max = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
+                                        // Acquire store read lock while materializing nodes to
+                                        // prevent data races with concurrent ingest holding the
+                                        // write lock (same protection as the PULL handler).
+                                        graph_store.acquireStoreLock();
                                         var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
+                                            graph_store.releaseStoreLock();
                                             // Inline page failed (e.g. concurrent ingest modified
                                             // nodes).  Reset the stream cursor so PULL starts from
                                             // the beginning and fall through to store the stream
@@ -2192,6 +2197,7 @@ fn handleClientMessage(
                                             active_stream.next_index = 0;
                                             break :inline_blk;
                                         };
+                                        graph_store.releaseStoreLock();
                                         defer page_result.result.deinit(gpa);
 
                                         var page_arena = std.heap.ArenaAllocator.init(gpa);
@@ -2296,7 +2302,7 @@ fn handleClientMessage(
                     var sent_rows: usize = 0;
                     var page_final = false;
                     if (state.inline_results_enabled) {
-                        const inline_max = if (state.inline_results_max_rows == 0) exec_result.rows.len else state.inline_results_max_rows;
+                        const inline_max = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
                         // Arena allocator for data page serialization (Issue #446):
                         // Per-value string dups become bump allocations; individual frees become no-ops.
                         var page_arena = std.heap.ArenaAllocator.init(gpa);
