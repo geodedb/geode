@@ -669,8 +669,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
         if (node_pattern.labels.len > 0) {
             // Use label_index for O(1) lookup instead of full scan
-            var label_node_ids = try store.getNodesByLabels(filter_graph, node_pattern.labels);
-            defer label_node_ids.deinit(store.allocator);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels);
+            defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
                 const node = store.nodes.getPtr(node_id) orelse continue;
@@ -1322,8 +1322,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         // CANARY: REQ=REQ-AUTO-INDEX-SCAN-002; FEATURE="AutoIdIndex"; ASPECT=RelationshipLabelIndexScan; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
         // Find all matching relationships using label_index when labels are present
         if (left_labels.len > 0) {
-            var label_node_ids = try store.getNodesByLabels(filter_graph, left_labels);
-            defer label_node_ids.deinit(store.allocator);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, left_labels);
+            defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
                 const left_node = store.nodes.getPtr(node_id) orelse continue;
@@ -1363,8 +1363,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else if (right_labels.len > 0) {
             // #558: No left labels but right labels present — use right label index, traverse edges backwards
-            var label_node_ids = try store.getNodesByLabels(filter_graph, right_labels);
-            defer label_node_ids.deinit(store.allocator);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, right_labels);
+            defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
                 const right_node = store.nodes.getPtr(node_id) orelse continue;
@@ -1464,8 +1464,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     } else if (first_chain.head) |node_pattern| {
         // First chain is just a node pattern - use label_index when labels are present
         if (node_pattern.labels.len > 0) {
-            var label_node_ids = try store.getNodesByLabels(filter_graph, node_pattern.labels);
-            defer label_node_ids.deinit(store.allocator);
+            var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels);
+            defer label_node_ids.deinit(allocator);
 
             for (label_node_ids.items) |node_id| {
                 const node = store.nodes.getPtr(node_id) orelse continue;
@@ -3396,8 +3396,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     };
 
                     if (first_hop.left.labels.len > 0) {
-                        var label_node_ids = try store.getNodesByLabels(filter_graph, first_hop.left.labels);
-                        defer label_node_ids.deinit(store.allocator);
+                        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels);
+                        defer label_node_ids.deinit(allocator);
 
                         for (label_node_ids.items) |node_id| {
                             const node = store.nodes.getPtr(node_id) orelse continue;
@@ -5126,8 +5126,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 if (first_hop.left.labels.len > 0) {
-                    var label_node_ids = try store.getNodesByLabels(filter_graph, first_hop.left.labels);
-                    defer label_node_ids.deinit(store.allocator);
+                    var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels);
+                    defer label_node_ids.deinit(allocator);
 
                     for (label_node_ids.items) |node_id| {
                         const node = store.nodes.getPtr(node_id) orelse continue;
