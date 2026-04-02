@@ -31,6 +31,12 @@ fn isValidGraphName(name: []const u8) bool {
     return true;
 }
 
+fn gqlStartsWithUseGraph(gql: []const u8) bool {
+    const trimmed = std.mem.trimLeft(u8, gql, " \t\r\n");
+    if (trimmed.len < 9) return false;
+    return std.ascii.eqlIgnoreCase(trimmed[0..9], "USE GRAPH");
+}
+
 const LastPayloadKind = enum {
     none,
     rows,
@@ -2362,10 +2368,22 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
 pub fn executeGql(state: anytype, gql: []const u8) !void {
     const stdout = platform.getStdoutHandle();
     const stderr = platform.getStderrHandle();
+    var scoped_gql = gql;
+    var owned_scoped_gql: ?[]u8 = null;
+    defer if (owned_scoped_gql) |buf| state.allocator.free(buf);
 
     // CANARY: REQ=REQ-SOURCE-CHUNKED-006; FEATURE="SourceChunkedExecution"; ASPECT=OutputSuppression; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
     // Check if output should be suppressed (during chunked execution)
     const suppress = if (@hasField(@TypeOf(state.*), "suppress_output")) state.suppress_output else false;
+
+    // REPL queries may execute on fresh transport streams, so carry the selected graph
+    // forward explicitly unless this request already starts with USE GRAPH.
+    if (state.current_graph) |graph| {
+        if (!gqlStartsWithUseGraph(gql)) {
+            owned_scoped_gql = try std.fmt.allocPrint(state.allocator, "USE GRAPH {s}; {s}", .{ graph, gql });
+            scoped_gql = owned_scoped_gql.?;
+        }
+    }
 
     // CRITICAL FIX: Move to new line before displaying results
     // This prevents overlapping with the prompt (skip when suppressing output)
@@ -2411,7 +2429,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     const max_retries: u32 = 1; // Only retry once after reconnection
 
     while (retry_count <= max_retries) : (retry_count += 1) {
-        state.session.runGql(gql) catch |err| {
+        state.session.runGql(scoped_gql) catch |err| {
             // CANARY: REQ=REQ-SHELL-WOULDBLOCK-002; FEATURE="SuppressWouldBlock"; ASPECT=RunGqlError; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
             // Issue #388: Don't display WouldBlock errors - normal async I/O behavior
             if (err == error.WouldBlock) {
@@ -4574,6 +4592,18 @@ test "TestIsIdentifierChar_NonIdentifier" {
     try testing.expect(!isIdentifierChar('('));
     try testing.expect(!isIdentifierChar(')'));
     try testing.expect(!isIdentifierChar(':'));
+}
+
+test "TestGqlStartsWithUseGraph_LeadingWhitespace" {
+    try testing.expect(gqlStartsWithUseGraph("  \n\tUSE GRAPH abs_eagle; MATCH (n) RETURN COUNT(n);"));
+}
+
+test "TestGqlStartsWithUseGraph_CaseInsensitive" {
+    try testing.expect(gqlStartsWithUseGraph("use graph abs_eagle;"));
+}
+
+test "TestGqlStartsWithUseGraph_OtherStatement" {
+    try testing.expect(!gqlStartsWithUseGraph("MATCH (n) RETURN COUNT(n);"));
 }
 
 // CANARY: REQ=REQ-SHELL-RECONNECT-015; FEATURE="ShellAutoReconnect"; ASPECT=UnitTests; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29

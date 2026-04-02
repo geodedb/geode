@@ -470,6 +470,22 @@ pub const SharedConnState = struct {
         if (self.current_graph) |g| self.allocator.free(g);
         // peer_ip freed by the connection handler's defer
     }
+
+    pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
+        self.streams_mu.lock();
+        defer self.streams_mu.unlock();
+
+        if (self.current_graph) |graph| {
+            self.allocator.free(graph);
+            self.current_graph = null;
+        }
+
+        if (state.exec_session) |sess| {
+            if (sess.graph) |graph| {
+                self.current_graph = try self.allocator.dupe(u8, graph);
+            }
+        }
+    }
 };
 
 /// Context passed to a spawned stream handler thread.
@@ -521,11 +537,13 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.password_reset_required = cs.password_reset_required;
 
     // Bind to the same graph as the connection.
-    if (cs.current_graph) |g| {
+    cs.streams_mu.lock();
+    if (cs.current_graph) |graph_name| {
         if (state.exec_session) |*sess| {
-            sess.graph = gpa.dupe(u8, g) catch null;
+            sess.graph = gpa.dupe(u8, graph_name) catch null;
         }
     }
+    cs.streams_mu.unlock();
 
     // Initialize evaluator callbacks (idempotent).
     execution.initEvaluator();
@@ -585,7 +603,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     }
 
     // Run the query loop for this stream.
-    runStreamQueryLoop(gpa, transport, stream, &state, cs.disable_estimates, cs.compact_profile, cs.memcurve_profile, cs.peer_ip);
+    runStreamQueryLoop(gpa, transport, stream, &state, cs, cs.disable_estimates, cs.compact_profile, cs.memcurve_profile, cs.peer_ip);
 }
 
 /// Stream acceptor loop: runs on a dedicated thread after the first stream's
@@ -657,6 +675,7 @@ fn runStreamQueryLoop(
     transport: *quic_transport.QuicTransport,
     stream: *quic_transport.QuicStream,
     state: *ServerState,
+    conn_state: ?*SharedConnState,
     disable_estimates: bool,
     compact_profile: bool,
     memcurve_profile: bool,
@@ -695,6 +714,12 @@ fn runStreamQueryLoop(
             sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
             continue;
         };
+
+        if (conn_state) |shared| {
+            shared.syncGraphFromState(state) catch |err| {
+                log.warn("Failed to sync shared graph context", &.{Attr.string("error", @errorName(err))});
+            };
+        }
     }
 }
 
@@ -996,7 +1021,7 @@ pub fn handleQuicConnection(
         log.warn("Failed to spawn stream acceptor, single-stream mode", &.{
             Attr.string("error", @errorName(err)),
         });
-        runStreamQueryLoop(gpa, transport, stream, &state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
         return;
     };
     defer {
@@ -1036,6 +1061,10 @@ pub fn handleQuicConnection(
             log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
             sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
             continue;
+        };
+
+        conn_state.syncGraphFromState(&state) catch |err| {
+            log.warn("Failed to sync shared graph context", &.{Attr.string("error", @errorName(err))});
         };
     }
 
@@ -2566,4 +2595,46 @@ fn handleClientMessage(
             try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Upload slot ready"), .upload_path = path } });
         },
     }
+}
+
+test "SharedConnState syncGraphFromState updates inherited graph" {
+    const allocator = std.testing.allocator;
+
+    var shared = SharedConnState{ .allocator = allocator };
+    defer shared.deinit();
+
+    var state = ServerState{ .allocator = allocator };
+    state.exec_session = execution.SessionState.init(allocator);
+    defer if (state.exec_session) |*session| session.deinit();
+
+    state.exec_session.?.graph = try allocator.dupe(u8, "abs_eagle");
+    try shared.syncGraphFromState(&state);
+    try std.testing.expect(shared.current_graph != null);
+    try std.testing.expectEqualStrings("abs_eagle", shared.current_graph.?);
+
+    allocator.free(state.exec_session.?.graph.?);
+    state.exec_session.?.graph = try allocator.dupe(u8, "__geode_security");
+    try shared.syncGraphFromState(&state);
+    try std.testing.expect(shared.current_graph != null);
+    try std.testing.expectEqualStrings("__geode_security", shared.current_graph.?);
+}
+
+test "SharedConnState syncGraphFromState clears inherited graph on reset" {
+    const allocator = std.testing.allocator;
+
+    var shared = SharedConnState{ .allocator = allocator };
+    defer shared.deinit();
+
+    var state = ServerState{ .allocator = allocator };
+    state.exec_session = execution.SessionState.init(allocator);
+    defer if (state.exec_session) |*session| session.deinit();
+
+    state.exec_session.?.graph = try allocator.dupe(u8, "abs_eagle");
+    try shared.syncGraphFromState(&state);
+    try std.testing.expect(shared.current_graph != null);
+
+    allocator.free(state.exec_session.?.graph.?);
+    state.exec_session.?.graph = null;
+    try shared.syncGraphFromState(&state);
+    try std.testing.expect(shared.current_graph == null);
 }
