@@ -256,7 +256,7 @@ pub const WriteAheadLog = struct {
     /// engine (via adapter.checkpointAll()), saves IdMaps, then truncates this
     /// logical WAL for space management.
     pub fn checkpoint(self: *WriteAheadLog, store: *graph_store.GraphStore) !void {
-        try store.saveToFile(); // calls adapter.checkpointAll() + saveIdMaps()
+        try store.saveToFile(); // calls adapter.checkpointAll() + legacy sidecar cleanup
         const checkpoint_at = self.inner.currentLsn();
         try self.truncate(checkpoint_at);
     }

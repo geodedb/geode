@@ -90,6 +90,11 @@ pub const DEFAULT_GRAPH_NAME = "default";
 /// GAP-0279: Backward compatible — existing single-tenant data uses this default
 pub const DEFAULT_TENANT_ID = "default";
 
+/// Reserved storage keys used to persist Geode's public IDs inside the
+/// graph-storage engine without exposing them as user-visible properties.
+pub const INTERNAL_NODE_ID_PROPERTY_KEY = "__geode_internal_node_id";
+pub const INTERNAL_EDGE_ID_PROPERTY_KEY = "__geode_internal_edge_id";
+
 pub const Node = struct {
     id: u64,
     labels: [][]const u8,
@@ -147,6 +152,19 @@ pub const PathFilter = struct {
     node_predicate: ?*const fn (*const Node) bool = null,
     edge_predicate: ?*const fn (*const Edge) bool = null,
 };
+
+fn isInternalPersistedPropertyKey(key: []const u8) bool {
+    return std.mem.eql(u8, key, INTERNAL_NODE_ID_PROPERTY_KEY) or
+        std.mem.eql(u8, key, INTERNAL_EDGE_ID_PROPERTY_KEY);
+}
+
+fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
+    return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
+}
+
+fn parsePersistedPublicId(text: []const u8) ?u64 {
+    return std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch null;
+}
 
 /// Check whether a byte slice looks like a serialized FLE EnvelopeV1.
 /// Format: alg_id(1) + key_version(2) + nonce(12) + tag(16) + ciphertext_len(4) + ciphertext
@@ -773,6 +791,38 @@ pub const GraphStore = struct {
         return id_map.edgeSlot(@as(u128, edge_id)) orelse error.EdgeSlotMappingMissing;
     }
 
+    fn persistNodePublicId(vt: AdapterVTable, graph_name: []const u8, slot_id: u64, public_id: u64) !void {
+        var id_buf: [16]u8 = undefined;
+        try vt.setNodePropertyFn(
+            vt.ctx,
+            graph_name,
+            slot_id,
+            INTERNAL_NODE_ID_PROPERTY_KEY,
+            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+        );
+    }
+
+    fn persistEdgePublicId(
+        vt: AdapterVTable,
+        graph_name: []const u8,
+        from_slot: u64,
+        to_slot: u64,
+        edge_slot: u64,
+        public_id: u64,
+    ) !void {
+        const set_edge_property = vt.setEdgePropertyFn orelse return error.Unsupported;
+        var id_buf: [16]u8 = undefined;
+        try set_edge_property(
+            vt.ctx,
+            graph_name,
+            from_slot,
+            to_slot,
+            edge_slot,
+            INTERNAL_EDGE_ID_PROPERTY_KEY,
+            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+        );
+    }
+
     pub fn graphExists(self: *const GraphStore, graph_name: []const u8) bool {
         // Dual-read: check adapter first, then fall back to local HashMap
         if (global_vtable) |vt| {
@@ -850,7 +900,6 @@ pub const GraphStore = struct {
 
         // Initialize IdMap for the new graph
         _ = try self.getOrCreateIdMap(graph_name);
-        self.saveIdMaps();
 
         self.dirty.store(true, .release);
     }
@@ -912,8 +961,14 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        const adapter_slot_id: ?u64 = if (global_vtable) |vt|
-            try vt.createNodeFn(vt.ctx, graph_name, labels)
+        const adapter_node: ?struct {
+            vt: AdapterVTable,
+            slot_id: u64,
+        } = if (global_vtable) |vt|
+            .{
+                .vt = vt,
+                .slot_id = try vt.createNodeFn(vt.ctx, graph_name, labels),
+            }
         else
             null;
         try self.ensureGraph(graph_name);
@@ -921,10 +976,13 @@ pub const GraphStore = struct {
         const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
-        if (adapter_slot_id) |slot_id| {
+        if (adapter_node) |persisted_node| {
+            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, id) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
-            try im.insertNodeWithSlot(@as(u128, id), slot_id);
-            self.saveIdMaps();
+            try im.insertNodeWithSlot(@as(u128, id), persisted_node.slot_id);
         }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
@@ -970,18 +1028,27 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
-        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+        const adapter_node: ?struct {
+            vt: AdapterVTable,
+            slot_id: u64,
+        } = if (persist_adapter) blk: {
             const vt = global_vtable orelse break :blk null;
-            break :blk try vt.createNodeFn(vt.ctx, graph_name, labels);
+            break :blk .{
+                .vt = vt,
+                .slot_id = try vt.createNodeFn(vt.ctx, graph_name, labels),
+            };
         } else null;
 
         try self.ensureGraph(graph_name);
         if (self.nodes.contains(node_id)) return error.NodeAlreadyExists;
 
-        if (adapter_slot_id) |slot_id| {
+        if (adapter_node) |persisted_node| {
+            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, node_id) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
-            try im.insertNodeWithSlot(@as(u128, node_id), slot_id);
-            self.saveIdMaps();
+            try im.insertNodeWithSlot(@as(u128, node_id), persisted_node.slot_id);
         }
 
         const labels_copy = try self.allocator.alloc([]const u8, labels.len);
@@ -1182,6 +1249,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setNodeProperty(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) !void {
+        if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         // Some callers already encrypt; isLikelyFleEnvelope() prevents double-encryption.
         const effective_value = switch (value) {
@@ -1304,6 +1372,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) void {
+        if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             const node = self.nodes.get(node_id) orelse return;
             const slot_id = self.requireNodeSlot(node.graph_name, node_id) catch |err| {
@@ -1973,22 +2042,49 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        const adapter_slot_id: ?u64 = blk: {
+        const adapter_edge: ?struct {
+            vt: AdapterVTable,
+            from_slot: u64,
+            to_slot: u64,
+            edge_slot: u64,
+        } = blk: {
             const vt = global_vtable orelse break :blk null;
             const im = self.getOrCreateIdMap(graph_name) catch break :blk null;
             const from_slot = im.nodeSlot(@as(u128, from_id)) orelse break :blk null;
             const to_slot = im.nodeSlot(@as(u128, to_id)) orelse break :blk null;
-            break :blk vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch break :blk null;
+            const edge_slot = vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch break :blk null;
+            break :blk .{
+                .vt = vt,
+                .from_slot = from_slot,
+                .to_slot = to_slot,
+                .edge_slot = edge_slot,
+            };
         };
         try self.ensureGraph(graph_name);
         // Generate UUIDv7-based time-sortable unique ID
         const id = generateTimeBasedId();
 
         // Store UUID→slot mapping in IdMap for adapter translation
-        if (adapter_slot_id) |slot_id| {
+        if (adapter_edge) |persisted_edge| {
+            persistEdgePublicId(
+                persisted_edge.vt,
+                graph_name,
+                persisted_edge.from_slot,
+                persisted_edge.to_slot,
+                persisted_edge.edge_slot,
+                id,
+            ) catch |err| {
+                persisted_edge.vt.deleteEdgeFn(
+                    persisted_edge.vt.ctx,
+                    graph_name,
+                    persisted_edge.from_slot,
+                    persisted_edge.to_slot,
+                    persisted_edge.edge_slot,
+                ) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
-            try im.insertEdgeWithSlot(@as(u128, id), slot_id);
-            self.saveIdMaps();
+            try im.insertEdgeWithSlot(@as(u128, id), persisted_edge.edge_slot);
         }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
@@ -2031,20 +2127,46 @@ pub const GraphStore = struct {
         mark_dirty: bool,
         persist_adapter: bool,
     ) !void {
-        const adapter_slot_id: ?u64 = if (persist_adapter) blk: {
+        const adapter_edge: ?struct {
+            vt: AdapterVTable,
+            from_slot: u64,
+            to_slot: u64,
+            edge_slot: u64,
+        } = if (persist_adapter) blk: {
             const vt = global_vtable orelse break :blk null;
             const from_slot = try self.requireNodeSlot(graph_name, from_id);
             const to_slot = try self.requireNodeSlot(graph_name, to_id);
-            break :blk try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
+            break :blk .{
+                .vt = vt,
+                .from_slot = from_slot,
+                .to_slot = to_slot,
+                .edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type),
+            };
         } else null;
 
         try self.ensureGraph(graph_name);
         if (self.edges.contains(edge_id)) return error.EdgeAlreadyExists;
 
-        if (adapter_slot_id) |slot_id| {
+        if (adapter_edge) |persisted_edge| {
+            persistEdgePublicId(
+                persisted_edge.vt,
+                graph_name,
+                persisted_edge.from_slot,
+                persisted_edge.to_slot,
+                persisted_edge.edge_slot,
+                edge_id,
+            ) catch |err| {
+                persisted_edge.vt.deleteEdgeFn(
+                    persisted_edge.vt.ctx,
+                    graph_name,
+                    persisted_edge.from_slot,
+                    persisted_edge.to_slot,
+                    persisted_edge.edge_slot,
+                ) catch {};
+                return err;
+            };
             const im = try self.getOrCreateIdMap(graph_name);
-            try im.insertEdgeWithSlot(@as(u128, edge_id), slot_id);
-            self.saveIdMaps();
+            try im.insertEdgeWithSlot(@as(u128, edge_id), persisted_edge.edge_slot);
         }
 
         const edge_type_copy = try self.allocator.dupe(u8, edge_type);
@@ -2185,6 +2307,7 @@ pub const GraphStore = struct {
     }
 
     pub fn setEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) !void {
+        if (isInternalPersistedPropertyKey(key)) return error.ReservedPropertyKey;
         // FLE defense-in-depth: encrypt String values before adapter write and in-memory storage.
         const effective_value = switch (value) {
             .String => |s| blk: {
@@ -2272,6 +2395,7 @@ pub const GraphStore = struct {
     }
 
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
+        if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
             if (vt.removeEdgePropertyFn) |f| {
                 if (self.edges.get(edge_id)) |edge_info| {
@@ -3131,13 +3255,14 @@ pub const GraphStore = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-002; FEATURE="EngineBackedPersistence"; ASPECT=SaveToFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
-    // Save delegates to adapter checkpoint + IdMap persistence.
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-002; FEATURE="EngineBackedPersistence"; ASPECT=SaveToFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-02
+    // Save delegates to adapter checkpoint. Public ID mappings are now stored
+    // inside graph-storage properties rather than a sidecar id_map.dat file.
     pub fn saveToFile(self: *GraphStore) !void {
         if (global_adapter) |adapter| {
             try adapter.checkpointAll();
         }
-        self.saveIdMaps();
+        self.cleanupLegacySidecars();
         self.dirty.store(false, .release);
     }
 
@@ -3155,16 +3280,7 @@ pub const GraphStore = struct {
         _ = final_path;
     }
 
-    fn resolveIdMapDirPath(self: *GraphStore, graph_name: []const u8, create_if_missing: bool) ![]u8 {
-        _ = create_if_missing;
-        if (self.data_dir.len == 0) return error.InvalidDataDir;
-
-        const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
-        const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
-        return std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
-    }
-
-    fn resolveIdMapDirPathForLoad(self: *GraphStore, graph_name: []const u8) !?[]u8 {
+    fn resolveGraphStorageDirPath(self: *GraphStore, graph_name: []const u8) !?[]u8 {
         if (self.data_dir.len == 0) return null;
 
         const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return null;
@@ -3178,33 +3294,63 @@ pub const GraphStore = struct {
         return uuid_path;
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-003; FEATURE="EngineBackedPersistence"; ASPECT=IdMapPersistence; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
-    /// Persist all dirty IdMaps to their per-graph data directories.
-    pub fn saveIdMaps(self: *GraphStore) void {
-        if (self.data_dir.len == 0) return;
+    fn loadLegacyIdMap(self: *GraphStore, graph_name: []const u8) !?id_map_mod.IdMap {
+        const graph_dir_path = (try self.resolveGraphStorageDirPath(graph_name)) orelse return null;
+        defer self.allocator.free(graph_dir_path);
 
-        var id_map_iter = self.id_maps.iterator();
-        while (id_map_iter.next()) |entry| {
-            const graph_name = entry.key_ptr.*;
-            const id_map = entry.value_ptr;
+        var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+        defer dir.close();
 
-            // Persist the IdMap beside the graph-storage engine files in the
-            // UUID-backed graph directory (`graphs/<uuid_hex>/`).
-            const graph_dir_path = self.resolveIdMapDirPath(graph_name, true) catch continue;
-            defer self.allocator.free(graph_dir_path);
+        dir.access("id_map.dat", .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
 
-            std.fs.cwd().makePath(graph_dir_path) catch continue;
+        return try id_map_mod.IdMap.load(self.allocator, dir);
+    }
 
-            var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch continue;
-            defer dir.close();
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-003; FEATURE="EngineBackedPersistence"; ASPECT=LegacyCleanup; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-02
+    /// Remove obsolete sidecar files after their contents have been migrated
+    /// into the graph-storage engine.
+    fn cleanupLegacySidecars(self: *GraphStore) void {
+        var it = self.graphs.iterator();
+        while (it.next()) |entry| {
+            self.cleanupLegacySidecarsForGraph(entry.key_ptr.*);
+        }
+    }
 
-            id_map.save(dir) catch |err| {
-                log.err("failed to save IdMap for graph", &.{
+    fn cleanupLegacySidecarsForGraph(self: *GraphStore, graph_name: []const u8) void {
+        const graph_dir_path = self.resolveGraphStorageDirPath(graph_name) catch return orelse return;
+        defer self.allocator.free(graph_dir_path);
+
+        var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch return;
+        defer dir.close();
+
+        const stale_files = [_][]const u8{
+            "adapter_labels.dat",
+            "adapter_labels.dat.tmp",
+            "id_map.dat",
+            "id_map.dat.tmp",
+        };
+        for (stale_files) |name| {
+            dir.deleteFile(name) catch |err| switch (err) {
+                error.FileNotFound => {},
+                else => log.warn("failed to remove legacy graph sidecar", &.{
                     Attr.string("graph", graph_name),
+                    Attr.string("file", name),
                     Attr.string("error", @errorName(err)),
-                });
+                }),
             };
         }
+    }
+
+    /// Deprecated compatibility shim. Public ID mappings are no longer
+    /// persisted in a sidecar file.
+    pub fn saveIdMaps(self: *GraphStore) void {
+        _ = self;
     }
 
     // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-004; FEATURE="EngineBackedPersistence"; ASPECT=LoadFromAdapter; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
@@ -3221,53 +3367,55 @@ pub const GraphStore = struct {
         for (graph_names) |graph_name| {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
+            var legacy_map = try self.loadLegacyIdMap(graph_name);
+            defer if (legacy_map) |*map| map.deinit();
 
-            // Current-format storage requires an IdMap alongside each UUID-backed
-            // graph directory so external IDs remain stable across reloads.
-            if (self.getIdMap(graph_name) == null and self.data_dir.len > 0) {
-                const graph_dir_path = (try self.resolveIdMapDirPathForLoad(graph_name)) orelse {
-                    log.warn("loadFromAdapter: skipping graph with no storage dir", &.{Attr.string("graph", graph_name)});
-                    continue;
-                };
-                defer self.allocator.free(graph_dir_path);
-
-                var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch {
-                    log.warn("loadFromAdapter: skipping graph with inaccessible dir", &.{Attr.string("graph", graph_name)});
-                    continue;
-                };
-                defer dir.close();
-
-                dir.access("id_map.dat", .{}) catch {
-                    log.warn("loadFromAdapter: skipping graph with no id_map.dat", &.{Attr.string("graph", graph_name)});
-                    continue;
-                };
-                const loaded_map = id_map_mod.IdMap.load(self.allocator, dir) catch {
-                    log.warn("loadFromAdapter: skipping graph with corrupt id_map.dat", &.{Attr.string("graph", graph_name)});
-                    continue;
-                };
-                const key = try self.allocator.dupe(u8, graph_name);
-                errdefer self.allocator.free(key);
-                try self.id_maps.put(key, loaded_map);
-            }
-
-            const id_map = self.requireIdMap(graph_name) catch {
-                log.warn("loadFromAdapter: skipping graph with no IdMap", &.{Attr.string("graph", graph_name)});
-                continue;
-            };
+            const id_map = try self.getOrCreateIdMap(graph_name);
+            var backfilled_from_legacy = false;
+            var skipped_node_mappings: u64 = 0;
+            var skipped_edge_mappings: u64 = 0;
 
             const scan_entries = try adapter.scanAllNodes(graph_name, self.allocator);
             defer self.allocator.free(scan_entries);
 
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
+                const node_uuid = blk: {
+                    if (try adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator)) |stored_prop| {
+                        defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                        switch (stored_prop) {
+                            .string => |text| {
+                                if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                            },
+                            else => {},
+                        }
+                    }
 
-                // Skip nodes whose slot_id isn't in the IdMap yet — they were
-                // created concurrently (e.g., by an ingest process) after the
-                // IdMap snapshot was taken.
-                const node_uuid_128 = id_map.nodeUuid(slot_id) orelse {
+                    if (legacy_map) |*map| {
+                        const legacy_uuid_128 = map.nodeUuid(slot_id) orelse break :blk null;
+                        const public_id = @as(u64, @truncate(legacy_uuid_128));
+                        var id_buf: [16]u8 = undefined;
+                        try adapter.setNodeProperty(
+                            graph_name,
+                            slot_id,
+                            INTERNAL_NODE_ID_PROPERTY_KEY,
+                            .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                        );
+                        backfilled_from_legacy = true;
+                        break :blk public_id;
+                    }
+
+                    break :blk null;
+                } orelse {
+                    skipped_node_mappings += 1;
                     continue;
                 };
-                const node_uuid = @as(u64, @truncate(node_uuid_128));
+                try id_map.insertNodeWithSlot(@as(u128, node_uuid), slot_id);
+            }
+
+            for (scan_entries) |entry| {
+                const slot_id = entry.slot_id;
+                const node_uuid = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse continue));
                 const labels = try adapter.getNodeLabels(graph_name, slot_id, self.allocator);
 
                 const graph_name_copy = try self.allocator.dupe(u8, graph_name);
@@ -3313,8 +3461,46 @@ pub const GraphStore = struct {
                 defer self.allocator.free(out_edges);
 
                 for (out_edges) |edge_entry| {
-                    // Skip edges/nodes whose slot_ids aren't in the IdMap yet (concurrent inserts)
-                    const edge_uuid = @as(u64, @truncate(id_map.edgeUuid(edge_entry.edge_id) orelse continue));
+                    // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
+                    const edge_uuid = blk: {
+                        if (try adapter.getEdgeProperty(
+                            graph_name,
+                            slot_id,
+                            edge_entry.edge_id,
+                            INTERNAL_EDGE_ID_PROPERTY_KEY,
+                            self.allocator,
+                        )) |stored_prop| {
+                            defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
+                            switch (stored_prop) {
+                                .string => |text| {
+                                    if (parsePersistedPublicId(text)) |parsed| break :blk parsed;
+                                },
+                                else => {},
+                            }
+                        }
+
+                        if (legacy_map) |*map| {
+                            const legacy_uuid_128 = map.edgeUuid(edge_entry.edge_id) orelse break :blk null;
+                            const public_id = @as(u64, @truncate(legacy_uuid_128));
+                            var id_buf: [16]u8 = undefined;
+                            try adapter.setEdgeProperty(
+                                graph_name,
+                                slot_id,
+                                edge_entry.neighbor,
+                                edge_entry.edge_id,
+                                INTERNAL_EDGE_ID_PROPERTY_KEY,
+                                .{ .String = encodePersistedPublicId(&id_buf, public_id) },
+                            );
+                            backfilled_from_legacy = true;
+                            break :blk public_id;
+                        }
+
+                        break :blk null;
+                    } orelse {
+                        skipped_edge_mappings += 1;
+                        continue;
+                    };
+                    try id_map.insertEdgeWithSlot(@as(u128, edge_uuid), edge_entry.edge_id);
 
                     if (self.edges.contains(edge_uuid)) continue;
 
@@ -3362,6 +3548,19 @@ pub const GraphStore = struct {
                         self.next_edge_id = edge_uuid + 1;
                     }
                 }
+            }
+
+            if (backfilled_from_legacy) {
+                try adapter.checkpointAll();
+            }
+            self.cleanupLegacySidecarsForGraph(graph_name);
+
+            if (skipped_node_mappings > 0 or skipped_edge_mappings > 0) {
+                log.warn("loadFromAdapter skipped entries with no persisted public ID mapping", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.int("skipped_nodes", @intCast(skipped_node_mappings)),
+                    Attr.int("skipped_edges", @intCast(skipped_edge_mappings)),
+                });
             }
         }
 
@@ -3632,7 +3831,6 @@ pub const GraphStore = struct {
             // Remove from IdMap
             if (self.getIdMap(adapter_gn)) |im| {
                 _ = im.removeNode(@as(u128, node_id));
-                self.saveIdMaps();
             }
         }
 
@@ -3684,7 +3882,6 @@ pub const GraphStore = struct {
                 // Remove edge from IdMap
                 if (self.getIdMap(edge.graph_name)) |im| {
                     _ = im.removeEdge(@as(u128, edge_id));
-                    self.saveIdMaps();
                 }
             }
         }
@@ -4226,8 +4423,8 @@ fn persistenceLoop() void {
     }
 }
 
-// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=PersistSplitPhase; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
-/// Persistence via adapter checkpoint + IdMap save. No more graph_store.dat.
+// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=PersistSplitPhase; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-02
+/// Persistence via adapter checkpoint. No more graph_store.dat or id_map.dat.
 fn persistSplitPhase(store_ptr: *GraphStore) void {
     if (!@constCast(&store_ptr.dirty).load(.acquire)) return;
 
@@ -4241,9 +4438,9 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         };
     }
 
-    // Save dirty IdMaps
+    // Remove any stale sidecar files after the checkpoint lands.
     g_store_rwlock.lockShared();
-    store_ptr.saveIdMaps();
+    store_ptr.cleanupLegacySidecars();
     g_store_rwlock.unlockShared();
 
     // Clear dirty flag
@@ -4801,6 +4998,29 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
 
     const adapter = getGlobalAdapter() orelse return error.AdapterNotInitialized;
     try adapter.checkpointAll();
+
+    const id_map = store.getIdMap("default") orelse return error.IdMapNotLoaded;
+    const node_slot = id_map.nodeSlot(@as(u128, 1001)) orelse return error.NodeSlotMappingMissing;
+    const edge_slot = id_map.edgeSlot(@as(u128, 9001)) orelse return error.EdgeSlotMappingMissing;
+
+    const persisted_node_id = try adapter.getNodeProperty("default", node_slot, INTERNAL_NODE_ID_PROPERTY_KEY, testing.allocator) orelse return error.PropertyNotFound;
+    defer graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, persisted_node_id);
+    var node_id_buf: [16]u8 = undefined;
+    try testing.expectEqualStrings(encodePersistedPublicId(&node_id_buf, 1001), persisted_node_id.string);
+
+    const persisted_edge_id = try adapter.getEdgeProperty("default", node_slot, edge_slot, INTERNAL_EDGE_ID_PROPERTY_KEY, testing.allocator) orelse return error.PropertyNotFound;
+    defer graph_storage_adapter.freeOwnedStorageProperty(testing.allocator, persisted_edge_id);
+    var edge_id_buf: [16]u8 = undefined;
+    try testing.expectEqualStrings(encodePersistedPublicId(&edge_id_buf, 9001), persisted_edge_id.string);
+
+    const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
+    const graph_dir_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}", .{ dir_path, std.fmt.bytesToHex(graph_uuid, .lower) });
+    defer testing.allocator.free(graph_dir_path);
+
+    var graph_dir = try std.fs.cwd().openDir(graph_dir_path, .{});
+    defer graph_dir.close();
+    try testing.expectError(error.FileNotFound, graph_dir.access("id_map.dat", .{}));
+    try testing.expectError(error.FileNotFound, graph_dir.access("adapter_labels.dat", .{}));
 
     try store.loadFromFile();
 

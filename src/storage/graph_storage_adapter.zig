@@ -4,9 +4,8 @@
 //! Graph Storage Adapter — bridges the graph-storage engine library to geode's
 //! execution engine.
 //!
-//! Manages one `GraphEngine` instance per named graph, maintains a per-graph
-//! label string↔LabelId dictionary, and provides the methods that geode's
-//! execution engine calls.
+//! Manages one `GraphEngine` instance per named graph and provides the methods
+//! that geode's execution engine calls.
 
 const std = @import("std");
 const gs = @import("graph_storage");
@@ -21,69 +20,105 @@ const log = std.log.scoped(.graph_storage_adapter);
 pub const EdgeEntry = gs.edge.EdgeEntry;
 
 // ============================================================================
-// LabelStringDict — bidirectional label string ↔ LabelId mapping
+// LabelStringDict — bidirectional label string ↔ LabelId mapping view
 // ============================================================================
 
-/// Per-graph bidirectional mapping between human-readable label strings and
-/// numeric `LabelId` values used by the storage engine.
 pub const LabelStringDict = struct {
-    allocator: Allocator,
-    str_to_id: std.StringHashMap(gs.LabelId),
-    id_to_str: std.AutoHashMap(gs.LabelId, []const u8),
-    next_id: gs.LabelId,
+    allocator: ?Allocator,
+    backing: union(enum) {
+        local: LocalState,
+        external: *gs.label_dict.LabelDictionary,
+    },
+
+    const LocalState = struct {
+        str_to_id: std.StringHashMap(gs.LabelId),
+        id_to_str: std.AutoHashMap(gs.LabelId, []const u8),
+        next_id: gs.LabelId,
+    };
 
     pub fn init(allocator: Allocator) LabelStringDict {
         return .{
             .allocator = allocator,
-            .str_to_id = std.StringHashMap(gs.LabelId).init(allocator),
-            .id_to_str = std.AutoHashMap(gs.LabelId, []const u8).init(allocator),
-            .next_id = 1,
+            .backing = .{
+                .local = .{
+                    .str_to_id = std.StringHashMap(gs.LabelId).init(allocator),
+                    .id_to_str = std.AutoHashMap(gs.LabelId, []const u8).init(allocator),
+                    .next_id = 1,
+                },
+            },
+        };
+    }
+
+    pub fn initView(dict: *gs.label_dict.LabelDictionary) LabelStringDict {
+        return .{
+            .allocator = null,
+            .backing = .{ .external = dict },
         };
     }
 
     pub fn deinit(self: *LabelStringDict) void {
-        var it = self.str_to_id.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
+        switch (self.backing) {
+            .local => |*local| {
+                const allocator = self.allocator orelse return;
+                var it = local.str_to_id.iterator();
+                while (it.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);
+                }
+                local.str_to_id.deinit();
+                local.id_to_str.deinit();
+            },
+            .external => {},
         }
-        self.str_to_id.deinit();
-        self.id_to_str.deinit();
     }
 
     /// Return the LabelId for `label`, assigning a new one if this is the
     /// first time the label has been seen.
     pub fn getOrCreate(self: *LabelStringDict, label: []const u8) !gs.LabelId {
-        if (self.str_to_id.get(label)) |id| {
-            return id;
+        switch (self.backing) {
+            .local => |*local| {
+                const allocator = self.allocator orelse return error.OutOfMemory;
+                if (local.str_to_id.get(label)) |id| {
+                    return id;
+                }
+
+                const id = local.next_id;
+                local.next_id += 1;
+
+                const owned = try allocator.dupe(u8, label);
+                errdefer allocator.free(owned);
+
+                try local.str_to_id.put(owned, id);
+                errdefer _ = local.str_to_id.remove(owned);
+
+                try local.id_to_str.put(id, owned);
+                return id;
+            },
+            .external => |dict| return dict.getOrAssign(label),
         }
-
-        const id = self.next_id;
-        self.next_id += 1;
-
-        const owned = try self.allocator.dupe(u8, label);
-        errdefer self.allocator.free(owned);
-
-        try self.str_to_id.put(owned, id);
-        errdefer _ = self.str_to_id.remove(owned);
-
-        try self.id_to_str.put(id, owned);
-
-        return id;
     }
 
     /// Reverse lookup: LabelId → string. Returns null when the id is unknown.
     pub fn getString(self: *const LabelStringDict, id: gs.LabelId) ?[]const u8 {
-        return self.id_to_str.get(id);
+        return switch (self.backing) {
+            .local => |local| local.id_to_str.get(id),
+            .external => |dict| dict.getName(id),
+        };
     }
 
     /// Forward lookup: string → LabelId. Returns null when the label is unknown.
     pub fn getId(self: *const LabelStringDict, label: []const u8) ?gs.LabelId {
-        return self.str_to_id.get(label);
+        return switch (self.backing) {
+            .local => |local| local.str_to_id.get(label),
+            .external => |dict| dict.getId(label),
+        };
     }
 
     /// Number of labels currently tracked.
     pub fn count(self: *const LabelStringDict) u32 {
-        return @intCast(self.str_to_id.count());
+        return switch (self.backing) {
+            .local => |local| @intCast(local.str_to_id.count()),
+            .external => |dict| dict.count(),
+        };
     }
 };
 
@@ -142,6 +177,19 @@ fn freeTemporaryStorageProperty(allocator: Allocator, val: gs.PropertyValue) voi
         .ext => |ext| allocator.free(ext.data),
         else => {},
     }
+}
+
+pub fn freeOwnedStorageProperty(allocator: Allocator, val: gs.PropertyValue) void {
+    switch (val) {
+        .string => |s| allocator.free(s),
+        .ext => |ext| allocator.free(ext.data),
+        else => {},
+    }
+}
+
+fn shouldExposePropertyKey(key: []const u8) bool {
+    return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
+        !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY);
 }
 
 // ============================================================================
@@ -730,6 +778,7 @@ pub const StorageAdapter = struct {
 
         // Now fetch each property by key.
         for (keys.items) |key| {
+            if (!shouldExposePropertyKey(key)) continue;
             if (try mg.engine.getProperty(rec.prop_head, key, allocator)) |val| {
                 // Transfer key ownership into the map.
                 const owned_key = try allocator.dupe(u8, key);
@@ -779,6 +828,7 @@ pub const StorageAdapter = struct {
 
         // Now fetch each property by key.
         for (keys.items) |key| {
+            if (!shouldExposePropertyKey(key)) continue;
             if (try mg.engine.getProperty(prop_head_u64, key, allocator)) |val| {
                 const owned_key = try allocator.dupe(u8, key);
                 try result.put(owned_key, val);
@@ -828,88 +878,12 @@ pub const StorageAdapter = struct {
         while (it.next()) |entry| {
             const mg = entry.value_ptr.*;
             try mg.engine.checkpoint();
-            // Save adapter-level label string dict alongside the engine
-            // data so that label string ↔ ID mappings survive restarts.
-            self.saveLabelDict(mg) catch |err| {
-                log.warn("failed to save label dict for graph '{s}': {}", .{ mg.name, err });
-            };
             self.syncRegistryCountsLocked(mg);
         }
 
         self.saveRegistryLocked() catch |err| {
             log.warn("failed to persist graph registry: {}", .{err});
         };
-    }
-
-    /// Save the adapter's LabelStringDict to a file in the graph's data
-    /// directory.  Format: count(u32) then [name_len(u32) | name | id(u32)]
-    /// per entry.
-    fn saveLabelDict(self: *StorageAdapter, mg: *ManagedGraph) !void {
-        _ = self;
-        const path = try mg.engine.allocator.alloc(u8, mg.engine.graph_dir.path.len + "/adapter_labels.dat".len);
-        defer mg.engine.allocator.free(path);
-        @memcpy(path[0..mg.engine.graph_dir.path.len], mg.engine.graph_dir.path);
-        @memcpy(path[mg.engine.graph_dir.path.len..], "/adapter_labels.dat");
-
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-
-        const count: u32 = @intCast(mg.label_dict.str_to_id.count());
-        var count_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &count_buf, count, .little);
-        try file.writeAll(&count_buf);
-
-        // Write next_id
-        var next_buf: [4]u8 = undefined;
-        std.mem.writeInt(u32, &next_buf, mg.label_dict.next_id, .little);
-        try file.writeAll(&next_buf);
-
-        var dict_it = mg.label_dict.str_to_id.iterator();
-        while (dict_it.next()) |dict_entry| {
-            const name = dict_entry.key_ptr.*;
-            const id = dict_entry.value_ptr.*;
-            var name_len_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &name_len_buf, @intCast(name.len), .little);
-            try file.writeAll(&name_len_buf);
-            try file.writeAll(name);
-            var id_buf: [4]u8 = undefined;
-            std.mem.writeInt(u32, &id_buf, id, .little);
-            try file.writeAll(&id_buf);
-        }
-    }
-
-    /// Load the adapter's LabelStringDict from disk into the ManagedGraph.
-    fn loadLabelDict(self: *StorageAdapter, mg: *ManagedGraph) void {
-        const path = std.fmt.allocPrint(self.allocator, "{s}/adapter_labels.dat", .{mg.engine.graph_dir.path}) catch return;
-        defer self.allocator.free(path);
-
-        const data = std.fs.cwd().readFileAlloc(self.allocator, path, 1024 * 1024) catch return;
-        defer self.allocator.free(data);
-
-        if (data.len < 8) return; // need at least count + next_id
-        const count = std.mem.readInt(u32, data[0..4], .little);
-        mg.label_dict.next_id = std.mem.readInt(u32, data[4..8], .little);
-
-        var offset: usize = 8;
-        var i: u32 = 0;
-        while (i < count) : (i += 1) {
-            if (offset + 4 > data.len) return;
-            const name_len = std.mem.readInt(u32, data[offset..][0..4], .little);
-            offset += 4;
-
-            if (name_len > 1024 or offset + name_len + 4 > data.len) return;
-            const name = self.allocator.dupe(u8, data[offset..][0..name_len]) catch return;
-            offset += name_len;
-
-            const id = std.mem.readInt(u32, data[offset..][0..4], .little);
-            offset += 4;
-
-            mg.label_dict.str_to_id.put(name, id) catch {
-                self.allocator.free(name);
-                return;
-            };
-            mg.label_dict.id_to_str.put(id, name) catch return;
-        }
     }
 
     // ------------------------------------------------------------------
@@ -963,7 +937,7 @@ pub const StorageAdapter = struct {
 
         mg.* = .{
             .engine = engine,
-            .label_dict = LabelStringDict.init(self.allocator),
+            .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
         };
@@ -1003,7 +977,7 @@ pub const StorageAdapter = struct {
 
         mg.* = .{
             .engine = engine,
-            .label_dict = LabelStringDict.init(self.allocator),
+            .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
         };
@@ -1013,10 +987,6 @@ pub const StorageAdapter = struct {
         self.saveRegistryLocked() catch |err| {
             log.warn("failed to persist graph registry after open of '{s}': {}", .{ name, err });
         };
-
-        // Load the adapter-level label string dict from disk so that label
-        // string ↔ ID mappings match what was used when nodes were created.
-        self.loadLabelDict(mg);
 
         log.info("opened existing graph '{s}'", .{name});
 

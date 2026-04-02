@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2024-2025 CodePros
 //
-// Persistent bidirectional mapping between UUIDv7 external IDs and dense
-// engine slot IDs.  Each graph owns one IdMap persisted to id_map.dat.
+// Legacy bidirectional mapping between UUIDv7 external IDs and dense engine
+// slot IDs. Active Geode persistence now stores public IDs inside
+// graph-storage properties; this codec remains for migration and tests.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-/// Magic bytes at the start of id_map.dat for format identification.
+/// Magic bytes at the start of legacy id_map.dat for format identification.
 const FILE_MAGIC: [8]u8 = "GEODEIDM".*;
 /// Current file format version.
 const FILE_VERSION: u32 = 1;
 
-/// Header stored at the beginning of the id_map.dat file.
+/// Header stored at the beginning of the legacy id_map.dat file.
 const FileHeader = extern struct {
     magic: [8]u8,
     version: u32,
