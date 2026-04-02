@@ -2179,9 +2179,19 @@ fn handleClientMessage(
                                     }
 
                                     var page_final = false;
-                                    if (state.inline_results_enabled) {
+                                    if (state.inline_results_enabled) inline_blk: {
                                         const inline_max = if (state.inline_results_max_rows == 0) active_stream.slot_ids.len else state.inline_results_max_rows;
-                                        var page_result = try active_stream.buildNextPage(gpa, inline_max);
+                                        var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
+                                            // Inline page failed (e.g. concurrent ingest modified
+                                            // nodes).  Reset the stream cursor so PULL starts from
+                                            // the beginning and fall through to store the stream
+                                            // for PULL instead of destroying it.
+                                            log.warn("Inline page build failed, deferring to PULL", &.{
+                                                Attr.string("error", @errorName(err)),
+                                            });
+                                            active_stream.next_index = 0;
+                                            break :inline_blk;
+                                        };
                                         defer page_result.result.deinit(gpa);
 
                                         var page_arena = std.heap.ArenaAllocator.init(gpa);
@@ -2337,7 +2347,27 @@ fn handleClientMessage(
             const pa = pull_arena.allocator();
 
             if (state.active_node_scan_stream) |*active_stream| {
-                var page_result = try active_stream.buildNextPage(gpa, page_size);
+                // Acquire store read lock while materializing nodes to prevent
+                // data races with concurrent ingest holding the write lock.
+                graph_store.acquireStoreLock();
+                var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
+                    graph_store.releaseStoreLock();
+                    // Node disappeared during concurrent ingest — send empty
+                    // final page so the client sees what was collected so far.
+                    log.warn("PULL page build failed, closing stream", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                    const empty_page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
+                    const err_status = try proto_util.buildStatus(pa, "00000", active_stream.flags);
+                    const err_resp = schema.ExecutionResponse{
+                        .status = err_status,
+                        .payload = .{ .page = empty_page },
+                    };
+                    try sendQuicMessage(pa, stream, .{ .pull = .{ .response = err_resp } });
+                    state.resetResult();
+                    return;
+                };
+                graph_store.releaseStoreLock();
                 defer page_result.result.deinit(gpa);
 
                 const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});

@@ -81,7 +81,10 @@ pub const NodeScanStream = struct {
         errdefer owned_entities.deinit();
 
         for (self.slot_ids[self.next_index..end]) |slot_id| {
-            const node = try materializeNode(allocator, self.graph_name, slot_id);
+            // Skip nodes that vanished due to concurrent modification (e.g.
+            // active ingest adding/removing nodes).  This avoids failing the
+            // entire page when a single slot becomes stale.
+            const node = materializeNode(allocator, self.graph_name, slot_id) catch continue;
             try owned_entities.trackNode(node);
 
             const row = try allocator.alloc(Value, 1);
