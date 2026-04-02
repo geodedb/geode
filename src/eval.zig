@@ -2250,6 +2250,10 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             const object = env.get(pa.object) orelse break :blk_property .{ .Null = {} };
 
             // Check what type of object this is and access its properties
+            // IMPORTANT: Use propertyValueToProjectedValue to copy strings.
+            // Borrowed string pointers from the graph store become stale when
+            // result rows are cached across allocator lifetimes (e.g. PULL
+            // serialization reads results built during RUN_GQL).
             switch (object) {
                 .Node => |node| {
                     if (node.properties.get(pa.property)) |val| {
@@ -2266,10 +2270,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                                     if (err == error.SearchNotPermitted) {
                                         return EvalError.SearchNotPermitted;
                                     }
-                                    break :blk Value{ .Str = s };
+                                    break :blk Value{ .Str = try allocator.dupe(u8, s) };
                                 };
-                                break :blk Value{ .Str = checked_value };
+                                break :blk Value{ .Str = try allocator.dupe(u8, checked_value) };
                             },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
                             else => property_codec.propertyValueToValue(val),
                         };
                         break :blk_property result;
@@ -2277,7 +2282,11 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 },
                 .Edge => |edge| {
                     if (edge.properties.get(pa.property)) |val| {
-                        const result = property_codec.propertyValueToValue(val);
+                        const result: Value = switch (val) {
+                            .String => |s| .{ .Str = try allocator.dupe(u8, s) },
+                            .ExtValue => |ext| property_codec.extValueToProjectedValue(allocator, ext) catch return EvalError.OutOfMemory,
+                            else => property_codec.propertyValueToValue(val),
+                        };
                         break :blk_property result;
                     }
                 },
