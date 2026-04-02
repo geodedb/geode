@@ -252,8 +252,9 @@ pub const ServerState = struct {
     query_mem_limit_bytes: usize = 0,
     // Whether to return results inline in RUN_GQL response (vs separate PULL)
     inline_results_enabled: bool = false,
-    // Maximum rows to return inline (0 = no limit)
-    inline_results_max_rows: usize = 0,
+    // Maximum rows to return inline (0 disables the cap; default keeps
+    // large row payloads streaming instead of blocking on one huge page)
+    inline_results_max_rows: usize = node_scan_stream.default_inline_rows,
     result_ordered: bool = false,
     result_order_keys: []const []const u8 = &.{},
     result_page_index: usize = 0,

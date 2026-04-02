@@ -1582,7 +1582,7 @@ pub const ClientSession = struct {
         var order_keys = std.json.Array.init(a);
         var request_id: u64 = 1;
 
-        const page_size: u32 = 0; // 0 -> server default page size
+        const page_size: u32 = 128; // Keep pull pages small so large node payloads stream promptly
         var done = false;
 
         if (self.inline_page_response) |inline_json| {

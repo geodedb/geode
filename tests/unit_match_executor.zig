@@ -396,6 +396,35 @@ test "TestCANARY_REQ_PERF_UNORDERED_STREAM_001_NodeScanStreamPagesSimpleLimit" {
     try std.testing.expectEqual(@as(usize, 3), seen.count());
 }
 
+test "TestCANARY_REQ_PERF_UNORDERED_STREAM_001_NodeScanStreamUsesBoundedDefaultPageSize" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+    var idx: usize = 0;
+    while (idx < 200) : (idx += 1) {
+        const node_id = try store.createNode(&.{"Person"});
+        try store.setNodeProperty(node_id, "rank", .{ .Int = @intCast(idx) });
+    }
+
+    var parsed = try geode.parseGql("MATCH (u:Person) RETURN u", allocator);
+    defer parsed.deinit();
+
+    const query_ptr = switch (parsed.program.statements[0]) {
+        .Query => |*q| q,
+        else => return error.ExpectedQueryStatement,
+    };
+
+    var stream = (try node_scan_stream.prepare(allocator, query_ptr, h.ctx, &.{}, &.{}, &.{})) orelse return error.ExpectedQueryStatement;
+    defer stream.deinit();
+
+    var first_page = try stream.buildNextPage(allocator, 0);
+    defer first_page.result.deinit(allocator);
+    try std.testing.expect(!first_page.final);
+    try std.testing.expectEqual(node_scan_stream.default_page_rows, first_page.result.rows.len);
+}
+
 // CANARY: REQ=REQ-PERF-UNORDERED-STREAM-002; FEATURE="UnorderedNodeScanStreaming"; ASPECT=Eligibility; STATUS=TESTED; TEST=tests/unit_match_executor.zig; OWNER=engine; UPDATED=2026-04-02
 test "TestCANARY_REQ_PERF_UNORDERED_STREAM_002_NodeScanStreamRejectsOrderedQuery" {
     const allocator = std.testing.allocator;

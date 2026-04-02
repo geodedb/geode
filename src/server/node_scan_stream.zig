@@ -14,6 +14,9 @@ const OwnedGraphEntities = execution.OwnedGraphEntities;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+pub const default_inline_rows: usize = 64;
+pub const default_page_rows: usize = 128;
+
 pub const NodeScanStream = struct {
     allocator: std.mem.Allocator,
     graph_name: []const u8,
@@ -52,7 +55,7 @@ pub const NodeScanStream = struct {
     };
 
     pub fn buildNextPage(self: *NodeScanStream, allocator: std.mem.Allocator, page_size: usize) !Page {
-        const page_len = if (page_size == 0) 1000 else page_size;
+        const page_len = if (page_size == 0) default_page_rows else page_size;
         if (self.next_index >= self.slot_ids.len) {
             var columns = try allocator.alloc([]const u8, 1);
             errdefer allocator.free(columns);

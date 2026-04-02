@@ -33,6 +33,7 @@ const stdio_util = @import("../utils/stdio.zig");
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
+const default_stream_page_size: u32 = 128;
 
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -174,7 +175,7 @@ fn printQueryUsage() void {
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
         "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
-        "  --page-size <n>        Page size for results (default: 250)\n" ++
+        "  --page-size <n>        Page size for results (default: 128)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
         "  --retry <count>        Number of retry attempts on failure (default: 0)\n" ++
         "  --begin                Start transaction\n" ++
@@ -868,7 +869,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var query_text: ?[]const u8 = null;
     var timeout_secs: u32 = 30; // Default 30 second timeout (QUIC handshake can be slow)
     var retry_count: u32 = 0; // Default no retries
-    var page_size: u32 = 250; // Default page size for PULL requests
+    var page_size: u32 = default_stream_page_size; // Default page size for PULL requests
     var use_saved_session = true; // Auto-load saved session by default
     // Issue #417: DSN connection string
     var dsn: ?[]const u8 = null;
@@ -1553,7 +1554,7 @@ const QuicQueryOptions = struct {
     client_key_path: ?[]const u8 = null,
     graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake (set from both --graph and DSN)
-    page_size: u32 = 250,
+    page_size: u32 = default_stream_page_size,
     params: std.ArrayList(schema.Param),
     role: ?[]const u8 = null, // GAP-0271: FLE role for field-level access control
 };
@@ -1568,7 +1569,7 @@ const GrpcQueryOptions = struct {
     password: ?[]const u8 = null,
     graph: ?[]const u8 = null, // For USE GRAPH prepending (null when graph from DSN)
     graph_for_hello: ?[]const u8 = null, // For HELLO handshake
-    page_size: u32 = 250,
+    page_size: u32 = default_stream_page_size,
     params: std.ArrayList(schema.Param),
 };
 
@@ -2357,7 +2358,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .password = opts.password,
                 .graph = opts.graph,
                 .graph_for_hello = opts.graph_for_hello,
-                .page_size = 250,
+                .page_size = default_stream_page_size,
                 .params = empty_params,
             }) catch |err| {
                 std.debug.print("Error executing chunk: {}\n", .{err});
@@ -2378,7 +2379,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 .client_key_path = opts.client_key_path,
                 .graph = opts.graph,
                 .graph_for_hello = opts.graph_for_hello,
-                .page_size = 250,
+                .page_size = default_stream_page_size,
                 .params = empty_params,
                 .role = opts.role,
             }) catch |err| {
