@@ -195,42 +195,21 @@ pub fn consumeQueryWithTransport(
         if (summary.stop) return;
     }
 
+    // Read ALL remaining inline pages.  The server sends all result pages
+    // as EXECUTE responses (no PULL round-trip needed).  This avoids the
+    // QUIC stream FIN race that caused PULL to arrive on a different handler.
     if (transport.supportsPull()) {
-        if (!saw_inline_page) {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-            defer arena.deinit();
-            const maybe_event = transport.nextEvent(arena.allocator(), opts.timeout_secs) catch |err| blk: {
-                if (err == error.Timeout or err == error.WouldBlock or err == error.EndOfStream) {
-                    break :blk null;
-                }
-                return err;
-            };
-            if (maybe_event) |event| {
-                const summary = try consumer.handleEvent(allocator, event, 0);
-                saw_inline_page = saw_inline_page or summary.saw_page;
-                inline_final = inline_final or summary.page_final;
-                if (summary.stop) return;
-            }
-        }
-
-        var request_id: u64 = 1;
-        if (!saw_inline_page or !inline_final) {
+        if (!inline_final) {
             var done = false;
-            while (!done) : (request_id += 1) {
-                const pull_req = schema.PullRequest{
-                    .request_id = request_id,
-                    .page_size = opts.page_size,
-                    .session_id = opts.session_id,
-                };
-
+            while (!done) {
                 var arena = std.heap.ArenaAllocator.init(allocator);
                 defer arena.deinit();
-                const event = transport.requestNextPage(arena.allocator(), pull_req, opts.timeout_secs) catch |err| {
-                    if (err == error.EndOfStream) break;
+                const event = transport.nextEvent(arena.allocator(), opts.timeout_secs) catch |err| {
+                    if (err == error.EndOfStream or err == error.Timeout or err == error.WouldBlock) break;
                     return err;
                 } orelse break;
 
-                const summary = try consumer.handleEvent(allocator, event, request_id);
+                const summary = try consumer.handleEvent(allocator, event, 0);
                 if (summary.page_final) done = true;
                 if (summary.stop) return;
             }

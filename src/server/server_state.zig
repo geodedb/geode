@@ -262,6 +262,9 @@ pub const ServerState = struct {
     // Optional value-backed result set for protobuf paging.
     active_result_values: ?execution.ExecutionResult = null,
     active_node_scan_stream: ?node_scan_stream.NodeScanStream = null,
+    // Pointer to the shared connection state for cross-stream PULL fallback.
+    // Set during stream handler init; null for standalone (non-multiplexed) usage.
+    shared_conn: ?*anyopaque = null,
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,

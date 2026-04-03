@@ -788,6 +788,15 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     for (program.statements) |stmt| {
         // Free previous result if any
         if (last_result) |*result| {
+            // Transfer entity ownership to the duplicate before freeing
+            // so that shallow-copied Node/Edge pointers in
+            // last_data_result don't become dangling.
+            if (last_data_result) |*dup| {
+                if (dup.owned_graph_entities == null) {
+                    dup.owned_graph_entities = result.owned_graph_entities;
+                    result.owned_graph_entities = null;
+                }
+            }
             result.deinit(allocator);
         }
 
@@ -845,6 +854,15 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     // If we tracked data results and have one, return that instead of transaction control
     if (track_data_results and last_data_result != null) {
         if (last_result) |*result| {
+            // Transfer graph entity ownership from the original to the
+            // duplicate.  duplicateResult() shallow-copies Node/Edge/Path
+            // pointers (they reference heap-allocated objects tracked by
+            // owned_graph_entities).  If we free the original without
+            // transferring, those objects are destroyed and the duplicate
+            // is left with dangling pointers — causing use-after-free
+            // when the server serialises the result for the wire.
+            last_data_result.?.owned_graph_entities = result.owned_graph_entities;
+            result.owned_graph_entities = null;
             result.deinit(allocator);
         }
         return last_data_result.?;

@@ -452,6 +452,16 @@ pub const SharedConnState = struct {
     streams_mu: std.Thread.Mutex = .{},
     streams_cv: std.Thread.Condition = .{},
 
+    /// Pending result transferred from a stream handler that exited before the
+    /// client's PULL arrived.  The QUIC library can report a spurious stream
+    /// FIN under concurrent load, causing the handler to exit while the client
+    /// still has an active result.  Protected by streams_mu.
+    pending_result: ?execution.ExecutionResult = null,
+    pending_node_scan_stream: ?node_scan_stream.NodeScanStream = null,
+    pending_result_page_index: usize = 0,
+    pending_result_ordered: bool = false,
+    pending_result_order_keys: []const []const u8 = &.{},
+
     /// Snapshot shared identity from a fully-initialized ServerState (after HELLO).
     pub fn captureFromState(self: *SharedConnState, state: *const ServerState) !void {
         if (state.authenticated_user) |u| {
@@ -471,6 +481,10 @@ pub const SharedConnState = struct {
     pub fn deinit(self: *SharedConnState) void {
         if (self.authenticated_user) |u| self.allocator.free(u);
         if (self.current_graph) |g| self.allocator.free(g);
+        if (self.pending_result) |*r| r.deinit(self.allocator);
+        if (self.pending_node_scan_stream) |*s| s.deinit();
+        for (self.pending_result_order_keys) |k| self.allocator.free(k);
+        if (self.pending_result_order_keys.len > 0) self.allocator.free(self.pending_result_order_keys);
         // peer_ip freed by the connection handler's defer
     }
 
@@ -558,6 +572,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.query_optimizer = cs.shared_optimizer;
     state.query_ast_cache = cs.shared_ast_cache;
     state.graph_bound = cs.graph_bound;
+    state.shared_conn = cs;
 
     // Inherit authenticated identity from the connection's HELLO.
     if (cs.authenticated_user) |u| {
@@ -730,7 +745,7 @@ fn runStreamQueryLoop(
             return;
         };
 
-        if (packet_opt == null) return; // EOF
+        if (packet_opt == null) return;
         var packet = packet_opt.?;
         defer packet.deinit(gpa);
 
@@ -1029,6 +1044,7 @@ pub fn handleQuicConnection(
         log.err("Failed to capture connection state for multiplexing", &.{Attr.string("error", @errorName(err))});
         return;
     };
+    state.shared_conn = &conn_state;
     // First stream counts as active.
     _ = conn_state.active_streams.fetchAdd(1, .release);
     defer {
@@ -1065,7 +1081,9 @@ pub fn handleQuicConnection(
     // This reuses the existing line_reader that already consumed the HELLO.
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
-            if (err == error.EndOfStream) break; // First stream done — check multiplexed streams
+            if (err == error.EndOfStream or err == error.Timeout) {
+                break;
+            }
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(2 * std.time.ns_per_ms);
@@ -1075,10 +1093,10 @@ pub fn handleQuicConnection(
                 continue;
             }
             log.err("Protobuf read error", &.{Attr.string("error", @errorName(err))});
-            break; // Error — check multiplexed streams before destroying
+            break;
         };
 
-        if (packet_opt == null) break; // EOF — check multiplexed streams
+        if (packet_opt == null) break;
         var packet = packet_opt.?;
         defer packet.deinit(gpa);
 
@@ -2235,8 +2253,7 @@ fn handleClientMessage(
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
-                    var store_result = false;
-                    defer if (!store_result) exec_result.deinit(gpa);
+                    defer exec_result.deinit(gpa);
                     const store = graph_store.getGlobalStore(gpa);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
@@ -2275,10 +2292,10 @@ fn handleClientMessage(
                     }
 
                     var order_keys: []const []const u8 = &.{};
-                    defer if (!store_result) {
+                    defer {
                         for (order_keys) |key| gpa.free(key);
                         if (order_keys.len > 0) gpa.free(order_keys);
-                    };
+                    }
                     if (ordered) {
                         if (findOrderBy(&parse_result.program)) |ob| {
                             order_keys = try buildOrderKeys(gpa, ob, &exec_result);
@@ -2299,33 +2316,26 @@ fn handleClientMessage(
                         try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
                     }
 
-                    var sent_rows: usize = 0;
-                    var page_final = false;
-                    if (state.inline_results_enabled) {
-                        const inline_max = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
-                        // Arena allocator for data page serialization (Issue #446):
-                        // Per-value string dups become bump allocations; individual frees become no-ops.
-                        var page_arena = std.heap.ArenaAllocator.init(gpa);
-                        defer page_arena.deinit();
-                        const pa = page_arena.allocator();
-                        const page = try proto_util.buildDataPage(pa, &exec_result, 0, inline_max, ordered, order_keys);
-                        sent_rows = page.rows.items.len;
-                        page_final = page.final;
-                        const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
-                        const page_resp = schema.ExecutionResponse{
-                            .status = page_status,
-                            .payload = .{ .page = page },
-                        };
-                        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
-                    }
-
-                    if (!state.inline_results_enabled or !page_final) {
-                        store_result = true;
-                        state.active_result_values = exec_result;
-                        state.active_result = true;
-                        state.result_page_index = if (state.inline_results_enabled) sent_rows else 0;
-                        state.result_ordered = ordered;
-                        state.result_order_keys = order_keys;
+                    // Send ALL result pages inline as EXECUTE responses.
+                    // This avoids the PULL round-trip which is unreliable under
+                    // concurrent load due to a QUIC library stream FIN race.
+                    {
+                        const page_size: usize = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
+                        var sent_rows: usize = 0;
+                        while (sent_rows < exec_result.rows.len or sent_rows == 0) {
+                            var page_arena = std.heap.ArenaAllocator.init(gpa);
+                            defer page_arena.deinit();
+                            const pa = page_arena.allocator();
+                            const page = try proto_util.buildDataPage(pa, &exec_result, sent_rows, page_size, ordered, order_keys);
+                            sent_rows += page.rows.items.len;
+                            const page_status = try proto_util.buildStatus(pa, "00000", exec_result.flags.items);
+                            const page_resp = schema.ExecutionResponse{
+                                .status = page_status,
+                                .payload = .{ .page = page },
+                            };
+                            try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+                            if (page.final) break;
+                        }
                     }
 
                     updateTxnStateFromProgram(state, &parse_result.program);
@@ -2346,6 +2356,43 @@ fn handleClientMessage(
             }
 
             const page_size = pull_req.page_size;
+
+            // If this stream has no active result, check the shared connection
+            // state for one transferred from a prior stream handler.  The QUIC
+            // library can report a spurious stream FIN, causing the handler that
+            // stored the result to exit and transfer it to SharedConnState.
+            // The PULL may arrive on a new handler before the transfer completes,
+            // so we poll with a brief backoff.
+            if (state.active_node_scan_stream == null and state.active_result_values == null) {
+                if (state.shared_conn) |shared_ptr| {
+                    const shared: *SharedConnState = @ptrCast(@alignCast(shared_ptr));
+                    var wait_attempts: usize = 0;
+                    while (wait_attempts < 100) : (wait_attempts += 1) {
+                        shared.streams_mu.lock();
+                        const found_result = shared.pending_result != null;
+                        const found_stream = shared.pending_node_scan_stream != null;
+                        if (found_result) {
+                            state.active_result_values = shared.pending_result;
+                            shared.pending_result = null;
+                            state.active_result = true;
+                            state.result_page_index = shared.pending_result_page_index;
+                            state.result_ordered = shared.pending_result_ordered;
+                            state.result_order_keys = shared.pending_result_order_keys;
+                            shared.pending_result_order_keys = &.{};
+                            shared.pending_result_page_index = 0;
+                            shared.pending_result_ordered = false;
+                        }
+                        if (found_stream) {
+                            state.active_node_scan_stream = shared.pending_node_scan_stream;
+                            shared.pending_node_scan_stream = null;
+                            state.active_result = true;
+                        }
+                        shared.streams_mu.unlock();
+                        if (found_result or found_stream) break;
+                        std.Thread.sleep(1 * std.time.ns_per_ms);
+                    }
+                }
+            }
 
             // Arena allocator for pull page serialization (Issue #446)
             var pull_arena = std.heap.ArenaAllocator.init(gpa);
