@@ -256,7 +256,11 @@ pub fn execute(
             for (perms) |p| {
                 const row = try allocator.alloc(Value, 2);
                 row[0] = Value{ .Str = username };
-                row[1] = Value{ .Str = @tagName(p) };
+                // Output permission names in lowercase to match CLI conventions
+                const tag = @tagName(p);
+                const lower = try allocator.alloc(u8, tag.len);
+                _ = std.ascii.lowerString(lower, tag);
+                row[1] = Value{ .Str = lower };
                 try rows_list.append(allocator, row);
             }
             return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };

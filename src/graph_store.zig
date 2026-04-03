@@ -1325,6 +1325,129 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Batch property entry for `setNodePropertiesBatch`.
+    /// When `value` is null the property is removed (tombstone).
+    pub const BatchPropertyEntry = struct {
+        key: []const u8,
+        value: ?PropertyValue, // null = remove
+    };
+
+    /// Set or remove multiple properties on a node in a single operation.
+    ///
+    /// When a storage adapter is present the batch is forwarded as one
+    /// adapter call, acquiring the adapter mutex only once instead of once
+    /// per property.  This eliminates severe mutex contention that caused
+    /// CLI commands (e.g. `geode user mfa-setup`) to hang when the server
+    /// was concurrently servicing queries against the same global adapter.
+    pub fn setNodePropertiesBatch(self: *GraphStore, node_id: u64, entries: []const BatchPropertyEntry) !void {
+        const node_meta = self.nodes.get(node_id) orelse return error.NodeNotFound;
+
+        // --- Adapter path: single lock acquisition for all properties ---
+        if (global_adapter) |adapter| {
+            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
+
+            // Build adapter-level batch entries, applying FLE encryption
+            // where required.
+            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
+            defer self.allocator.free(adapter_entries);
+
+            for (entries, 0..) |entry, i| {
+                if (entry.value) |val| {
+                    const effective = self.applyFleEncryption(node_id, entry.key, val);
+                    adapter_entries[i] = .{ .key = entry.key, .value = effective };
+                } else {
+                    adapter_entries[i] = .{ .key = entry.key, .value = null };
+                }
+            }
+
+            try adapter.setNodePropertiesBatch(node_meta.graph_name, slot_id, adapter_entries);
+        } else if (global_vtable) |vt| {
+            // Fallback: vtable without direct adapter access (shouldn't
+            // happen in practice, but keep correctness).
+            const slot_id = try self.requireNodeSlot(node_meta.graph_name, node_id);
+            for (entries) |entry| {
+                if (entry.value) |val| {
+                    const effective = self.applyFleEncryption(node_id, entry.key, val);
+                    try vt.setNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key, effective);
+                } else {
+                    try vt.removeNodePropertyFn(vt.ctx, node_meta.graph_name, slot_id, entry.key);
+                }
+            }
+        }
+
+        // --- In-memory store update (always, regardless of adapter) ---
+        if (self.nodes.getPtr(node_id)) |node| {
+            for (entries) |entry| {
+                if (isInternalPersistedPropertyKey(entry.key)) continue;
+
+                if (entry.value) |val| {
+                    const effective = self.applyFleEncryption(node_id, entry.key, val);
+                    const value_copy = try copyPropertyValue(self, effective);
+                    errdefer freePropertyValue(self, value_copy);
+
+                    const result = try node.properties.getOrPut(entry.key);
+                    if (!result.found_existing) {
+                        result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
+                    } else {
+                        freePropertyValue(self, result.value_ptr.*);
+                    }
+                    result.value_ptr.* = value_copy;
+
+                    notifyMutation(.set_node_property, node_id, 0, 0, null, entry.key, effective, null);
+                } else {
+                    // Remove
+                    if (node.properties.fetchRemove(entry.key)) |kv| {
+                        self.allocator.free(kv.key);
+                        freePropertyValue(self, kv.value);
+                    }
+                }
+            }
+            self.dirty.store(true, .release);
+        }
+    }
+
+    /// Apply FLE encryption to a property value if required.  Factored out
+    /// so both `setNodeProperty` and `setNodePropertiesBatch` share the
+    /// same logic.
+    fn applyFleEncryption(self: *GraphStore, node_id: u64, key: []const u8, value: PropertyValue) PropertyValue {
+        switch (value) {
+            .String => |s| {
+                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                    const node_type: []const u8 = if (self.nodes.get(node_id)) |n|
+                        (if (n.labels.len > 0) n.labels[0] else "Unknown")
+                    else
+                        "Unknown";
+                    if (fle_integration.fieldRequiresEncryption(node_type, key)) {
+                        const fle_ctx = fle_integration.EncryptionContext{
+                            .tenant_id = self.tenant_id,
+                            .schema_name = self.schema_name,
+                            .allocator = self.allocator,
+                            .current_user_role = fle_integration.getCurrentUserRole(),
+                        };
+                        const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch {
+                            return value;
+                        };
+                        defer self.allocator.free(record_id);
+                        const encrypted = fle_integration.encryptFieldIfNeeded(
+                            fle_ctx,
+                            node_type,
+                            key,
+                            s,
+                            record_id,
+                        ) catch {
+                            return value;
+                        };
+                        if (!std.mem.eql(u8, encrypted, s)) {
+                            return PropertyValue{ .String = encrypted };
+                        }
+                    }
+                }
+                return value;
+            },
+            else => return value,
+        }
+    }
+
     pub fn getNodeProperty(self: *GraphStore, node_id: u64, key: []const u8) ?PropertyValue {
         if (self.nodes.get(node_id)) |node| {
             const value = node.properties.get(key) orelse return null;

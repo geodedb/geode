@@ -1008,38 +1008,71 @@ pub const UserStorageBackend = struct {
         const node_id = self.user_nodes.get(record.id) orelse try self.createEntityNode(USER_LABEL);
         try self.user_nodes.put(record.id, node_id);
 
-        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });
-        try self.store.setNodeProperty(node_id, "username", .{ .String = record.getUsername() });
-        try self.store.setNodeProperty(node_id, "email", .{ .String = record.getEmail() });
-        try self.store.setNodeProperty(node_id, "password_hash", .{ .String = record.getPasswordHash() });
+        // Build a batch of all property mutations so the underlying
+        // StorageAdapter mutex is acquired only once instead of 17+ times.
+        // This prevents the CLI from hanging when the server is
+        // concurrently servicing queries against the same adapter.
+        const Entry = graph_store.GraphStore.BatchPropertyEntry;
+        const PV = graph_store.PropertyValue;
+
+        // Maximum possible entries: 20 (all conditional branches taken).
+        var buf: [20]Entry = undefined;
+        var n: usize = 0;
+
+        buf[n] = .{ .key = "id", .value = PV{ .Int = safeI64(record.id) } };
+        n += 1;
+        buf[n] = .{ .key = "username", .value = PV{ .String = record.getUsername() } };
+        n += 1;
+        buf[n] = .{ .key = "email", .value = PV{ .String = record.getEmail() } };
+        n += 1;
+        buf[n] = .{ .key = "password_hash", .value = PV{ .String = record.getPasswordHash() } };
+        n += 1;
         if (sliceUntilZero(&record.salt)) |salt_str| {
-            try self.store.setNodeProperty(node_id, "salt", .{ .String = salt_str });
+            buf[n] = .{ .key = "salt", .value = PV{ .String = salt_str } };
+            n += 1;
         }
-        try self.store.setNodeProperty(node_id, "is_active", .{ .Bool = record.is_active });
-        try self.store.setNodeProperty(node_id, "is_superuser", .{ .Bool = record.is_superuser });
-        try self.store.setNodeProperty(node_id, "mfa_enabled", .{ .Bool = record.mfa_enabled });
+        buf[n] = .{ .key = "is_active", .value = PV{ .Bool = record.is_active } };
+        n += 1;
+        buf[n] = .{ .key = "is_superuser", .value = PV{ .Bool = record.is_superuser } };
+        n += 1;
+        buf[n] = .{ .key = "mfa_enabled", .value = PV{ .Bool = record.mfa_enabled } };
+        n += 1;
         if (record.getMFASecret()) |mfa| {
-            try self.store.setNodeProperty(node_id, "mfa_secret", .{ .String = mfa });
+            buf[n] = .{ .key = "mfa_secret", .value = PV{ .String = mfa } };
         } else {
-            self.store.removeNodeProperty(node_id, "mfa_secret");
+            buf[n] = .{ .key = "mfa_secret", .value = null }; // remove
         }
-        try self.store.setNodeProperty(node_id, "failed_login_attempts", .{ .Int = record.failed_login_attempts });
-        try self.store.setNodeProperty(node_id, "lockout_until", .{ .Int = record.lockout_until });
-        try self.store.setNodeProperty(node_id, "last_login", .{ .Int = record.last_login });
-        try self.store.setNodeProperty(node_id, "created_at", .{ .Int = record.created_at });
-        try self.store.setNodeProperty(node_id, "updated_at", .{ .Int = record.updated_at });
+        n += 1;
+        buf[n] = .{ .key = "failed_login_attempts", .value = PV{ .Int = record.failed_login_attempts } };
+        n += 1;
+        buf[n] = .{ .key = "lockout_until", .value = PV{ .Int = record.lockout_until } };
+        n += 1;
+        buf[n] = .{ .key = "last_login", .value = PV{ .Int = record.last_login } };
+        n += 1;
+        buf[n] = .{ .key = "created_at", .value = PV{ .Int = record.created_at } };
+        n += 1;
+        buf[n] = .{ .key = "updated_at", .value = PV{ .Int = record.updated_at } };
+        n += 1;
         if (record.hash_algorithm_len > 0) {
-            try self.store.setNodeProperty(node_id, "hash_algorithm", .{ .String = record.getHashAlgorithm() });
+            buf[n] = .{ .key = "hash_algorithm", .value = PV{ .String = record.getHashAlgorithm() } };
+            n += 1;
         }
-        try self.store.setNodeProperty(node_id, "is_default_user", .{ .Bool = record.is_default_user });
-        try self.store.setNodeProperty(node_id, "password_reset_required", .{ .Bool = record.password_reset_required });
-        try self.store.setNodeProperty(node_id, "auth_version", .{ .Int = safeI64(record.auth_version) });
+        buf[n] = .{ .key = "is_default_user", .value = PV{ .Bool = record.is_default_user } };
+        n += 1;
+        buf[n] = .{ .key = "password_reset_required", .value = PV{ .Bool = record.password_reset_required } };
+        n += 1;
+        buf[n] = .{ .key = "auth_version", .value = PV{ .Int = safeI64(record.auth_version) } };
+        n += 1;
         if (record.getAttributesJson()) |attrs| {
-            try self.store.setNodeProperty(node_id, "attributes_json", .{ .String = attrs });
+            buf[n] = .{ .key = "attributes_json", .value = PV{ .String = attrs } };
         } else {
-            self.store.removeNodeProperty(node_id, "attributes_json");
+            buf[n] = .{ .key = "attributes_json", .value = null }; // remove
         }
-        try self.store.setNodeProperty(node_id, "password_changed_at", .{ .Int = record.password_changed_at });
+        n += 1;
+        buf[n] = .{ .key = "password_changed_at", .value = PV{ .Int = record.password_changed_at } };
+        n += 1;
+
+        try self.store.setNodePropertiesBatch(node_id, buf[0..n]);
     }
 
     fn upsertRoleNode(self: *Self, record: RoleRecord) !void {

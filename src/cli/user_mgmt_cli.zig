@@ -420,7 +420,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         var it = mgr.storage.permissionIterator();
         while (it.next()) |record| {
             if (!first) printOut(", ", .{});
-            printOut("{s}", .{record.getName()});
+            // Output permission names in lowercase to match CLI conventions
+            const name = record.getName();
+            var lower_buf: [256]u8 = undefined;
+            const lower_name = if (name.len <= lower_buf.len)
+                std.ascii.lowerString(lower_buf[0..name.len], name)
+            else
+                name;
+            printOut("{s}", .{lower_name});
             first = false;
         }
         if (first) {

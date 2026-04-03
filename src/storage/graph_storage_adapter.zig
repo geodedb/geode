@@ -584,6 +584,40 @@ pub const StorageAdapter = struct {
         try mg.engine.putNode(node_id, rec);
     }
 
+    /// Batch property entry: a key with either a value to set or null to remove.
+    pub const BatchPropertyEntry = struct {
+        key: []const u8,
+        value: ?graph_store.PropertyValue, // null means remove (tombstone)
+    };
+
+    /// Set or remove multiple properties on a node under a single mutex
+    /// acquisition.  This avoids the per-property lock/unlock overhead of
+    /// calling `setNodeProperty` / `removeNodeProperty` in a loop, which
+    /// can cause severe mutex contention when the server is concurrently
+    /// servicing queries against the same StorageAdapter.
+    pub fn setNodePropertiesBatch(self: *StorageAdapter, graph_name: []const u8, node_id: u64, entries: []const BatchPropertyEntry) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = try self.requireExistingGraphLocked(graph_name);
+        var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+
+        for (entries) |entry| {
+            if (entry.value) |val| {
+                const storage_val = try toStorageProperty(self.allocator, val);
+                defer freeTemporaryStorageProperty(self.allocator, storage_val);
+                const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, storage_val);
+                rec.prop_head = new_prop_head;
+            } else {
+                const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, .null);
+                rec.prop_head = new_prop_head;
+            }
+        }
+
+        // Write the node record once after all property mutations.
+        try mg.engine.putNode(node_id, rec);
+    }
+
     /// Remove a property from a node by writing a null tombstone.
     pub fn removeNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !void {
         self.mutex.lock();
