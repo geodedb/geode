@@ -788,27 +788,13 @@ pub const GraphStore = struct {
     }
 
     fn requireNodeSlot(self: *GraphStore, graph_name: []const u8, node_id: u64) !u64 {
-        const id_map = self.requireIdMap(graph_name) catch {
-            // No IdMap for this graph — the node_id IS the slot for in-memory stores
-            if (self.nodes.contains(node_id)) return node_id;
-            return error.NodeSlotMappingMissing;
-        };
-        return id_map.nodeSlot(@as(u128, node_id)) orelse {
-            // Slot not in IdMap — try direct lookup
-            if (self.nodes.contains(node_id)) return node_id;
-            return error.NodeSlotMappingMissing;
-        };
+        const id_map = self.requireIdMap(graph_name) catch return error.NodeSlotMappingMissing;
+        return id_map.nodeSlot(@as(u128, node_id)) orelse error.NodeSlotMappingMissing;
     }
 
     fn requireEdgeSlot(self: *GraphStore, graph_name: []const u8, edge_id: u64) !u64 {
-        const id_map = self.requireIdMap(graph_name) catch {
-            if (self.edges.contains(edge_id)) return edge_id;
-            return error.EdgeSlotMappingMissing;
-        };
-        return id_map.edgeSlot(@as(u128, edge_id)) orelse {
-            if (self.edges.contains(edge_id)) return edge_id;
-            return error.EdgeSlotMappingMissing;
-        };
+        const id_map = self.requireIdMap(graph_name) catch return error.EdgeSlotMappingMissing;
+        return id_map.edgeSlot(@as(u128, edge_id)) orelse error.EdgeSlotMappingMissing;
     }
 
     fn persistNodePublicId(vt: AdapterVTable, graph_name: []const u8, slot_id: u64, public_id: u64) !void {
