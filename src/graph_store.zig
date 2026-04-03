@@ -4454,6 +4454,11 @@ pub fn acquireStoreLock() void {
     g_store_rwlock.lockShared();
 }
 
+/// Try to acquire shared lock without blocking.  Returns true if locked.
+pub fn tryAcquireStoreLock() bool {
+    return if (g_store_rwlock.tryLockShared()) true else false;
+}
+
 /// Release the global store lock (shared)
 pub fn releaseStoreLock() void {
     g_store_rwlock.unlockShared();

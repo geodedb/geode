@@ -84,8 +84,12 @@ fn persistentAuthUsersExist(_: ?*anyopaque) anyerror!bool {
 }
 
 fn lookupPersistentAuthVersion(_: ?*anyopaque, username: []const u8) anyerror!?u64 {
-    geode.graph_store.acquireStoreLock();
-    defer geode.graph_store.releaseStoreLock();
+    // The store lock may already be held by the calling thread (e.g., QUIC
+    // handler executing a CALL query).  Use tryAcquire to avoid deadlock;
+    // if the lock can't be acquired, return null (caller treats the user as
+    // "not cached" and falls back to in-memory state).
+    const locked = geode.graph_store.tryAcquireStoreLock();
+    defer if (locked) geode.graph_store.releaseStoreLock();
 
     const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
     return user_storage.UserStorageBackend.findUserAuthVersionByUsernameInGraph(store, username);
