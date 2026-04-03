@@ -3237,13 +3237,16 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const writable_store = graph_store.getWritableGlobalStore(allocator);
-    // Skip read snapshots for MATCH+CREATE queries: the result contains Node
-    // pointers that reference the snapshot store.  The snapshot is freed when
-    // this function returns, turning those pointers into dangling references
-    // that the caller (executeMatchCreateQuery) would dereference to obtain
-    // node IDs.  By using the primary writable store directly, the Node
-    // pointers remain valid for the lifetime of the store.
-    const skip_snapshot = q.create_pattern != null or q.merge_statement != null;
+    // Always use the primary writable store directly instead of creating a
+    // QueryReadSession snapshot.  The snapshot's arena-backed GraphStore
+    // shallow-copies PropertyValue.String slices from the writable store.
+    // When the snapshot's arena is freed on function return, the arena
+    // allocator bookkeeping corrupts the shared string memory, producing
+    // use-after-free (0xAA fill pattern) in the result's Str values.
+    // Since MATCH queries hold the store lock for the duration of execution,
+    // snapshot isolation is not needed for correctness — the writable store
+    // is stable while the lock is held.
+    const skip_snapshot = true;
     var read_session = if (skip_snapshot) @as(?graph_store.QueryReadSession, null) else try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
     var previous_read_store: ?*graph_store.GraphStore = null;
     if (read_session) |*session| {

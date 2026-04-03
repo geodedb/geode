@@ -958,7 +958,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             insecure = true;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\r\n", .{});
+            // --insecure silently accepted as alias for --insecure-tls-skip-verify
         } else if (std.mem.eql(u8, arg, "--grpc")) {
             use_grpc = true;
         } else if (std.mem.eql(u8, arg, "--ca-cert")) {
@@ -2705,7 +2705,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\r\n", .{});
+            // --insecure silently accepted as alias for --insecure-tls-skip-verify
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             // GAP-0113: CA certificate path for server verification
             if (i + 1 >= argv.len) {

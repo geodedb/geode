@@ -216,7 +216,7 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
             tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
+            // --insecure silently accepted as alias for --insecure-tls-skip-verify
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -707,7 +707,7 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
+            // --insecure silently accepted as alias for --insecure-tls-skip-verify
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});
@@ -1170,7 +1170,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
             tls_config.insecure = true;
         } else if (std.mem.eql(u8, argv[i], "--insecure")) {
             tls_config.insecure = true;
-            std.debug.print("Warning: --insecure is deprecated. Use --insecure-tls-skip-verify instead.\n", .{});
+            // --insecure silently accepted as alias for --insecure-tls-skip-verify
         } else if (std.mem.eql(u8, argv[i], "--ca-cert")) {
             if (i + 1 >= argv.len) {
                 std.debug.print("Error: --ca-cert requires a certificate path\n", .{});

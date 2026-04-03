@@ -737,7 +737,12 @@ pub const GraphStore = struct {
             var prop_it = src_node.properties.iterator();
             while (prop_it.next()) |prop| {
                 const key = try self.allocator.dupe(u8, prop.key_ptr.*);
-                try props.put(key, prop.value_ptr.*);
+                // Deep-copy property values so the snapshot owns all its
+                // string data independently.  Shallow copies share pointers
+                // with the writable store; when the snapshot arena is freed
+                // the allocator bookkeeping can corrupt those shared strings,
+                // producing use-after-free (0xAA fill pattern) on read.
+                try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
             }
 
             try self.nodes.put(entry.key_ptr.*, .{
@@ -764,7 +769,8 @@ pub const GraphStore = struct {
             var prop_it = src_edge.properties.iterator();
             while (prop_it.next()) |prop| {
                 const key = try self.allocator.dupe(u8, prop.key_ptr.*);
-                try props.put(key, prop.value_ptr.*);
+                // Deep-copy edge property values (same rationale as node properties)
+                try props.put(key, try copyPropertyValue(self, prop.value_ptr.*));
             }
 
             try self.edges.put(entry.key_ptr.*, .{
