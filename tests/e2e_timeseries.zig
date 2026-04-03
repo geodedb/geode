@@ -81,7 +81,7 @@ test "e2e_timeseries: basic store operations" {
 test "e2e_timeseries: chunk storage with compression" {
     const allocator = std.testing.allocator;
 
-    const pid = std.os.linux.getpid();
+    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var dir_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_timeseries_chunks_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
@@ -142,7 +142,7 @@ test "e2e_timeseries: chunk storage with compression" {
 test "e2e_timeseries: retention policy" {
     const allocator = std.testing.allocator;
 
-    const pid = std.os.linux.getpid();
+    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var dir_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_retention_policy_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};

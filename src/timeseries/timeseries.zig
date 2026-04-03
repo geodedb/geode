@@ -409,7 +409,7 @@ test "ts: timeBucketAvg — boundary: point exactly at bucket start" {
 test "ts: persist-restart-query via StoreConfig" {
     const allocator = std.testing.allocator;
 
-    const pid = std.os.linux.getpid();
+    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/geode_ts_persist_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};

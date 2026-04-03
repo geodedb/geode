@@ -77,7 +77,7 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
     // Simple timestamp formatting (would need proper date formatting in production)
     try writer.print("Jan 01 12:00:00 ", .{});
 
-    try writer.print("localhost geode[{d}]: ", .{std.os.linux.getpid()});
+    try writer.print("localhost geode[{d}]: ", .{if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0});
     try writer.print("event_type={s} ", .{@tagName(event.event_type)});
     try writer.print("user_id={d} ", .{event.user_id orelse 0});
     try writer.print("resource={s} ", .{event.resource});

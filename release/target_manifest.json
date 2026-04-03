@@ -4,7 +4,6 @@
     "x86_64-linux-musl",
     "aarch64-linux-gnu",
     "aarch64-linux-musl",
-    "arm-linux-gnueabihf",
     "riscv64-linux-gnu",
     "x86_64-macos",
     "aarch64-macos"
@@ -43,11 +42,6 @@
     {
       "name": "Linux ARM64 (musl/Alpine)",
       "filename": "geode_{version}_aarch64-linux-musl.tar.gz",
-      "link_type": "package"
-    },
-    {
-      "name": "Linux ARMv7",
-      "filename": "geode_{version}_arm-linux-gnueabihf.tar.gz",
       "link_type": "package"
     },
     {

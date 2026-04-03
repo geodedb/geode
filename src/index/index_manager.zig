@@ -1059,7 +1059,7 @@ pub const IndexManager = struct {
     ) !void {
         if (self.advanced_interval_indexes.getPtr(index_name)) |wrapper| {
             const r = try @import("../types/range.zig").IntRange.init(lower, upper, .inclusive_exclusive);
-            try wrapper.*.tree.insert(r, entity_id);
+            try wrapper.*.tree.insert(r, @as(usize, @intCast(entity_id)));
             self.statistics.total_entries += 1;
         } else {
             return error.IndexNotFound;

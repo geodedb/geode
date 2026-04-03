@@ -30,7 +30,6 @@ builds:
   - x86_64-linux-musl
   - aarch64-linux-gnu
   - aarch64-linux-musl
-  - arm-linux-gnueabihf
   - riscv64-linux-gnu
   - x86_64-macos
   - aarch64-macos

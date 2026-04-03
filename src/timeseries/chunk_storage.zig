@@ -32,7 +32,7 @@ const std = @import("std");
 test "chunk_storage: compression and stats" {
     const ally = std.testing.allocator;
 
-    const pid = std.os.linux.getpid();
+    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_chunks_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
@@ -65,7 +65,7 @@ test "chunk_storage: compression and stats" {
 test "chunk_storage: retention" {
     const ally = std.testing.allocator;
 
-    const pid = std.os.linux.getpid();
+    const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_retention_{d}", .{pid}) catch unreachable;
     defer std.fs.cwd().deleteTree(test_dir) catch {};
