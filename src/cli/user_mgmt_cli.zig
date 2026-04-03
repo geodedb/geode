@@ -117,14 +117,7 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
 /// User management command handler
 /// Handles: user create, user list, user delete, user update, user show and additional auth helpers
 pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for offline auth operations
-    const data_dir = extractDataDir(argv);
-    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
-        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
+    // Check for --help before initializing storage (help should never require disk I/O)
     const subcmd_idx = findSubcommandStart(argv, start_idx);
     if (subcmd_idx >= argv.len) {
         std.debug.print("Error: missing user subcommand\n", .{});
@@ -138,6 +131,14 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         printUserUsage();
         return;
     }
+
+    // Open graph store for offline auth operations (after help check)
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {

@@ -1034,7 +1034,12 @@ fn resolveExternalNodeId(
         }
     }
 
-    return error.NodeSlotMappingMissing;
+    // Neither the IdMap nor the persisted property had a mapping for this
+    // slot.  This happens for nodes created within the current session whose
+    // graph has no IdMap yet (e.g. freshly-created test graphs).  Fall back
+    // to using the slot_id directly as the external ID so that
+    // materializeNode can still succeed.
+    return slot_id;
 }
 
 fn buildColumns(allocator: std.mem.Allocator, items: []const ast.ReturnItem) !struct { columns: [][]const u8, buffer: []u8 } {

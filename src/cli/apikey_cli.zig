@@ -231,19 +231,40 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
 }
 
 /// API Key management command handler
-pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Open graph store for user lookup
-    const data_dir = extractDataDir(argv);
-    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
-        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+/// Handle the validate subcommand without requiring storage initialization.
+/// This is a pure format check that only parses the key string.
+fn handleValidateSubcommand(argv: [][:0]u8, subcmd_idx: usize) void {
+    if (hasHelpFlag(argv, subcmd_idx + 1)) {
+        printOut("Usage: geode apikey validate <api_key>\nValidates an API key format\n", .{});
+        return;
+    }
+
+    if (subcmd_idx + 1 >= argv.len) {
+        std.debug.print("Error: API key is required\n", .{});
         std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
+    const key_string = argv[subcmd_idx + 1];
+
+    // Parse and validate format
+    _ = parseGeodeApiKey(key_string) catch |err| {
+        switch (err) {
+            error.UnsupportedApiKeyVersion => {
+                std.debug.print("Error: unsupported API key version\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
+            error.InvalidApiKeyFormat => {
+                std.debug.print("Error: invalid API key format\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            },
+        }
     };
-    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
 
-    // Initialize API key manager
-    var manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config);
-    defer manager.deinit();
+    printOut("API key format is valid\n", .{});
+}
 
+pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Check for --help and validate before initializing storage (these don't need disk I/O)
     const subcmd_idx = findSubcommandStart(argv, start_idx);
     if (subcmd_idx >= argv.len) {
         std.debug.print("Error: missing apikey subcommand\n", .{});
@@ -257,6 +278,24 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         printUsage();
         return;
     }
+
+    // Handle validate subcommand without storage (pure format check)
+    if (std.mem.eql(u8, subcommand, "validate")) {
+        handleValidateSubcommand(argv, subcmd_idx);
+        return;
+    }
+
+    // Open graph store for user lookup (after help/validate check)
+    const data_dir = extractDataDir(argv);
+    var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
+        std.debug.print("Error: Failed to initialize auth store: {}\n", .{err});
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    };
+    defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
+
+    // Initialize API key manager
+    var manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config);
+    defer manager.deinit();
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
@@ -565,37 +604,6 @@ pub fn cmdApiKey(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         try saveApiKeyState(&api_key_state);
         printOut("Revoked {d} API key(s) for user '{s}'\n", .{ count, username.? });
 
-        return;
-    }
-
-    if (std.mem.eql(u8, subcommand, "validate")) {
-        if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode apikey validate <api_key>\nValidates an API key format\n", .{});
-            return;
-        }
-
-        if (subcmd_idx + 1 >= argv.len) {
-            std.debug.print("Error: API key is required\n", .{});
-            std.process.exit(@intFromEnum(ExitCode.usage_error));
-        }
-
-        const key_string = argv[subcmd_idx + 1];
-
-        // Parse and validate format
-        _ = parseGeodeApiKey(key_string) catch |err| {
-            switch (err) {
-                error.UnsupportedApiKeyVersion => {
-                    std.debug.print("Error: unsupported API key version\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.general_error));
-                },
-                error.InvalidApiKeyFormat => {
-                    std.debug.print("Error: invalid API key format\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.general_error));
-                },
-            }
-        };
-
-        printOut("API key format is valid\n", .{});
         return;
     }
 
