@@ -334,8 +334,7 @@ fn nodeMatchesPattern(
 fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
-    const id_map = store.getIdMap(graph_name) orelse return error.IdMapNotLoaded;
-    const external_id = @as(u64, @truncate(id_map.nodeUuid(slot_id) orelse return error.NodeSlotMappingMissing));
+    const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
 
     const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
     errdefer {
@@ -424,6 +423,46 @@ fn labelsContainAll(actual: []const []const u8, required: []const []const u8) bo
         if (!found) return false;
     }
     return true;
+}
+
+/// Resolve the external (public) node ID for a given adapter slot.
+/// First checks the in-memory IdMap; if missing, falls back to reading the
+/// persisted `__geode_internal_node_id` property from the adapter and
+/// back-fills the IdMap so subsequent lookups are O(1).
+fn resolveExternalNodeId(
+    allocator: std.mem.Allocator,
+    adapter: *graph_storage_adapter.StorageAdapter,
+    store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    slot_id: u64,
+) !u64 {
+    // Fast path: IdMap already has the mapping.
+    if (store.getIdMap(graph_name)) |id_map| {
+        if (id_map.nodeUuid(slot_id)) |uuid_128| {
+            return @as(u64, @truncate(uuid_128));
+        }
+    }
+
+    // Slow path: read the persisted public ID property from the adapter.
+    if (adapter.getNodeProperty(graph_name, slot_id, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY, allocator) catch null) |stored_prop| {
+        defer switch (stored_prop) {
+            .string => |text| allocator.free(text),
+            else => {},
+        };
+        const public_id: ?u64 = switch (stored_prop) {
+            .string => |text| graph_store.parsePersistedPublicId(text),
+            .int => |n| if (n >= 0) @as(u64, @intCast(n)) else null,
+            else => null,
+        };
+        if (public_id) |pid| {
+            // Back-fill the IdMap for future lookups.
+            const im = store.getOrCreateIdMap(graph_name) catch return pid;
+            im.insertNodeWithSlot(@as(u128, pid), slot_id) catch {};
+            return pid;
+        }
+    }
+
+    return error.NodeSlotMappingMissing;
 }
 
 fn freeStoragePropertyValue(allocator: std.mem.Allocator, value: gs.PropertyValue) void {

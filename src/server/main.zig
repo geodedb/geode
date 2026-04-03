@@ -67,8 +67,13 @@ fn duplicatePersistentUser(allocator: std.mem.Allocator, record: user_storage.Us
 }
 
 fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, username: []const u8) anyerror!?geode.user_management.User {
-    geode.graph_store.acquireStoreLock();
-    defer geode.graph_store.releaseStoreLock();
+    // The store lock may already be held by the calling thread (e.g., QUIC
+    // handler executing a CALL query or MFA setup for a non-existent user).
+    // Use tryAcquire to avoid deadlock; if the lock can't be acquired, return
+    // null (caller treats the user as "not found" and falls back to in-memory
+    // state).
+    const locked = geode.graph_store.tryAcquireStoreLock();
+    defer if (locked) geode.graph_store.releaseStoreLock();
 
     const store = geode.graph_store.getGlobalStore(allocator);
     const record = user_storage.UserStorageBackend.findUserByUsernameInGraph(store, username) orelse return null;
@@ -76,8 +81,10 @@ fn lookupPersistentAuthUser(_: ?*anyopaque, allocator: std.mem.Allocator, userna
 }
 
 fn persistentAuthUsersExist(_: ?*anyopaque) anyerror!bool {
-    geode.graph_store.acquireStoreLock();
-    defer geode.graph_store.releaseStoreLock();
+    // Same tryAcquire pattern as lookupPersistentAuthUser to prevent deadlock
+    // when called from a thread already holding the store lock.
+    const locked = geode.graph_store.tryAcquireStoreLock();
+    defer if (locked) geode.graph_store.releaseStoreLock();
 
     const store = geode.graph_store.getGlobalStore(std.heap.c_allocator);
     return user_storage.UserStorageBackend.hasUserRecordsInGraph(store);
@@ -96,8 +103,10 @@ fn lookupPersistentAuthVersion(_: ?*anyopaque, username: []const u8) anyerror!?u
 }
 
 fn listPersistentAuthUsers(_: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]geode.user_management.User {
-    geode.graph_store.acquireStoreLock();
-    defer geode.graph_store.releaseStoreLock();
+    // Same tryAcquire pattern as lookupPersistentAuthUser to prevent deadlock
+    // when called from a thread already holding the store lock.
+    const locked = geode.graph_store.tryAcquireStoreLock();
+    defer if (locked) geode.graph_store.releaseStoreLock();
 
     const store = geode.graph_store.getGlobalStore(allocator);
     const records = try user_storage.UserStorageBackend.listUsersFromGraph(allocator, store);

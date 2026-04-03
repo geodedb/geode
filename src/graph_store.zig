@@ -162,7 +162,7 @@ fn encodePersistedPublicId(buf: *[16]u8, public_id: u64) []const u8 {
     return std.fmt.bufPrint(buf, "{x:0>16}", .{public_id}) catch unreachable;
 }
 
-fn parsePersistedPublicId(text: []const u8) ?u64 {
+pub fn parsePersistedPublicId(text: []const u8) ?u64 {
     return std.fmt.parseUnsigned(u64, text, 16) catch std.fmt.parseUnsigned(u64, text, 10) catch null;
 }
 
