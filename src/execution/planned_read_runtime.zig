@@ -512,7 +512,14 @@ fn executePatternQuery(
 
     if (chain.hops.len == 0) {
         for (start_slots) |slot_id| {
-            try materializeNodeOnlyRow(allocator, q, context, plan, slot_id, param_names, param_values, &rows, owned_entities);
+            // Skip deleted nodes: the engine label index may return slot IDs
+            // for nodes that have been deleted (NODE_FLAG_DELETED set) since
+            // label entries are not cleaned up on delete. Catch NodeNotFound
+            // so the query succeeds with the remaining live nodes.
+            materializeNodeOnlyRow(allocator, q, context, plan, slot_id, param_names, param_values, &rows, owned_entities) catch |err| switch (err) {
+                error.NodeNotFound => continue,
+                else => return err,
+            };
         }
     } else {
         var current_nodes = try allocator.alloc(u64, chain.hops.len + 1);
@@ -522,7 +529,11 @@ fn executePatternQuery(
 
         for (start_slots) |start_slot| {
             current_nodes[0] = start_slot;
-            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+            // Skip deleted nodes in hop expansion (same stale label index issue).
+            exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0) catch |err| switch (err) {
+                error.NodeNotFound => continue,
+                else => return err,
+            };
         }
     }
 
@@ -572,10 +583,16 @@ fn exploreHops(
 
     var produced: u64 = 0;
     for (candidates) |edge| {
-        if (!try edgeMatchesPattern(allocator, adapter, graph_name, edge, hop.rel, param_names, param_values, context)) {
+        if (!(edgeMatchesPattern(allocator, adapter, graph_name, edge, hop.rel, param_names, param_values, context) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        })) {
             continue;
         }
-        if (!try nodeMatchesPatternBySlot(allocator, adapter, graph_name, edge.next_slot, hop.right, param_names, param_values, context)) {
+        if (!(nodeMatchesPatternBySlot(allocator, adapter, graph_name, edge.next_slot, hop.right, param_names, param_values, context) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        })) {
             continue;
         }
         current_edges[hop_index] = edge;
@@ -729,7 +746,13 @@ fn collectStartSlots(
     var filtered = try std.ArrayList(u64).initCapacity(allocator, initial.len);
     defer filtered.deinit(allocator);
     for (initial) |slot_id| {
-        if (try nodeMatchesPatternBySlot(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) {
+        // Skip deleted nodes: the engine label index may include stale
+        // slot IDs for nodes that have been soft-deleted.
+        const matches = nodeMatchesPatternBySlot(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        };
+        if (matches) {
             try filtered.append(allocator, slot_id);
         }
     }
@@ -753,7 +776,11 @@ fn scanAndFilterStartSlots(
     defer filtered.deinit(allocator);
 
     for (scan_entries) |entry| {
-        if (try nodeMatchesPatternBySlot(allocator, adapter, graph_name, entry.slot_id, pattern, param_names, param_values, context)) {
+        const matches = nodeMatchesPatternBySlot(allocator, adapter, graph_name, entry.slot_id, pattern, param_names, param_values, context) catch |err| switch (err) {
+            error.NodeNotFound => continue,
+            else => return err,
+        };
+        if (matches) {
             try filtered.append(allocator, entry.slot_id);
         }
     }
