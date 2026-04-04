@@ -650,7 +650,27 @@ pub const StorageAdapter = struct {
 
         const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
-        return mg.engine.scanLabel(label_id, allocator);
+        const raw = try mg.engine.scanLabel(label_id, allocator);
+
+        // The label index may contain stale entries for nodes that have been
+        // soft-deleted (NODE_FLAG_DELETED set but index not updated).  Filter
+        // them out so callers never receive slot IDs for deleted nodes.
+        var live_count: usize = 0;
+        for (raw) |slot_id| {
+            const rec = mg.engine.node_store.getNode(slot_id) catch continue;
+            if (rec != null) {
+                raw[live_count] = slot_id;
+                live_count += 1;
+            }
+        }
+        if (live_count == raw.len) return raw;
+
+        // Shrink the allocation to just the live nodes.
+        if (live_count == 0) {
+            allocator.free(raw);
+            return try allocator.alloc(u64, 0);
+        }
+        return raw[0..live_count];
     }
 
     // ------------------------------------------------------------------
