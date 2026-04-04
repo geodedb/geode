@@ -2265,11 +2265,17 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
     // Transform the input result according to WITH clause items
     const with_items = with_clause.items;
 
-    // Calculate new column count - use generateUniqueColumnNames to qualify
-    // duplicate property names (e.g., a.name and b.name become "a.name" and "b.name")
-    var new_columns = std.ArrayList([]const u8).fromOwnedSlice(
-        try match_operations.generateUniqueColumnNames(allocator, with_items),
-    );
+    // Calculate new column count - allocate new strings for column names
+    // GAP-0220 FIX: Use try for proper error propagation
+    var new_columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    defer new_columns.deinit(allocator);
+
+    for (with_items) |item| {
+        const alias = item.alias orelse getExpressionNameFromAst(item.expr);
+        // Duplicate the column name to avoid double-free
+        const owned_alias = try allocator.dupe(u8, alias);
+        try new_columns.append(allocator, owned_alias);
+    }
 
     // Transform each row according to WITH items
     // GAP-0220 FIX: Use try for proper error propagation
