@@ -189,7 +189,10 @@ const BufferedProtoReader = struct {
                 const msg_len = std.mem.readInt(u32, len_bytes, .big);
 
                 // Sanity check length (e.g., 16MB)
-                if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
+                if (msg_len > 16 * 1024 * 1024) {
+                    log.err("MessageTooLarge: msg_len={d} bytes_in_buf={d} start_index={d}", &.{ Attr.int("msg_len", @intCast(msg_len)), Attr.int("buf_len", @intCast(self.buffer.items.len)), Attr.int("start", @intCast(self.start_index)) });
+                    return error.MessageTooLarge;
+                }
 
                 if (unread.len >= 4 + msg_len) {
                     // We have the full message
@@ -662,6 +665,7 @@ fn streamAcceptorLoop(
     conn: *quic_transport.QuicConnection,
     conn_state: *SharedConnState,
     shutdown: *std.atomic.Value(bool),
+    first_stream_id: u64,
 ) void {
     const max_additional_streams: u32 = 64; // Limit to prevent resource exhaustion
     while (!shutdown.load(.acquire)) {
@@ -679,6 +683,19 @@ fn streamAcceptorLoop(
 
         // Non-blocking attempt to accept a new stream
         if (conn.tryAcceptStream()) |new_stream| {
+            // GAP-0278: Skip the first stream — it is already handled by the Phase 3
+            // loop. The QUIC library re-queues the same stream ID in incoming_stream_queue
+            // every time new data arrives (PHASE 57 PART 6 in the QUIC library), so
+            // acceptStream() may return the same stream ID repeatedly. We must not
+            // spawn a second handler for a stream already owned by another goroutine.
+            if (new_stream.stream_id == first_stream_id) {
+                // Discard the wrapper without touching the underlying QUIC stream.
+                // destroyStream removes the wrapper from the tracking list and frees
+                // the struct, but does NOT send a FIN/RESET to the peer — the data
+                // is still being consumed by the Phase 3 handler on this thread.
+                conn.destroyStream(new_stream);
+                continue;
+            }
             log.debug("Accepted additional multiplexed stream", &.{});
             _ = conn_state.active_streams.fetchAdd(1, .release);
 
@@ -1061,7 +1078,7 @@ pub fn handleQuicConnection(
 
     var acceptor_shutdown = std.atomic.Value(bool).init(false);
     const acceptor_thread = std.Thread.spawn(.{}, streamAcceptorLoop, .{
-        gpa, transport, conn, &conn_state, &acceptor_shutdown,
+        gpa, transport, conn, &conn_state, &acceptor_shutdown, stream.stream_id,
     }) catch |err| {
         // If we can't spawn the acceptor, fall back to single-stream mode.
         // The first stream still works fine — just no multiplexing.

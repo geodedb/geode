@@ -1069,7 +1069,14 @@ pub const QuicClientStream = struct {
                 }
                 return err;
             };
-            if (n == 0) return QuicError.WriteError;
+            if (n == 0) {
+                // Congestion window full: poll to process ACKs, then retry
+                blocked_retries += 1;
+                if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
+                api.poll(self.endpoint, 5) catch {};
+                std.Thread.sleep(5 * std.time.ns_per_ms);
+                continue;
+            }
             written += n;
             blocked_retries = 0;
         }
