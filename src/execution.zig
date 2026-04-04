@@ -2139,7 +2139,9 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
     // Handle sum(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "sum")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var sum: i64 = 0;
+        var int_sum: i64 = 0;
+        var float_sum: f64 = 0.0;
+        var has_float = false;
         var has_value = false;
         for (group_rows) |row| {
             const env = Env{
@@ -2148,18 +2150,41 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Int) {
-                sum += val.Int;
-                has_value = true;
+            switch (val) {
+                .Int => |n| {
+                    int_sum += n;
+                    has_value = true;
+                },
+                .Real => |f| {
+                    float_sum += @floatCast(f);
+                    has_float = true;
+                    has_value = true;
+                },
+                .Double => |f| {
+                    float_sum += f;
+                    has_float = true;
+                    has_value = true;
+                },
+                .Decimal => |d| {
+                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
+                    has_float = true;
+                    has_value = true;
+                },
+                else => {},
             }
         }
-        return if (has_value) Value{ .Int = sum } else Value{ .Null = {} };
+        if (!has_value) return Value{ .Null = {} };
+        if (has_float) return Value{ .Double = float_sum + @as(f64, @floatFromInt(int_sum)) };
+        return Value{ .Int = int_sum };
     }
 
     // Handle avg(expr)
     if (std.ascii.eqlIgnoreCase(func_name, "avg")) {
         if (arg_ptr == null) return Value{ .Null = {} };
-        var sum: i64 = 0;
+        var int_sum: i64 = 0;
+        var float_sum: f64 = 0.0;
+        var has_float = false;
         var count: i64 = 0;
         for (group_rows) |row| {
             const env = Env{
@@ -2168,12 +2193,33 @@ pub fn computeGroupAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
                 .allocator = allocator,
             };
             const val = eval.evalExpr(allocator, arg_ptr.?.*, env) catch continue;
-            if (val == .Int) {
-                sum += val.Int;
-                count += 1;
+            switch (val) {
+                .Int => |n| {
+                    int_sum += n;
+                    count += 1;
+                },
+                .Real => |f| {
+                    float_sum += @floatCast(f);
+                    has_float = true;
+                    count += 1;
+                },
+                .Double => |f| {
+                    float_sum += f;
+                    has_float = true;
+                    count += 1;
+                },
+                .Decimal => |d| {
+                    const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                    float_sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
+                    has_float = true;
+                    count += 1;
+                },
+                else => {},
             }
         }
-        return if (count > 0) Value{ .Int = @divTrunc(sum, count) } else Value{ .Null = {} };
+        if (count == 0) return Value{ .Null = {} };
+        if (has_float) return Value{ .Double = (float_sum + @as(f64, @floatFromInt(int_sum))) / @as(f64, @floatFromInt(count)) };
+        return Value{ .Int = @divTrunc(int_sum, count) };
     }
 
     // Handle min(expr)
@@ -2253,6 +2299,11 @@ pub fn executeWithClause(allocator: std.mem.Allocator, input_result: ExecutionRe
 // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
 /// Execute WITH clause with optional GROUP BY aggregation
 pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr) !ExecutionResult {
+    return executeWithClauseWithGroupByAndParams(allocator, input_result, with_clause, group_by, having, &.{}, &.{});
+}
+
+/// Execute WITH clause with optional GROUP BY aggregation and query parameter bindings
+pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input_result: ExecutionResult, with_clause: ast.WithClause, group_by: ?ast.GroupBy, having: ?ast.Expr, param_names: []const []const u8, param_values: []const eval.Value) !ExecutionResult {
     // CANARY(memory-safety): Validate input_result structure
     if (input_result.columns.len > MAX_COLUMNS_PER_RESULT) {
         log.err("Corrupted input_result.columns.len in executeWithClause", &.{
@@ -2307,6 +2358,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             const env = Env{
                 .names = input_result.columns,
                 .values = input_row,
+                .param_names = param_names,
+                .param_values = param_values,
                 .allocator = allocator,
             };
 
@@ -2354,6 +2407,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
             const base_env = Env{
                 .names = input_result.columns,
                 .values = first_row,
+                .param_names = param_names,
+                .param_values = param_values,
                 .allocator = allocator,
             };
 
@@ -2377,6 +2432,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 const having_env = Env{
                     .names = new_columns.items,
                     .values = new_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
                 const having_result = eval.evalExpr(allocator, having_expr, having_env) catch Value{ .Bool = false };
@@ -2441,6 +2498,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                     const env = Env{
                         .names = input_result.columns,
                         .values = input_row,
+                        .param_names = param_names,
+                        .param_values = param_values,
                         .allocator = allocator,
                     };
 
@@ -2489,6 +2548,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                     const base_env = Env{
                         .names = input_result.columns,
                         .values = first_row,
+                        .param_names = param_names,
+                        .param_values = param_values,
                         .allocator = allocator,
                     };
 
@@ -2510,10 +2571,14 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 const base_env = if (input_result.rows.len > 0) Env{
                     .names = input_result.columns,
                     .values = input_result.rows[0],
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 } else Env{
                     .names = input_result.columns,
                     .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 
@@ -2542,6 +2607,8 @@ pub fn executeWithClauseWithGroupBy(allocator: std.mem.Allocator, input_result: 
                 const env = Env{
                     .names = input_result.columns,
                     .values = input_row,
+                    .param_names = param_names,
+                    .param_values = param_values,
                     .allocator = allocator,
                 };
 

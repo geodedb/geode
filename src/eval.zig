@@ -3742,17 +3742,31 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                     }
                 }
 
-                if (has_decimal) {
-                    // Sum as decimal (for now, convert to int)
-                    var sum: i64 = 0;
+                // Check if we have any float types (Real or Double)
+                var has_float = false;
+                for (list) |item| {
+                    if (item == .Real or item == .Double) {
+                        has_float = true;
+                        break;
+                    }
+                }
+
+                if (has_float or has_decimal) {
+                    // Sum as float (f64)
+                    var sum: f64 = 0.0;
                     for (list) |item| {
                         switch (item) {
-                            .Int => |n| sum += n,
-                            .Decimal => |d| sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale))),
+                            .Int => |n| sum += @floatFromInt(n),
+                            .Real => |f| sum += @floatCast(f),
+                            .Double => |f| sum += f,
+                            .Decimal => |d| {
+                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
+                            },
                             else => {},
                         }
                     }
-                    return Value{ .Int = sum };
+                    return Value{ .Double = sum };
                 } else {
                     // Sum as integer
                     var sum: i64 = 0;
@@ -3776,24 +3790,60 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .List => |list| {
                 if (list.len == 0) return Value{ .Null = {} };
 
-                var sum: i64 = 0;
-                var count: usize = 0;
+                // Check if we have any float types
+                var has_float = false;
+                var has_decimal = false;
                 for (list) |item| {
-                    switch (item) {
-                        .Int => |n| {
-                            sum += n;
-                            count += 1;
-                        },
-                        .Decimal => |d| {
-                            sum += @intCast(@divFloor(d.coeff, std.math.pow(i128, 10, d.scale)));
-                            count += 1;
-                        },
-                        else => {},
+                    if (item == .Real or item == .Double) {
+                        has_float = true;
+                        break;
+                    }
+                    if (item == .Decimal) {
+                        has_decimal = true;
                     }
                 }
 
-                if (count == 0) return Value{ .Null = {} };
-                return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
+                var count: usize = 0;
+                if (has_float or has_decimal) {
+                    var sum: f64 = 0.0;
+                    for (list) |item| {
+                        switch (item) {
+                            .Int => |n| {
+                                sum += @floatFromInt(n);
+                                count += 1;
+                            },
+                            .Real => |f| {
+                                sum += @floatCast(f);
+                                count += 1;
+                            },
+                            .Double => |f| {
+                                sum += f;
+                                count += 1;
+                            },
+                            .Decimal => |d| {
+                                const divisor = std.math.pow(f64, 10.0, @floatFromInt(d.scale));
+                                sum += @as(f64, @floatFromInt(d.coeff)) / divisor;
+                                count += 1;
+                            },
+                            else => {},
+                        }
+                    }
+                    if (count == 0) return Value{ .Null = {} };
+                    return Value{ .Double = sum / @as(f64, @floatFromInt(count)) };
+                } else {
+                    var sum: i64 = 0;
+                    for (list) |item| {
+                        switch (item) {
+                            .Int => |n| {
+                                sum += n;
+                                count += 1;
+                            },
+                            else => {},
+                        }
+                    }
+                    if (count == 0) return Value{ .Null = {} };
+                    return Value{ .Int = @divFloor(sum, @as(i64, @intCast(count))) };
+                }
             },
             else => return Value{ .Null = {} },
         }

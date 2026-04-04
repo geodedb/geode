@@ -311,7 +311,7 @@ pub fn executeProfiledIfSupported(
         const with_stage = stripWithExecutionModifiers(with_clause);
         const input_rows = result.rows.len;
         const start_ns = std.time.nanoTimestamp();
-        var with_result = try transformResultRows(allocator, result, with_stage, q.group_by, q.having);
+        var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, q.having, param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -373,7 +373,7 @@ pub fn executeProfiledIfSupported(
         };
         const input_rows = result.rows.len;
         const start_ns = std.time.nanoTimestamp();
-        var projected = try transformResultRows(allocator, result, return_stage, return_group_by, return_having);
+        var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
         transferOwnedGraphEntities(&result, &projected);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
 
@@ -1108,7 +1108,19 @@ fn transformResultRows(
     group_by: ?ast.GroupBy,
     having: ?ast.Expr,
 ) !ExecutionResult {
-    return execution.executeWithClauseWithGroupBy(allocator, input_result, with_clause, group_by, having);
+    return transformResultRowsWithParams(allocator, input_result, with_clause, group_by, having, &.{}, &.{});
+}
+
+fn transformResultRowsWithParams(
+    allocator: std.mem.Allocator,
+    input_result: ExecutionResult,
+    with_clause: ast.WithClause,
+    group_by: ?ast.GroupBy,
+    having: ?ast.Expr,
+    param_names: []const []const u8,
+    param_values: []const Value,
+) !ExecutionResult {
+    return execution.executeWithClauseWithGroupByAndParams(allocator, input_result, with_clause, group_by, having, param_names, param_values);
 }
 
 fn applyResultFilters(
