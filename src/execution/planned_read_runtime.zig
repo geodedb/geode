@@ -18,6 +18,7 @@ pub const OpKind = enum {
     ConstProjection,
     AllNodesScan,
     LabelScan,
+    IndexSeek,
     ExpandOut,
     ExpandIn,
     ExpandEither,
@@ -152,8 +153,14 @@ pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, c
             const chain = q.match.chains[0];
             const first_node = if (chain.head) |head| head else chain.hops[0].left;
             root_index = try ensureBinding(allocator, &binding_names, &binding_kinds, .node, first_node.name, "node", 0);
+            const scan_kind: OpKind = if (nodeCanUseIndex(context, first_node, q.where_clause))
+                .IndexSeek
+            else if (first_node.labels.len > 0)
+                .LabelScan
+            else
+                .AllNodesScan;
             try ops.append(allocator, .{
-                .kind = if (first_node.labels.len > 0) .LabelScan else .AllNodesScan,
+                .kind = scan_kind,
                 .est_rows = try estimateScanRows(allocator, graph_name, first_node),
             });
 
@@ -1389,6 +1396,78 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
     }
 
     return adapter.nodeCount(graph_name) catch 0;
+}
+
+// CANARY: REQ=REQ-AUTO-INDEX-EXPLAIN-004; FEATURE="AutoIdIndex"; ASPECT=PlanIndexSeek; STATUS=IMPL; OWNER=planner; UPDATED=2026-04-02
+/// Returns true if the catalog has an index on the given label+property pair,
+/// enabling the planner to choose IndexSeek over LabelScan.
+fn labelHasIndexForProp(context: ExecutionContext, label: []const u8, prop: []const u8) bool {
+    const cat = context.catalog;
+    cat.rwlock.lockShared();
+    defer cat.rwlock.unlockShared();
+    var iter = cat.indexes.valueIterator();
+    while (iter.next()) |info| {
+        if (std.mem.eql(u8, info.table_name, label) and
+            info.columns.len > 0 and
+            std.mem.eql(u8, info.columns[0], prop))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// Returns true if the node has an inline property that matches a catalog index,
+/// or if the WHERE clause contains an equality on an indexed property.
+fn nodeCanUseIndex(context: ExecutionContext, node: ast.NodePattern, where_clause: ?ast.Expr) bool {
+    if (node.labels.len == 0) return false;
+    const label = node.labels[0];
+
+    // Check inline properties (MATCH (n:Label {prop: value}))
+    if (node.props) |props| {
+        for (props) |prop| {
+            if (labelHasIndexForProp(context, label, prop.key)) return true;
+        }
+    }
+
+    // Check WHERE clause equality (MATCH (n:Label) WHERE n.prop = value)
+    if (where_clause) |where| {
+        if (node.name) |var_name| {
+            return whereClauseHasIndexedEquality(where, var_name, label, context);
+        }
+    }
+    return false;
+}
+
+fn whereClauseHasIndexedEquality(expr: ast.Expr, var_name: []const u8, label: []const u8, context: ExecutionContext) bool {
+    switch (expr) {
+        .Binary => |bin| {
+            if (bin.op == .And) {
+                if (whereClauseHasIndexedEquality(bin.left.*, var_name, label, context)) return true;
+                return whereClauseHasIndexedEquality(bin.right.*, var_name, label, context);
+            }
+            if (bin.op == .Eq) {
+                const prop = extractVarPropName(bin.left.*, var_name) orelse
+                    extractVarPropName(bin.right.*, var_name) orelse return false;
+                return labelHasIndexForProp(context, label, prop);
+            }
+            return false;
+        },
+        else => return false,
+    }
+}
+
+fn extractVarPropName(expr: ast.Expr, var_name: []const u8) ?[]const u8 {
+    switch (expr) {
+        .PropertyAccess => |pa| {
+            if (std.mem.eql(u8, pa.object, var_name)) return pa.property;
+        },
+        .Member => |m| {
+            if (m.target.* == .Ident and std.mem.eql(u8, m.target.Ident.orig, var_name)) return m.field;
+        },
+        else => {},
+    }
+    return null;
 }
 
 fn resolveGraphName(context: ExecutionContext) []const u8 {

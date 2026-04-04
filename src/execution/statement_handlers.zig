@@ -1082,6 +1082,7 @@ fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
         .Distinct => "Distinct",
         .Limit => "Limit",
         .Sort => "Sort",
+        .IndexSeek => "IndexSeek",
     };
 }
 const Catalog = @import("../schema/catalog.zig").Catalog;

@@ -671,13 +671,14 @@ fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
         .Distinct => "Distinct",
         .Limit => "Limit",
         .Sort => "Sort",
+        .IndexSeek => "IndexSeek",
     };
 }
 
 fn plannedOpPhase(kind: planned_read_runtime.OpKind) []const u8 {
     return switch (kind) {
         .ConstProjection => "PROJECT",
-        .AllNodesScan, .LabelScan => "SCAN",
+        .AllNodesScan, .LabelScan, .IndexSeek => "SCAN",
         .ExpandOut, .ExpandIn, .ExpandEither => "EXPAND",
         .OptionalMatch => "MATCH",
         .VarLengthExpand, .ShortestPath, .PathModeExpand => "EXPAND",

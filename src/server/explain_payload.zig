@@ -248,6 +248,7 @@ fn plannedOpName(kind: planned_read_runtime.OpKind) []const u8 {
         .ConstProjection => "ConstProjection",
         .AllNodesScan => "AllNodesScan",
         .LabelScan => "LabelScan",
+        .IndexSeek => "IndexSeek",
         .ExpandOut => "ExpandOut",
         .ExpandIn => "ExpandIn",
         .ExpandEither => "ExpandEither",
