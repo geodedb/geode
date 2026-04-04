@@ -644,13 +644,66 @@ pub const StorageAdapter = struct {
     }
 
     /// Find all node IDs with the given label in a graph.
+    /// Filters out deleted nodes whose slot IDs are still present in the
+    /// label index (the engine's deleteNode sets NODE_FLAG_DELETED but does
+    /// not remove the entry from the label posting list).
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
-        return mg.engine.scanLabel(label_id, allocator);
+        const raw_ids = try mg.engine.scanLabel(label_id, allocator);
+
+        // Filter out deleted/empty nodes whose slot IDs are still present
+        // in the label index.  We read raw page bytes via the buffer pool
+        // and check the record flags directly — this avoids engine.getNode()
+        // which conflates "empty" and "deleted" into a single null return,
+        // and whose null-based filtering caused regressions in prior attempts.
+        const node_mod = gs.node;
+        const NodeRec = node_mod.NodeRec;
+        const npp = mg.engine.node_store.nodes_per_page;
+        const hdr_size = gs.node.PAGE_HEADER_SIZE;
+        var live_count: usize = 0;
+        for (raw_ids) |nid| {
+            const page_id = nid / npp;
+            // Page not allocated → node cannot be live (stale index entry)
+            if (!mg.engine.node_store.free_space.isAllocated(page_id)) continue;
+
+            const slot: u32 = @intCast(nid % npp);
+            const slot_offset = hdr_size + slot * @sizeOf(NodeRec);
+            const frame = try mg.engine.node_store.buffer_pool.pin(.nodes, page_id);
+            const data = frame.dataSlice();
+            const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
+            mg.engine.node_store.buffer_pool.unpin(
+                mg.engine.node_store.buffer_pool.frameIndex(frame),
+                false,
+            );
+
+            if (node_mod.isDeleted(&rec)) continue;
+            if (node_mod.isEmpty(&rec)) continue;
+
+            raw_ids[live_count] = nid;
+            live_count += 1;
+        }
+
+        if (live_count == raw_ids.len) return raw_ids;
+
+        // Shrink the allocation to only the live IDs.
+        if (live_count == 0) {
+            allocator.free(raw_ids);
+            return try allocator.alloc(u64, 0);
+        }
+        // realloc in-place when possible; the live IDs are already packed
+        // at the front of raw_ids.
+        if (allocator.resize(raw_ids, live_count)) {
+            return raw_ids[0..live_count];
+        }
+        // Fallback: allocate a new slice and copy.
+        const result = try allocator.alloc(u64, live_count);
+        @memcpy(result, raw_ids[0..live_count]);
+        allocator.free(raw_ids);
+        return result;
     }
 
     // ------------------------------------------------------------------
