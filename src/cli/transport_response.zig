@@ -112,13 +112,46 @@ pub fn renderTransportResponseWithStreams(
             try root.put("order_keys", .{ .array = try buildStringArray(jalloc, view.order_keys) });
             try root.put("columns", .{ .array = try buildColumnsArray(jalloc, view.columns) });
 
+            // Check for duplicate column names (e.g. RETURN a.name, b.name both produce "name")
+            var has_dupes = false;
+            for (view.columns, 0..) |col, i| {
+                if (has_dupes) break;
+                for (view.columns[0..i]) |prev| {
+                    if (std.mem.eql(u8, col.name, prev.name)) {
+                        has_dupes = true;
+                        break;
+                    }
+                }
+            }
+
+            // Build unique row-object keys only when duplicates exist.
+            // The `columns` array in the output is NOT changed — only row keys are disambiguated.
+            var unique_col_keys: ?[][]const u8 = null;
+            if (has_dupes) {
+                const keys = try jalloc.alloc([]const u8, view.columns.len);
+                for (view.columns, 0..) |col, idx| {
+                    var occurrence: usize = 0;
+                    for (view.columns[0..idx]) |prev| {
+                        if (std.mem.eql(u8, prev.name, col.name)) occurrence += 1;
+                    }
+                    keys[idx] = if (occurrence == 0)
+                        try jalloc.dupe(u8, col.name)
+                    else
+                        try std.fmt.allocPrint(jalloc, "{s}_{d}", .{ col.name, occurrence + 1 });
+                }
+                unique_col_keys = keys;
+            }
+
             var rows_arr = std.json.Array.init(jalloc);
             if (rows_json) |rows| {
                 for (rows.items) |row| {
                     var row_obj = std.json.ObjectMap.init(jalloc);
                     for (row.items, 0..) |val, col_idx| {
-                        const col_name = if (col_idx < view.columns.len) view.columns[col_idx].name else "?";
-                        try row_obj.put(try jalloc.dupe(u8, col_name), val);
+                        const col_key = if (unique_col_keys) |keys|
+                            (if (col_idx < keys.len) keys[col_idx] else "?")
+                        else
+                            (if (col_idx < view.columns.len) view.columns[col_idx].name else "?");
+                        try row_obj.put(try jalloc.dupe(u8, col_key), val);
                     }
                     try rows_arr.append(.{ .object = row_obj });
                 }
