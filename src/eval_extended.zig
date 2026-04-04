@@ -2067,9 +2067,10 @@ fn stCentroid(allocator: std.mem.Allocator, args: []const ExtValue) !ExtValue {
     const geom = args[0].Geometry;
     const geom_type = parseWkbGeomType(geom.wkb);
 
-    // Point centroid is itself
+    // Point centroid is itself - return a copy so the caller can safely free args
     if (geom_type == 1) {
-        return args[0];
+        const wkb_copy = try allocator.dupe(u8, geom.wkb);
+        return .{ .Geometry = .{ .wkb = wkb_copy } };
     }
 
     if (geom_type != 3) return error.UnsupportedGeometry;
