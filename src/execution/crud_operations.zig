@@ -997,7 +997,9 @@ pub fn executeReturnClauseWithNodes(
 ) !ExecutionResult {
     const store = graph_store.getGlobalStore(allocator);
     const items = ret.items;
-    var columns = try allocator.alloc([]const u8, items.len);
+    // Use generateUniqueColumnNames to qualify duplicate property names
+    // (e.g., a.name and b.name become "a.name" and "b.name")
+    const columns = try generateUniqueColumnNames(allocator, items);
     var rows = try allocator.alloc([]Value, 1);
     var row = try allocator.alloc(Value, items.len);
 
@@ -1028,13 +1030,6 @@ pub fn executeReturnClauseWithNodes(
     };
 
     for (items, 0..) |item, i| {
-        const col_name = item.alias orelse switch (item.expr) {
-            .Ident => |ident| ident.orig,
-            .PropertyAccess => |prop| prop.property,
-            .Member => |mem| mem.field,
-            else => "column",
-        };
-        columns[i] = try allocator.dupe(u8, col_name);
         row[i] = try eval.evalExpr(allocator, item.expr, env);
     }
 
