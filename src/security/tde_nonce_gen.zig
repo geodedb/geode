@@ -15,9 +15,10 @@ const Attr = logging.Attr;
 /// GCM standard 96-bit nonce
 pub const NonceBytes = 12;
 
-/// GAP-0109 SECURITY FIX: Production build detection
-const is_production_build = @import("builtin").mode == .ReleaseFast or
-    @import("builtin").mode == .ReleaseSafe;
+/// GAP-0109 / SEC-12 SECURITY FIX: Production build detection
+/// Any non-Debug build is considered production to prevent deterministic
+/// nonces in ReleaseSmall (which was previously excluded).
+const is_production_build = @import("builtin").mode != .Debug;
 
 /// Nonce generation mode
 pub const NonceMode = enum {
