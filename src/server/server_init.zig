@@ -30,8 +30,14 @@ pub const EnvironmentConfig = struct {
     disable_estimates: bool = false,
     order_keys_expr: bool = true, // ISO/GQL standard allows property paths in ORDER BY
     // CANARY: REQ=REQ-ABAC-WIRE-005; FEATURE="ABAC Enforcement"; ASPECT=EnvConfig; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-    // GAP-0165: Environment flag to enable ABAC enforcement
-    abac_enabled: bool = false,
+    // GAP-0165 / SEC-14: ABAC enforcement enabled by default for security.
+    // Set GEODE_ENABLE_ABAC=false to disable.
+    abac_enabled: bool = true,
+    // #683: Cache per-connection env vars at startup to avoid repeated syscalls.
+    query_optimizer_enabled: bool = false,
+    inline_results_enabled: bool = true,
+    inline_results_max_rows: usize = 1000,
+    telemetry_paging: bool = false,
 };
 
 /// Server initialization context containing all initialized resources
@@ -173,6 +179,22 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
             } else {
                 config.order_keys_expr = false;
             }
+        }
+
+        // #683: Read per-connection env vars once at startup instead of per-connection.
+        if (env.get("GEODE_ENABLE_QUERY_OPTIMIZER")) |val| {
+            config.query_optimizer_enabled = val.len > 0 and val[0] != '0' and
+                !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off");
+        }
+        if (env.get("GEODE_INLINE_RESULTS")) |val| {
+            config.inline_results_enabled = val.len == 0 or (val[0] != '0' and
+                !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off"));
+        }
+        if (env.get("GEODE_INLINE_RESULTS_MAX_ROWS")) |val| {
+            config.inline_results_max_rows = std.fmt.parseInt(usize, val, 10) catch config.inline_results_max_rows;
+        }
+        if (env.get("GEODE_TELEMETRY_PAGING")) |_| {
+            config.telemetry_paging = true;
         }
 
         // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15

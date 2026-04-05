@@ -32,13 +32,13 @@ test "GAP-0165: SecurityManager initialization succeeds" {
 test "GAP-0165: EnvironmentConfig includes abac_enabled field" {
     const config = server_init.EnvironmentConfig{};
 
-    // Default should be false
-    try testing.expect(!config.abac_enabled);
+    // SEC-14: Default should be true (ABAC enabled by default for security)
+    try testing.expect(config.abac_enabled);
 
     // Verify field is accessible and settable
     var config2 = server_init.EnvironmentConfig{};
-    config2.abac_enabled = true;
-    try testing.expect(config2.abac_enabled);
+    config2.abac_enabled = false;
+    try testing.expect(!config2.abac_enabled);
 }
 
 // CANARY: REQ=REQ-ABAC-WIRE-TEST-004; FEATURE="ABAC Enforcement Tests"; ASPECT=InitContext; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
