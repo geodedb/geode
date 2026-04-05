@@ -29,6 +29,8 @@ const SimplifiedBackupManager = backup_mgr.SimplifiedBackupManager;
 
 // GAP-0281: FLE integration for per-tenant encryption namespace setup.
 const fle_integration = geode.fle_integration;
+// GAP-0282: Import audit module for per-thread tenant_id enrichment
+const audit_mod = geode.security.audit;
 // S1: RLS post-result filtering (parity with QUIC handler).
 const rls_filter = @import("../server/rls_filter.zig");
 // S6: Auth rate limiter (parity with QUIC handler).
@@ -165,6 +167,8 @@ const SessionStore = struct {
 
         // GAP-0281: Set per-thread FLE tenant_id for encryption namespace isolation.
         fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+        // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
+        audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
 
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=GrpcSessionGraph; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         if (graph) |g| {

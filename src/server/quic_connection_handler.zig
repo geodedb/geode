@@ -33,6 +33,8 @@ const server_init = @import("server_init.zig");
 const mtls_provider = geode.mtls_provider;
 // GAP-0271: Import FLE integration for role-based field access control
 const fle_integration = geode.fle_integration;
+// GAP-0282: Import audit module for per-thread tenant_id enrichment
+const audit_mod = geode.security.audit;
 // GAP-0283: Import multi-graph security for graph-scoped RBAC enforcement
 const multi_graph_security = geode.multi_graph_security;
 // GAP-0289: Import tenant quota manager for per-tenant resource limits
@@ -1542,6 +1544,8 @@ fn handleClientMessage(
 
             // GAP-0281: Set per-thread FLE tenant_id from session config for encryption namespace isolation.
             fle_integration.setCurrentTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
+            // GAP-0282: Set per-thread audit tenant_id so all audit events carry tenant context.
+            audit_mod.setCurrentAuditTenantId(if (state.session_config) |cfg| cfg.tenant_id else null);
 
             // GAP-0271: Set FLE role from HELLO request with injection validation.
             // Always reset role on new connection to prevent stale role leakage.

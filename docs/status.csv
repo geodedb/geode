@@ -200,6 +200,7 @@ REQ-AUDIT-SYSLOG-001,SyslogAuditIntegration,AuditLogging,EXEMPT,,,cli,2026-01-10
 REQ-AUDIT-SYSLOG-002,SyslogSenderInit,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig
 REQ-AUDIT-SYSLOG-003,SyslogEventSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig
 REQ-AUDIT-SYSLOG-004,SyslogUdpSend,AuditLogging,EXEMPT,,,cli,2026-01-10,src/cli/cli_dispatcher.zig
+REQ-AUDIT-TENANT-001,AuditTenantId,PerThreadTenant,IMPL,,,security,2026-04-05,src/security/audit.zig
 REQ-AUDIT-TEST-001,Audit Unit Tests,UnitTests,TESTED,,,security,2026-01-13,src/security/audit.zig
 REQ-AUDIT-TEST-001,AuditTests,UnitTests,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,TESTED,,,audit,2026-01-16,tests/test_gap_0193_batch2_security.zig

@@ -54,6 +54,34 @@ pub const SecurityGraphEvent = struct {
 pub var global_audit_logger: ?*AuditLogger = null;
 pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
 
+// GAP-0282: Per-thread tenant_id for audit event enrichment.
+// Set from the QUIC connection handler before query execution so that all
+// audit events created on this thread carry the correct tenant context.
+// CANARY: REQ=REQ-AUDIT-TENANT-001; FEATURE="AuditTenantId"; ASPECT=PerThreadTenant; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
+var audit_tenant_mutex: std.Thread.Mutex = .{};
+var per_thread_audit_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(std.heap.page_allocator);
+
+/// Set the current tenant_id for audit events on this thread.
+pub fn setCurrentAuditTenantId(tenant_id: ?[]const u8) void {
+    audit_tenant_mutex.lock();
+    defer audit_tenant_mutex.unlock();
+    const tid = std.Thread.getCurrentId();
+    if (tenant_id) |t| {
+        per_thread_audit_tenants.put(tid, t) catch {
+            _ = per_thread_audit_tenants.remove(tid);
+        };
+    } else {
+        _ = per_thread_audit_tenants.remove(tid);
+    }
+}
+
+/// Get the current tenant_id for audit events. Returns null if not set.
+pub fn getCurrentAuditTenantId() ?[]const u8 {
+    audit_tenant_mutex.lock();
+    defer audit_tenant_mutex.unlock();
+    return per_thread_audit_tenants.get(std.Thread.getCurrentId());
+}
+
 pub fn setGlobalAuditLogger(logger: ?*AuditLogger) void {
     global_audit_logger_mutex.lock();
     defer global_audit_logger_mutex.unlock();
@@ -80,10 +108,12 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
         detail_map.put("details", allocator.dupe(u8, details) catch return) catch return;
     }
 
+    // GAP-0282: Populate tenant_id from per-thread audit context
     var audit_event = AuditEvent{
         .timestamp = std.time.milliTimestamp(),
         .event_type = event.event_type,
         .severity = .info,
+        .tenant_id = getCurrentAuditTenantId(),
         .user_id = event.user_id,
         .session_id = "",
         .resource = .{
@@ -320,6 +350,11 @@ pub const AuditLogger = struct {
     pub fn appendAuditEvent(self: *AuditLogger, ev: *AuditEvent) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
+
+        // GAP-0282: Enrich event with per-thread tenant_id if not already set
+        if (ev.tenant_id == null) {
+            ev.tenant_id = getCurrentAuditTenantId();
+        }
 
         self.last_seq += 1;
         ev.seq_no = self.last_seq;
