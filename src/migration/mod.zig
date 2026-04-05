@@ -1,3 +1,9 @@
+/// Migration engine for managing GQL schema migrations.
+///
+/// Provides a durable ledger, checksum validation, up/down application,
+/// drift detection, and a pluggable query executor interface (QUIC-backed
+/// in the CLI, injectable for tests).  Migration files live in a
+/// configurable directory and are applied in version order.
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -245,14 +251,24 @@ fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Led
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
 
-    // Use timestamp-based suffix to avoid predictable temp file names (CWE-377).
-    var suffix_buf: [64]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.tmp", .{nowMs()}) catch return error.OutOfMemory;
+    // SEC-MIG-07: Use timestamp + cryptographic random suffix to prevent predictable
+    // temp file names (CWE-377 / symlink attack mitigation).
+    var rand_bytes: [8]u8 = undefined;
+    std.crypto.random.bytes(&rand_bytes);
+    const rand_hex = std.fmt.bytesToHex(rand_bytes, .lower);
+    var suffix_buf: [96]u8 = undefined;
+    const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.{s}.tmp", .{ nowMs(), rand_hex }) catch return error.OutOfMemory;
     const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
 
     var tmp = std.fs.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
     errdefer tmp.close();
+
+    // SEC-MIG-06: Restrict ledger file permissions to owner-only (0o600) to prevent
+    // other users from reading migration state or tampering with checksums.
+    if (builtin.os.tag != .windows) {
+        tmp.chmod(0o600) catch {};
+    }
 
     // Serialize to a buffer manually
     var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
@@ -299,7 +315,8 @@ var global_lock: ?LockHandle = null;
 var lock_steal_count: u64 = 0;
 
 /// Acquires the migration lock with the given TTL in milliseconds. Thread-safe.
-pub fn acquireLock(_: std.mem.Allocator, ttl_ms: u64) MigrationError!LockHandle {
+/// Q13: Removed unused allocator parameter that was ignored in the implementation.
+pub fn acquireLock(ttl_ms: u64) MigrationError!LockHandle {
     migration_mutex.lock();
     defer migration_mutex.unlock();
     const now = nowMs();
@@ -350,7 +367,7 @@ pub fn applyUpMigrations(
     names: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
-    var lock = try acquireLock(alloc, default_lock_ttl_ms); // 5 minute TTL
+    var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -383,7 +400,9 @@ pub fn applyUpMigrations(
         const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
         defer alloc.free(script);
 
-        executor.execFn(executor.context, script) catch {
+        executor.execFn(executor.context, script) catch |err| {
+            // Q15: Log the underlying executor error instead of silently erasing it.
+            std.log.warn("migration: executor failed on version {d}: {}", .{ entry.version, err });
             ledger.metrics.failed_total += 1;
             return error.ApplyFailed;
         };
@@ -414,7 +433,7 @@ pub fn applyDownMigration(
     cfg: MigrationConfig,
     executor: QueryExecutor,
 ) MigrationError!void {
-    var lock = try acquireLock(alloc, default_lock_ttl_ms); // 5 minute TTL
+    var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -430,7 +449,9 @@ pub fn applyDownMigration(
     const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.DownScriptMissing;
     defer alloc.free(script);
 
-    executor.execFn(executor.context, script) catch {
+    executor.execFn(executor.context, script) catch |err| {
+        // Q15: Log the underlying executor error instead of silently erasing it.
+        std.log.warn("migration: down-migration executor failed on version {d}: {}", .{ latest.version, err });
         ledger.metrics.failed_total += 1;
         return error.ApplyFailed;
     };
@@ -518,7 +539,9 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
     return slice;
 }
 
-/// Frees all heap-allocated names and the slice returned by statusReport.
+/// Frees all heap-allocated names and the slice returned by `statusReport`.
+/// The `len > 0` guard distinguishes heap-duped names from the default
+/// empty-string literal in `StatusRow` (which must not be freed).
 pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
     for (rows) |row| {
         if (row.name.len > 0) alloc.free(row.name);
@@ -942,11 +965,11 @@ test "acquireLock increments lock_steal_count on expired lock" {
     migration_mutex.unlock();
 
     // Acquire with a 1ms TTL, then sleep to let it expire.
-    var h = try acquireLock(std.testing.allocator, 1);
+    var h = try acquireLock(1);
     std.Thread.sleep(2 * std.time.ns_per_ms);
 
     // Second acquire should steal the expired lock.
-    var h2 = try acquireLock(std.testing.allocator, 60_000);
+    var h2 = try acquireLock(60_000);
 
     migration_mutex.lock();
     const steals = lock_steal_count;
@@ -1381,7 +1404,7 @@ test "acquireLock serializes concurrent access" {
 
     const thread_fn = struct {
         fn run(count: *std.atomic.Value(u32)) void {
-            const result = acquireLock(std.testing.allocator, 60_000);
+            const result = acquireLock(60_000);
             if (result) |_| {
                 _ = count.fetchAdd(1, .monotonic);
             } else |_| {}
