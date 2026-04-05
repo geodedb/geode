@@ -29,6 +29,14 @@ pub const Value = value_types.Value;
 // Phase 5 M5.2: Re-export Dec from value_types module for backward compatibility
 const Dec = value_types.Dec;
 
+// #681: Named constants replacing magic number 1000000.
+// Decimal scale factor: 10^6 gives 6 decimal places of precision when
+// converting floats/ints to the internal Decimal representation.
+const float_to_decimal_scale: i128 = 1_000_000;
+const float_to_decimal_scale_f64: f64 = 1_000_000.0;
+// Microseconds per second for interval-to-microseconds conversion.
+const micros_per_second: i128 = 1_000_000;
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-005; FEATURE="Circular Dependency Resolution"; ASPECT=FunctionAlias; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use toDec from value_types module
 const toDec = value_types.toDec;
@@ -551,8 +559,8 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // This is simplistic (ignores month/day length variance), but consistent for ordering.
                 // Convert to rough micros: months*30*24*3600*1e6 + days*24*3600*1e6 + micros
                 // Just implementation detail for now.
-                const l_micros = @as(i128, l.Interval.months) * 30 * 86400 * 1000000 + @as(i128, l.Interval.days) * 86400 * 1000000 + l.Interval.micros;
-                const r_micros = @as(i128, r.Interval.months) * 30 * 86400 * 1000000 + @as(i128, r.Interval.days) * 86400 * 1000000 + r.Interval.micros;
+                const l_micros = @as(i128, l.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, l.Interval.days) * 86400 * micros_per_second + l.Interval.micros;
+                const r_micros = @as(i128, r.Interval.months) * 30 * 86400 * micros_per_second + @as(i128, r.Interval.days) * 86400 * micros_per_second + r.Interval.micros;
                 const ord = std.math.order(l_micros, r_micros);
                 return .{ .Bool = cmpToBool(op, switch (ord) {
                     .lt => -1,
@@ -1470,13 +1478,13 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     switch (value_arg) {
                         .Int => |i| {
                             // Convert int to decimal with 6 decimal places for float representation
-                            const coeff = @as(i128, i) * 1000000;
+                            const coeff = @as(i128, i) * float_to_decimal_scale;
                             break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
                         },
                         .Decimal => |d| break :blk_call .{ .Decimal = d },
                         .Str => |s| {
                             const f = std.fmt.parseFloat(f64, s) catch break :blk_call .{ .Null = {} };
-                            const coeff = @as(i128, @intFromFloat(f * 1000000));
+                            const coeff = @as(i128, @intFromFloat(f * float_to_decimal_scale_f64));
                             break :blk_call .{ .Decimal = .{ .coeff = coeff, .scale = 6 } };
                         },
                         else => break :blk_call .{ .Null = {} },
@@ -1587,12 +1595,12 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                     .Int => |i| {
                         if (i < 0) break :blk_call .{ .Null = {} };
                         const f = @sqrt(@as(f64, @floatFromInt(i)));
-                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                     },
                     .Decimal => |d| {
                         if (d.coeff < 0) break :blk_call .{ .Null = {} };
                         const f = @sqrt(@as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))));
-                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                        break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(f * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
                     },
                     else => break :blk_call .{ .Null = {} },
                 }
@@ -1618,7 +1626,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = std.math.pow(f64, base, exponent);
                 // Check for NaN, infinity, or overflow before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                const scaled = result * 1000000;
+                const scaled = result * float_to_decimal_scale_f64;
                 if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
@@ -1634,7 +1642,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = @sin(val);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "cos")) {
@@ -1648,7 +1656,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = @cos(val);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "tan")) {
@@ -1662,7 +1670,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = @tan(val);
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                const scaled = result * 1000000;
+                const scaled = result * float_to_decimal_scale_f64;
                 if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
@@ -1679,7 +1687,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = std.math.atan(val);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
@@ -1703,7 +1711,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = std.math.atan2(val_y, val_x);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
@@ -1720,7 +1728,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = std.math.asin(val);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
@@ -1737,7 +1745,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = std.math.acos(val);
                 // Check for NaN before converting
                 if (std.math.isNan(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
@@ -1753,7 +1761,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
                 // Use @round to properly round instead of truncating for better precision
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * float_to_decimal_scale_f64)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
@@ -1769,7 +1777,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
                 // Use @round to properly round instead of truncating for better precision
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * 1000000)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * float_to_decimal_scale_f64)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "log")) {
@@ -1784,7 +1792,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = @log(val);
                 // Check for NaN or infinity before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             if (std.mem.eql(u8, function_name, "exp")) {
@@ -1798,7 +1806,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const result = @exp(val);
                 // Check for NaN, infinity, or overflow before converting
                 if (std.math.isNan(result) or std.math.isInf(result)) break :blk_call .{ .Null = {} };
-                const scaled = result * 1000000;
+                const scaled = result * float_to_decimal_scale_f64;
                 if (scaled < -1.7e38 or scaled > 1.7e38) break :blk_call .{ .Null = {} }; // Overflow check
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
@@ -1967,7 +1975,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 const rand_u64 = std.mem.readInt(u64, &rand_bytes, .little);
                 // Map to [0, 1) with 6 decimal digits of precision
                 const value = @as(f64, @floatFromInt(rand_u64 >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
-                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+                break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(value * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
             // Handle Char function - converts string to fixed-length char with length validation
@@ -2993,7 +3001,7 @@ fn parseJsonValue(allocator: std.mem.Allocator, json_str: []const u8, i: *usize)
         const num_str = json_str[num_start..i.*];
         if (is_float) {
             const float_val = std.fmt.parseFloat(f64, num_str) catch return Value{ .Null = {} };
-            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
+            return Value{ .Decimal = .{ .coeff = @intFromFloat(float_val * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
         } else {
             const int_val = std.fmt.parseInt(i64, num_str, 10) catch return Value{ .Null = {} };
             return Value{ .Int = int_val };
@@ -4157,7 +4165,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
 
         const similarity = dot_product / (@sqrt(norm1) * @sqrt(norm2));
-        return Value{ .Decimal = .{ .coeff = @intFromFloat(similarity * 1000000), .scale = 6 } };
+        return Value{ .Decimal = .{ .coeff = @intFromFloat(similarity * float_to_decimal_scale_f64), .scale = 6 } };
     }
 
     // Evaluate arguments first
@@ -4247,13 +4255,13 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 if (i <= 0) return Value{ .Null = {} };
                 const f: f64 = @floatFromInt(i);
                 const log10_result = @log10(f);
-                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * 1000000), .scale = 6 } };
+                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
             .Decimal => |d| {
                 const f: f64 = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10.0, @floatFromInt(d.scale));
                 if (f <= 0) return Value{ .Null = {} };
                 const log10_result = @log10(f);
-                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * 1000000), .scale = 6 } };
+                return Value{ .Decimal = .{ .coeff = @intFromFloat(log10_result * float_to_decimal_scale_f64), .scale = 6 } };
             },
             else => return Value{ .Null = {} },
         }
@@ -4357,13 +4365,12 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
         // Convert to float - use scale=6 for 6 decimal places of precision
         const float_scale: u8 = 6;
-        const float_multiplier: i128 = 1000000; // 10^6
         switch (first_arg) {
-            .Int => |i| return Value{ .Decimal = .{ .coeff = i * float_multiplier, .scale = float_scale } },
+            .Int => |i| return Value{ .Decimal = .{ .coeff = i * float_to_decimal_scale, .scale = float_scale } },
             .Decimal => |d| return Value{ .Decimal = d },
             .Str => |s| {
                 const f = std.fmt.parseFloat(f64, s) catch return Value{ .Null = {} };
-                const scaled: i128 = @intFromFloat(@round(f * @as(f64, @floatFromInt(float_multiplier))));
+                const scaled: i128 = @intFromFloat(@round(f * float_to_decimal_scale_f64));
                 return Value{ .Decimal = .{ .coeff = scaled, .scale = float_scale } };
             },
             else => return Value{ .Null = {} },
