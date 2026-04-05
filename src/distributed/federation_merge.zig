@@ -242,3 +242,18 @@ pub fn readProtoMessage(
     const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
     return packet.quic orelse error.InvalidMessage;
 }
+
+// ---------------------------------------------------------------------------
+// Row hashing for deduplication
+// ---------------------------------------------------------------------------
+
+/// Hash a binding row into an allocated hex string for use as a deduplication key.
+/// The hash covers all column values by their raw byte representation.
+pub fn hashRow(allocator: std.mem.Allocator, row: protocol.BindingRow) ![]u8 {
+    var hasher = std.hash_map.DefaultHasher.init();
+    for (row.cols) |binding| {
+        hasher.update(std.mem.asBytes(&binding));
+    }
+    const hash_value = hasher.final();
+    return try std.fmt.allocPrint(allocator, "{x}", .{hash_value});
+}

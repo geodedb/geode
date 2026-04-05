@@ -18,6 +18,7 @@ const cloneOrderKeys = federation_merge.cloneOrderKeys;
 const cloneOrderDirs = federation_merge.cloneOrderDirs;
 const cloneQueryResults = federation_merge.cloneQueryResults;
 const buildParams = federation_merge.buildParams;
+const hashRow = federation_merge.hashRow;
 const freeParams = federation_merge.freeParams;
 const appendPageRows = federation_merge.appendPageRows;
 const captureOrderMeta = federation_merge.captureOrderMeta;
@@ -734,9 +735,60 @@ pub const FederationManager = struct {
             },
 
             .union_distinct => {
-                // Remove duplicates during merge
-                // Implementation would use hash set for deduplication
-                return mergeResults(undefined, local, remote, .union_all, allocator);
+                // Deduplicated merge: track seen row hashes and skip duplicates.
+                var seen = std.StringHashMap(void).init(allocator);
+                defer {
+                    var sit = seen.iterator();
+                    while (sit.next()) |entry| allocator.free(entry.key_ptr.*);
+                    seen.deinit();
+                }
+
+                var unique_rows = std.ArrayList(protocol.BindingRow).init(allocator);
+                errdefer {
+                    for (unique_rows.items) |row| freeBindingRow(allocator, row);
+                    unique_rows.deinit();
+                }
+
+                // Helper to add a row if not already seen
+                const addIfUnique = struct {
+                    fn call(
+                        alloc: std.mem.Allocator,
+                        s: *std.StringHashMap(void),
+                        out: *std.ArrayList(protocol.BindingRow),
+                        row: protocol.BindingRow,
+                    ) !void {
+                        const key = try hashRow(alloc, row);
+                        const gop = try s.getOrPut(key);
+                        if (gop.found_existing) {
+                            alloc.free(key);
+                        } else {
+                            try out.append(try cloneBindingRow(alloc, row));
+                        }
+                    }
+                }.call;
+
+                for (local.rows) |row| try addIfUnique(allocator, &seen, &unique_rows, row);
+                for (remote) |r| {
+                    for (r.rows) |row| try addIfUnique(allocator, &seen, &unique_rows, row);
+                }
+
+                const schema_source = if (local.schema.len > 0)
+                    local.schema
+                else if (remote.len > 0 and remote[0].schema.len > 0)
+                    remote[0].schema
+                else
+                    &.{};
+                const schema_copy = if (schema_source.len > 0) try cloneSchema(allocator, schema_source) else &.{};
+                errdefer if (schema_copy.len > 0) freeSchema(allocator, schema_copy);
+
+                const rows_slice = try unique_rows.toOwnedSlice();
+
+                return QueryResults{
+                    .rows = rows_slice,
+                    .schema = schema_copy,
+                    .execution_time_ms = local.execution_time_ms,
+                    .ordered = false,
+                };
             },
 
             .merge_sorted => {
@@ -1499,4 +1551,63 @@ test "TestCANARY_REQ_GQL_024_FederationMismatchFlagEmission" {
     const merged = try fm.mergeResults(local, rem[0..], .merge_sorted, ally);
     defer merged.deinit(ally);
     try std.testing.expect(!merged.ordered);
+}
+
+test "federation: union_distinct removes duplicate rows" {
+    // GAP-D005: Verify that union_distinct deduplicates overlapping rows across local/remote results.
+    const ally = std.testing.allocator;
+    const test_schema = &[_]protocol.ColumnDef{
+        .{ .name = "x", .data_type = "INT" },
+        .{ .name = "y", .data_type = "INT" },
+    };
+    // Local has rows (1,2) and (3,4)
+    var v_l1 = [_]protocol.BindingValue{ .{ .Int = 1 }, .{ .Int = 2 } };
+    var v_l2 = [_]protocol.BindingValue{ .{ .Int = 3 }, .{ .Int = 4 } };
+    const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v_l1 }, .{ .cols = &v_l2 } };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    // Remote has rows (3,4) [duplicate] and (5,6) [unique]
+    var v_r1 = [_]protocol.BindingValue{ .{ .Int = 3 }, .{ .Int = 4 } };
+    var v_r2 = [_]protocol.BindingValue{ .{ .Int = 5 }, .{ .Int = 6 } };
+    const remote_rows = &[_]protocol.BindingRow{ .{ .cols = &v_r1 }, .{ .cols = &v_r2 } };
+    const r1 = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    var rem = [_]QueryResults{r1};
+    var fm: FederationManager = undefined;
+    var merged = try fm.mergeResults(local, rem[0..], .union_distinct, ally);
+    defer merged.deinit(ally);
+
+    // Should have 3 unique rows: (1,2), (3,4), (5,6) -- not 4
+    try std.testing.expectEqual(@as(usize, 3), merged.rows.len);
+
+    // Verify values: row 0 = (1,2), row 1 = (3,4), row 2 = (5,6)
+    try std.testing.expectEqual(@as(i64, 1), merged.rows[0].cols[0].Int);
+    try std.testing.expectEqual(@as(i64, 2), merged.rows[0].cols[1].Int);
+    try std.testing.expectEqual(@as(i64, 3), merged.rows[1].cols[0].Int);
+    try std.testing.expectEqual(@as(i64, 4), merged.rows[1].cols[1].Int);
+    try std.testing.expectEqual(@as(i64, 5), merged.rows[2].cols[0].Int);
+    try std.testing.expectEqual(@as(i64, 6), merged.rows[2].cols[1].Int);
+}
+
+test "federation: union_distinct with all duplicates returns unique set" {
+    // Edge case: all rows identical across local and remote
+    const ally = std.testing.allocator;
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "v", .data_type = "INT" }};
+    var v1 = [_]protocol.BindingValue{.{ .Int = 42 }};
+    var v2 = [_]protocol.BindingValue{.{ .Int = 42 }};
+    const local_rows = &[_]protocol.BindingRow{ .{ .cols = &v1 }, .{ .cols = &v2 } };
+    const local = QueryResults{ .rows = local_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    var v3 = [_]protocol.BindingValue{.{ .Int = 42 }};
+    const remote_rows = &[_]protocol.BindingRow{.{ .cols = &v3 }};
+    const r1 = QueryResults{ .rows = remote_rows, .schema = test_schema, .execution_time_ms = 0 };
+    var rem = [_]QueryResults{r1};
+
+    var fm: FederationManager = undefined;
+    var merged = try fm.mergeResults(local, rem[0..], .union_distinct, ally);
+    defer merged.deinit(ally);
+
+    // All rows are (42) -- should deduplicate to 1 row
+    try std.testing.expectEqual(@as(usize, 1), merged.rows.len);
+    try std.testing.expectEqual(@as(i64, 42), merged.rows[0].cols[0].Int);
 }
