@@ -338,8 +338,11 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !Configu
     const test_data = "test_data";
     const test_result = blk: {
         // Test encrypt/decrypt roundtrip using AES-256-GCM
-        const key: [32]u8 = [_]u8{0x42} ** 32; // Test key
-        const nonce: [12]u8 = [_]u8{0x01} ** 12; // Test nonce
+        // SEC-06: Use ephemeral random key and nonce instead of static values
+        var key: [32]u8 = undefined;
+        var nonce: [12]u8 = undefined;
+        std.crypto.random.bytes(&key);
+        std.crypto.random.bytes(&nonce);
 
         // Encrypt test data
         var encrypted: [test_data.len]u8 = undefined;
