@@ -26,8 +26,11 @@ pub const ServerConfig = struct {
     // Query behavior
     order_keys_mode_expr: bool = false, // ident-only by default; env/flag can enable
 
-    // Authentication
-    enable_auth: bool = false,
+    // Authentication (enabled by default for security; use --no-auth to disable)
+    enable_auth: bool = true,
+
+    // GAP-0503: Distributed mode is experimental and must be explicitly enabled
+    enable_experimental_distributed: bool = false,
 
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
@@ -154,6 +157,8 @@ pub fn printHelp() void {
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
+    std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
+    std.debug.print("  --enable-experimental-distributed  Enable experimental distributed/cluster mode (not production-ready)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -258,6 +263,12 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
             config.enable_auth = true;
+        } else if (std.mem.eql(u8, arg, "--no-auth")) {
+            config.enable_auth = false;
+            std.log.warn("Authentication disabled via --no-auth. This is NOT recommended for production use.", .{});
+        } else if (std.mem.eql(u8, arg, "--enable-experimental-distributed")) {
+            config.enable_experimental_distributed = true;
+            std.log.warn("Experimental distributed mode enabled. This feature is NOT production-ready and may lose data.", .{});
         } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
             // FLE/TDE are always available; flags accepted for compatibility
         } else if (std.mem.eql(u8, arg, "--tde-provider") and ai + 1 < args.len) {
