@@ -157,15 +157,14 @@ pub const TwoPhaseTransport = struct {
         const port_str = endpoint[colon_pos + 1 ..];
         const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
 
-        // Check if insecure mode is explicitly allowed
-        const builtin = @import("builtin");
+        // Check if insecure mode is explicitly allowed via environment variable
+        // SEC-D005: Debug builds no longer auto-bypass TLS verification
         const allow_insecure = blk: {
-            if (builtin.mode == .Debug) break :blk true;
             const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);
                 if (std.mem.eql(u8, v, "1")) {
-                    log.warn("SECURITY WARNING: 2PC TLS verification disabled", &.{});
+                    log.warn("SECURITY WARNING: 2PC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
                     break :blk true;
                 }
             }
@@ -339,14 +338,16 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Check if insecure mode is explicitly allowed
-    const builtin = @import("builtin");
+    // Check if insecure mode is explicitly allowed via environment variable
+    // SEC-D005: Debug builds no longer auto-bypass TLS verification
     const allow_insecure = blk: {
-        if (builtin.mode == .Debug) break :blk true;
         const env = std.process.getEnvVarOwned(allocator, "GEODE_CLUSTER_INSECURE") catch null;
         if (env) |v| {
             defer allocator.free(v);
-            if (std.mem.eql(u8, v, "1")) break :blk true;
+            if (std.mem.eql(u8, v, "1")) {
+                log.warn("SECURITY WARNING: 2PC one-shot TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+                break :blk true;
+            }
         }
         break :blk false;
     };
