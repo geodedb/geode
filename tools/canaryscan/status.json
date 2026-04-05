@@ -18768,7 +18768,6 @@
           "files": [
             "../../src/distributed/federation.zig",
             "../../src/distributed/federation_flag.zig",
-            "../../src/distributed/federation_root.zig",
             "../../tests/e2e_federation_mismatch_flag.zig"
           ],
           "tests": [
