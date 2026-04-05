@@ -2,7 +2,7 @@
 
 ## 🏆 Enterprise Graph Database Platform
 
-Geode is a production-ready graph database with enterprise-grade features, achieving 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests) and industry-leading performance.
+Geode is a feature-complete graph database with enterprise-grade features, achieving 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests). See Known Limitations in [CLAUDE.md](../CLAUDE.md) before production deployment.
 
 ### ✅ **All Planned Features Complete** (October 16, 2025)
 
@@ -178,7 +178,7 @@ All 7 development phases from the TODO list have been successfully implemented:
 <!-- GAP-0118 FIX: Standardized test coverage numbers - Updated January 2026 -->
 - **97.4% Test Pass Rate**: Integration tests (1644/1688 passing)
 - **100% Unit Test Pass Rate**: 393/393 Zig unit tests passing
-- **CANARY System**: 1,735 governance markers tracking 2,190+ requirements
+- **CANARY System**: 2,178 governance markers (71.0% TESTED, 14.2% IMPL, 11.6% EXEMPT, 3.1% BENCHED)
 - **Performance Benchmarks**: Automated regression testing
 - **Cross-Platform**: Linux, macOS, Windows compatibility
 

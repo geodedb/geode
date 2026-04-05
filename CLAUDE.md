@@ -2,15 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## 🏆 Project Status (January 2026)
+## 🏆 Project Status (April 2026)
 
-Geode is an **enterprise-ready graph database** with industry-leading compliance and performance:
+Geode is a **feature-complete graph database** with strong compliance and active development:
 
 - **✅ 97.4% Test Coverage** (1644/1688 tests - see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for details)
 - **✅ 100% GQL Compliance** (70/70 ISO/IEC 39075:2024 tests)
-- **✅ 1,735 CANARY Markers** tracking 2,190+ requirements (81.4% TESTED status)
-- **✅ Enterprise Features** complete (TDE, audit, vector search, cloud backup, enhanced RLS)
+- **✅ 2,178 CANARY Markers** tracking requirements (71.0% TESTED, 14.2% IMPL, 11.6% EXEMPT, 3.1% BENCHED)
+- **✅ Enterprise Features** implemented (TDE, audit, vector search, cloud backup, enhanced RLS) -- multi-tenancy is partial
 - **✅ ALL TODO.md PHASES COMPLETE** - All 7 development phases implemented (Phases 2-7)
+
+### Known Limitations
+
+- **Multi-tenancy isolation is partial**: Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress
+- **Distributed module is experimental**: Gated behind `--enable-experimental-distributed` flag; not recommended for production use
+- **Auth defaults**: Authentication is enabled by default but must be configured with credentials before deployment
+- **CANARY coverage gap**: 14.2% of CANARY markers remain at IMPL status (implemented but not yet fully tested)
 
 ## 📚 Documentation Structure
 
@@ -109,11 +116,11 @@ Geode is an **enterprise-ready graph database** with industry-leading compliance
 
 ### Evidence-Based Development
 
-- **CANARY System**: 1,735 governance markers tracking 2,190+ requirements
+- **CANARY System**: 2,178 governance markers tracking requirements
 - **Geodetestlab**: 97.4% pass rate (1644/1688 tests passing)
 - **ISO Compliance**: 100% GQL compliance (70/70 official test suite)
 - **Performance Benchmarks**: Automated regression testing
-- **Status Breakdown**: 81.4% TESTED, 6.0% BENCHED, 7.7% EXEMPT, 5.7% IMPL
+- **Status Breakdown**: 71.0% TESTED, 14.2% IMPL, 11.6% EXEMPT, 3.1% BENCHED
 
 ### Test Execution
 
@@ -303,9 +310,9 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 ## 📍 Current Status
 
-**ALL HIGH/MEDIUM/LOW PRIORITY ITEMS COMPLETED**
+**ALL HIGH/MEDIUM/LOW PRIORITY TODO ITEMS COMPLETED**
 
-Based on [TODO.md](docs/TODO.md), all major development priorities have been successfully implemented with comprehensive testing and documentation. The project is now **PRODUCTION READY** with enterprise-grade features.
+Based on [TODO.md](docs/TODO.md), all major development priorities have been implemented with comprehensive testing and documentation. The project is **DEVELOPMENT READY** -- all planned features are implemented, but operators should review the Known Limitations section above before deploying to production.
 
 **Multi-tenancy caveat:** Multi-tenancy isolation is partial. Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress. See [FEATURES_OVERVIEW.md](docs/FEATURES_OVERVIEW.md) for details.
 
@@ -324,8 +331,8 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been suc
 
 **See the complete documentation in [`./docs/`](docs/)** for detailed technical specifications, API references, performance analysis, and implementation guides.
 
-*Last Updated: January 2026*
-*Status: PRODUCTION READY - 100% GQL compliance, 97.4% test coverage, all major features implemented*
+*Last Updated: April 2026*
+*Status: DEVELOPMENT READY - 100% GQL compliance, 97.4% test coverage, all planned features implemented (see Known Limitations)*
 *License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
 
 ## Important Development Guidelines
