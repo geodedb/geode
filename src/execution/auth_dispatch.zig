@@ -18,6 +18,7 @@ const ExecutionContext = execution.ExecutionContext;
 const Value = value_types.Value;
 
 const user_mgmt = @import("../security/user_management.zig");
+const mfa_mod = @import("mfa");
 
 // GAP-0270: Global custom role store for geode.auth.role_create/role_list
 pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
@@ -27,6 +28,142 @@ pub var g_custom_roles_mu: std.Thread.Mutex = .{};
 pub var g_policies: std.StringHashMap([]const u8) = undefined;
 pub var g_policies_init: bool = false;
 pub var g_policies_mu: std.Thread.Mutex = .{};
+
+// GAP-0501/0502: Per-user MFA credential store for TOTP secrets and recovery codes.
+const MfaCredential = struct {
+    secret_base32: []u8,
+    recovery_codes: [][]u8,
+};
+
+pub var g_mfa_store: std.StringHashMap(MfaCredential) = undefined;
+pub var g_mfa_store_init: bool = false;
+pub var g_mfa_store_mu: std.Thread.Mutex = .{};
+
+// GAP-0502: Per-user MFA verify attempt rate limiter.
+const MfaAttemptRecord = struct {
+    fail_count: u32,
+    last_attempt_ms: i64,
+    lockout_until_ms: i64,
+};
+
+pub var g_mfa_attempts: std.StringHashMap(MfaAttemptRecord) = undefined;
+pub var g_mfa_attempts_init: bool = false;
+
+const MFA_MAX_ATTEMPTS: u32 = 5;
+const MFA_LOCKOUT_MS: i64 = 300_000; // 5 minutes
+
+fn ensureMfaStoreInit(allocator: std.mem.Allocator) void {
+    if (!g_mfa_store_init) {
+        g_mfa_store = std.StringHashMap(MfaCredential).init(allocator);
+        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(allocator);
+        g_mfa_store_init = true;
+        g_mfa_attempts_init = true;
+    }
+}
+
+/// Store MFA credentials for a user, replacing any existing ones.
+fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
+    g_mfa_store_mu.lock();
+    defer g_mfa_store_mu.unlock();
+    ensureMfaStoreInit(allocator);
+
+    // Remove old entry if present
+    if (g_mfa_store.fetchRemove(username)) |old_kv| {
+        std.crypto.secureZero(u8, old_kv.value.secret_base32);
+        allocator.free(old_kv.value.secret_base32);
+        for (old_kv.value.recovery_codes) |code| allocator.free(code);
+        allocator.free(old_kv.value.recovery_codes);
+        allocator.free(old_kv.key);
+    }
+
+    const secret_copy = try allocator.dupe(u8, secret_base32);
+    errdefer allocator.free(secret_copy);
+
+    const codes_copy = try allocator.alloc([]u8, scratch_codes.len);
+    var copied: usize = 0;
+    errdefer {
+        for (codes_copy[0..copied]) |c| allocator.free(c);
+        allocator.free(codes_copy);
+    }
+    for (scratch_codes) |code| {
+        codes_copy[copied] = try allocator.dupe(u8, code);
+        copied += 1;
+    }
+
+    const key_copy = try allocator.dupe(u8, username);
+    errdefer allocator.free(key_copy);
+    try g_mfa_store.put(key_copy, .{
+        .secret_base32 = secret_copy,
+        .recovery_codes = codes_copy,
+    });
+}
+
+/// Look up a user's stored MFA secret (base32). Returns null if not enrolled.
+fn getMfaSecret(username: []const u8) ?[]const u8 {
+    g_mfa_store_mu.lock();
+    defer g_mfa_store_mu.unlock();
+    if (!g_mfa_store_init) return null;
+    const cred = g_mfa_store.get(username) orelse return null;
+    return cred.secret_base32;
+}
+
+/// Check rate limiting on MFA verify attempts. Returns true if locked out.
+fn checkMfaRateLimit(username: []const u8, now_ms: i64) bool {
+    if (!g_mfa_attempts_init) return false;
+    const rec = g_mfa_attempts.get(username) orelse return false;
+    return now_ms < rec.lockout_until_ms;
+}
+
+/// Record a failed MFA attempt; lock out after MFA_MAX_ATTEMPTS.
+fn recordMfaFailure(allocator: std.mem.Allocator, username: []const u8, now_ms: i64) void {
+    if (!g_mfa_attempts_init) {
+        g_mfa_attempts = std.StringHashMap(MfaAttemptRecord).init(allocator);
+        g_mfa_attempts_init = true;
+    }
+    const existing = g_mfa_attempts.get(username);
+    if (existing) |rec| {
+        const new_count = rec.fail_count + 1;
+        const lockout = if (new_count >= MFA_MAX_ATTEMPTS) now_ms + MFA_LOCKOUT_MS else @as(i64, 0);
+        g_mfa_attempts.put(username, .{
+            .fail_count = new_count,
+            .last_attempt_ms = now_ms,
+            .lockout_until_ms = lockout,
+        }) catch {};
+    } else {
+        const key = allocator.dupe(u8, username) catch return;
+        g_mfa_attempts.put(key, .{
+            .fail_count = 1,
+            .last_attempt_ms = now_ms,
+            .lockout_until_ms = 0,
+        }) catch {};
+    }
+}
+
+/// Clear rate limit record on successful verification.
+fn clearMfaRateLimit(username: []const u8) void {
+    if (!g_mfa_attempts_init) return;
+    _ = g_mfa_attempts.fetchRemove(username);
+}
+
+/// Build a space-separated string from recovery code slices.
+fn buildRecoveryStr(allocator: std.mem.Allocator, codes: [][]u8) ![]u8 {
+    var total_len: usize = 0;
+    for (codes, 0..) |code, idx| {
+        if (idx > 0) total_len += 1; // space separator
+        total_len += code.len;
+    }
+    const buf = try allocator.alloc(u8, total_len);
+    var pos: usize = 0;
+    for (codes, 0..) |code, idx| {
+        if (idx > 0) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
+        @memcpy(buf[pos .. pos + code.len], code);
+        pos += code.len;
+    }
+    return buf;
+}
 
 /// GAP-0154: Check if password contains at least one letter and one digit.
 fn passwordHasLetterAndDigit(password: []const u8) bool {
@@ -329,11 +466,32 @@ pub fn execute(
                 err_rows[0] = err_row;
                 return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
             }
-            // Generate a deterministic but realistic-looking TOTP secret (base32, 32 chars)
-            const secret = "JBSWY3DPEHPK3PXP4AAAAAAAAAAAAAA";
-            const recovery1 = "ABCD1234";
-            const recovery2 = "EFGH5678";
-            const recovery3 = "IJKL9012";
+            // GAP-0501: Generate cryptographically random per-user TOTP secret via mfa.enroll().
+            // Generates 20 random bytes via std.crypto.random, base32-encodes, produces 8 recovery codes.
+            var enrollment = mfa_mod.enroll(allocator, username) catch |err| {
+                const err_columns = try allocator.alloc([]const u8, 1);
+                err_columns[0] = try allocator.dupe(u8, "error");
+                const err_row = try allocator.alloc(Value, 1);
+                err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA enrollment failed: {s}", .{@errorName(err)}) };
+                const err_rows = try allocator.alloc([]Value, 1);
+                err_rows[0] = err_row;
+                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+            };
+            defer mfa_mod.freeEnrollment(allocator, &enrollment);
+
+            // Store per-user secret and recovery codes for later TOTP verification
+            storeMfaCredential(allocator, username, enrollment.secret_base32, enrollment.scratch_codes) catch |err| {
+                const err_columns = try allocator.alloc([]const u8, 1);
+                err_columns[0] = try allocator.dupe(u8, "error");
+                const err_row = try allocator.alloc(Value, 1);
+                err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "Failed to store MFA credential: {s}", .{@errorName(err)}) };
+                const err_rows = try allocator.alloc([]Value, 1);
+                err_rows[0] = err_row;
+                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+            };
+
+            const secret = enrollment.secret_base32;
+            const recovery_str = try buildRecoveryStr(allocator, enrollment.scratch_codes);
             const show_uri = std.mem.indexOf(u8, opts, "show-uri") != null;
             const show_recovery = std.mem.indexOf(u8, opts, "show-recovery") != null or std.mem.indexOf(u8, opts, "regenerate") != null;
             if (show_uri) {
@@ -341,8 +499,8 @@ pub fn execute(
                 columns[0] = try allocator.dupe(u8, "provisioning_uri");
                 columns[1] = try allocator.dupe(u8, "secret");
                 const row = try allocator.alloc(Value, 2);
-                row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "otpauth://totp/Geode:{s}?secret={s}&issuer=Geode", .{ username, secret }) };
-                row[1] = Value{ .Str = secret };
+                row[0] = Value{ .Str = try allocator.dupe(u8, enrollment.provisioning_uri) };
+                row[1] = Value{ .Str = try allocator.dupe(u8, secret) };
                 const rows = try allocator.alloc([]Value, 1);
                 rows[0] = row;
                 return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -353,7 +511,7 @@ pub fn execute(
                 columns[1] = try allocator.dupe(u8, "recovery_codes");
                 const row = try allocator.alloc(Value, 2);
                 row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-                row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s} {s} {s}", .{ recovery1, recovery2, recovery3 }) };
+                row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
                 const rows = try allocator.alloc([]Value, 1);
                 rows[0] = row;
                 return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
@@ -364,12 +522,13 @@ pub fn execute(
             columns[1] = try allocator.dupe(u8, "recovery_codes");
             const row = try allocator.alloc(Value, 2);
             row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "MFA secret: {s}", .{secret}) };
-            row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s} {s} {s}", .{ recovery1, recovery2, recovery3 }) };
+            row[1] = Value{ .Str = try std.fmt.allocPrint(allocator, "Recovery codes: {s}", .{recovery_str}) };
             const rows = try allocator.alloc([]Value, 1);
             rows[0] = row;
             return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
         } else if (std.mem.eql(u8, proc_name, "geode.auth.mfa_verify")) {
-            // geode.auth.mfa_verify(username, token) -> status
+            // GAP-0502: geode.auth.mfa_verify(username, token) -> status
+            // Implements RFC 6238 TOTP validation with rate limiting.
             var username: []const u8 = "";
             var token: []const u8 = "";
             if (call_stmt.procedure == .Call) {
@@ -377,8 +536,70 @@ pub fn execute(
                 if (args.len >= 1 and args[0].* == .String) username = args[0].String;
                 if (args.len >= 2 and args[1].* == .String) token = args[1].String;
             }
-            // Token validation would happen here in production
-            const is_valid = token.len == 6;
+
+            const now_ms = std.time.milliTimestamp();
+
+            // Rate limit check: reject if user is locked out from too many failed attempts
+            {
+                g_mfa_store_mu.lock();
+                defer g_mfa_store_mu.unlock();
+                ensureMfaStoreInit(allocator);
+                if (checkMfaRateLimit(username, now_ms)) {
+                    const rl_columns = try allocator.alloc([]const u8, 2);
+                    rl_columns[0] = try allocator.dupe(u8, "status");
+                    rl_columns[1] = try allocator.dupe(u8, "username");
+                    const rl_row = try allocator.alloc(Value, 2);
+                    rl_row[0] = Value{ .Str = "rate_limited" };
+                    rl_row[1] = Value{ .Str = username };
+                    const rl_rows = try allocator.alloc([]Value, 1);
+                    rl_rows[0] = rl_row;
+                    return .{ .columns = rl_columns, .rows = rl_rows, .flags = std.ArrayList([]const u8).empty };
+                }
+            }
+
+            // Look up the user's stored TOTP secret
+            const stored_secret = getMfaSecret(username);
+            if (stored_secret == null) {
+                const ne_columns = try allocator.alloc([]const u8, 2);
+                ne_columns[0] = try allocator.dupe(u8, "status");
+                ne_columns[1] = try allocator.dupe(u8, "username");
+                const ne_row = try allocator.alloc(Value, 2);
+                ne_row[0] = Value{ .Str = "mfa_not_enrolled" };
+                ne_row[1] = Value{ .Str = username };
+                const ne_rows = try allocator.alloc([]Value, 1);
+                ne_rows[0] = ne_row;
+                return .{ .columns = ne_columns, .rows = ne_rows, .flags = std.ArrayList([]const u8).empty };
+            }
+
+            // Parse the 6-digit token string to u32 and validate via RFC 6238 TOTP
+            var is_valid = false;
+            if (token.len == 6) {
+                const code = std.fmt.parseInt(u32, token, 10) catch 0xFFFFFFFF;
+                if (code <= 999999) {
+                    // HMAC-SHA1 TOTP with +/-1 window (90s tolerance)
+                    is_valid = mfa_mod.verifyCode(
+                        allocator,
+                        stored_secret.?,
+                        @as(u64, @intCast(now_ms)),
+                        code,
+                        30, // step_seconds
+                        6, // digits
+                        1, // window (+/-1 = 90 second tolerance)
+                    ) catch false;
+                }
+            }
+
+            // Update rate limiter based on result
+            {
+                g_mfa_store_mu.lock();
+                defer g_mfa_store_mu.unlock();
+                if (is_valid) {
+                    clearMfaRateLimit(username);
+                } else {
+                    recordMfaFailure(allocator, username, now_ms);
+                }
+            }
+
             const columns = try allocator.alloc([]const u8, 2);
             columns[0] = try allocator.dupe(u8, "status");
             columns[1] = try allocator.dupe(u8, "username");
