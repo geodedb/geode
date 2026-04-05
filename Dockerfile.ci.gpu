@@ -35,4 +35,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 # Production default: error-level logging only
 # Override with --log-level debug|info|warn for development/troubleshooting
 ENTRYPOINT ["/usr/local/bin/geode"]
-CMD ["serve", "--data-dir", "/data", "--log-level", "error"]
+CMD ["serve", "--data-dir", "/data", "--log-level", "error", "--enable-auth"]

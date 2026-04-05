@@ -80,4 +80,4 @@ HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
 
 # Entrypoint
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data", "--listen", "0.0.0.0:3141"]
+CMD ["--data-dir", "/data", "--listen", "0.0.0.0:3141", "--enable-auth"]

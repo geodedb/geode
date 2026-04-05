@@ -24,4 +24,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
         ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
 
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
-CMD ["--data-dir", "/data"]
+CMD ["--data-dir", "/data", "--enable-auth"]
