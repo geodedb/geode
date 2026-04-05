@@ -1,7 +1,7 @@
 const std = @import("std");
 const raft_lib = @import("raft");
 
-// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=TESTED; TEST=e2e_raft_persist_snapshot_membership; OWNER=distributed; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RaftState; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 //
 // Persistent Raft node — compatibility wrapper around the external raft library's

@@ -238,7 +238,7 @@ const ConnectionPool = struct {
     }
 };
 
-// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-CONN-001; FEATURE="Distributed Query Connection"; ASPECT=ConnectionInit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 /// Individual connection to a remote node
 const Connection = struct {
     allocator: std.mem.Allocator,
@@ -494,7 +494,7 @@ const Connection = struct {
     }
 
     // GAP-0144: Secure TLS connections for distributed queries
-    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-DIST-TLS-001; FEATURE="Distributed TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     fn connect(self: *Connection, timeout_ms: u32) !void {
         // Get node address from registry if available, otherwise use default pattern
         const node_info = self.getNodeAddress();

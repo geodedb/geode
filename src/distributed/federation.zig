@@ -189,7 +189,7 @@ pub const ConnectionPool = struct {
 };
 
 /// Connection to a remote node
-/// CANARY: REQ=REQ-FED-QUIC-001; FEATURE="FederationQUICConnection"; ASPECT=Connection; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=federation; UPDATED=2026-01-10
+/// CANARY: REQ=REQ-FED-QUIC-001; FEATURE="FederationQUICConnection"; ASPECT=Connection; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
 pub const Connection = struct {
     allocator: std.mem.Allocator,
     client: ?quic.QuicClient = null,
@@ -264,7 +264,7 @@ pub const Connection = struct {
 
     /// GAP-0044: Initialize QUIC client and establish connection to remote federation node
     // GAP-0144: Secure TLS connections for federation
-    // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-FED-TLS-001; FEATURE="Federation TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn connect(self: *Connection, endpoint: []const u8, timeout_ms: u64) !void {
         // Parse endpoint like "host:port"
         const colon = std.mem.indexOfScalar(u8, endpoint, ':') orelse return error.InvalidEndpoint;

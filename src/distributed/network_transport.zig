@@ -3,7 +3,7 @@ const quic = @import("../transport/quic_msquic.zig");
 const protobuf = @import("protobuf");
 const dist_schema = @import("distributed_schema");
 
-// CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=InterNodeMessaging; STATUS=TESTED; TEST=e2e_distributed_cluster; OWNER=distributed; UPDATED=2025-09-25
+// CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=InterNodeMessaging; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 
 pub const ClusterMessageType = dist_schema.ClusterMessageType;
 pub const ClusterMessage = dist_schema.ClusterMessage;

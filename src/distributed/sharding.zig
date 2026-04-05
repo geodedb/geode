@@ -78,7 +78,7 @@ pub const ShardManager = struct {
     };
 
     // GAP-0208 FIX: Migration state tracking for progress monitoring and checkpointing
-    // CANARY: REQ=REQ-DIST-MIGRATION-002; FEATURE="Migration State"; ASPECT=ProgressTracking; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-16
+    // CANARY: REQ=REQ-DIST-MIGRATION-002; FEATURE="Migration State"; ASPECT=ProgressTracking; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub const MigrationState = struct {
         source_shard_id: u64,
         target_shard_id: u64,
@@ -102,7 +102,7 @@ pub const ShardManager = struct {
     };
 
     // GAP-0208 FIX: Transport callback interface for network-based migration
-    // CANARY: REQ=REQ-DIST-TRANSPORT-001; FEATURE="Migration Transport"; ASPECT=NetworkCallback; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-16
+    // CANARY: REQ=REQ-DIST-TRANSPORT-001; FEATURE="Migration Transport"; ASPECT=NetworkCallback; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub const TransportCallback = struct {
         context: *anyopaque,
         requestBatchFn: *const fn (
@@ -442,7 +442,7 @@ pub const ShardManager = struct {
         return .{ .start = "", .end = "" };
     }
 
-    // CANARY: REQ=REQ-DIST-MIGRATION-001; FEATURE="Shard Data Migration"; ASPECT=Migration; STATUS=TESTED; OWNER=distributed; UPDATED=2026-01-16
+    // CANARY: REQ=REQ-DIST-MIGRATION-001; FEATURE="Shard Data Migration"; ASPECT=Migration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     // GAP-0208 FIX: Implemented real shard migration with transport callback, progress tracking, and checksum verification
     fn executeMigration(self: *ShardManager, migration: Migration) !void {
         const source_shard = self.shards.getPtr(migration.source_shard) orelse return error.ShardNotFound;

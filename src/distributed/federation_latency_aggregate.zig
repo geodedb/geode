@@ -15,12 +15,12 @@ const fed_flag = @import("src/distributed/federation_flag.zig");
 // Simplifications: p95 estimate uses order statistic over a bounded small buffer
 // (size 32) of the most recent latencies in the current cycle (adequate for tests).
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Archive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencyArchive; OWNER=federation; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Summary; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencySummary; OWNER=federation; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=MultiRun; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencyMultiRun; OWNER=federation; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=RobustStats; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencyRobustStats; OWNER=federation; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=SchemaValidation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencySchemaValidation; OWNER=federation; UPDATED=2025-09-26
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Streak; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FedLatencyStreak; OWNER=federation; UPDATED=2025-09-26
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Archive; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Summary; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=MultiRun; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=RobustStats; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=SchemaValidation; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Streak; STATUS=IMPL; OWNER=federation; UPDATED=2026-04-05
 
 pub const Snapshot = struct {
     cycle_id: u64,

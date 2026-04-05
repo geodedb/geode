@@ -34,7 +34,7 @@ pub const EnhancedQueryTransport = struct {
     statistics: TransportStatistics,
     stats_mutex: std.Thread.Mutex = .{}, // PERF-D010: Thread-safe statistics access
     config: TransportConfig,
-    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     // GAP-0054: Added active_trackers map for query tracking
     active_trackers: std.AutoHashMap(u64, *QueryTracker),
 
@@ -490,7 +490,7 @@ pub const EnhancedQueryTransport = struct {
 
     // Helper functions for message handling and type conversion
     /// Serialize a QueryFragment to protobuf for distributed transport
-    // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-FRAG-001; FEATURE="Fragment Serialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0162: Implements fragment serialization using protobuf encoding
     fn serializeFragment(allocator: Allocator, fragment: QueryFragment) ![]u8 {
         var deps = std.ArrayList(u64).init(allocator);
@@ -514,7 +514,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Deserialize a QueryFragment from protobuf for distributed transport
-    // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-FRAG-002; FEATURE="Fragment Deserialization"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0162: Implements fragment deserialization from protobuf
     fn deserializeFragment(allocator: Allocator, data: []const u8) !QueryFragment {
         var reader: std.Io.Reader = .fixed(data);
@@ -552,7 +552,7 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Track an active query for coordination and cancellation support
-    // CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; ASPECT=Query; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-TRACKER-002; FEATURE="Query Tracking"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0054: Implements actual query tracking using HashMap storage
     fn trackActiveQuery(self: *EnhancedQueryTransport, query_id: u64, plan: *const ExecutionPlan, callback: QueryCompletionCallback) !void {
         // Allocate and initialize tracker
@@ -580,14 +580,14 @@ pub const EnhancedQueryTransport = struct {
     }
 
     /// Get the tracker for an active query
-    // CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; ASPECT=Query; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-TRACKER-003; FEATURE="Query Tracker Lookup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0054: Implements actual tracker retrieval from HashMap
     fn getQueryTracker(self: *EnhancedQueryTransport, query_id: u64) ?*QueryTracker {
         return self.active_trackers.get(query_id);
     }
 
     /// Remove and clean up a query tracker after completion or cancellation
-    // CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; ASPECT=Query; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-TRACKER-004; FEATURE="Query Tracker Cleanup"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0054: Implements actual tracker cleanup with proper memory deallocation
     fn removeQueryTracker(self: *EnhancedQueryTransport, query_id: u64) void {
         if (self.active_trackers.fetchRemove(query_id)) |entry| {
@@ -633,7 +633,7 @@ pub const EnhancedQueryTransport = struct {
         return 1000; // Default estimate
     }
 
-    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=distributed; UPDATED=2026-01-08
+    // CANARY: REQ=REQ-DIST-LB-001; FEATURE="Load Balancing"; ASPECT=ShardSelection; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// Select the best shard for a query using the configured load balancing strategy
     pub fn selectShardForQuery(self: *EnhancedQueryTransport, available_shards: []const u64, query_key: ?[]const u8) !u64 {
         if (available_shards.len == 0) return error.NoShardsAvailable;
@@ -972,7 +972,7 @@ fn handleCoordinatorMerge(transport: *EnhancedQueryTransport, message: *const Qu
 }
 
 // Unit tests for fragment serialization
-// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-DIST-FRAG-003; FEATURE="Fragment Serialization Tests"; ASPECT=Testing; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 // GAP-0162: Tests for fragment serialization/deserialization
 
 test "serializeFragment produces protobuf payload" {

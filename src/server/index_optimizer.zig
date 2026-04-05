@@ -2003,11 +2003,11 @@ pub const FullTextOptimizer = struct {
     };
 
     // Distributed Query Planning Cost Estimation Integration
-    // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_INDEX_OPTIMIZER_001; OWNER=distributed; UPDATED=2025-10-05
+    // CANARY: REQ=REQ-DISTRIBUTED-INDEX-OPTIMIZER-001; FEATURE="Distributed IndexOptimizer"; ASPECT=FederationAwareCostEstimation; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 
     /// Distributed query planning cost estimation for federation-aware optimization
     /// GAP-0114 FIX: Added per-shard cost breakdown for EXPLAIN output
-    // CANARY: REQ=REQ-DISTRIBUTED-COST-BREAKDOWN-001; FEATURE="PerShardCostBreakdown"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DISTRIBUTED-COST-BREAKDOWN-001; FEATURE="PerShardCostBreakdown"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn estimateDistributedQueryCost(
         self: *IndexOptimizer,
         labels: []const []const u8,
@@ -2170,7 +2170,7 @@ pub const FullTextOptimizer = struct {
 
     /// Get federation-aware index recommendations
     /// GAP-0114 FIX: Implement federation-aware index recommendations
-    // CANARY: REQ=REQ-FEDERATION-INDEX-REC-001; FEATURE="FederationIndexRecommendations"; ASPECT=Index; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-FEDERATION-INDEX-REC-001; FEATURE="FederationIndexRecommendations"; ASPECT=Index; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn getFederationIndexRecommendations(
         self: *IndexOptimizer,
         query_patterns: []const QueryPattern,

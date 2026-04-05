@@ -926,7 +926,7 @@ pub const ClusterCoordinator = struct {
         };
     }
 
-    // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
+    // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: Message) !void {
         const endpoint = try self.findNodeEndpoint(node_id);
         const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
@@ -968,7 +968,7 @@ pub const ClusterCoordinator = struct {
         try stream.writeAll(framed);
     }
 
-    // CANARY: REQ=REQ-GQL-021; FEATURE="Cluster Message Handler"; ASPECT=OnMessage; STATUS=TESTED; TEST=e2e_cluster_replication; OWNER=distributed; UPDATED=2025-09-25
+    // CANARY: REQ=REQ-GQL-021; FEATURE="Cluster Message Handler"; ASPECT=OnMessage; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn onMessage(self: *ClusterCoordinator, callback: fn (*ClusterCoordinator, *const Message) void) void {
         self.message_callback = callback;
     }
@@ -986,7 +986,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleShardQuery(self: *ClusterCoordinator, msg: Message) !Response {
-        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=TESTED; TEST=TestCANARY_DistributedQuery; OWNER=distributed; UPDATED=2025-09-29
+        // CANARY: REQ=REQ-GQL-2PC-005; FEATURE="Distributed Query Processing"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 
         // Determine if this is a read-only or write query
         const is_write = try self.isWriteQuery(msg);

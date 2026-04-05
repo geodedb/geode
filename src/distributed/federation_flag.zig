@@ -11,7 +11,7 @@ const std = @import("std");
 // result stream. Subsequent pages / frames in the same stream will not repeat it unless a new
 // mismatch event occurs.
 //
-// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=Federation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_FederationMismatchFlagConsumption; OWNER=federation; UPDATED=2025-09-23
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationMismatchFlag"; ASPECT=Federation; STATUS=TESTED; TEST="federation mismatch flag consumption"; OWNER=federation; UPDATED=2026-04-05
 
 pub var g_last_federation_mismatch: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 

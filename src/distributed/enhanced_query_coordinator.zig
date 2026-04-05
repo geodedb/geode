@@ -1,5 +1,5 @@
-// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=QueryCoordination; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_COORD_001_QueryCoordination; OWNER=dist; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DIST-QUERY-COORD-002; FEATURE="Query Optimization"; ASPECT=DistributedOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_COORD_002_DistributedOptimization; OWNER=dist; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=QueryCoordination; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-05
+// CANARY: REQ=REQ-DIST-QUERY-COORD-002; FEATURE="Query Optimization"; ASPECT=DistributedOptimization; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-05
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
@@ -551,7 +551,7 @@ pub const EnhancedQueryCoordinator = struct {
 
     /// Top-K results with distributed optimization using heap-based selection
     /// GAP-0129: Uses O(n log k) heap selection instead of O(n log n) full sort
-    // CANARY: REQ=REQ-DIST-TOPK-001; FEATURE="Heap-based Top-K Selection"; ASPECT=Performance; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-TOPK-001; FEATURE="Heap-based Top-K Selection"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     fn topKResults(
         self: *EnhancedQueryCoordinator,
         shard_results: []federation.QueryResults,
@@ -631,7 +631,7 @@ pub const EnhancedQueryCoordinator = struct {
         }
 
         // GAP-0129: Use max-heap for O(n log k) top-K selection
-        // CANARY: REQ=REQ-DIST-TOPK-002; FEATURE="Max-Heap Top-K"; ASPECT=Performance; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+        // CANARY: REQ=REQ-DIST-TOPK-002; FEATURE="Max-Heap Top-K"; ASPECT=Performance; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
         // We maintain a max-heap of size k containing the smallest k elements seen so far
         // For ascending order: keep smallest k elements using a max-heap (pop largest when full)
         // For descending order: keep largest k elements using a min-heap (pop smallest when full)
@@ -734,7 +734,7 @@ pub const EnhancedQueryCoordinator = struct {
         }
 
         // Sort the k results for correct order
-        // CANARY: REQ=REQ-DIST-ORDERBY-002; FEATURE="Distributed ORDER BY Sort"; ASPECT=QueryCorrectness; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+        // CANARY: REQ=REQ-DIST-ORDERBY-002; FEATURE="Distributed ORDER BY Sort"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
         if (options.order_by.len > 0) {
             const sort_context = OrderBySortContext{ .order_by = options.order_by };
             std.sort.heap(protocol.BindingRow, result_rows.items, sort_context, orderByCompare);

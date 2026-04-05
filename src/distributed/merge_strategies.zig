@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=TESTED; TEST=TestCANARY_REQ_DIST_QUERY_COORD_001_QueryCoordination; OWNER=dist; UPDATED=2025-10-05
+// CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-05
 
 const std = @import("std");
 const protocol = @import("../protocol.zig");
@@ -22,7 +22,7 @@ pub const AggregateGroup = struct {
 };
 
 // GAP-0130: ORDER BY key for distributed query sorting
-// CANARY: REQ=REQ-DIST-ORDERBY-001; FEATURE="Distributed ORDER BY"; ASPECT=QueryCorrectness; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-DIST-ORDERBY-001; FEATURE="Distributed ORDER BY"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 pub const OrderByKey = struct {
     column_index: usize,
     ascending: bool = true,
@@ -393,7 +393,7 @@ pub fn cloneQueryResults(allocator: std.mem.Allocator, result: federation.QueryR
 }
 
 /// Row comparison for distributed query result sorting
-// CANARY: REQ=REQ-DIST-ROW-SORT-001; FEATURE="Distributed Row Sorting"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-DIST-ROW-SORT-001; FEATURE="Distributed Row Sorting"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 /// GAP-0053: Implements actual field-by-field comparison using ORDER BY semantics
 pub fn simpleRowCompare(context: void, a: protocol.BindingRow, b: protocol.BindingRow) bool {
     _ = context;
@@ -420,7 +420,7 @@ pub fn simpleRowCompare(context: void, a: protocol.BindingRow, b: protocol.Bindi
 }
 
 // GAP-0130: Context for ORDER BY-aware sorting
-// CANARY: REQ=REQ-DIST-ORDERBY-003; FEATURE="ORDER BY Sort Context"; ASPECT=QueryCorrectness; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-DIST-ORDERBY-003; FEATURE="ORDER BY Sort Context"; ASPECT=QueryCorrectness; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
 pub const OrderBySortContext = struct {
     order_by: []const OrderByKey,
 };

@@ -19,7 +19,7 @@ const Attr = logging.Attr;
 /// Distributed query coordinator
 /// Handles scatter-gather pattern for federated queries
 /// GAP-0077: Now uses statistics registry for row estimates
-// CANARY: REQ=REQ-DIST-STATS-001; FEATURE="DistributedStatsIntegration"; ASPECT=QueryPlanning; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+// CANARY: REQ=REQ-DIST-STATS-001; FEATURE="DistributedStatsIntegration"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="QueryCoordinator: initialization"; OWNER=distributed; UPDATED=2026-04-05
 pub const QueryCoordinator = struct {
     allocator: std.mem.Allocator,
     config: federation.FederationConfig,
@@ -50,7 +50,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// Execute a distributed query with global ORDER BY and LIMIT
-    // CANARY: REQ=REQ-GQL-FED-001; FEATURE="Distributed Query Federation"; ASPECT=Core; STATUS=TESTED; TEST=e2e_federation_global_order; BENCH=benchmark_federation_merge; OWNER=distributed; UPDATED=2026-01-17
+    // CANARY: REQ=REQ-GQL-FED-001; FEATURE="Distributed Query Federation"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn executeDistributedQuery(
         self: *Self,
         query: []const u8,
@@ -96,7 +96,7 @@ pub const QueryCoordinator = struct {
         // Generate shard-specific query fragments
         for (participating_shards) |shard_id| {
             // GAP-0077: Use statistics for row estimate if available
-            // CANARY: REQ=REQ-DIST-STATS-002; FEATURE="ShardRowEstimate"; ASPECT=QueryPlanning; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+            // CANARY: REQ=REQ-DIST-STATS-002; FEATURE="ShardRowEstimate"; ASPECT=QueryPlanning; STATUS=TESTED; TEST="QueryCoordinator: row estimation without stats"; OWNER=distributed; UPDATED=2026-04-05
             const estimated_rows = self.estimateRowsForShard(table_name, shard_id, participating_shards.len);
 
             const fragment = QueryFragment{
@@ -212,7 +212,7 @@ pub const QueryCoordinator = struct {
         return results;
     }
 
-    // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// Execute query fragment on local shard using the actual query executor
     fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
         const start_time = std.time.milliTimestamp();
@@ -501,7 +501,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// GAP-0077: Extract table name from query for statistics lookup
-    // CANARY: REQ=REQ-DIST-STATS-003; FEATURE="TableNameExtraction"; ASPECT=QueryParsing; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-STATS-003; FEATURE="TableNameExtraction"; ASPECT=QueryParsing; STATUS=TESTED; TEST="QueryCoordinator: table name extraction"; OWNER=distributed; UPDATED=2026-04-05
     fn extractTableFromQuery(self: *Self, query: []const u8) ?[]const u8 {
         _ = self;
         // Simple heuristic: look for MATCH (x:TableName) or FROM TableName patterns
@@ -526,7 +526,7 @@ pub const QueryCoordinator = struct {
     }
 
     /// GAP-0077: Estimate rows for a shard using statistics
-    // CANARY: REQ=REQ-DIST-STATS-004; FEATURE="ShardRowEstimation"; ASPECT=Statistics; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-STATS-004; FEATURE="ShardRowEstimation"; ASPECT=Statistics; STATUS=TESTED; TEST="QueryCoordinator: row estimation without stats"; OWNER=distributed; UPDATED=2026-04-05
     fn estimateRowsForShard(self: *Self, table_name: ?[]const u8, shard_id: u64, total_shards: usize) u64 {
         _ = shard_id;
 
@@ -761,7 +761,7 @@ const TopKHeap = struct {
     }
 
     /// Compare rows based on order keys for distributed query sorting
-    // CANARY: REQ=REQ-DIST-ROW-CMP-002; FEATURE="Distributed Row Comparison"; ASPECT=Distributed; STATUS=TESTED; TEST=geodetestlab/specs/geode_distributed_queries.yml; OWNER=distributed; UPDATED=2026-01-25
+    // CANARY: REQ=REQ-DIST-ROW-CMP-002; FEATURE="Distributed Row Comparison"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// GAP-0053: Implements proper ORDER BY key comparison
     fn compareRows(order_keys: []const federation.OrderKey, a: protocol.BindingRow, b: protocol.BindingRow) bool {
         if (order_keys.len == 0) {
