@@ -100,6 +100,30 @@ test "Raft persistence: initial state is follower with term 0" {
     try std.testing.expect(node.snapshot == null);
 }
 
+test "Raft persistence: voted_for round-trip across reopen" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const sub = &tmp.sub_path;
+    const path = try std.fmt.allocPrint(std.testing.allocator, ".zig-cache/tmp/{s}/raft_vf", .{sub});
+    defer std.testing.allocator.free(path);
+
+    // First session: set voted_for and close
+    {
+        var node = try raft_persistent.RaftNode.raftOpen(std.testing.allocator, path);
+        try std.testing.expect(node.voted_for == null);
+        node.voted_for = 5;
+        node.deinit();
+    }
+
+    // Second session: verify voted_for was persisted
+    {
+        var node = try raft_persistent.RaftNode.raftOpen(std.testing.allocator, path);
+        defer node.deinit();
+        try std.testing.expectEqual(@as(?u32, 5), node.voted_for);
+    }
+}
+
 test "Raft persistence: member voting flag defaults to true" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
