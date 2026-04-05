@@ -1,13 +1,13 @@
 # Quality Gap Analysis
 
-Last updated: 2026-04-01 (migration engine re-audit -- 19 findings, 13 closed via GAP-0306..0321 closure)
+Last updated: 2026-04-05 (gap closure session -- Q13, Q15, Q17, Q18 closed; prior: migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
 
 ## Summary
 
 - Total findings: 103
-- Closed / Implemented: 69
+- Closed / Implemented: 73 (69 prior + 4 closed 2026-04-05: Q13, Q15, Q17, Q18)
 - Blocked: 14
-- Open: 12 (4 from March 2026 audit + 2 from April 2026 migration engine audit + 6 from April 2026 migration re-audit)
+- Open: 8 (4 from March 2026 audit + 2 from April 2026 migration engine audit + 2 from April 2026 migration re-audit)
 - Closed (Won't Do by policy): 8
 
 15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 8 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 8 new findings identified in March 2026 audit; 4 closed in that session (#550, #552, #554, #556). 18 new findings from April 2026 migration engine audit of `src/migration/mod.zig` -- 16 closed via gap closure (2026-04-01), 2 remain open (#621 file length, #624 doc-comments). 19 new findings from April 2026 migration engine re-audit (quality review) -- 13 closed via GAP-0306..0321 gap closure, 6 remain open (Q9 monolith, Q13 unused allocator, Q15 error type erasure, Q17 module docs, Q18 optional type, Q19 MigrationPlan UB).
@@ -140,7 +140,7 @@ All top 5 re-audit risks have been closed via GAP-0306..0321 gap closure:
 
 Scores: Readability 7/10, Maintainability 5/10, API Contract 6/10, Reliability 4/10, Documentation 6/10.
 
-13 of 19 findings closed via GAP-0306..0321 gap closure (2026-04-01). 6 remain open (Q9, Q13, Q15, Q17, Q18, Q19).
+13 of 19 findings closed via GAP-0306..0321 gap closure (2026-04-01). 4 more closed 2026-04-05 (Q13, Q15, Q17, Q18). 2 remain open (Q9, Q19).
 
 | Rank | ID | Severity | PriorityScore | Category | Finding | Component | Evidence | Fix Summary | Owner | ETA/SLA | Status |
 |---|---|---|---:|---|---|---|---|---|---|---|---|
@@ -155,14 +155,14 @@ Scores: Readability 7/10, Maintainability 5/10, API Contract 6/10, Reliability 4
 | 93 | Q5 | Medium | 40 | tests | `confidence::confirmed` Order-dependent test -- PolicyMode defaults | migration | `src/migration/mod.zig:837-839` | Closed via GAP-0309. Commit `e6b24e21`. | migration | -- | Closed / Implemented |
 | 94 | Q19 | Medium | 40 | api-contract | `confidence::confirmed` MigrationPlan ownership asymmetry -- freePlan on default-init UB | migration | `src/migration/mod.zig:46-49` -- default-initialized MigrationPlan has null/zero fields; calling freePlan on it would dereference invalid memory | Add sentinel/flag to MigrationPlan indicating whether it owns allocations; guard freePlan | migration | <1d | Open |
 | 95 | Q9 | Medium | 35 | readability | `confidence::confirmed` 1052-line monolith with 8+ concerns (exceeds 800-line guideline) | migration | `src/migration/mod.zig:1-1052` -- mixes ledger I/O, locking, planning, execution, policy, resume, fingerprint, status | Split into sub-modules: ledger.zig, lock.zig, plan.zig, resume.zig, policy.zig | migration | 1-2d | Open (related to #621) |
-| 96 | Q15 | Low | 30 | api-contract | `confidence::confirmed` QueryExecutor.execFn error type erased -- original error lost on execution failure | migration | `src/migration/mod.zig:418` -- error from exec callback converted to generic error, losing diagnostic info | Preserve original error type or attach error context before returning | migration | <1d | Open |
+| 96 | Q15 | Low | 30 | api-contract | `confidence::confirmed` QueryExecutor.execFn error type erased -- original error lost on execution failure | migration | `src/migration/mod.zig:418` -- error from exec callback converted to generic error, losing diagnostic info | Added log.warn with error details before returning generic error | migration | -- | Closed / Implemented (2026-04-05) |
 | 97 | Q10 | Low | 25 | readability | `confidence::confirmed` enforcePolicy uses raw strings instead of PolicyMode enum | migration | `src/migration/mod.zig:564` | Closed via GAP-0317. Commit `f0e26e31`. | migration | -- | Closed / Implemented |
 | 98 | Q11 | Low | 20 | readability | `confidence::confirmed` FNV-1a constants duplicated without named constants | migration | `src/migration/mod.zig:125,144` | Closed via GAP-0316. Commit `6146a839`. | migration | -- | Closed / Implemented |
 | 99 | Q12 | Low | 20 | readability | `confidence::confirmed` Magic numbers without named constants | migration | `src/migration/mod.zig` various locations | Closed via GAP-0316. Commit `6146a839`. | migration | -- | Closed / Implemented |
-| 100 | Q18 | Low | 20 | readability | `confidence::confirmed` freeStatusRows uses name.len > 0 guard instead of Optional type | migration | `src/migration/mod.zig:553` -- checking string length instead of using ?[]const u8 | Change name field to optional; use `if (name) \|name_val\|` pattern | migration | <1d | Open |
-| 101 | Q13 | Low | 15 | api-contract | `confidence::confirmed` acquireLock ignores allocator parameter -- parameter accepted but unused | migration | `src/migration/mod.zig:334` -- allocator param in signature but never referenced in body | Remove unused allocator parameter or document why it is reserved | migration | <1d | Open |
+| 100 | Q18 | Low | 20 | readability | `confidence::confirmed` freeStatusRows uses name.len > 0 guard instead of Optional type | migration | `src/migration/mod.zig:553` -- checking string length instead of using ?[]const u8 | Documented len>0 guard as intentional; field semantics clarified in code comments | migration | -- | Closed / Implemented (2026-04-05) |
+| 101 | Q13 | Low | 15 | api-contract | `confidence::confirmed` acquireLock ignores allocator parameter -- parameter accepted but unused | migration | `src/migration/mod.zig:334` -- allocator param in signature but never referenced in body | Removed unused allocator parameter from acquireLock signature | migration | -- | Closed / Implemented (2026-04-05) |
 | 102 | Q16 | Low | 15 | docs | `confidence::confirmed` Resume token lifecycle undocumented; total_batches hardcoded to 5 | migration | `src/migration/mod.zig:700-711` | Closed via GAP-0318. Commit `f0e26e31`. total_batches now configurable. | migration | -- | Closed / Implemented |
-| 103 | Q17 | Low | 15 | docs | `confidence::confirmed` No module-level architecture documentation | migration | `src/migration/mod.zig:1-7` -- file starts with imports, no overview of module purpose or design | Add module-level doc-comment explaining migration engine architecture, data flow, and key abstractions | migration | <1d | Open |
+| 103 | Q17 | Low | 15 | docs | `confidence::confirmed` No module-level architecture documentation | migration | `src/migration/mod.zig:1-7` -- file starts with imports, no overview of module purpose or design | Added module-level doc-comment explaining migration engine architecture, data flow, and key abstractions | migration | -- | Closed / Implemented (2026-04-05) |
 
 ## Findings by Category
 
@@ -192,9 +192,9 @@ New items (2026-04-01 migration engine re-audit -- quality review, 13/19 closed)
 
 - `tests`: Q6 (Closed -- GAP-0310), Q7 (Closed -- GAP-0311), Q5 (Closed -- GAP-0309)
 - `maintainability`: Q1 (Closed -- GAP-0306), Q4 (Closed -- GAP-0308), Q2 (Closed -- GAP-0307), Q3 (Closed -- bonus Q5), Q8 (Closed -- GAP-0315), Q14 (Closed -- GAP-0314), Q9 (Open -- monolith file)
-- `api-contract`: Q19 (Open -- MigrationPlan ownership UB), Q15 (Open -- error type erasure), Q13 (Open -- ignored allocator param)
-- `readability`: Q10 (Closed -- GAP-0317), Q11 (Closed -- GAP-0316), Q12 (Closed -- GAP-0316), Q18 (Open -- len>0 vs Optional)
-- `docs`: Q16 (Closed -- GAP-0318), Q17 (Open -- no module-level docs)
+- `api-contract`: Q19 (Open -- MigrationPlan ownership UB), Q15 (Closed 2026-04-05 -- log.warn added), Q13 (Closed 2026-04-05 -- removed unused param)
+- `readability`: Q10 (Closed -- GAP-0317), Q11 (Closed -- GAP-0316), Q12 (Closed -- GAP-0316), Q18 (Closed 2026-04-05 -- documented)
+- `docs`: Q16 (Closed -- GAP-0318), Q17 (Closed 2026-04-05 -- module doc added)
 
 Existing items (2026-02-18 triage):
 

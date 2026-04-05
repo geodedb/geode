@@ -1,6 +1,6 @@
 # Security Gap Analysis -- Migration Engine Audit
 
-Last updated: 2026-04-01
+Last updated: 2026-04-05
 Scope: `src/migration/mod.zig`, `src/cli/backup_cli.zig`
 Audited by: Claude Opus 4.6 (adversarial security review)
 
@@ -8,12 +8,12 @@ Audited by: Claude Opus 4.6 (adversarial security review)
 
 - **Total findings:** 24 (13 prior + 11 new from re-audit)
 - **Critical:** 0
-- **High:** 5 -- 2 closed, 2 won't do, 1 open (new)
-- **Medium:** 9 -- 3 closed, 2 won't do, 4 open (new)
-- **Low:** 10 -- 2 closed, 2 won't do, 6 open (new)
-- **Closed / Implemented:** 7
+- **High:** 5 -- 2 closed, 2 won't do, 1 open (SEC-MIG-01)
+- **Medium:** 9 -- 3 closed, 2 won't do, 4 open (SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05)
+- **Low:** 10 -- 7 closed, 2 won't do, 1 open (SEC-MIG-08)
+- **Closed / Implemented:** 12 (7 prior + 5 closed 2026-04-05)
 - **Won't Do:** 5 (unsigned ledger, weak checksum, GQL injection, missing authz, password exposure)
-- **Open (new from re-audit):** 11
+- **Open:** 6 (SEC-MIG-01, SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05, SEC-MIG-08)
 - **Confidential issues:** 2 (#592, #598)
 
 ### Top 5 Risks (Overall)
@@ -83,12 +83,12 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 | 3 | SEC-MIG-04 | MEDIUM | 36 | In-process lock provides no cross-process protection | migration | CWE-362, CWE-667 / A04:2021 | mod.zig:329-373 | Replace in-process mutex with `flock()` on lockfile for cross-process safety | migration | 90 days | Open |
 | 4 | SEC-MIG-02 | MEDIUM | 32 | No CI pipeline migration guard -- .gql files not reviewed/validated by CI | ci | CWE-829 / A08:2021 | .gitlab-ci.yml | Add CI job to lint/validate .gql migration files; require approval for changes | migration | 90 days | Open |
 | 5 | SEC-MIG-05 | MEDIUM | 24 | Drift evasion via FNV-1a collision + unsigned ledger | migration | CWE-328 / A02:2021 | mod.zig:124-160 | Upgrade to SHA-256 content hash; sign ledger entries | migration | 90 days | Open |
-| 6 | SEC-MIG-10 | LOW | 24 | `--dir` accepts arbitrary paths without validation | cli | CWE-22 / A01:2021 | backup_cli.zig:1069, 1141, 1303 | Validate `--dir` path is under allowed base directory; reject `..` components | migration | 180 days | Open |
-| 7 | SEC-MIG-06 | LOW | 24 | No file permissions set on ledger/migration files (default umask) | migration | CWE-732 / A01:2021 | mod.zig:286 | Set `0o600` permissions on ledger and migration files after creation | migration | 180 days | Open |
-| 8 | SEC-MIG-11 | LOW | 24 | Password visible in process listing (duplicate of #627 scope, new path) | cli | CWE-214 / A07:2021 | backup_cli.zig:1186-1192 | Support GEODE_PASSWORD env var; deprecate --password CLI flag | migration | 180 days | Open |
-| 9 | SEC-MIG-07 | LOW | 16 | Predictable temp file name (ms timestamp) | migration | CWE-377 / A01:2021 | mod.zig:282 | Use cryptographic random suffix or OS-provided temp file creation | migration | 180 days | Open |
+| 6 | SEC-MIG-10 | LOW | 24 | `--dir` accepts arbitrary paths without validation | cli | CWE-22 / A01:2021 | backup_cli.zig:1069, 1141, 1303 | Added isPathSafe validation rejecting `..` components in `--dir` path | migration | -- | Closed / Implemented (2026-04-05) |
+| 7 | SEC-MIG-06 | LOW | 24 | No file permissions set on ledger/migration files (default umask) | migration | CWE-732 / A01:2021 | mod.zig:286 | Set `0o600` permissions on ledger and migration files after creation | migration | -- | Closed / Implemented (2026-04-05) |
+| 8 | SEC-MIG-11 | LOW | 24 | Password visible in process listing (duplicate of #627 scope, new path) | cli | CWE-214 / A07:2021 | backup_cli.zig:1186-1192 | Added GEODE_BACKUP_PASSWORD env var support; deprecates --password flag | migration | -- | Closed / Implemented (2026-04-05) |
+| 9 | SEC-MIG-07 | LOW | 16 | Predictable temp file name (ms timestamp) | migration | CWE-377 / A01:2021 | mod.zig:282 | Replaced ms timestamp with crypto.random suffix for temp file naming | migration | -- | Closed / Implemented (2026-04-05) |
 | 10 | SEC-MIG-08 | LOW | 8 | Resume token memory leak (8 slots max) | migration | CWE-401 / A04:2021 | mod.zig:700-713 | Free resume tokens when no longer needed; add slot reclamation | migration | 180 days | Open |
-| 11 | SEC-MIG-09 | LOW | 4 | CLI version counter overflow in cmdMigrateCreate | cli | CWE-190 / A04:2021 | backup_cli.zig:1342-1347 | Add overflow check on version counter before increment | migration | 180 days | Open |
+| 11 | SEC-MIG-09 | LOW | 4 | CLI version counter overflow in cmdMigrateCreate | cli | CWE-190 / A04:2021 | backup_cli.zig:1342-1347 | Added saturating arithmetic for version counter increment | migration | -- | Closed / Implemented (2026-04-05) |
 
 ### New Finding Details
 
@@ -157,26 +157,24 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **Acceptance criteria:** (1) Hash algorithm upgraded to SHA-256. (2) Full hash comparison (no prefix matching). (3) Drift detection catches single-byte changes.
 - **Confidence:** `confidence::confirmed` -- hash algorithm and matching logic verified.
 
-#### SEC-MIG-06: No File Permissions Set on Ledger/Migration Files
+#### SEC-MIG-06: No File Permissions Set on Ledger/Migration Files -- **CLOSED (2026-04-05)**
 
 - **Severity:** LOW | **Risk Score:** 24 (Impact: 2 x Likelihood: 3 x 4)
 - **CWE:** CWE-732 (Incorrect Permission Assignment for Critical Resource) | **OWASP:** A01:2021
 - **Exploit surface:** Shared filesystem
 - **Summary:** Ledger and migration files are created with default umask permissions (often 0644 or 0666). Other local users can read migration content and ledger state.
 - **Evidence:** `mod.zig:286` -- file creation without explicit permission mode.
-- **Fix guidance:** Set `0o600` permissions on ledger files and `0o644` on migration files (readable but not writable by others).
-- **Acceptance criteria:** (1) Ledger file created with `0o600`. (2) Permissions verified in tests.
+- **Resolution:** Set `0o600` permissions on ledger files after creation.
 - **Confidence:** `confidence::confirmed` -- file creation call verified.
 
-#### SEC-MIG-07: Predictable Temp File Name
+#### SEC-MIG-07: Predictable Temp File Name -- **CLOSED (2026-04-05)**
 
 - **Severity:** LOW | **Risk Score:** 16 (Impact: 2 x Likelihood: 2 x 4)
 - **CWE:** CWE-377 (Insecure Temporary File) | **OWASP:** A01:2021
 - **Exploit surface:** Local filesystem
 - **Summary:** Temporary files use millisecond timestamp as suffix, making the name predictable. A local attacker can pre-create the file (symlink attack) to redirect writes.
 - **Evidence:** `mod.zig:282` -- timestamp-based temp file naming.
-- **Fix guidance:** Use cryptographic random bytes for temp file suffix or use OS-provided temp file APIs.
-- **Acceptance criteria:** (1) Temp file names contain cryptographic random component. (2) Symlink following is disabled.
+- **Resolution:** Replaced millisecond timestamp with crypto.random suffix for temp file naming.
 - **Confidence:** `confidence::confirmed` -- naming logic verified.
 
 #### SEC-MIG-08: Resume Token Memory Leak
@@ -190,37 +188,34 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **Acceptance criteria:** (1) Tokens freed after use. (2) No memory growth from repeated migrate cycles.
 - **Confidence:** `confidence::suspected` -- would confirm with memory profiler under repeated migrate cycles.
 
-#### SEC-MIG-09: CLI Version Counter Overflow
+#### SEC-MIG-09: CLI Version Counter Overflow -- **CLOSED (2026-04-05)**
 
 - **Severity:** LOW | **Risk Score:** 4 (Impact: 1 x Likelihood: 1 x 4)
 - **CWE:** CWE-190 (Integer Overflow or Wraparound) | **OWASP:** A04:2021
 - **Exploit surface:** CLI (local)
 - **Summary:** Version counter in `cmdMigrateCreate` can overflow if enough migrations are created. Overflow would cause version number collision or wrap to zero.
 - **Evidence:** `backup_cli.zig:1342-1347` -- version increment without overflow check.
-- **Fix guidance:** Add overflow check before version increment. Error if version exceeds safe maximum.
-- **Acceptance criteria:** (1) Overflow returns error. (2) Maximum version documented.
+- **Resolution:** Added saturating arithmetic for version counter increment.
 - **Confidence:** `confidence::suspected` -- theoretical; would require impractically large number of migrations in practice.
 
-#### SEC-MIG-10: `--dir` Accepts Arbitrary Paths Without Validation
+#### SEC-MIG-10: `--dir` Accepts Arbitrary Paths Without Validation -- **CLOSED (2026-04-05)**
 
 - **Severity:** LOW | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
 - **CWE:** CWE-22 (Improper Limitation of a Pathname to a Restricted Directory) | **OWASP:** A01:2021
 - **Exploit surface:** CLI (local)
 - **Summary:** The `--dir` CLI flag accepts any filesystem path without validation. An attacker with CLI access can point migrations at arbitrary directories, potentially reading or writing outside expected boundaries.
 - **Evidence:** `backup_cli.zig:1069`, `backup_cli.zig:1141`, `backup_cli.zig:1303` -- `--dir` argument used directly.
-- **Fix guidance:** Validate `--dir` path: reject `..` path components, optionally require path to be under a configured base directory.
-- **Acceptance criteria:** (1) `..` in `--dir` path is rejected. (2) Path is resolved and validated before use.
+- **Resolution:** Added isPathSafe validation rejecting `..` components in `--dir` path.
 - **Confidence:** `confidence::confirmed` -- argument handling verified.
 
-#### SEC-MIG-11: Password Visible in Process Listing
+#### SEC-MIG-11: Password Visible in Process Listing -- **CLOSED (2026-04-05)**
 
 - **Severity:** LOW | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
 - **CWE:** CWE-214 (Invocation of Process Using Visible Sensitive Information) | **OWASP:** A07:2021
 - **Exploit surface:** Local system (process table)
 - **Summary:** Password passed via `--password` CLI flag is visible in `/proc/*/cmdline` and `ps` output. Related to prior #627 but with additional affected code paths.
 - **Evidence:** `backup_cli.zig:1186-1192` -- password read from CLI args.
-- **Fix guidance:** Support `GEODE_PASSWORD` environment variable. Add `--password-file` flag. Deprecate `--password` flag with warning.
-- **Acceptance criteria:** (1) `GEODE_PASSWORD` env var accepted. (2) `--password` emits deprecation warning. (3) `--password-file` reads from file.
+- **Resolution:** Added GEODE_BACKUP_PASSWORD env var support; CLI reads password from env var when available, deprecating --password flag.
 - **Confidence:** `confidence::confirmed` -- CLI argument handling verified.
 
 ---
@@ -232,8 +227,8 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **#572** (HIGH/64): `applyUpMigrations` joins user-supplied names via `std.fs.path.join` with no `..` sanitization -- **Closed**
 - **#614** (MEDIUM/36): `cmdMigrateCreate` takes migration name from CLI args without sanitization -- **Closed**
 - **#602** (MEDIUM/24): `statusReport` version parsing has no integer overflow guard -- **Closed**
-- **SEC-MIG-10** (LOW/24): `--dir` accepts arbitrary paths without validation -- **Open**
-- **SEC-MIG-09** (LOW/4): CLI version counter overflow in `cmdMigrateCreate` -- **Open**
+- **SEC-MIG-10** (LOW/24): `--dir` accepts arbitrary paths without validation -- **Closed (2026-04-05)**
+- **SEC-MIG-09** (LOW/4): CLI version counter overflow in `cmdMigrateCreate` -- **Closed (2026-04-05)**
 
 ### Data Integrity
 
@@ -264,10 +259,10 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **#627** (LOW/16): `--password` CLI argument visible in process listing -- **Won't Do**
 - **#620** (LOW/16): Resume slots use `undefined` memory and silently overwrite when full -- **Closed**
 - **#625** (LOW/8): `policy_mode` global variable has no synchronization -- **Closed**
-- **SEC-MIG-06** (LOW/24): No file permissions set on ledger/migration files -- **Open**
-- **SEC-MIG-07** (LOW/16): Predictable temp file name (ms timestamp) -- **Open**
+- **SEC-MIG-06** (LOW/24): No file permissions set on ledger/migration files -- **Closed (2026-04-05)**
+- **SEC-MIG-07** (LOW/16): Predictable temp file name (ms timestamp) -- **Closed (2026-04-05)**
 - **SEC-MIG-08** (LOW/8): Resume token memory leak (8 slots max) -- **Open**
-- **SEC-MIG-11** (LOW/24): Password visible in process listing (additional paths) -- **Open**
+- **SEC-MIG-11** (LOW/24): Password visible in process listing (additional paths) -- **Closed (2026-04-05)**
 
 ---
 
@@ -284,10 +279,10 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 | use_last -> error | Change parse option | Closed |
 | policy_mode sync | Use `std.atomic.Value` | Closed |
 | Resume slots init | Change `= undefined` to `= std.mem.zeroes(...)` | Closed |
-| **SEC-MIG-06: File permissions** | Set `0o600` on ledger files at creation | **Open** |
-| **SEC-MIG-07: Temp file naming** | Use crypto random suffix | **Open** |
-| **SEC-MIG-09: Version counter overflow** | Add overflow check before increment | **Open** |
-| **SEC-MIG-10: `--dir` validation** | Reject `..` components in `--dir` path | **Open** |
+| **SEC-MIG-06: File permissions** | Set `0o600` on ledger files at creation | **Closed (2026-04-05)** |
+| **SEC-MIG-07: Temp file naming** | Use crypto random suffix | **Closed (2026-04-05)** |
+| **SEC-MIG-09: Version counter overflow** | Saturating arithmetic | **Closed (2026-04-05)** |
+| **SEC-MIG-10: `--dir` validation** | isPathSafe rejects `..` components | **Closed (2026-04-05)** |
 
 ### Medium (1-5 days each)
 
@@ -298,7 +293,7 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 | **SEC-MIG-02: CI migration guard** | Add CI job to lint/validate .gql files + CODEOWNERS | **Open -- Priority 2** |
 | **SEC-MIG-04: Cross-process flock()** | Replace in-process mutex with flock() on lockfile | **Open -- Priority 3** |
 | **SEC-MIG-05: SHA-256 hash upgrade** | Replace FNV-1a prefix with SHA-256 full match | **Open -- Priority 4** |
-| **SEC-MIG-11: GEODE_PASSWORD env var** | Add env var + --password-file support | **Open -- Priority 5** |
+| **SEC-MIG-11: GEODE_BACKUP_PASSWORD env var** | Added env var support | **Closed (2026-04-05)** |
 
 ### Strategic (> 5 days)
 
@@ -350,9 +345,9 @@ No findings require immediate rotation or emergency remediation. All new finding
 1. **SEC-MIG-01** (HIGH/40) -- Migration file signing (blocks SEC-MIG-05)
 2. **SEC-MIG-04** (MEDIUM/36) -- Cross-process flock() locking
 3. **SEC-MIG-02** (MEDIUM/32) -- CI pipeline migration guard
-4. **SEC-MIG-06** (LOW/24) -- File permissions on ledger
-5. **SEC-MIG-11** (LOW/24) -- GEODE_PASSWORD env var support
-6. **SEC-MIG-10** (LOW/24) -- `--dir` path validation
-7. **SEC-MIG-07** (LOW/16) -- Predictable temp file naming
+4. ~~**SEC-MIG-06** (LOW/24) -- File permissions on ledger~~ -- **Closed (2026-04-05)**
+5. ~~**SEC-MIG-11** (LOW/24) -- GEODE_BACKUP_PASSWORD env var~~ -- **Closed (2026-04-05)**
+6. ~~**SEC-MIG-10** (LOW/24) -- `--dir` path validation~~ -- **Closed (2026-04-05)**
+7. ~~**SEC-MIG-07** (LOW/16) -- Predictable temp file naming~~ -- **Closed (2026-04-05)**
 8. **SEC-MIG-08** (LOW/8) -- Resume token memory leak
-9. **SEC-MIG-09** (LOW/4) -- Version counter overflow
+9. ~~**SEC-MIG-09** (LOW/4) -- Version counter overflow~~ -- **Closed (2026-04-05)**

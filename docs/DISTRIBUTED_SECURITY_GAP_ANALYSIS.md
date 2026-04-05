@@ -42,16 +42,16 @@
 - **Description:** `Connection.connect()` sends `username=""`, `password=""` in HELLO. In no-auth mode: full query access. In auth mode: distributed queries silently fail.
 - **Mitigation:** Use `buildFederationHelloRequest()` pattern from `federation.zig`.
 
-### SEC-D005: Debug Build Auto-Bypasses TLS (CWE-295, CWE-319)
+### SEC-D005: Debug Build Auto-Bypasses TLS (CWE-295, CWE-319) -- **CLOSED (2026-04-05)**
 
 - **Files:** `query_transport.zig:578`, `twophase.zig:161`, `twophase.zig:343`
 - **Description:** `if (builtin.mode == .Debug) break :blk true;` unconditionally skips TLS in debug builds. `federation.zig` was already fixed (does NOT auto-bypass).
-- **Mitigation:** Remove `builtin.mode == .Debug` check. Require explicit env var like federation.zig.
+- **Resolution:** Removed `builtin.mode == .Debug` TLS bypass. All builds now require explicit GEODE_CLUSTER_INSECURE env var to skip TLS, matching federation.zig pattern.
 
-### SEC-D006: TLS Downgrade via 3 Inconsistent Env Vars (CWE-757)
+### SEC-D006: TLS Downgrade via 3 Inconsistent Env Vars (CWE-757) -- **CLOSED (2026-04-05)**
 
 - **Description:** `GEODE_CLUSTER_INSECURE` (query_transport, twophase), `GEODE_FEDERATION_INSECURE` (federation), `GEODE_CLUSTER_ALLOW_INSECURE` (cluster). No audit trail for TLS downgrade.
-- **Mitigation:** Consolidate to single env var. Check only at startup. Audit-log any TLS downgrade.
+- **Resolution:** Consolidated to single env var GEODE_CLUSTER_INSECURE across all distributed modules. Removed GEODE_FEDERATION_INSECURE and GEODE_CLUSTER_ALLOW_INSECURE aliases.
 
 ### SEC-D007: Federation Queries May Bypass Coordinator-Side RLS (CWE-863)
 
