@@ -139,13 +139,15 @@ fn writeServerPacket(allocator: std.mem.Allocator, stream: *quic_transport.QuicS
     const msg_bytes = aw.writer.buffer[0..aw.writer.end];
     const msg_len: u32 = @intCast(msg_bytes.len);
 
-    // Write 4-byte big-endian length prefix
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, msg_len, .big);
-    try stream.writeAll(&len_buf);
-
-    // Write the protobuf bytes
-    try stream.writeAll(msg_bytes);
+    // #688: Single writeAll with length prefix prepended to avoid two QUIC
+    // mutex acquisitions per response.  Allocate a combined buffer, copy
+    // the 4-byte big-endian length header followed by the payload, and
+    // send in one call.
+    const framed = try allocator.alloc(u8, 4 + msg_bytes.len);
+    defer allocator.free(framed);
+    std.mem.writeInt(u32, framed[0..4], msg_len, .big);
+    @memcpy(framed[4..], msg_bytes);
+    try stream.writeAll(framed);
 }
 
 // CANARY: REQ=REQ-PERF-QUIC-READLINE-001; FEATURE="BufferedProtoReader"; ASPECT=TransportHotPath; STATUS=IMPL; OWNER=wire; UPDATED=2026-02-02
@@ -633,7 +635,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         if (state.session_config) |*cfg| cfg.deinit();
         if (state.authenticated_user) |u| gpa.free(u);
         if (state.authenticated_password) |p| {
-            @memset(@constCast(p), 0);
+            std.crypto.secureZero(u8, @constCast(p));
             gpa.free(p);
         }
         state.txn_manager.deinit();
@@ -878,7 +880,7 @@ pub fn handleQuicConnection(
         if (state.session_config) |*cfg| cfg.deinit();
         if (state.authenticated_user) |u| gpa.free(u);
         if (state.authenticated_password) |p| {
-            @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+            std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
             gpa.free(p);
         }
         state.txn_manager.deinit();
@@ -1440,7 +1442,7 @@ fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) v
         state.authenticated_user = null;
     }
     if (state.authenticated_password) |password| {
-        @memset(@constCast(password), 0);
+        std.crypto.secureZero(u8, @constCast(password));
         gpa.free(password);
         state.authenticated_password = null;
     }
@@ -1504,7 +1506,7 @@ fn handleClientMessage(
                 // Grant federation-level session: store identity, grant ReadWrite role
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {
-                    @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+                    std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
@@ -1549,7 +1551,7 @@ fn handleClientMessage(
 
                 if (state.authenticated_user) |u| gpa.free(u);
                 if (state.authenticated_password) |p| {
-                    @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+                    std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
                     gpa.free(p);
                 }
                 state.authenticated_user = try gpa.dupe(u8, hello_req.username);
