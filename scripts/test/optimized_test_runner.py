@@ -18,11 +18,13 @@ def run_test_fast(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig
     expect = test_case.get("expect", {})
 
     # Add --server 127.0.0.1:3141 --insecure for query commands if not present
-    if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any(
-            "--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args
-        ):
-            args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
+    if (
+        len(args) > 0
+        and args[0] == "query"
+        and not any("--server" in str(arg) for arg in args)
+        and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args)
+    ):
+        args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     stdin_content = test_case.get("stdin", None)
 
@@ -34,9 +36,8 @@ def run_test_fast(test_case, binary="/home/benji/src/gl/devnw/codepros/geode/zig
         return False, str(e)
 
     # Check exit code
-    if "exit_code" in expect:
-        if result.returncode != expect["exit_code"]:
-            return False, f"exit code {result.returncode}"
+    if "exit_code" in expect and result.returncode != expect["exit_code"]:
+        return False, f"exit code {result.returncode}"
 
     # Check stdout_contains
     if "stdout_contains" in expect:
@@ -67,7 +68,7 @@ def main():
         try:
             with open(spec_file) as f:
                 spec = yaml.safe_load(f)
-        except:
+        except Exception:
             continue
 
         for test in spec.get("tests", []):

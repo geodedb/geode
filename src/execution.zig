@@ -1,7 +1,7 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
 const fle_catalog = @import("schema/fle_catalog.zig");
-const fle_annotations = @import("schema/annotations.zig");
+// fle_annotations import removed (#696) — unused
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Execution; STATUS=EXEMPT; OWNER=execution; UPDATED=2026-01-24
 const logging = @import("logging");

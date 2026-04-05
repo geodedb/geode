@@ -9,7 +9,6 @@ import yaml
 
 def main():
     specs_dir = Path("/home/benji/src/gl/devnw/codepros/geode/geodetestlab/specs")
-    binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"
 
     # Categories
     server_tests = []  # Tests that need a running server
@@ -21,16 +20,8 @@ def main():
         try:
             with open(spec_file) as f:
                 spec = yaml.safe_load(f)
-        except:
+        except Exception:
             continue
-
-        # Check if spec requires server
-        server_enabled = False
-        cli_config = spec.get("cli", {})
-        if isinstance(cli_config, dict):
-            server_config = cli_config.get("server", {})
-            if isinstance(server_config, dict):
-                server_enabled = server_config.get("enabled", False)
 
         # Check each test
         for test in spec.get("tests", []):

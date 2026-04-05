@@ -61,7 +61,7 @@ def test_batch_update_properties():
                         if isinstance(row, list):
                             for val in row:
                                 json_values.append(str(val))
-            except:
+            except Exception:
                 pass
 
     print(f"Extracted JSON values: {json_values}")
@@ -100,7 +100,7 @@ def test_json_extraction():
                     if isinstance(row, list):
                         for val in row:
                             json_values.append(str(val))
-        except:
+        except Exception:
             pass
 
         if json_values == expected:

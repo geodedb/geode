@@ -48,7 +48,7 @@ def test_spec(spec_path):
     try:
         with open(spec_path) as f:
             spec = yaml.safe_load(f)
-    except:
+    except Exception:
         return 0, 0, 0
 
     passed = failed = skipped = 0

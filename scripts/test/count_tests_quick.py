@@ -16,7 +16,7 @@ def main():
         try:
             with open(spec_file) as f:
                 spec = yaml.safe_load(f)
-        except:
+        except Exception:
             continue
 
         count = 0

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Parallel optimized test runner with smart caching and minimal overhead."""
 
+import contextlib
 import multiprocessing as mp
 import os
 import subprocess
@@ -44,10 +45,7 @@ def needs_cleanup(test_case):
         return True
 
     # Has setup/teardown = likely modifies state
-    if test_case.get("setup") or test_case.get("teardown"):
-        return True
-
-    return False
+    return bool(test_case.get("setup") or test_case.get("teardown"))
 
 
 def categorize_test_speed(test_case):
@@ -87,10 +85,8 @@ def categorize_test_speed(test_case):
 
 def cleanup_files():
     """Clean up catalog and persistence files."""
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.remove("/tmp/geode_graph_store.dat")
-    except FileNotFoundError:
-        pass
 
     home_dir = os.path.expanduser("~")
     catalog_paths = [
@@ -99,10 +95,8 @@ def cleanup_files():
         f"{home_dir}/.geode/catalog_schemas.json",
     ]
     for catalog_path in catalog_paths:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             os.remove(catalog_path)
-        except FileNotFoundError:
-            pass
 
 
 def run_test_worker(test_data):
@@ -116,11 +110,13 @@ def run_test_worker(test_data):
     expect = test_case.get("expect", {})
 
     # Add --server 127.0.0.1:3141 --insecure for query commands
-    if len(args) > 0 and args[0] == "query":
-        if not any("--server" in str(arg) for arg in args) and not any(
-            "--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args
-        ):
-            args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
+    if (
+        len(args) > 0
+        and args[0] == "query"
+        and not any("--server" in str(arg) for arg in args)
+        and not any("--server 127.0.0.1:3141 --insecure" in str(arg) for arg in args)
+    ):
+        args = ["query", "--server 127.0.0.1:3141 --insecure"] + args[1:]
 
     # Only cleanup if test modifies state
     if needs_cleanup(test_case):
@@ -140,9 +136,8 @@ def run_test_worker(test_data):
         return False, str(e)
 
     # Check exit code
-    if "exit_code" in expect:
-        if result.returncode != expect["exit_code"]:
-            return False, f"exit code {result.returncode}"
+    if "exit_code" in expect and result.returncode != expect["exit_code"]:
+        return False, f"exit code {result.returncode}"
 
     # Check stdout_contains
     if "stdout_contains" in expect:
@@ -165,7 +160,7 @@ def process_spec_file(spec_file_path):
     try:
         with open(spec_file_path) as f:
             spec = yaml.safe_load(f)
-    except:
+    except Exception:
         return []
 
     binary = "/home/benji/src/gl/devnw/codepros/geode/zig-out/bin/geode"

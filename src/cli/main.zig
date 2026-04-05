@@ -41,8 +41,7 @@ const crypto = std.crypto;
 // Direct calls to server and client main functions to eliminate subprocess spawning
 
 // CANARY: REQ=REQ-M11-DRY-002; FEATURE="CodeQuality"; ASPECT=DuplicateCode; STATUS=EXEMPT; OWNER=core; UPDATED=2025-10-17
-// M11: Import backup types from canonical location (storage/backup.zig) instead of duplicating
-const backup_types = @import("storage/backup");
+// M11: backup_types import removed (#696) — was unused after CLI modularization
 
 // CANARY: REQ=REQ-M4.1-CLI-MODULARIZATION-001; FEATURE="CLI Modularization"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=cli; UPDATED=2026-01-15
 // Phase 4 M4.1: Import user management CLI module
