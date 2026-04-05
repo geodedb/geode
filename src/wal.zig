@@ -166,14 +166,30 @@ pub const WriteAheadLog = struct {
     /// Append a WAL record and return the assigned LSN.
     /// Thread-safe: the external WAL library handles locking internally.
     pub fn appendRecord(self: *WriteAheadLog, txn_id: u64, record: WalRecord) !u64 {
+        // #692: Use a stack buffer for small records (majority of mutations
+        // are under 256 bytes) to avoid a heap allocation per WAL append.
+        // The FixedBufferAllocator serves from the stack; if the record
+        // exceeds 256 bytes, we fall back to the heap allocator.
+        var stack_buf: [256]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&stack_buf);
+        const stack_alloc = fba.allocator();
+
+        // Try stack-backed path first; fall back to heap on overflow.
+        return self.appendRecordWithAllocator(stack_alloc, txn_id, record) catch |err| switch (err) {
+            error.OutOfMemory => self.appendRecordWithAllocator(self.allocator, txn_id, record),
+            else => err,
+        };
+    }
+
+    fn appendRecordWithAllocator(self: *WriteAheadLog, alloc: std.mem.Allocator, txn_id: u64, record: WalRecord) !u64 {
         // Serialize the geode-specific payload: [u64: txn_id][u8: op_type][payload...]
-        var payload_buf = std.ArrayList(u8).initCapacity(self.allocator, 256) catch return error.OutOfMemory;
-        defer payload_buf.deinit(self.allocator);
+        var payload_buf = std.ArrayList(u8).initCapacity(alloc, 256) catch return error.OutOfMemory;
+        defer payload_buf.deinit(alloc);
 
         // Prepend txn_id and op_type to the serialized payload
-        try appendU64(&payload_buf, self.allocator, txn_id);
-        try payload_buf.append(self.allocator, @intFromEnum(std.meta.activeTag(record)));
-        try serializePayload(self.allocator, &payload_buf, record);
+        try appendU64(&payload_buf, alloc, txn_id);
+        try payload_buf.append(alloc, @intFromEnum(std.meta.activeTag(record)));
+        try serializePayload(alloc, &payload_buf, record);
 
         return self.inner.append(payload_buf.items);
     }
