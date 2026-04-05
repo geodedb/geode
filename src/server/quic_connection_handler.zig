@@ -28,6 +28,7 @@ const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
+const server_init = @import("server_init.zig");
 // GAP-0258: Import mTLS provider for QUIC client certificate authentication
 const mtls_provider = geode.mtls_provider;
 // GAP-0271: Import FLE integration for role-based field access control
@@ -803,6 +804,7 @@ pub fn handleQuicConnection(
     security_manager: ?*geode_auth.SecurityManager,
     shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer, // Issue #460
+    env_config: *const server_init.EnvironmentConfig, // #683: Cached env vars
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
@@ -844,10 +846,7 @@ pub fn handleQuicConnection(
         .allocator = gpa,
     };
     state.exec_session = execution.SessionState.init(gpa);
-    state.telemetry_paging = if (std.process.getEnvVarOwned(gpa, "GEODE_TELEMETRY_PAGING")) |v| blk: {
-        defer gpa.free(v);
-        break :blk true;
-    } else |_| false;
+    state.telemetry_paging = env_config.telemetry_paging;
     state.txn_manager.init(gpa);
     state.inserted_values = .{};
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
@@ -898,33 +897,12 @@ pub fn handleQuicConnection(
         state.graph_types.deinit();
     }
 
-    // Query optimizer gating: enable only when explicitly requested.
-    // PROFILE/EXPLAIN will still enable it per-query.
+    // #683: Use cached env config instead of per-connection getEnvVarOwned syscalls.
     // CANARY: REQ=REQ-PERF-OPT-GATE-001; FEATURE="OptimizerGating"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
-    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk false;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| false;
-
-    // Inline RUN+PULL for small results (configurable).
-    // Enabled by default; set GEODE_INLINE_RESULTS=0 to disable.
+    state.query_optimizer_enabled = env_config.query_optimizer_enabled;
     // CANARY: REQ=REQ-PERF-INLINE-PULL-001; FEATURE="InlineRunPull"; ASPECT=HotPath; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-27
-    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk true;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| true;
-    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
-        defer gpa.free(v);
-        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
-    } else |_| state.inline_results_max_rows;
+    state.inline_results_enabled = env_config.inline_results_enabled;
+    state.inline_results_max_rows = env_config.inline_results_max_rows;
 
     // Issue #460: Use shared cross-connection optimizer instead of per-connection instance
     // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=ConnectionWiring; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17

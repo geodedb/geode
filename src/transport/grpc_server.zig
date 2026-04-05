@@ -250,7 +250,7 @@ fn deinitServerState(state: *server_state.ServerState) void {
     if (state.session_config) |*cfg| cfg.deinit();
     if (state.authenticated_user) |u| alloc.free(u);
     if (state.authenticated_password) |p| {
-        @memset(@constCast(p), 0); // SECURITY (S7): Zero plaintext password before freeing
+        std.crypto.secureZero(u8, @constCast(p)); // SECURITY (S7): Zero plaintext password before freeing
         alloc.free(p);
     }
     state.txn_manager.deinit();
@@ -286,7 +286,7 @@ fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_s
         state.authenticated_user = null;
     }
     if (state.authenticated_password) |p| {
-        @memset(@constCast(p), 0);
+        std.crypto.secureZero(u8, @constCast(p));
         allocator.free(p);
         state.authenticated_password = null;
     }

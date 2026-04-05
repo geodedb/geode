@@ -5,14 +5,8 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-SEC-ZEROIZE-001; FEATURE="SecretsZeroization"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_ZEROIZE_001_Basic; OWNER=security; UPDATED=2025-09-26
 
 pub fn wipe(buf: []u8) void {
-    // Rely on compiler barrier around explicit loop with volatile pointer semantics.
-    var i: usize = 0;
-    while (i < buf.len) : (i += 1) {
-        const p: *volatile u8 = @ptrCast(&buf[i]);
-        p.* = 0;
-    }
-    // Barrier hint
-    std.atomic.spinLoopHint();
+    // SEC-11: Use std.crypto.secureZero for consistent, optimizer-resistant zeroing.
+    std.crypto.secureZero(u8, buf);
 }
 
 pub fn wipeStruct(comptime T: type, val: *T) void {

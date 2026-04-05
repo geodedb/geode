@@ -438,7 +438,7 @@ pub const KeyPair = struct {
 
     pub fn deinit(self: KeyPair, allocator: std.mem.Allocator) void {
         // Zero out private key for security
-        @memset(@constCast(self.private_key), 0);
+        std.crypto.secureZero(u8, @constCast(self.private_key));
         allocator.free(self.private_key);
         allocator.free(self.public_key);
     }
@@ -532,7 +532,7 @@ pub const Hmac = struct {
 
     pub fn deinit(self: Hmac, allocator: std.mem.Allocator) void {
         // Zero out key for security
-        @memset(@constCast(self.key), 0);
+        std.crypto.secureZero(u8, @constCast(self.key));
         allocator.free(self.key);
         allocator.free(self.digest);
     }
