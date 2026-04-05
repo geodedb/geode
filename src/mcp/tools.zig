@@ -34,7 +34,10 @@ pub fn listTools(cursor: ?[]const u8) []const u8 {
     return tools_json;
 }
 
-/// Execute a Geode MCP tool
+/// Execute a Geode MCP tool.
+/// SEC-08: All tool calls are gated by the MCP server's auth layer (bearer token
+/// by default). The server refuses to start without a configured token unless
+/// auth_mode is explicitly set to .none. See server.zig GeodeMcpServer.init.
 pub fn callTool(
     allocator: std.mem.Allocator,
     geode_endpoint: ?[]const u8,

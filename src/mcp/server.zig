@@ -16,7 +16,22 @@ pub const GeodeMcpServer = struct {
     server: mcp.Server,
     geode_endpoint: ?[]const u8,
 
+    pub const McpAuthError = error{
+        /// SEC-08: MCP server requires bearer token authentication by default.
+        /// Set auth_mode to .bearer and provide a bearer_token, or explicitly
+        /// set auth_mode to .none if running in a trusted environment.
+        MissingBearerToken,
+    };
+
     pub fn init(allocator: std.mem.Allocator, options: Options) !*GeodeMcpServer {
+        // SEC-08: Refuse to start MCP server without bearer token when auth is required
+        if (options.auth_mode == .bearer and options.bearer_token == null) {
+            std.debug.print("ERROR: MCP server requires a bearer token when auth_mode is 'bearer' (the default). " ++
+                "Set --mcp-token or pass bearer_token in Options. " ++
+                "To disable auth (NOT recommended), explicitly set auth_mode to .none.\n", .{});
+            return error.MissingBearerToken;
+        }
+
         const self = try allocator.create(GeodeMcpServer);
         errdefer allocator.destroy(self);
 
@@ -90,7 +105,8 @@ pub const GeodeMcpServer = struct {
         worker_threads: u16 = 4,
         http_bind: []const u8 = "127.0.0.1",
         http_port: u16 = 0,
-        auth_mode: mcp.AuthMode = .none,
+        // SEC-08: Default to bearer token auth; refuse to start without a token configured
+        auth_mode: mcp.AuthMode = .bearer,
         bearer_token: ?[]const u8 = null,
     };
 };
@@ -165,11 +181,34 @@ fn setLogLevelHandler(ctx: ?*anyopaque, level: []const u8) anyerror!void {
 // Tests
 // =============================================================================
 
-test "GeodeMcpServer initialization" {
+test "GeodeMcpServer initialization with bearer token" {
     const allocator = std.testing.allocator;
 
     const server = try GeodeMcpServer.init(allocator, .{
         .geode_endpoint = "localhost:3141",
+        .bearer_token = "test-token-for-unit-test",
+    });
+    defer server.deinit();
+
+    try std.testing.expect(server.geode_endpoint != null);
+}
+
+test "GeodeMcpServer rejects init without bearer token" {
+    const allocator = std.testing.allocator;
+
+    // SEC-08: Default auth_mode is .bearer, so omitting bearer_token must fail
+    const result = GeodeMcpServer.init(allocator, .{
+        .geode_endpoint = "localhost:3141",
+    });
+    try std.testing.expectError(error.MissingBearerToken, result);
+}
+
+test "GeodeMcpServer allows no-auth when explicitly set" {
+    const allocator = std.testing.allocator;
+
+    const server = try GeodeMcpServer.init(allocator, .{
+        .geode_endpoint = "localhost:3141",
+        .auth_mode = .none,
     });
     defer server.deinit();
 

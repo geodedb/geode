@@ -924,6 +924,8 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     var http_port: u16 = 8080;
     var endpoint: ?[]const u8 = "localhost:3141";
     var use_stdio: bool = false;
+    var bearer_token: ?[]const u8 = null;
+    var no_auth: bool = false;
     var ai: usize = start_idx + 1;
 
     while (ai < argv.len) : (ai += 1) {
@@ -937,6 +939,13 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 endpoint = argv[ai + 1];
                 ai += 1;
             }
+        } else if (std.mem.eql(u8, argv[ai], "--token")) {
+            if (ai + 1 < argv.len) {
+                bearer_token = argv[ai + 1];
+                ai += 1;
+            }
+        } else if (std.mem.eql(u8, argv[ai], "--no-auth")) {
+            no_auth = true;
         } else if (std.mem.eql(u8, argv[ai], "--stdio")) {
             use_stdio = true;
         } else if (std.mem.eql(u8, argv[ai], "-h") or std.mem.eql(u8, argv[ai], "--help")) {
@@ -948,10 +957,22 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         }
     }
 
+    // SEC-08: Also check GEODE_MCP_TOKEN env var as fallback for bearer token
+    if (bearer_token == null) {
+        bearer_token = std.posix.getenv("GEODE_MCP_TOKEN");
+    }
+
     // Create and start MCP server with Options struct
-    const server = try geode_mcp.GeodeMcpServer.init(allocator, .{
+    // SEC-08: Default auth_mode is .bearer; --no-auth explicitly disables it
+    const server = try geode_mcp.GeodeMcpServer.init(allocator, if (no_auth) .{
         .geode_endpoint = endpoint,
         .http_port = http_port,
+        .auth_mode = .none,
+        .bearer_token = bearer_token,
+    } else .{
+        .geode_endpoint = endpoint,
+        .http_port = http_port,
+        .bearer_token = bearer_token,
     });
     defer server.deinit();
 
