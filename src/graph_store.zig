@@ -3722,56 +3722,68 @@ pub const GraphStore = struct {
         return std.ArrayList(u8).initCapacity(self.allocator, 0);
     }
 
-    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="ClusterReplication"; ASPECT=SnapshotSerialization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
-    /// Serialize all nodes and edges to a line-delimited snapshot format for
-    /// cluster replication. Each line is one record:
-    ///   N|<id>|<graph>|<label1>,<label2>|<key>=<val>,<key>=<val>
-    ///   E|<id>|<from>|<to>|<graph>|<label>|<key>=<val>
+    // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="ClusterReplication"; ASPECT=SnapshotSerialization; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-05
+    /// Serialize all nodes and edges to JSON-lines format for cluster replication.
+    /// Each line is one JSON object:
+    ///   {"type":"node","id":N,"graph":"G","labels":["L1"],"properties":{"k":"v"}}
+    ///   {"type":"edge","id":N,"from":F,"to":T,"graph":"G","label":"L","properties":{}}
     /// Returns owned bytes that the caller must free with `allocator.free`.
     pub fn serializeSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]u8 {
         var buf = std.ArrayList(u8){};
         errdefer buf.deinit(allocator);
 
-        // Serialize nodes
+        // Serialize nodes as JSON-lines
         var node_iter = self.nodes.iterator();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr;
-            try buf.appendSlice(allocator, "N|");
-            try appendU64(&buf, allocator, entry.key_ptr.*);
-            try buf.append(allocator, '|');
-            try buf.appendSlice(allocator, node.graph_name);
-            try buf.append(allocator, '|');
-            // Labels
-            for (node.labels, 0..) |label, i| {
-                if (i > 0) try buf.append(allocator, ',');
-                try buf.appendSlice(allocator, label);
-            }
-            try buf.append(allocator, '|');
-            // Properties
-            try appendProperties(&buf, allocator, &node.properties);
+            try appendNodeJson(&buf, allocator, entry.key_ptr.*, node);
             try buf.append(allocator, '\n');
         }
 
-        // Serialize edges
+        // Serialize edges as JSON-lines
         var edge_iter = self.edges.iterator();
         while (edge_iter.next()) |entry| {
             const edge = entry.value_ptr;
-            try buf.appendSlice(allocator, "E|");
-            try appendU64(&buf, allocator, entry.key_ptr.*);
-            try buf.append(allocator, '|');
-            try appendU64(&buf, allocator, edge.from_id);
-            try buf.append(allocator, '|');
-            try appendU64(&buf, allocator, edge.to_id);
-            try buf.append(allocator, '|');
-            try buf.appendSlice(allocator, edge.graph_name);
-            try buf.append(allocator, '|');
-            try buf.appendSlice(allocator, edge.label);
-            try buf.append(allocator, '|');
-            try appendProperties(&buf, allocator, &edge.properties);
+            try appendEdgeJson(&buf, allocator, entry.key_ptr.*, edge);
             try buf.append(allocator, '\n');
         }
 
         return try buf.toOwnedSlice(allocator);
+    }
+
+    /// Append a single node as a JSON object to the buffer.
+    fn appendNodeJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, id: u64, node: *const Node) !void {
+        try buf.appendSlice(allocator, "{\"type\":\"node\",\"id\":");
+        try appendU64(buf, allocator, id);
+        try buf.appendSlice(allocator, ",\"graph\":\"");
+        try appendJsonEscaped(buf, allocator, node.graph_name);
+        try buf.appendSlice(allocator, "\",\"labels\":[");
+        for (node.labels, 0..) |label, i| {
+            if (i > 0) try buf.append(allocator, ',');
+            try buf.append(allocator, '"');
+            try appendJsonEscaped(buf, allocator, label);
+            try buf.append(allocator, '"');
+        }
+        try buf.appendSlice(allocator, "],\"properties\":");
+        try appendPropertiesJson(buf, allocator, &node.properties);
+        try buf.append(allocator, '}');
+    }
+
+    /// Append a single edge as a JSON object to the buffer.
+    fn appendEdgeJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, id: u64, edge: *const Edge) !void {
+        try buf.appendSlice(allocator, "{\"type\":\"edge\",\"id\":");
+        try appendU64(buf, allocator, id);
+        try buf.appendSlice(allocator, ",\"from\":");
+        try appendU64(buf, allocator, edge.from_id);
+        try buf.appendSlice(allocator, ",\"to\":");
+        try appendU64(buf, allocator, edge.to_id);
+        try buf.appendSlice(allocator, ",\"graph\":\"");
+        try appendJsonEscaped(buf, allocator, edge.graph_name);
+        try buf.appendSlice(allocator, "\",\"label\":\"");
+        try appendJsonEscaped(buf, allocator, edge.label);
+        try buf.appendSlice(allocator, "\",\"properties\":");
+        try appendPropertiesJson(buf, allocator, &edge.properties);
+        try buf.append(allocator, '}');
     }
 
     /// Append a u64 value as decimal text.
@@ -3781,44 +3793,81 @@ pub const GraphStore = struct {
         try buf.appendSlice(allocator, slice);
     }
 
-    /// Append property map as key=value pairs separated by commas.
-    fn appendProperties(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, props: *const std.StringHashMap(PropertyValue)) !void {
+    /// Append a string with JSON escaping (quotes, backslashes, control chars).
+    fn appendJsonEscaped(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, s: []const u8) !void {
+        for (s) |c| {
+            switch (c) {
+                '"' => try buf.appendSlice(allocator, "\\\""),
+                '\\' => try buf.appendSlice(allocator, "\\\\"),
+                '\n' => try buf.appendSlice(allocator, "\\n"),
+                '\r' => try buf.appendSlice(allocator, "\\r"),
+                '\t' => try buf.appendSlice(allocator, "\\t"),
+                else => {
+                    if (c < 0x20) {
+                        // Control characters as \u00XX
+                        var esc: [6]u8 = undefined;
+                        _ = std.fmt.bufPrint(&esc, "\\u{x:0>4}", .{c}) catch unreachable;
+                        try buf.appendSlice(allocator, &esc);
+                    } else {
+                        try buf.append(allocator, c);
+                    }
+                },
+            }
+        }
+    }
+
+    /// Append a property map as a JSON object: {"key":"val","key2":123}
+    fn appendPropertiesJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, props: *const std.StringHashMap(PropertyValue)) !void {
+        try buf.append(allocator, '{');
         var first = true;
         var it = props.iterator();
         while (it.next()) |prop| {
             if (!first) try buf.append(allocator, ',');
             first = false;
-            try buf.appendSlice(allocator, prop.key_ptr.*);
-            try buf.append(allocator, '=');
-            switch (prop.value_ptr.*) {
-                .String => |s| {
-                    try buf.appendSlice(allocator, s);
-                },
-                .Int => |v| {
-                    var tmp: [20]u8 = undefined;
-                    const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
-                    try buf.appendSlice(allocator, slice);
-                },
-                .Float => |v| {
-                    var tmp: [32]u8 = undefined;
-                    const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
-                    try buf.appendSlice(allocator, slice);
-                },
-                .Bool => |v| {
-                    try buf.appendSlice(allocator, if (v) "true" else "false");
-                },
-                .Null => {
-                    try buf.appendSlice(allocator, "null");
-                },
-                .Decimal => |d| {
-                    var tmp: [48]u8 = undefined;
-                    const slice = std.fmt.bufPrint(&tmp, "{d}e-{d}", .{ d.coeff, d.scale }) catch unreachable;
-                    try buf.appendSlice(allocator, slice);
-                },
-                .ExtValue => {
-                    try buf.appendSlice(allocator, "<ext>");
-                },
-            }
+            try buf.append(allocator, '"');
+            try appendJsonEscaped(buf, allocator, prop.key_ptr.*);
+            try buf.appendSlice(allocator, "\":");
+            try appendPropertyValueJson(buf, allocator, prop.value_ptr.*);
+        }
+        try buf.append(allocator, '}');
+    }
+
+    /// Append a single PropertyValue as a JSON value.
+    fn appendPropertyValueJson(buf: *std.ArrayList(u8), allocator: std.mem.Allocator, value: PropertyValue) !void {
+        switch (value) {
+            .String => |s| {
+                try buf.append(allocator, '"');
+                try appendJsonEscaped(buf, allocator, s);
+                try buf.append(allocator, '"');
+            },
+            .Int => |v| {
+                var tmp: [20]u8 = undefined;
+                const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
+                try buf.appendSlice(allocator, slice);
+            },
+            .Float => |v| {
+                var tmp: [32]u8 = undefined;
+                const slice = std.fmt.bufPrint(&tmp, "{d}", .{v}) catch unreachable;
+                try buf.appendSlice(allocator, slice);
+            },
+            .Bool => |v| {
+                try buf.appendSlice(allocator, if (v) "true" else "false");
+            },
+            .Null => {
+                try buf.appendSlice(allocator, "null");
+            },
+            .Decimal => |d| {
+                // Serialize as string to preserve precision
+                try buf.append(allocator, '"');
+                var tmp: [48]u8 = undefined;
+                const slice = std.fmt.bufPrint(&tmp, "{d}e-{d}", .{ d.coeff, d.scale }) catch unreachable;
+                try buf.appendSlice(allocator, slice);
+                try buf.append(allocator, '"');
+            },
+            .ExtValue => {
+                // Extended values serialized as descriptive string
+                try buf.appendSlice(allocator, "\"<ext>\"");
+            },
         }
     }
 
@@ -5273,12 +5322,12 @@ test "listGraphNames merges persisted adapter graphs with local cache" {
     try testing.expect(found);
 }
 
-test "TestSerializeSnapshotNonEmpty" {
-    // GAP-D001: serializeSnapshot must produce non-empty output with nodes/edges
+test "serializeSnapshot produces valid JSON-lines for nodes and edges" {
+    // GAP-D001: serializeSnapshot must produce JSON-lines with nodes and edges
     var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
 
-    // Create nodes (setNodeProperty triggers FLE check requiring libc, so skip props)
+    // Create nodes
     var labels = [_][]const u8{"Person"};
     const n1 = try store.createNodeWithGraph(&labels, "test_graph");
 
@@ -5295,18 +5344,24 @@ test "TestSerializeSnapshotNonEmpty" {
     // Must be non-empty
     try testing.expect(snapshot.len > 0);
 
-    // Must contain node and edge markers
-    try testing.expect(std.mem.indexOf(u8, snapshot, "N|") != null);
-    try testing.expect(std.mem.indexOf(u8, snapshot, "E|") != null);
+    // Must contain JSON node markers
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"type\":\"node\"") != null);
 
-    // Must contain graph name
-    try testing.expect(std.mem.indexOf(u8, snapshot, "test_graph") != null);
+    // Must contain JSON edge markers
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"type\":\"edge\"") != null);
 
-    // Must contain label
-    try testing.expect(std.mem.indexOf(u8, snapshot, "Person") != null);
+    // Must contain graph name as JSON string
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"graph\":\"test_graph\"") != null);
 
-    // Must contain edge type
-    try testing.expect(std.mem.indexOf(u8, snapshot, "KNOWS") != null);
+    // Must contain label in labels array
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"labels\":[\"Person\"]") != null);
+
+    // Must contain edge label
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"label\":\"KNOWS\"") != null);
+
+    // Must contain properties object (even if empty)
+    try testing.expect(std.mem.indexOf(u8, snapshot, "\"properties\":{}") != null or
+        std.mem.indexOf(u8, snapshot, "\"properties\":{\"") != null);
 
     // Count lines — at least 2 nodes + 1 edge = 3 lines
     var line_count: usize = 0;
@@ -5316,7 +5371,7 @@ test "TestSerializeSnapshotNonEmpty" {
     try testing.expect(line_count >= 3);
 }
 
-test "TestSerializeSnapshotEmpty" {
+test "serializeSnapshot empty store produces empty output" {
     // GAP-D001: empty store produces empty snapshot
     var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
@@ -5325,4 +5380,21 @@ test "TestSerializeSnapshotEmpty" {
     defer testing.allocator.free(snapshot);
 
     try testing.expect(snapshot.len == 0);
+}
+
+test "serializeSnapshot JSON escaping in strings" {
+    // Verify that special characters in labels/graph names are properly escaped
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Label\"With\\Quotes"};
+    _ = try store.createNodeWithGraph(&labels, "graph\nnewline");
+
+    const snapshot = try store.serializeSnapshot(testing.allocator);
+    defer testing.allocator.free(snapshot);
+
+    // Escaped quote in label
+    try testing.expect(std.mem.indexOf(u8, snapshot, "Label\\\"With\\\\Quotes") != null);
+    // Escaped newline in graph name
+    try testing.expect(std.mem.indexOf(u8, snapshot, "graph\\nnewline") != null);
 }
