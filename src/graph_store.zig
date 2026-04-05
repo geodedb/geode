@@ -960,8 +960,13 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create node with optional graph name for per-graph data isolation
+    // GAP-0291: Resolve tenant_id from the per-thread FLE context set by the connection handler.
+    // This ensures nodes created during a multi-tenant session are tagged with the correct
+    // tenant_id instead of always using DEFAULT_TENANT_ID.
+    // CANARY: REQ=REQ-MULTI-TENANT-006; FEATURE="PerTenantIsolation"; ASPECT=NodeCreateAutoTenant; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-05
     pub fn createNodeWithGraph(self: *GraphStore, labels: []const []const u8, graph_name: []const u8) !u64 {
-        return self.createNodeWithGraphAndTenant(labels, graph_name, DEFAULT_TENANT_ID);
+        const tenant = fle_integration.getCurrentTenantId();
+        return self.createNodeWithGraphAndTenant(labels, graph_name, tenant);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
@@ -2166,8 +2171,13 @@ pub const GraphStore = struct {
 
     // CANARY: REQ=REQ-MULTI-GRAPH-005; FEATURE="MultiGraphIsolation"; ASPECT=CreateEdge; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
     // Create edge with optional graph name for per-graph data isolation
+    // GAP-0291: Resolve tenant_id from the per-thread FLE context set by the connection handler.
+    // This ensures edges created during a multi-tenant session are tagged with the correct
+    // tenant_id instead of always using DEFAULT_TENANT_ID.
+    // CANARY: REQ=REQ-MULTI-TENANT-007; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreateAutoTenant; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-05
     pub fn createEdgeWithGraph(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8) !u64 {
-        return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, DEFAULT_TENANT_ID);
+        const tenant = fle_integration.getCurrentTenantId();
+        return self.createEdgeWithGraphAndTenant(from_id, to_id, edge_type, graph_name, tenant);
     }
 
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
@@ -5040,6 +5050,28 @@ test "TestTenantIsolationBackwardCompatible" {
 
     // Graph name should still work as before
     try testing.expectEqualStrings("default", node.graph_name);
+}
+
+// GAP-0291: Verify that createNodeWithGraph and createEdgeWithGraph automatically
+// pick up the per-thread tenant_id set via fle_integration.
+test "TestCreateNodeWithGraphResolvesTenantFromThread" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Simulate a connection handler setting a non-default tenant
+    fle_integration.setCurrentTenantId("acme-corp");
+    defer fle_integration.clearCurrentThreadState();
+
+    var labels = [_][]const u8{"Person"};
+    const node_id = try store.createNodeWithGraph(&labels, "default");
+    const node = store.nodes.get(node_id).?;
+    try testing.expectEqualStrings("acme-corp", node.tenant_id);
+
+    // Also verify edges
+    const node2_id = try store.createNodeWithGraph(&labels, "default");
+    const edge_id = try store.createEdgeWithGraph(node_id, node2_id, "KNOWS", "default");
+    const edge = store.edges.get(edge_id).?;
+    try testing.expectEqualStrings("acme-corp", edge.tenant_id);
 }
 
 test "clearNodeProperties removes all node properties" {
