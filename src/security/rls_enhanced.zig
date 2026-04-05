@@ -76,11 +76,19 @@ pub const EnhancedRLSEngine = struct {
             }
         }
 
-        // Evaluate main policy expression
+        // GAP-0294: Evaluate main policy expression with fail-closed error handling.
+        // SECURITY: If expression evaluation fails for any reason, deny access.
+        // CANARY: REQ=REQ-RLS-FAILCLOSED-001; FEATURE="RLSFailClosed"; ASPECT=ExpressionEvaluation; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
         const result = if (policy.using_expr) |expr|
-            try self.expression_compiler.evaluate(expr, row, context)
+            self.expression_compiler.evaluate(expr, row, context) catch |err| {
+                log.warn("RLS expression evaluation failed, denying access (fail-closed)", .{});
+                _ = err;
+                // Cache the denial to avoid repeated evaluation of broken expressions
+                self.cache_manager.put(cache_key, false) catch {};
+                return false;
+            }
         else
-            true; // No expression means allow
+            true; // No expression means allow (standard RLS semantics)
 
         // Cache the result
         try self.cache_manager.put(cache_key, result);
