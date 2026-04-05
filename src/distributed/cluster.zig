@@ -936,9 +936,10 @@ pub const ClusterCoordinator = struct {
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
 
-        const allow_insecure = envFlagEnabled(self.allocator, "GEODE_CLUSTER_ALLOW_INSECURE");
+        // SEC-D006: Consolidated to single env var GEODE_CLUSTER_INSECURE
+        const allow_insecure = envFlagEnabled(self.allocator, "GEODE_CLUSTER_INSECURE");
         if (allow_insecure) {
-            log.warn("GEODE_CLUSTER_ALLOW_INSECURE enabled; TLS certificate verification disabled", &.{});
+            log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
             _ = client.connectInsecure(host, port, true) catch |err| return err;
         } else {
             const ca_path = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
