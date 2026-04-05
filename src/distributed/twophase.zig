@@ -8,6 +8,8 @@ const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
 
 const cluster_auth = @import("cluster_auth.zig");
+// SEC-D009: Import nonce tracker for replay protection on 2PC messages.
+const nonce_tracker = @import("nonce_tracker.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("twophase");
@@ -548,6 +550,7 @@ pub const Transaction = struct {
     // PERF-D003: Worker function for parallel prepare
     fn prepareWorker(ctx: PrepareWorkerCtx) void {
         const participant = &ctx.txn.participants.items[ctx.idx];
+        // SEC-D009: Include cryptographic nonce for replay protection
         const msg = TwoPhaseMessage{
             .msg_type = .PREPARE,
             .transaction_id = ctx.txn.id,
@@ -555,6 +558,7 @@ pub const Transaction = struct {
             .timestamp = std.time.timestamp(),
             .operations = ctx.txn.operations,
             .auth_token = getClusterToken(),
+            .nonce = nonce_tracker.NonceTracker.generateNonce(),
         };
         const response = ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms) catch {
             participant.prepare_response = .VOTE_TIMEOUT;
@@ -579,6 +583,7 @@ pub const Transaction = struct {
         const participant = &ctx.txn.participants.items[ctx.idx];
         var ops = std.ArrayList(Operation).init(ctx.txn.allocator);
         defer ops.deinit(ctx.txn.allocator);
+        // SEC-D009: Include cryptographic nonce for replay protection
         const msg = TwoPhaseMessage{
             .msg_type = .COMMIT,
             .transaction_id = ctx.txn.id,
@@ -586,6 +591,7 @@ pub const Transaction = struct {
             .timestamp = std.time.timestamp(),
             .operations = ops,
             .auth_token = getClusterToken(),
+            .nonce = nonce_tracker.NonceTracker.generateNonce(),
         };
         var retries: u32 = 0;
         const max_retries: u32 = 3;
@@ -684,6 +690,7 @@ pub const Transaction = struct {
 
             // Create and send abort message
             // SEC-D003: Include cluster token for inter-node authentication
+            // SEC-D009: Include cryptographic nonce for replay protection
             var ops = std.ArrayList(Operation).init(self.allocator);
             defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
@@ -693,6 +700,7 @@ pub const Transaction = struct {
                 .timestamp = std.time.timestamp(),
                 .operations = ops,
                 .auth_token = getClusterToken(),
+                .nonce = nonce_tracker.NonceTracker.generateNonce(),
             };
 
             // Send abort message (best effort - proceed even if some fail)
@@ -932,6 +940,8 @@ pub const TwoPCCoordinator = struct {
     enable_coordinator: bool = true,
     enable_participant: bool = true,
     stats: Stats = .{},
+    /// SEC-D009: Nonce tracker for replay protection on incoming 2PC messages.
+    twophase_nonce_tracker: nonce_tracker.NonceTracker,
 
     pub fn init(allocator: Allocator, config: CoordinatorConfig) !TwoPCCoordinator {
         const coord_id = try allocator.dupe(u8, config.coordinator_id);
@@ -952,6 +962,7 @@ pub const TwoPCCoordinator = struct {
             .enable_coordinator = true,
             .enable_participant = true,
             .stats = .{},
+            .twophase_nonce_tracker = try nonce_tracker.NonceTracker.init(allocator, 10_000),
         };
         result.participant = if (config.store) |store|
             ParticipantNode.initWithStore(allocator, participant_id, &result.resource_manager, store)
@@ -961,6 +972,7 @@ pub const TwoPCCoordinator = struct {
     }
 
     pub fn deinit(self: *TwoPCCoordinator) void {
+        self.twophase_nonce_tracker.deinit();
         self.coordinator.deinit();
         self.participant.deinit();
         self.resource_manager.deinit();
@@ -1021,6 +1033,16 @@ pub const TwoPCCoordinator = struct {
                 });
                 return error.AuthFailed;
             }
+        }
+
+        // SEC-D009: Validate nonce to prevent replay attacks on 2PC messages.
+        if (!self.twophase_nonce_tracker.checkAndRecord(msg.nonce)) {
+            log.warn("2PC message rejected: replay or missing nonce", &.{
+                Attr.string("from", from),
+                Attr.string("txn_id", msg.transaction_id),
+                Attr.uint("nonce", msg.nonce),
+            });
+            return error.ReplayDetected;
         }
 
         const response: ?TwoPhaseResponse = switch (message_type) {
@@ -1483,4 +1505,81 @@ test "Transaction.rollbackToSavepoint returns error for unknown savepoint" {
 
     const result = txn.rollbackToSavepoint("nonexistent");
     try testing.expectError(error.SavepointNotFound, result);
+}
+
+test "2PC nonce generation produces nonzero distinct values" {
+    // SEC-D009: Verify that nonce generation works for 2PC messages.
+    const n1 = nonce_tracker.NonceTracker.generateNonce();
+    const n2 = nonce_tracker.NonceTracker.generateNonce();
+    try testing.expect(n1 != 0);
+    try testing.expect(n2 != 0);
+    try testing.expect(n1 != n2);
+}
+
+test "TwoPCCoordinator.handleMessage rejects replayed nonce" {
+    // SEC-D009: Verify replay detection on the receive side.
+    const ally = testing.allocator;
+    var coord = try TwoPCCoordinator.init(ally, .{
+        .coordinator_id = "coord-replay",
+    });
+    defer coord.deinit();
+
+    // Build a valid 2PC PREPARE message with a specific nonce.
+    var ops = std.ArrayList(Operation).init(ally);
+    defer ops.deinit(ally);
+    const msg = TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = "txn-replay",
+        .coordinator_id = "coord-remote",
+        .timestamp = 12345,
+        .operations = ops,
+        .auth_token = "",
+        .nonce = 42,
+    };
+
+    // Encode the message to protobuf bytes.
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ally, 256);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, ally, msg);
+    const payload = aw.writer.buffer[0..aw.writer.end];
+
+    // First call should succeed (nonce 42 is new).
+    // It may return an error from participant handling but NOT ReplayDetected.
+    const first_result = coord.handleMessage("remote-node", .PREPARE, payload);
+    if (first_result) |_| {} else |err| {
+        try testing.expect(err != error.ReplayDetected);
+    }
+
+    // Second call with the same payload (same nonce 42) should be rejected as replay.
+    const second_result = coord.handleMessage("remote-node", .PREPARE, payload);
+    try testing.expectError(error.ReplayDetected, second_result);
+}
+
+test "TwoPCCoordinator.handleMessage rejects zero nonce" {
+    // SEC-D009: A zero nonce indicates an uninitialized or legacy frame and should be rejected.
+    const ally = testing.allocator;
+    var coord = try TwoPCCoordinator.init(ally, .{
+        .coordinator_id = "coord-zero",
+    });
+    defer coord.deinit();
+
+    var ops = std.ArrayList(Operation).init(ally);
+    defer ops.deinit(ally);
+    const msg = TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = "txn-zero",
+        .coordinator_id = "coord-remote",
+        .timestamp = 12345,
+        .operations = ops,
+        .auth_token = "",
+        .nonce = 0,
+    };
+
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(ally, 256);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, ally, msg);
+    const payload = aw.writer.buffer[0..aw.writer.end];
+
+    const r = coord.handleMessage("remote-node", .PREPARE, payload);
+    try testing.expectError(error.ReplayDetected, r);
 }

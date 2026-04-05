@@ -132,6 +132,8 @@ pub const TwoPhaseMessage = struct {
     timestamp: i64 = 0,
     operations: std.ArrayList(TwoPhaseOperation),
     auth_token: []const u8 = "",
+    /// SEC-D009: Cryptographic nonce for replay protection.
+    nonce: u64 = 0,
 
     pub const _desc_table = .{
         .msg_type = fd(1, .{ .scalar = .@"enum" }),
@@ -140,6 +142,7 @@ pub const TwoPhaseMessage = struct {
         .timestamp = fd(4, .{ .scalar = .int64 }),
         .operations = fd(5, .{ .repeated = .{ .submessage = {} } }),
         .auth_token = fd(6, .{ .scalar = .string }),
+        .nonce = fd(7, .{ .scalar = .uint64 }),
     };
 
     pub fn deinit(self: *TwoPhaseMessage, allocator: std.mem.Allocator) void {
