@@ -107,6 +107,19 @@ pub fn getCurrentUserRole() ?[]const u8 {
     return per_thread_roles.get(std.Thread.getCurrentId());
 }
 
+/// Clear all per-thread FLE state (tenant_id and role) for the current thread.
+/// MUST be called in the connection handler's defer block to prevent stale
+/// state from leaking into a subsequent connection that reuses the same thread.
+/// GAP-0285: Prevents cross-tenant FLE decryption when threads are reused.
+/// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-002; FEATURE="FLERoleIsolation"; ASPECT=ThreadCleanup; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
+pub fn clearCurrentThreadState() void {
+    global_mutex.lock();
+    defer global_mutex.unlock();
+    const tid = std.Thread.getCurrentId();
+    _ = per_thread_roles.remove(tid);
+    _ = per_thread_tenants.remove(tid);
+}
+
 pub const EncryptionContext = struct {
     tenant_id: []const u8,
     schema_name: []const u8,
@@ -658,4 +671,34 @@ test "FLE integration placeholder" {
 
     const match_result = try matchesEncryptedField(ctx, "Person", "ssn", "encrypted", "123-45-6789");
     try testing.expect(!match_result);
+}
+
+// GAP-0285: Verify that clearCurrentThreadState removes stale per-thread role and tenant entries.
+test "clearCurrentThreadState removes per-thread role and tenant" {
+    const testing = std.testing;
+
+    // Set per-thread state (simulates a connection handler setting FLE context)
+    setCurrentUserRole("admin");
+    setCurrentTenantId("acme-corp");
+
+    // Verify state is set
+    try testing.expectEqualStrings("acme-corp", getCurrentTenantId());
+    // getCurrentUserRole may read env var first; check per_thread_roles directly
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        try testing.expect(per_thread_roles.get(std.Thread.getCurrentId()) != null);
+    }
+
+    // Simulate connection handler defer block calling clearCurrentThreadState
+    clearCurrentThreadState();
+
+    // After cleanup: tenant should fall back to "default", role should be null
+    try testing.expectEqualStrings("default", getCurrentTenantId());
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        try testing.expect(per_thread_roles.get(std.Thread.getCurrentId()) == null);
+        try testing.expect(per_thread_tenants.get(std.Thread.getCurrentId()) == null);
+    }
 }

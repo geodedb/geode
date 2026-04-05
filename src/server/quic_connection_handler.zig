@@ -856,6 +856,13 @@ pub fn handleQuicConnection(
 
     // Ensure cleanup of per-connection state.
     defer {
+        // GAP-0285: Clear per-thread FLE state (tenant_id and role) to prevent stale
+        // state from leaking into a subsequent connection that reuses this thread.
+        // CANARY: REQ=REQ-FLE-ROLE-ISOLATION-003; FEATURE="FLERoleIsolation"; ASPECT=QUICCleanup; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
+        fle_integration.clearCurrentThreadState();
+        // GAP-0285: Also clear per-thread audit tenant_id.
+        audit_mod.setCurrentAuditTenantId(null);
+
         // GAP-0289: Release connection quota slot for this tenant.
         if (quota_tenant_id) |tid| {
             if (tenant_quota.getGlobalQuotaManager()) |qm| {

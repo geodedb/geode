@@ -241,6 +241,13 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
 
 fn deinitServerState(state: *server_state.ServerState) void {
     const alloc = state.allocator;
+    // GAP-0285: Clear per-thread FLE state (tenant_id and role) to prevent stale
+    // state from leaking into a subsequent request that reuses this thread.
+    // CANARY: REQ=REQ-FLE-ROLE-ISOLATION-004; FEATURE="FLERoleIsolation"; ASPECT=GrpcCleanup; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
+    fle_integration.clearCurrentThreadState();
+    // GAP-0285: Also clear per-thread audit tenant_id.
+    audit_mod.setCurrentAuditTenantId(null);
+
     state.resetResult();
     if (state.exec_session) |*sess| sess.deinit();
     // GAP-0289: Release per-tenant connection quota before freeing session config.
