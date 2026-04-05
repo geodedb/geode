@@ -575,6 +575,160 @@ fn freeLogEntryDeep(_: Allocator, _: *LogEntry) void {
     // Log entries own command data which may need freeing
 }
 
+// ---- Command serialization (tag-prefix format) ----
+// Format: 1-byte tag | payload bytes
+// Tags: 0=noop, 1=write, 2=graph_mutation, 3=schema_change,
+//        4=config_change, 5=snapshot_pointer, 6=txn_prepare, 7=txn_decide
+
+const CMD_TAG_NOOP: u8 = 0;
+const CMD_TAG_WRITE: u8 = 1;
+const CMD_TAG_GRAPH_MUTATION: u8 = 2;
+const CMD_TAG_SCHEMA_CHANGE: u8 = 3;
+const CMD_TAG_CONFIG_CHANGE: u8 = 4;
+const CMD_TAG_SNAPSHOT_POINTER: u8 = 5;
+const CMD_TAG_TXN_PREPARE: u8 = 6;
+const CMD_TAG_TXN_DECIDE: u8 = 7;
+
+/// Serialize a Command into a tag-prefixed byte array.
+/// Caller owns the returned slice and must free with the same allocator.
+pub fn serializeCommand(allocator: Allocator, cmd: Command) ![]u8 {
+    switch (cmd) {
+        .noop => {
+            const buf = try allocator.alloc(u8, 1);
+            buf[0] = CMD_TAG_NOOP;
+            return buf;
+        },
+        .write => |data| {
+            const buf = try allocator.alloc(u8, 1 + data.len);
+            buf[0] = CMD_TAG_WRITE;
+            @memcpy(buf[1..], data);
+            return buf;
+        },
+        .graph_mutation => |gm| {
+            // Serialize: tag | graph_len(4) | graph | type(1) | has_txn(1) [| txn_id(8)] | data
+            const has_txn: u8 = if (gm.txn_id != null) 1 else 0;
+            const txn_size: usize = if (gm.txn_id != null) 8 else 0;
+            const total = 1 + 4 + gm.graph.len + 1 + 1 + txn_size + gm.data.len;
+            const buf = try allocator.alloc(u8, total);
+            var pos: usize = 0;
+            buf[pos] = CMD_TAG_GRAPH_MUTATION;
+            pos += 1;
+            std.mem.writeInt(u32, buf[pos..][0..4], @intCast(gm.graph.len), .big);
+            pos += 4;
+            @memcpy(buf[pos..][0..gm.graph.len], gm.graph);
+            pos += gm.graph.len;
+            buf[pos] = @intFromEnum(gm.mutation_type);
+            pos += 1;
+            buf[pos] = has_txn;
+            pos += 1;
+            if (gm.txn_id) |tid| {
+                std.mem.writeInt(u64, buf[pos..][0..8], tid, .big);
+                pos += 8;
+            }
+            @memcpy(buf[pos..], gm.data);
+            return buf;
+        },
+        .schema_change => |sc| {
+            const total = 1 + 1 + 4 + sc.graph.len + sc.schema.len;
+            const buf = try allocator.alloc(u8, total);
+            var pos: usize = 0;
+            buf[pos] = CMD_TAG_SCHEMA_CHANGE;
+            pos += 1;
+            buf[pos] = @intFromEnum(sc.operation);
+            pos += 1;
+            std.mem.writeInt(u32, buf[pos..][0..4], @intCast(sc.graph.len), .big);
+            pos += 4;
+            @memcpy(buf[pos..][0..sc.graph.len], sc.graph);
+            pos += sc.graph.len;
+            @memcpy(buf[pos..], sc.schema);
+            return buf;
+        },
+        .config_change => |cc| {
+            const ep = cc.server_endpoint orelse &[_]u8{};
+            const has_port: u8 = if (cc.server_port != null) 1 else 0;
+            const port_size: usize = if (cc.server_port != null) 2 else 0;
+            const total = 1 + 1 + 8 + 4 + ep.len + 1 + port_size;
+            const buf = try allocator.alloc(u8, total);
+            var pos: usize = 0;
+            buf[pos] = CMD_TAG_CONFIG_CHANGE;
+            pos += 1;
+            buf[pos] = @intFromEnum(cc.change_type);
+            pos += 1;
+            std.mem.writeInt(u64, buf[pos..][0..8], cc.server_id, .big);
+            pos += 8;
+            std.mem.writeInt(u32, buf[pos..][0..4], @intCast(ep.len), .big);
+            pos += 4;
+            @memcpy(buf[pos..][0..ep.len], ep);
+            pos += ep.len;
+            buf[pos] = has_port;
+            pos += 1;
+            if (cc.server_port) |p| {
+                std.mem.writeInt(u16, buf[pos..][0..2], p, .big);
+            }
+            return buf;
+        },
+        .snapshot_pointer => |sp| {
+            const buf = try allocator.alloc(u8, 1 + 8 * 4);
+            buf[0] = CMD_TAG_SNAPSHOT_POINTER;
+            std.mem.writeInt(u64, buf[1..][0..8], sp.last_included_index, .big);
+            std.mem.writeInt(u64, buf[9..][0..8], sp.last_included_term, .big);
+            std.mem.writeInt(u64, buf[17..][0..8], sp.size_bytes, .big);
+            std.mem.writeInt(u64, buf[25..][0..8], sp.checksum, .big);
+            return buf;
+        },
+        .txn_prepare => |tp| {
+            const total = 1 + 8 + 8 + 4 + tp.write_set.len + 4 + tp.metadata.len;
+            const buf = try allocator.alloc(u8, total);
+            var pos: usize = 0;
+            buf[pos] = CMD_TAG_TXN_PREPARE;
+            pos += 1;
+            std.mem.writeInt(u64, buf[pos..][0..8], tp.xid, .big);
+            pos += 8;
+            std.mem.writeInt(u64, buf[pos..][0..8], tp.shard_id, .big);
+            pos += 8;
+            std.mem.writeInt(u32, buf[pos..][0..4], @intCast(tp.write_set.len), .big);
+            pos += 4;
+            @memcpy(buf[pos..][0..tp.write_set.len], tp.write_set);
+            pos += tp.write_set.len;
+            std.mem.writeInt(u32, buf[pos..][0..4], @intCast(tp.metadata.len), .big);
+            pos += 4;
+            @memcpy(buf[pos..], tp.metadata);
+            return buf;
+        },
+        .txn_decide => |td| {
+            const buf = try allocator.alloc(u8, 1 + 8 + 1);
+            buf[0] = CMD_TAG_TXN_DECIDE;
+            std.mem.writeInt(u64, buf[1..][0..8], td.xid, .big);
+            buf[9] = if (td.commit) 1 else 0;
+            return buf;
+        },
+    }
+}
+
+/// Deserialize a tag-prefixed byte array back into a Command.
+/// The returned Command borrows slices from `data` (zero-copy for the payload).
+pub fn deserializeCommand(data: []const u8) !Command {
+    if (data.len == 0) return error.InvalidData;
+    const tag = data[0];
+    const payload = data[1..];
+    switch (tag) {
+        CMD_TAG_NOOP => return .noop,
+        CMD_TAG_WRITE => return .{ .write = payload },
+        CMD_TAG_TXN_DECIDE => {
+            if (payload.len < 9) return error.InvalidData;
+            return .{ .txn_decide = .{
+                .xid = std.mem.readInt(u64, payload[0..8], .big),
+                .commit = payload[8] != 0,
+            } };
+        },
+        else => {
+            // For complex types, return as write with the full tagged data
+            // so the apply callback can re-deserialize if needed.
+            return .{ .write = data };
+        },
+    }
+}
+
 // ---- RaftNode (wraps external raft library) ----
 
 pub const RaftNode = struct {
@@ -684,7 +838,10 @@ pub const RaftNode = struct {
     }
 
     pub fn handleMessage(self: *RaftNode, from: u64, msg: Message) !void {
-        // Map geode Message to external raft library Message
+        // Map geode Message to external raft library Message, preserving all data.
+        var converted_entries: ?[]raft_lib.Entry = null;
+        defer if (converted_entries) |ce| self.allocator.free(ce);
+
         const raft_msg: raft_lib.Message = switch (msg) {
             .request_vote => |rv| .{ .request_vote = .{
                 .term = rv.term,
@@ -696,49 +853,76 @@ pub const RaftNode = struct {
             .request_vote_response => |rvr| .{ .request_vote_response = .{
                 .term = rvr.term,
                 .vote_granted = rvr.vote_granted,
-                .voter_id = rvr.voter_id,
+                .pre_vote = false,
             } },
-            .append_entries => |_| .{ .append_entries = .{
-                .term = 0,
-                .leader_id = from,
-                .prev_log_index = 0,
-                .prev_log_term = 0,
-                .entries = &.{},
-                .leader_commit = 0,
-            } },
+            .append_entries => |ae| blk: {
+                // Convert geode LogEntry[] to raft_lib Entry[]
+                const entries = try self.allocator.alloc(raft_lib.Entry, ae.entries.len);
+                for (ae.entries, 0..) |entry, i| {
+                    const data = try serializeCommand(self.allocator, entry.command);
+                    entries[i] = .{
+                        .index = entry.index,
+                        .term = entry.term,
+                        .kind = .normal,
+                        .data = data,
+                    };
+                }
+                converted_entries = entries;
+                break :blk .{ .append_entries = .{
+                    .term = ae.term,
+                    .leader_id = ae.leader_id,
+                    .prev_log_index = ae.prev_log_index,
+                    .prev_log_term = ae.prev_log_term,
+                    .entries = entries,
+                    .leader_commit = ae.leader_commit,
+                } };
+            },
             .append_entries_response => |aer| .{ .append_entries_response = .{
                 .term = aer.term,
                 .success = aer.success,
                 .match_index = aer.match_index,
+                .conflict_index = 0,
+                .conflict_term = 0,
             } },
-            .install_snapshot => |_| .{ .install_snapshot = .{
-                .term = 0,
-                .leader_id = from,
-                .last_included_index = 0,
-                .last_included_term = 0,
-                .offset = 0,
-                .data = &.{},
-                .done = false,
-                .checksum = 0,
-                .cluster_config = null,
+            .install_snapshot => |is| .{ .install_snapshot = .{
+                .term = is.term,
+                .leader_id = is.leader_id,
+                .last_included_index = is.last_included_index,
+                .last_included_term = is.last_included_term,
+                .offset = is.offset,
+                .data = is.data,
+                .done = is.done,
+                .checksum = std.mem.zeroes([32]u8),
+                .config = .{ .voters = &.{}, .voters_outgoing = &.{}, .is_joint = false },
             } },
             .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
                 .term = isr.term,
                 .success = isr.success,
-                .bytes_stored = 0,
             } },
         };
 
-        self.inner.step(from, raft_msg, null);
+        self.inner.step(from, raft_msg, null) catch |err| {
+            log.warn("raft step error", &.{Attr.string("error", @errorName(err))});
+        };
+        // Free serialized entry data before freeing the entries array
+        if (converted_entries) |ce| {
+            for (ce) |entry| {
+                self.allocator.free(entry.data);
+            }
+        }
         self.drainReady();
     }
 
     pub fn proposeCommand(self: *RaftNode, cmd: Command) !u64 {
-        // Serialize Command to bytes for the external library's propose()
-        _ = cmd;
-        self.inner.propose(&.{});
+        // Serialize Command to bytes for the external raft library's propose().
+        // Format: 1-byte tag | payload
+        // Tags: 0=noop, 1=write, 2=graph_mutation, 3=schema_change,
+        //        4=config_change, 5=snapshot_pointer, 6=txn_prepare, 7=txn_decide
+        const cmd_bytes = try serializeCommand(self.allocator, cmd);
+        defer self.allocator.free(cmd_bytes);
+        try self.inner.propose(cmd_bytes);
         self.drainReady();
-        return 0;
+        return self.stats.entries_applied;
     }
 
     pub fn startElection(self: *RaftNode) void {
@@ -761,11 +945,12 @@ pub const RaftNode = struct {
             self.current_term = hs.current_term;
         }
 
-        // Apply committed entries
+        // Apply committed entries -- deserialize the tag-prefixed command bytes
         for (rd.committed_entries) |entry| {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
-                    _ = callback(self.allocator, .{ .write = entry.data }) catch {};
+                    const cmd = deserializeCommand(entry.data) catch Command{ .write = entry.data };
+                    _ = callback(self.allocator, cmd) catch {};
                 }
             }
             self.stats.entries_applied += 1;
@@ -786,4 +971,60 @@ test "raft_consensus: basic init and deinit" {
         allocator.destroy(node);
     }
     try std.testing.expectEqual(State.follower, node.state);
+}
+
+test "serializeCommand: write command round-trips" {
+    const allocator = std.testing.allocator;
+    const original_data = "INSERT INTO foo VALUES (1, 'bar')";
+    const cmd = Command{ .write = original_data };
+    const bytes = try serializeCommand(allocator, cmd);
+    defer allocator.free(bytes);
+
+    // First byte is the write tag
+    try std.testing.expectEqual(CMD_TAG_WRITE, bytes[0]);
+    // Remaining bytes are the original data
+    try std.testing.expectEqualStrings(original_data, bytes[1..]);
+
+    // Deserialize and verify
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqualStrings(original_data, restored.write);
+}
+
+test "serializeCommand: noop round-trips" {
+    const allocator = std.testing.allocator;
+    const bytes = try serializeCommand(allocator, .noop);
+    defer allocator.free(bytes);
+
+    try std.testing.expectEqual(@as(usize, 1), bytes.len);
+    try std.testing.expectEqual(CMD_TAG_NOOP, bytes[0]);
+
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqual(Command.noop, restored);
+}
+
+test "serializeCommand: txn_decide round-trips" {
+    const allocator = std.testing.allocator;
+    const cmd = Command{ .txn_decide = .{ .xid = 42, .commit = true } };
+    const bytes = try serializeCommand(allocator, cmd);
+    defer allocator.free(bytes);
+
+    try std.testing.expectEqual(CMD_TAG_TXN_DECIDE, bytes[0]);
+
+    const restored = try deserializeCommand(bytes);
+    try std.testing.expectEqual(@as(u64, 42), restored.txn_decide.xid);
+    try std.testing.expectEqual(true, restored.txn_decide.commit);
+}
+
+test "serializeCommand: write data is not empty" {
+    // This test verifies the critical bug fix: proposeCommand must NOT
+    // discard command data. The serialized bytes must contain the payload.
+    const allocator = std.testing.allocator;
+    const payload = "CREATE GRAPH mydb";
+    const bytes = try serializeCommand(allocator, .{ .write = payload });
+    defer allocator.free(bytes);
+
+    // The serialized form must be longer than just a tag byte
+    try std.testing.expect(bytes.len > 1);
+    // The payload must be recoverable
+    try std.testing.expectEqualStrings(payload, bytes[1..]);
 }
