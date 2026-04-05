@@ -12,13 +12,15 @@ const log = logging.scoped("cluster_auth");
 pub fn validateClusterToken(password: []const u8) bool {
     const expected = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
     if (expected.len == 0 or password.len == 0) return false;
-    if (password.len != expected.len) return false;
-    // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
+    // SEC-07: No early length check — pad both to 256 bytes and compare in constant time.
+    // Different lengths produce different zero-padded buffers, caught by timing_safe.eql
+    // without leaking which input was shorter.
     var buf_a: [256]u8 = [_]u8{0} ** 256;
     var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n = @min(password.len, 256);
-    @memcpy(buf_a[0..n], password[0..n]);
-    @memcpy(buf_b[0..n], expected[0..n]);
+    const n_pw = @min(password.len, 256);
+    const n_ex = @min(expected.len, 256);
+    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
+    @memcpy(buf_b[0..n_ex], expected[0..n_ex]);
     return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
 }
 

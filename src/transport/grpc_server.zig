@@ -1094,13 +1094,13 @@ fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     const expected = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_CLUSTER_TOKEN") else null;
     const expected_tok = expected orelse return false;
     if (expected_tok.len == 0 or password.len == 0) return false;
-    if (password.len != expected_tok.len) return false;
-    // Constant-time comparison — pad both to 256 bytes to prevent timing side-channels
+    // SEC-07: No early length check — pad both independently to prevent length-leak timing
     var buf_a: [256]u8 = [_]u8{0} ** 256;
     var buf_b: [256]u8 = [_]u8{0} ** 256;
-    const n = @min(password.len, 256);
-    @memcpy(buf_a[0..n], password[0..n]);
-    @memcpy(buf_b[0..n], expected_tok[0..n]);
+    const n_pw = @min(password.len, 256);
+    const n_ex = @min(expected_tok.len, 256);
+    @memcpy(buf_a[0..n_pw], password[0..n_pw]);
+    @memcpy(buf_b[0..n_ex], expected_tok[0..n_ex]);
     return std.crypto.timing_safe.eql([256]u8, buf_a, buf_b);
 }
 
