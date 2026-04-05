@@ -735,6 +735,7 @@ pub const FederationManager = struct {
             },
 
             .union_distinct => {
+                // CANARY: REQ=GAP-D005; FEATURE="Federation Union Distinct Dedup"; ASPECT=Correctness; STATUS=TESTED; TEST="federation: union_distinct removes duplicate rows"; OWNER=dist; UPDATED=2026-04-05
                 // Deduplicated merge: track seen row hashes and skip duplicates.
                 var seen = std.StringHashMap(void).init(allocator);
                 defer {

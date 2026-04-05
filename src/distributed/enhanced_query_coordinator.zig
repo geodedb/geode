@@ -490,6 +490,7 @@ pub const EnhancedQueryCoordinator = struct {
         };
     }
 
+    // CANARY: REQ=GAP-D006; FEATURE="Federation Hash Aggregate Accumulation"; ASPECT=Correctness; STATUS=TESTED; TEST="hash_aggregate merges numeric values across shards"; OWNER=dist; UPDATED=2026-04-05
     /// Hash aggregate results (for GROUP BY queries).
     /// Groups rows by key columns (from options.group_key_columns) and accumulates
     /// numeric values in non-key columns. When group_key_columns is empty, all
