@@ -314,3 +314,70 @@ test "freePropertyValue: non-string types are no-ops" {
     freePropertyValue(allocator, .{ .Int = 42 });
     freePropertyValue(allocator, .{ .Float = 1.0 });
 }
+
+test "protoValueToPropertyValue: decimal_val" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .decimal_val = .{
+        .coeff = "12345",
+        .scale = 2,
+        .orig_scale = 2,
+        .orig_repr = "",
+    } } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    switch (pv) {
+        .Decimal => |d| {
+            try std.testing.expectEqual(@as(i128, 12345), d.coeff);
+            try std.testing.expectEqual(@as(u8, 2), d.scale);
+        },
+        else => return error.UnexpectedType,
+    }
+}
+
+test "protoValueToPropertyValue: decimal_val with invalid coeff returns error" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .decimal_val = .{
+        .coeff = "not_a_number",
+        .scale = 0,
+        .orig_scale = 0,
+        .orig_repr = "",
+    } } };
+    const result = protoValueToPropertyValue(allocator, val, 0);
+    try std.testing.expectError(error.InvalidDecimal, result);
+}
+
+test "protoValueToPropertyValue: bytes_val yields ExtValue Bytea" {
+    const allocator = std.testing.allocator;
+    const val = schema.Value{ .kind = .{ .bytes_val = .{ .value = "abc" } } };
+    const pv = try protoValueToPropertyValue(allocator, val, 0);
+    defer freePropertyValue(allocator, pv);
+    switch (pv) {
+        .ExtValue => |ext| switch (ext) {
+            .Bytea => |b| try std.testing.expectEqualStrings("abc", b),
+            else => return error.UnexpectedType,
+        },
+        else => return error.UnexpectedType,
+    }
+}
+
+test "propertyValueToProto: decimal round-trip" {
+    const allocator = std.testing.allocator;
+    var proto_val = try propertyValueToProto(allocator, .{ .Decimal = .{ .coeff = 999, .scale = 3 } });
+    defer proto_val.deinit(allocator);
+    try std.testing.expect(proto_val.kind != null);
+    switch (proto_val.kind.?) {
+        .decimal_val => |d| {
+            try std.testing.expectEqual(@as(u32, 3), d.scale);
+        },
+        else => return error.UnexpectedType,
+    }
+}
+
+test "propertyValueToProto: float round-trip" {
+    const allocator = std.testing.allocator;
+    const proto_val = try propertyValueToProto(allocator, .{ .Float = 2.718 });
+    try std.testing.expect(proto_val.kind != null);
+    switch (proto_val.kind.?) {
+        .double_val => |dv| try std.testing.expectApproxEqAbs(@as(f64, 2.718), dv.value, 1e-10),
+        else => return error.UnexpectedType,
+    }
+}
