@@ -375,6 +375,60 @@ fn rowContainsDeniedLabel(
     return false;
 }
 
+// CANARY: REQ=REQ-SEC-RLS-FEDERATION-001; FEATURE="RLS Federation Filter"; ASPECT=PostMergeFilter; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
+// SEC-D007: Post-merge RLS filter for federated query results.
+// Federated QueryResults use BindingRow (cols: []const Value), which is the same value type
+// as ExecutionResult rows.  We use `anytype` for the results parameter so that this function
+// works with any struct that has a `.rows` field of BindingRow-like slice type where each
+// element has a `.cols` field of `[]const Value`.
+
+/// Apply label-based RLS filtering to any result set that exposes `.rows` containing
+/// BindingRow-compatible elements (each having `.cols: []const Value`).
+/// Designed for federation QueryResults but works generically.
+/// Returns the number of rows removed.
+pub fn applyRLSToFederatedResults(
+    allocator: std.mem.Allocator,
+    results: anytype,
+    engine: *RLSFilterEngine,
+    username: []const u8,
+    graph_name: []const u8,
+) usize {
+    // Fast path: no policies configured.
+    if (engine.policyCount() == 0) return 0;
+
+    // Snapshot denied labels once (single lock acquisition).
+    var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
+    defer denied.deinit();
+
+    if (denied.count() == 0) return 0;
+
+    var removed: usize = 0;
+    var i: usize = 0;
+    while (i < results.rows.len) {
+        if (rowContainsDeniedLabel(&denied, results.rows[i].cols)) {
+            // Swap-remove: replace current with last element.
+            const last = results.rows.len - 1;
+            if (i < last) {
+                @constCast(&results.rows[i]).* = results.rows[last];
+            }
+            results.rows = results.rows[0..last];
+            removed += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    if (removed > 0) {
+        log.info("rls_federation_filter", &.{
+            Attr.string("action", "federation_rows_filtered"),
+            Attr.string("user", username),
+            Attr.string("graph", graph_name),
+        });
+    }
+
+    return removed;
+}
+
 // ---- Unit tests ----
 
 test "RLSFilterEngine: addDenyPolicy and isLabelDenied" {
@@ -751,4 +805,71 @@ test "applyAlgorithmRLSFilter: deleted node passes through" {
     const removed = applyAlgorithmRLSFilter(allocator, &result, &engine, &store, "alice", "default");
     try std.testing.expectEqual(@as(usize, 0), removed);
     try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+}
+
+// Test helper: minimal BindingRow-compatible struct for testing applyRLSToFederatedResults
+// without importing federation types (which would cause module path conflicts).
+const TestBindingRow = struct {
+    cols: []const Value,
+};
+const TestFederatedResults = struct {
+    rows: []const TestBindingRow,
+};
+
+test "applyRLSToFederatedResults: filters federation rows with denied labels" {
+    // SEC-D007: Verify that federated QueryResults are filtered by RLS.
+    const allocator = std.testing.allocator;
+
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+    try engine.addDenyPolicy("default", "Secret", "alice");
+
+    var store = try graph_store.GraphStore.init(allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(1, &[_][]const u8{"Public"}, "default");
+    try store.createNodeWithId(2, &[_][]const u8{"Secret"}, "default");
+
+    const node1 = store.getNodePtr(1).?;
+    const node2 = store.getNodePtr(2).?;
+
+    var rows_buf = try allocator.alloc(TestBindingRow, 2);
+    defer allocator.free(rows_buf);
+
+    const cols1 = try allocator.alloc(Value, 1);
+    defer allocator.free(cols1);
+    cols1[0] = .{ .Node = node1 };
+    rows_buf[0] = .{ .cols = cols1 };
+
+    const cols2 = try allocator.alloc(Value, 1);
+    defer allocator.free(cols2);
+    cols2[0] = .{ .Node = node2 };
+    rows_buf[1] = .{ .cols = cols2 };
+
+    var results = TestFederatedResults{
+        .rows = rows_buf,
+    };
+
+    const removed_count = applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
+    try std.testing.expectEqual(@as(usize, 1), removed_count);
+    try std.testing.expectEqual(@as(usize, 1), results.rows.len);
+
+    switch (results.rows[0].cols[0]) {
+        .Node => |n| try std.testing.expectEqualStrings("Public", n.labels[0]),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "applyRLSToFederatedResults: no policies returns 0" {
+    const allocator = std.testing.allocator;
+
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+
+    var results = TestFederatedResults{
+        .rows = &.{},
+    };
+
+    const removed_count = applyRLSToFederatedResults(allocator, &results, &engine, "alice", "default");
+    try std.testing.expectEqual(@as(usize, 0), removed_count);
 }

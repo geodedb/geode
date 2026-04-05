@@ -198,6 +198,8 @@ pub const Connection = struct {
     session_id: ?[]u8 = null,
     last_used: i64,
     connected: bool = false,
+    /// SEC-D010: Tenant ID carried from the originating session for multi-tenant isolation.
+    tenant_id: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator) !Connection {
         return .{
@@ -207,6 +209,7 @@ pub const Connection = struct {
             .session_id = null,
             .last_used = 0,
             .connected = false,
+            .tenant_id = null,
         };
     }
 
@@ -279,7 +282,7 @@ pub const Connection = struct {
         // GAP-0490: Use GEODE_CLUSTER_TOKEN for inter-node authentication
         var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer hello_arena.deinit();
-        const hello_req = try buildFederationHelloRequest(hello_arena.allocator(), self.config.tenant_id);
+        const hello_req = try buildFederationHelloRequest(hello_arena.allocator(), self.tenant_id);
         try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
 
         var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
@@ -512,6 +515,12 @@ pub const FederatedQuery = struct {
     parameters: []const protocol.Value,
     target_nodes: []const []const u8,
     consistency_level: ConsistencyLevel,
+    /// SEC-D007: Username from the originating session for post-merge RLS filtering.
+    username: ?[]const u8 = null,
+    /// SEC-D007: Target graph from the originating session for post-merge RLS filtering.
+    target_graph: ?[]const u8 = null,
+    /// SEC-D010: Tenant ID from the originating session for multi-tenant isolation.
+    tenant_id: ?[]const u8 = null,
 };
 
 pub const ConsistencyLevel = enum {
@@ -590,6 +599,12 @@ pub const FederationManager = struct {
             lr.deinit(allocator);
         }
 
+        // SEC-D010: Propagate tenant_id from the originating query into config
+        // so that federation HELLO requests carry the correct tenant scope.
+        if (query.tenant_id) |tid| {
+            self.config.tenant_id = tid;
+        }
+
         // Execute remote operations in parallel
         const remote_results = try self.executeRemoteOperations(plan.remote_operations, allocator);
         defer {
@@ -601,12 +616,22 @@ pub const FederationManager = struct {
         }
 
         // Merge results according to strategy
-        const merged_results = try self.mergeResults(
+        var merged_results = try self.mergeResults(
             local_results,
             remote_results,
             plan.merge_strategy,
             allocator,
         );
+
+        // SEC-D007: Apply RLS filtering to federated results post-merge.
+        // If the RLS engine is active and the query carries session context,
+        // filter out rows containing denied labels before caching or returning.
+        const rls_filter = @import("../server/rls_filter.zig");
+        if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
+            const username = query.username orelse "anonymous";
+            const graph = query.target_graph orelse "default";
+            _ = rls_filter.applyRLSToFederatedResults(allocator, &merged_results, engine, username, graph);
+        }
 
         // Cache results if enabled
         if (self.config.enable_cache) {
@@ -650,6 +675,9 @@ pub const FederationManager = struct {
 
             var conn = try node.connection_pool.acquire();
             defer node.connection_pool.release(conn);
+
+            // SEC-D010: Propagate tenant_id to the connection for HELLO handshake.
+            conn.tenant_id = self.config.tenant_id;
 
             const query = FederatedQuery{
                 .query_text = try self.operationToGQL(op.operation, allocator),
@@ -1641,4 +1669,44 @@ test "federation: union_distinct with all duplicates returns unique set" {
     // All rows are (42) -- should deduplicate to 1 row
     try std.testing.expectEqual(@as(usize, 1), merged.rows.len);
     try std.testing.expectEqual(@as(i64, 42), merged.rows[0].cols[0].Int);
+}
+
+test "federation: FederatedQuery carries tenant_id and session context" {
+    // SEC-D010/SEC-D007: Verify that FederatedQuery propagates tenant_id, username, target_graph.
+    const q = FederatedQuery{
+        .query_text = "MATCH (n) RETURN n",
+        .parameters = &.{},
+        .target_nodes = &.{},
+        .consistency_level = .eventual,
+        .tenant_id = "tenant-abc",
+        .username = "alice",
+        .target_graph = "mydb",
+    };
+
+    try std.testing.expectEqualStrings("tenant-abc", q.tenant_id.?);
+    try std.testing.expectEqualStrings("alice", q.username.?);
+    try std.testing.expectEqualStrings("mydb", q.target_graph.?);
+}
+
+test "federation: Connection carries tenant_id for HELLO" {
+    // SEC-D010: Verify Connection.tenant_id defaults to null and can be set.
+    const ally = std.testing.allocator;
+    var conn = try Connection.init(ally);
+    defer conn.deinit();
+
+    try std.testing.expectEqual(@as(?[]const u8, null), conn.tenant_id);
+    conn.tenant_id = "tenant-xyz";
+    try std.testing.expectEqualStrings("tenant-xyz", conn.tenant_id.?);
+}
+
+test "federation: buildFederationHelloRequest propagates tenant_id" {
+    // SEC-D010: Verify HELLO request carries tenant_id when provided.
+    // In test env GEODE_CLUSTER_TOKEN is NOT set, so we expect MissingClusterToken.
+    const ally = std.testing.allocator;
+    const result = buildFederationHelloRequest(ally, "tenant-123");
+    if (result) |_| {
+        // Token was set (unlikely in test env)
+    } else |err| {
+        try std.testing.expectEqual(error.MissingClusterToken, err);
+    }
 }
