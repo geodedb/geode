@@ -143,6 +143,7 @@ const _e2e_hash_functions = @import("e2e_hash_functions.zig");
 
 // Distributed systems tests - Raft persistence, 2PC, BM25, Leiden, WCOJ
 const _e2e_raft_persist = @import("e2e_raft_persist_snapshot_membership.zig");
+const _test_raft_persistent_storage = @import("test_raft_persistent_storage.zig");
 const _test_twophase_unit = @import("test_twophase_unit.zig");
 const _test_2pc_distributed = @import("test_2pc_distributed.zig");
 const _test_fulltext_bm25 = @import("test_fulltext_bm25.zig");

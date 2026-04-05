@@ -218,7 +218,8 @@ pub const Transport = struct {
     }
 };
 
-// ---- Persistent storage (delegates to external library) ----
+// ---- Persistent storage (file-backed term & votedFor) ----
+// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Consensus Persistence"; ASPECT=TermVotedFor; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-05
 
 pub const PersistentStorage = struct {
     allocator: Allocator,
@@ -230,18 +231,92 @@ pub const PersistentStorage = struct {
 
     pub fn close(_: *PersistentStorage) void {}
 
-    pub fn getCurrentTerm(_: *PersistentStorage) !?u64 {
-        return null;
+    /// Read current_term from {data_dir}/current_term. Returns null if file does not exist.
+    pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
+        return readU64File(self.data_dir, "current_term");
     }
-    pub fn saveCurrentTerm(_: *PersistentStorage, _: u64) !void {}
-    pub fn getVotedFor(_: *PersistentStorage) !?u64 {
-        return null;
+
+    /// Atomically write current_term to {data_dir}/current_term.
+    pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
+        try ensureDir(self.data_dir);
+        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        defer dir.close();
+        var buf: [32]u8 = undefined;
+        const str = std.fmt.bufPrint(&buf, "{d}", .{term}) catch unreachable;
+        try atomicWriteFile(dir, "current_term", str);
     }
-    pub fn saveVotedFor(_: *PersistentStorage, _: ?u64) !void {}
+
+    /// Read voted_for from {data_dir}/voted_for. Returns null if file does not exist.
+    pub fn getVotedFor(self: *PersistentStorage) !?u64 {
+        return readU64File(self.data_dir, "voted_for");
+    }
+
+    /// Atomically write voted_for to {data_dir}/voted_for, or delete the file if null.
+    pub fn saveVotedFor(self: *PersistentStorage, voter: ?u64) !void {
+        try ensureDir(self.data_dir);
+        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        defer dir.close();
+        if (voter) |v| {
+            var buf: [32]u8 = undefined;
+            const str = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
+            try atomicWriteFile(dir, "voted_for", str);
+        } else {
+            dir.deleteFile("voted_for") catch |err| {
+                if (err != error.FileNotFound) return err;
+            };
+        }
+    }
+
+    /// Log persistence is future work — returns null.
     pub fn getLogEntries(_: *PersistentStorage) !?[]LogEntry {
         return null;
     }
+
+    /// Log persistence is future work — no-op.
     pub fn appendLogEntry(_: *PersistentStorage, _: LogEntry) !void {}
+
+    // ---- Internal helpers ----
+
+    fn ensureDir(path: []const u8) !void {
+        std.fs.cwd().makePath(path) catch |err| {
+            if (err != error.PathAlreadyExists) return err;
+        };
+    }
+
+    fn readU64File(dir_path: []const u8, file_name: []const u8) !?u64 {
+        var dir = std.fs.cwd().openDir(dir_path, .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+        defer dir.close();
+        const f = dir.openFile(file_name, .{}) catch |err| {
+            if (err == error.FileNotFound) return null;
+            return err;
+        };
+        defer f.close();
+        var buf: [32]u8 = undefined;
+        const n = try f.readAll(&buf);
+        if (n == 0) return null;
+        const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
+        return std.fmt.parseInt(u64, trimmed, 10) catch null;
+    }
+
+    /// Write data to file_name atomically via write-to-temp-then-rename.
+    fn atomicWriteFile(dir: std.fs.Dir, name: []const u8, data: []const u8) !void {
+        var tmp_buf: [256]u8 = undefined;
+        const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
+
+        const f = try dir.createFile(tmp_name, .{});
+        errdefer {
+            f.close();
+            dir.deleteFile(tmp_name) catch {};
+        }
+        try f.writeAll(data);
+        try f.sync();
+        f.close();
+
+        try dir.rename(tmp_name, name);
+    }
 };
 
 // ---- Message types ----

@@ -1161,6 +1161,17 @@ pub fn build(b: *std.Build) void {
     const run_raft_persistent_tests = b.addRunArtifact(raft_persistent_tests);
     test_step.dependOn(&run_raft_persistent_tests.step);
 
+    // Raft consensus PersistentStorage file-backed round-trip tests
+    const raft_ps_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_ps_test_mod.addImport("geode", root_mod);
+    const raft_ps_tests = b.addTest(.{ .root_module = raft_ps_test_mod });
+    const run_raft_ps_tests = b.addRunArtifact(raft_ps_tests);
+    test_step.dependOn(&run_raft_ps_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");
