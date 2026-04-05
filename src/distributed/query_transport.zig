@@ -503,18 +503,11 @@ const Connection = struct {
         self.quic_client = quic.QuicClient.init(self.allocator);
 
         // GAP-0144: Use TLS verification for inter-node communication
-        // Check if insecure mode is explicitly allowed via environment variable
-        const allow_insecure = blk: {
-            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
-            if (env) |v| {
-                defer self.allocator.free(v);
-                if (std.mem.eql(u8, v, "1")) {
-                    log.warn("SECURITY WARNING: Inter-node TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-                    break :blk true;
-                }
-            }
-            break :blk false;
-        };
+        // SEC-D006: Consolidated to cluster_auth.isInsecureModeAllowed()
+        const allow_insecure = cluster_auth.isInsecureModeAllowed();
+        if (allow_insecure) {
+            log.warn("SECURITY WARNING: Inter-node TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+        }
 
         // Connect with TLS verification by default (skip_verify=false)
         self.quic_client.?.connectInsecure(node_info.host, node_info.port, allow_insecure) catch |err| {

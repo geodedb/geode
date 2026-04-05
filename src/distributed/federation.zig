@@ -259,18 +259,12 @@ pub const Connection = struct {
         self.client = quic.QuicClient.init(self.allocator);
 
         // GAP-0144: Use TLS verification for federation by default
-        // SEC-D006: Consolidated to single env var GEODE_CLUSTER_INSECURE
-        const allow_insecure = blk: {
-            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
-            if (env) |v| {
-                defer self.allocator.free(v);
-                if (std.mem.eql(u8, v, "1")) {
-                    log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
-                    break :blk true;
-                }
-            }
-            break :blk false;
-        };
+        // SEC-D006: Consolidated to single env var GEODE_CLUSTER_INSECURE via cluster_auth
+        const cluster_auth_mod = @import("cluster_auth.zig");
+        const allow_insecure = cluster_auth_mod.isInsecureModeAllowed();
+        if (allow_insecure) {
+            log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+        }
 
         // Connect to remote federation node with TLS verification by default (skip_verify=false)
         try self.client.?.connectInsecure(host, port, allow_insecure);
