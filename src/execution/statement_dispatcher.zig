@@ -815,6 +815,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return result;
         },
         .CreateGraph => |cg| {
+            // GAP-0295: Reject CREATE GRAPH when session is graph-bound via DSN
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-004; FEATURE="DSNGraphBinding"; ASPECT=CreateGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-05
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-AUTH-ENFORCE-015; FEATURE="AuthEnforcement"; ASPECT=CreateGraphSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: CREATE GRAPH is a schema modification operation
             try checkPermission(context, .Schema);
@@ -886,6 +891,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .CreateGraphType => |cgt| {
+            // GAP-0295: Reject CREATE GRAPH TYPE when session is graph-bound via DSN
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=CreateGraphTypeRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-05
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-AUTH-ENFORCE-016; FEATURE="AuthEnforcement"; ASPECT=CreateGraphTypeSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: CREATE GRAPH TYPE is a schema modification operation
             try checkPermission(context, .Schema);
@@ -948,6 +958,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraph => |dg| {
+            // GAP-0295: Reject DROP GRAPH when session is graph-bound via DSN
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-006; FEATURE="DSNGraphBinding"; ASPECT=DropGraphRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-05
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-AUTH-ENFORCE-017; FEATURE="AuthEnforcement"; ASPECT=DropGraphSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: DROP GRAPH is a schema modification operation
             try checkPermission(context, .Schema);
@@ -991,6 +1006,11 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             };
         },
         .DropGraphType => |dgt| {
+            // GAP-0295: Reject DROP GRAPH TYPE when session is graph-bound via DSN
+            // CANARY: REQ=REQ-DSN-GRAPH-BIND-007; FEATURE="DSNGraphBinding"; ASPECT=DropGraphTypeRejection; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-05
+            if (context.graph_bound) {
+                return error.GraphBound;
+            }
             // CANARY: REQ=REQ-AUTH-ENFORCE-018; FEATURE="AuthEnforcement"; ASPECT=DropGraphTypeSchemaPermission; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
             // CRITICAL SECURITY: DROP GRAPH TYPE is a schema modification operation
             try checkPermission(context, .Schema);
