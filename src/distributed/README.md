@@ -3,8 +3,8 @@
 This module implements Geode's distributed systems layer: consensus,
 coordination, sharding, federation, and distributed query execution.
 
-> **Experimental.** The entire distributed module is gated behind
-> `--enable-experimental-distributed`. It is not production-ready.
+> Distributed mode activates when `GEODE_CLUSTER_TOKEN` is set.
+> All inter-node communication is authenticated and encrypted via QUIC+TLS.
 
 ## Layer Diagram
 

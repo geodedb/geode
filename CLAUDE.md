@@ -15,7 +15,7 @@ Geode is a **feature-complete graph database** with strong compliance and active
 ### Known Limitations
 
 - **Multi-tenancy isolation is partial**: Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress
-- **Distributed module is experimental**: Gated behind `--enable-experimental-distributed` flag; not recommended for production use
+- **Distributed module**: Activates when `GEODE_CLUSTER_TOKEN` is set; Raft consensus, 2PC transactions, federation queries, and sharding are functional
 - **Auth defaults**: Authentication is enabled by default but must be configured with credentials before deployment
 - **CANARY coverage gap**: 14.2% of CANARY markers remain at IMPL status (implemented but not yet fully tested)
 

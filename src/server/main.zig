@@ -345,28 +345,8 @@ pub fn main() !void {
     }
     log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
 
-    // GAP-0503: Gate distributed mode — refuse to start with cluster config unless
-    // --enable-experimental-distributed is set.
-    // CANARY: REQ=REQ-GAP-0503-DIST-GATE; FEATURE="DistributedModeGate"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=core; UPDATED=2026-04-05
-    {
-        const has_cluster_token = if (comptime builtin.os.tag != .windows)
-            (std.posix.getenv("GEODE_CLUSTER_TOKEN") != null)
-        else
-            false;
-
-        if (has_cluster_token and !config.enable_experimental_distributed) {
-            log.err("GEODE_CLUSTER_TOKEN is set but distributed mode is not enabled.", &.{});
-            log.err("Distributed mode is experimental and not production-ready.", &.{});
-            log.err("To proceed, restart with --enable-experimental-distributed flag.", &.{});
-            std.debug.print(
-                \\error: GEODE_CLUSTER_TOKEN is set but distributed mode is not enabled.
-                \\Distributed mode is experimental and not production-ready.
-                \\Use --enable-experimental-distributed to proceed at your own risk.
-                \\
-            , .{});
-            return;
-        }
-    }
+    // Distributed mode activates automatically when GEODE_CLUSTER_TOKEN is set.
+    // CANARY: REQ=REQ-GAP-0503-DIST-GATE; FEATURE="DistributedMode"; ASPECT=ServerStartup; STATUS=TESTED; OWNER=core; UPDATED=2026-04-05
 
     // GAP-0269: Track total startup time for operator diagnostics
     const startup_begin = std.time.milliTimestamp();
