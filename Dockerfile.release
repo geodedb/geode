@@ -30,7 +30,10 @@ WORKDIR /home/geode
 # Expose runtime ports
 EXPOSE 3141/udp 50051/tcp 9090/tcp
 
-# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
+# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled.
+# SEC-22: --insecure is acceptable here because the health check connects to
+# localhost (127.0.0.1) only, never leaving the container. The auto-generated
+# TLS cert's CN won't match 127.0.0.1, so TLS verification must be skipped.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
         ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
