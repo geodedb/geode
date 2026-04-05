@@ -259,16 +259,13 @@ pub const Connection = struct {
         self.client = quic.QuicClient.init(self.allocator);
 
         // GAP-0144: Use TLS verification for federation by default
-        // Check if insecure mode is explicitly allowed via environment variable
-        const builtin = @import("builtin");
+        // SEC-D006: Consolidated to single env var GEODE_CLUSTER_INSECURE
         const allow_insecure = blk: {
-            // All builds require explicit env var to skip TLS verification.
-            // Debug builds no longer auto-allow insecure connections.
-            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_FEDERATION_INSECURE") catch null;
+            const env = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_INSECURE") catch null;
             if (env) |v| {
                 defer self.allocator.free(v);
                 if (std.mem.eql(u8, v, "1")) {
-                    log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_FEDERATION_INSECURE", &.{});
+                    log.warn("SECURITY WARNING: Federation TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
                     break :blk true;
                 }
             }
