@@ -15,9 +15,11 @@ pub const MergeStrategy = enum {
 };
 
 /// Aggregate group for hash-aggregate merge strategy.
+/// Tracks per-column numeric sums for all non-key columns and a count of merged rows.
 pub const AggregateGroup = struct {
     count: u64,
-    sum: f64,
+    /// Per-column accumulated sums for numeric columns (indexed by column position).
+    col_sums: []f64,
     representative_row: protocol.BindingRow,
 };
 
@@ -38,6 +40,11 @@ pub const QueryOptions = struct {
     timeout_ms: u32 = 30000,
     // GAP-0130: ORDER BY keys for result sorting
     order_by: []const OrderByKey = &.{},
+    /// Column indices that form the GROUP BY key for hash_aggregate merges.
+    /// When non-empty, only these columns are hashed for grouping; remaining
+    /// columns are treated as aggregate values and accumulated numerically.
+    /// When empty, all columns are hashed (backward-compatible default).
+    group_key_columns: []const usize = &.{},
 };
 
 pub const QueryAnalysis = struct {
@@ -457,10 +464,47 @@ pub fn orderByCompare(context: OrderBySortContext, a: protocol.BindingRow, b: pr
 pub fn hashRow(allocator: std.mem.Allocator, row: protocol.BindingRow) ![]u8 {
     var hasher = std.hash_map.DefaultHasher.init();
     for (row.cols) |binding| {
-        // Simple binding hashing - would be more sophisticated in practice
         hasher.update(std.mem.asBytes(&binding));
     }
 
     const hash_value = hasher.final();
     return try std.fmt.allocPrint(allocator, "{x}", .{hash_value});
+}
+
+/// Hash only specified columns of a row (for GROUP BY key identification).
+/// When `key_columns` is empty, hashes all columns (same as `hashRow`).
+pub fn hashRowColumns(allocator: std.mem.Allocator, row: protocol.BindingRow, key_columns: []const usize) ![]u8 {
+    var hasher = std.hash_map.DefaultHasher.init();
+    if (key_columns.len == 0) {
+        for (row.cols) |binding| {
+            hasher.update(std.mem.asBytes(&binding));
+        }
+    } else {
+        for (key_columns) |col_idx| {
+            if (col_idx < row.cols.len) {
+                hasher.update(std.mem.asBytes(&row.cols[col_idx]));
+            }
+        }
+    }
+    const hash_value = hasher.final();
+    return try std.fmt.allocPrint(allocator, "{x}", .{hash_value});
+}
+
+/// Extract a numeric (f64) value from a binding value, returning 0.0 for non-numeric types.
+pub fn extractNumeric(val: protocol.Value) f64 {
+    return switch (val) {
+        .Int => |v| @floatFromInt(v),
+        .SmallInt => |v| @floatFromInt(v),
+        .BigInt => |v| @floatFromInt(v),
+        .Real => |v| @as(f64, v),
+        .Double => |v| v,
+        .Decimal => |d| blk: {
+            const coeff_f: f64 = @floatFromInt(d.coeff);
+            var divisor: f64 = 1.0;
+            var i: u8 = 0;
+            while (i < d.scale) : (i += 1) divisor *= 10.0;
+            break :blk coeff_f / divisor;
+        },
+        else => 0.0,
+    };
 }

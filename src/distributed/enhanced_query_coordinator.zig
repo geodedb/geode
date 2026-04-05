@@ -32,6 +32,8 @@ const cloneOrderKeys = merge.cloneOrderKeys;
 const cloneOrderDirs = merge.cloneOrderDirs;
 const cloneQueryResults = merge.cloneQueryResults;
 const simpleRowCompare = merge.simpleRowCompare;
+const hashRowColumns = merge.hashRowColumns;
+const extractNumeric = merge.extractNumeric;
 const orderByCompare = merge.orderByCompare;
 const OrderBySortContext = merge.OrderBySortContext;
 
@@ -488,21 +490,23 @@ pub const EnhancedQueryCoordinator = struct {
         };
     }
 
-    /// Hash aggregate results (for GROUP BY queries)
+    /// Hash aggregate results (for GROUP BY queries).
+    /// Groups rows by key columns (from options.group_key_columns) and accumulates
+    /// numeric values in non-key columns. When group_key_columns is empty, all
+    /// columns are used as the grouping key (backward-compatible).
     fn hashAggregateResults(
         self: *EnhancedQueryCoordinator,
         shard_results: []federation.QueryResults,
         options: QueryOptions,
     ) !federation.QueryResults {
-        _ = options;
+        const key_cols = options.group_key_columns;
 
-        // Simple aggregation placeholder
-        // In practice, would implement sophisticated aggregation merging
         var groups = std.StringHashMap(AggregateGroup).init(self.allocator);
         defer {
             var it = groups.iterator();
             while (it.next()) |entry| {
                 freeBindingRow(self.allocator, entry.value_ptr.representative_row);
+                self.allocator.free(entry.value_ptr.col_sums);
                 self.allocator.free(entry.key_ptr.*);
             }
             groups.deinit();
@@ -510,23 +514,34 @@ pub const EnhancedQueryCoordinator = struct {
 
         for (shard_results) |result| {
             for (result.rows) |row| {
-                const group_key = try self.hashRow(row);
+                const group_key = try hashRowColumns(self.allocator, row, key_cols);
                 const gop = try groups.getOrPut(group_key);
                 if (gop.found_existing) {
                     self.allocator.free(group_key);
                     gop.value_ptr.count += 1;
-                    // Update aggregates
+                    // Accumulate numeric values in non-key columns
+                    for (row.cols, 0..) |val, ci| {
+                        if (!isKeyColumn(ci, key_cols)) {
+                            gop.value_ptr.col_sums[ci] += extractNumeric(val);
+                        }
+                    }
                 } else {
+                    // First row in this group: initialize per-column sums
+                    const num_cols = row.cols.len;
+                    const sums = try self.allocator.alloc(f64, num_cols);
+                    for (row.cols, 0..) |val, ci| {
+                        sums[ci] = extractNumeric(val);
+                    }
                     gop.value_ptr.* = AggregateGroup{
                         .count = 1,
-                        .sum = 0, // Would extract from row
+                        .col_sums = sums,
                         .representative_row = try cloneBindingRow(self.allocator, row),
                     };
                 }
             }
         }
 
-        // Convert groups back to rows
+        // Convert groups back to rows, updating non-key columns with accumulated values
         var aggregated_rows = std.ArrayList(protocol.BindingRow).init(self.allocator);
         errdefer {
             for (aggregated_rows.items) |row| freeBindingRow(self.allocator, row);
@@ -535,7 +550,31 @@ pub const EnhancedQueryCoordinator = struct {
 
         var iter = groups.iterator();
         while (iter.next()) |entry| {
-            try aggregated_rows.append(try cloneBindingRow(self.allocator, entry.value_ptr.representative_row));
+            const group = entry.value_ptr;
+            var out_row = try cloneBindingRow(self.allocator, group.representative_row);
+            errdefer freeBindingRow(self.allocator, out_row);
+
+            // Overwrite non-key aggregate columns with accumulated sums
+            if (key_cols.len > 0) {
+                for (out_row.cols, 0..) |_, ci| {
+                    if (!isKeyColumn(ci, key_cols)) {
+                        // Replace with the accumulated sum as an Int if it's a whole number, otherwise Double
+                        const s = group.col_sums[ci];
+                        const s_int: i64 = @intFromFloat(s);
+                        const as_f: f64 = @floatFromInt(s_int);
+                        if (as_f == s and s >= @as(f64, @floatFromInt(@as(i64, std.math.minInt(i64)))) and
+                            s <= @as(f64, @floatFromInt(@as(i64, std.math.maxInt(i64)))))
+                        {
+                            // Whole number -- keep as Int for downstream compatibility
+                            @constCast(out_row.cols)[ci] = .{ .Int = s_int };
+                        } else {
+                            @constCast(out_row.cols)[ci] = .{ .Double = s };
+                        }
+                    }
+                }
+            }
+
+            try aggregated_rows.append(out_row);
         }
 
         return federation.QueryResults{
@@ -547,6 +586,14 @@ pub const EnhancedQueryCoordinator = struct {
             .execution_time_ms = 0,
             .ordered = false,
         };
+    }
+
+    /// Check whether a column index is in the set of group key columns.
+    fn isKeyColumn(col_idx: usize, key_cols: []const usize) bool {
+        for (key_cols) |kc| {
+            if (kc == col_idx) return true;
+        }
+        return false;
     }
 
     /// Top-K results with distributed optimization using heap-based selection
@@ -810,3 +857,158 @@ pub const EnhancedQueryCoordinator = struct {
 };
 
 // Supporting types and helper functions extracted to merge_strategies.zig
+
+test "hash_aggregate merges numeric values across shards" {
+    // GAP-D006: Verify that hash_aggregate actually computes real sums instead of hardcoding 0.
+    // Two shards each return a row with group key col 0 = "a" and aggregate col 1 = some integer.
+    // After merge, the output should contain one group with col 1 = sum of both partial values.
+    const ally = std.testing.allocator;
+
+    const test_schema = &[_]protocol.ColumnDef{
+        .{ .name = "grp", .data_type = "STRING" },
+        .{ .name = "total", .data_type = "INT" },
+    };
+
+    // Shard 1: group "a" with partial sum 10
+    var v_s1 = [_]protocol.Value{ .{ .Str = "a" }, .{ .Int = 10 } };
+    const shard1_rows = &[_]protocol.BindingRow{.{ .cols = &v_s1 }};
+    const shard1 = federation.QueryResults{
+        .rows = shard1_rows,
+        .schema = test_schema,
+        .execution_time_ms = 0,
+    };
+
+    // Shard 2: group "a" with partial sum 25
+    var v_s2 = [_]protocol.Value{ .{ .Str = "a" }, .{ .Int = 25 } };
+    const shard2_rows = &[_]protocol.BindingRow{.{ .cols = &v_s2 }};
+    const shard2 = federation.QueryResults{
+        .rows = shard2_rows,
+        .schema = test_schema,
+        .execution_time_ms = 0,
+    };
+
+    var shard_results = [_]federation.QueryResults{ shard1, shard2 };
+
+    // Create a minimal coordinator
+    var coord = EnhancedQueryCoordinator{
+        .allocator = ally,
+        .transport = null,
+        .cache = .{
+            .allocator = ally,
+            .entries = std.StringHashMap(merge.QueryCache.CacheEntry).init(ally),
+            .enabled = false,
+        },
+        .metrics = std.mem.zeroes(CoordinatorMetrics),
+    };
+    defer coord.deinit();
+
+    // group_key_columns = {0} means column 0 is the key, column 1 is the aggregate
+    const key_cols = [_]usize{0};
+    const opts = QueryOptions{ .group_key_columns = &key_cols };
+
+    var result = try coord.hashAggregateResults(&shard_results, opts);
+    defer result.deinit(ally);
+
+    // Should produce 1 group
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+
+    // The aggregate column (index 1) should be 10 + 25 = 35
+    try std.testing.expectEqual(@as(i64, 35), result.rows[0].cols[1].Int);
+}
+
+test "hash_aggregate without key columns groups by full row" {
+    // Backward compatibility: when group_key_columns is empty, rows are grouped
+    // by hashing all columns (same as before). Identical rows collapse.
+    const ally = std.testing.allocator;
+
+    const test_schema = &[_]protocol.ColumnDef{.{ .name = "x", .data_type = "INT" }};
+
+    var v1 = [_]protocol.Value{.{ .Int = 7 }};
+    var v2 = [_]protocol.Value{.{ .Int = 7 }};
+    const shard1_rows = &[_]protocol.BindingRow{.{ .cols = &v1 }};
+    const shard2_rows = &[_]protocol.BindingRow{.{ .cols = &v2 }};
+    const shard1 = federation.QueryResults{ .rows = shard1_rows, .schema = test_schema, .execution_time_ms = 0 };
+    const shard2 = federation.QueryResults{ .rows = shard2_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    var shard_results = [_]federation.QueryResults{ shard1, shard2 };
+
+    var coord = EnhancedQueryCoordinator{
+        .allocator = ally,
+        .transport = null,
+        .cache = .{
+            .allocator = ally,
+            .entries = std.StringHashMap(merge.QueryCache.CacheEntry).init(ally),
+            .enabled = false,
+        },
+        .metrics = std.mem.zeroes(CoordinatorMetrics),
+    };
+    defer coord.deinit();
+
+    const opts = QueryOptions{}; // no group_key_columns
+    var result = try coord.hashAggregateResults(&shard_results, opts);
+    defer result.deinit(ally);
+
+    // Both rows are identical, so they collapse to 1 group
+    try std.testing.expectEqual(@as(usize, 1), result.rows.len);
+    try std.testing.expectEqual(@as(i64, 7), result.rows[0].cols[0].Int);
+}
+
+test "hash_aggregate multiple groups with real sums" {
+    // Two groups across two shards: verify each group accumulates independently.
+    const ally = std.testing.allocator;
+
+    const test_schema = &[_]protocol.ColumnDef{
+        .{ .name = "city", .data_type = "STRING" },
+        .{ .name = "pop", .data_type = "INT" },
+    };
+
+    // Shard 1: NYC=100, LA=50
+    var v_s1_r1 = [_]protocol.Value{ .{ .Str = "NYC" }, .{ .Int = 100 } };
+    var v_s1_r2 = [_]protocol.Value{ .{ .Str = "LA" }, .{ .Int = 50 } };
+    const s1_rows = &[_]protocol.BindingRow{ .{ .cols = &v_s1_r1 }, .{ .cols = &v_s1_r2 } };
+    const shard1 = federation.QueryResults{ .rows = s1_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    // Shard 2: NYC=200, LA=75
+    var v_s2_r1 = [_]protocol.Value{ .{ .Str = "NYC" }, .{ .Int = 200 } };
+    var v_s2_r2 = [_]protocol.Value{ .{ .Str = "LA" }, .{ .Int = 75 } };
+    const s2_rows = &[_]protocol.BindingRow{ .{ .cols = &v_s2_r1 }, .{ .cols = &v_s2_r2 } };
+    const shard2 = federation.QueryResults{ .rows = s2_rows, .schema = test_schema, .execution_time_ms = 0 };
+
+    var shard_results = [_]federation.QueryResults{ shard1, shard2 };
+
+    var coord = EnhancedQueryCoordinator{
+        .allocator = ally,
+        .transport = null,
+        .cache = .{
+            .allocator = ally,
+            .entries = std.StringHashMap(merge.QueryCache.CacheEntry).init(ally),
+            .enabled = false,
+        },
+        .metrics = std.mem.zeroes(CoordinatorMetrics),
+    };
+    defer coord.deinit();
+
+    const key_cols = [_]usize{0};
+    const opts = QueryOptions{ .group_key_columns = &key_cols };
+
+    var result = try coord.hashAggregateResults(&shard_results, opts);
+    defer result.deinit(ally);
+
+    // Should produce 2 groups
+    try std.testing.expectEqual(@as(usize, 2), result.rows.len);
+
+    // Find NYC and LA groups (order is not guaranteed in hash map)
+    var nyc_sum: ?i64 = null;
+    var la_sum: ?i64 = null;
+    for (result.rows) |row| {
+        const city = row.cols[0].Str;
+        const pop = row.cols[1].Int;
+        if (std.mem.eql(u8, city, "NYC")) {
+            nyc_sum = pop;
+        } else if (std.mem.eql(u8, city, "LA")) {
+            la_sum = pop;
+        }
+    }
+    try std.testing.expectEqual(@as(i64, 300), nyc_sum.?); // 100 + 200
+    try std.testing.expectEqual(@as(i64, 125), la_sum.?); // 50 + 75
+}
