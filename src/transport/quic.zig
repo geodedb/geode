@@ -709,13 +709,13 @@ pub const QuicStream = struct {
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
         var written: usize = 0;
         var blocked_retries: usize = 0;
-        const max_blocked_retries: usize = 2000; // ~10s at 5ms sleep
+        const max_blocked_retries: usize = 20000; // ~10s at 500μs sleep
         while (written < data.len) {
             const n = self.connection.writeStream(self.stream_id, data[written..], false) catch |err| {
                 if (err == error.FlowControlBlocked) {
                     blocked_retries += 1;
                     if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
-                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    std.Thread.sleep(500 * std.time.ns_per_us);
                     continue;
                 }
                 return err;
@@ -724,7 +724,7 @@ pub const QuicStream = struct {
                 // Congestion window full — retry with backoff (same as FlowControlBlocked)
                 blocked_retries += 1;
                 if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                std.Thread.sleep(500 * std.time.ns_per_us);
                 continue;
             }
             written += n;
