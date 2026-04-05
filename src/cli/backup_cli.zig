@@ -78,6 +78,20 @@ fn printStdout(comptime fmt: []const u8, args: anytype) void {
     stdout.writeAll(slice) catch {};
 }
 
+/// SEC-MIG-10: Validate that a user-supplied directory path does not contain
+/// path traversal components ("..") which could escape the intended directory scope.
+/// Returns true if the path is safe to use, false if it contains traversal attempts.
+fn isPathSafe(path: []const u8) bool {
+    // Reject empty paths
+    if (path.len == 0) return false;
+    // Check for ".." path components by splitting on separators
+    var it = std.mem.tokenizeAny(u8, path, "/\\");
+    while (it.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) return false;
+    }
+    return true;
+}
+
 /// Backup command handler - routes to specific backup subcommands
 /// Handles: backup create, backup list, backup info, backup cleanup
 pub fn cmdBackup(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
@@ -246,6 +260,17 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
+    // to avoid password exposure in process listing (/proc/PID/cmdline).
+    if (password == null) {
+        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
+            password = env_pw;
+        }
+    } else {
+        std.debug.print("Warning: --password on command line is visible in process listings. " ++
+            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
+    }
+
     // GAP-0137: Validate TLS configuration
     if (!tls_config.validate()) {
         std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
@@ -313,6 +338,14 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
             i += 1;
             custom_dir = argv[i];
+        }
+    }
+
+    // SEC-MIG-10: Validate --dir path to prevent directory traversal
+    if (custom_dir) |cd| {
+        if (!isPathSafe(cd)) {
+            std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
         }
     }
 
@@ -741,6 +774,16 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
+    if (password == null) {
+        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
+            password = env_pw;
+        }
+    } else {
+        std.debug.print("Warning: --password on command line is visible in process listings. " ++
+            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
+    }
+
     // GAP-0137: Validate TLS configuration
     if (!tls_config.validate()) {
         std.debug.print("Error: Both --client-cert and --client-key must be provided for mutual TLS\n", .{});
@@ -1093,6 +1136,12 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         }
     }
 
+    // SEC-MIG-10: Validate --dir path to prevent directory traversal
+    if (!isPathSafe(migrations_dir)) {
+        std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
     const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
 
     // Get actual migration status from migration module
@@ -1222,6 +1271,22 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
+    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
+    if (password == null) {
+        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
+            password = env_pw;
+        }
+    } else {
+        std.debug.print("Warning: --password on command line is visible in process listings. " ++
+            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
+    }
+
+    // SEC-MIG-10: Validate --dir path to prevent directory traversal
+    if (!isPathSafe(migrations_dir)) {
+        std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
     printStdout("Running migrations from: {s}\n", .{migrations_dir});
 
     // Scan migrations directory for .gql files (excluding .down.gql rollback files)
@@ -1336,6 +1401,12 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
+    // SEC-MIG-10: Validate --dir path to prevent directory traversal
+    if (!isPathSafe(migrations_dir)) {
+        std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
     // Validate migration name for path traversal (GAP-0285/0301)
     migration.validateMigrationName(migration_name.?) catch {
         std.debug.print("Error: invalid migration name '{s}' (must not contain path separators or '..')\n", .{migration_name.?});
@@ -1365,12 +1436,19 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
             var version: u32 = 0;
             var j: usize = 0;
             while (j < entry.name.len and entry.name[j] >= '0' and entry.name[j] <= '9') : (j += 1) {
-                version = version * 10 + @as(u32, entry.name[j] - '0');
+                // SEC-MIG-09: Use saturating arithmetic to prevent overflow on
+                // pathological filenames with very large numeric prefixes.
+                version = version *| 10 +| @as(u32, entry.name[j] - '0');
             }
             if (version > max_version) max_version = version;
         }
     }
 
+    // SEC-MIG-09: Guard against overflow when incrementing past u32 max.
+    if (max_version == std.math.maxInt(u32)) {
+        std.debug.print("Error: migration version counter overflow (max version {d})\n", .{max_version});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
     const new_version = max_version + 1;
 
     // Create filename: NNN_name.gql
@@ -2157,7 +2235,7 @@ test "migration version ordering" {
 
 test "ExitCode values are distinct" {
     try std.testing.expect(@intFromEnum(ExitCode.success) != @intFromEnum(ExitCode.general_error));
-    try std.testing.expect(@intFromEnum(ExitCode.general_error) != @intFromEnum(ExitCode.command_not_found));
+    try std.testing.expect(@intFromEnum(ExitCode.general_error) != @intFromEnum(ExitCode.usage_error));
     try std.testing.expect(@intFromEnum(ExitCode.success) == 0);
     try std.testing.expect(@intFromEnum(ExitCode.general_error) == 1);
 }
@@ -2169,19 +2247,16 @@ test "MigrationExecContext fields are properly initialized" {
 
     const ctx = MigrationExecContext{
         .allocator = allocator,
-        .quic_client = undefined, // Would be a heap-allocated pointer in real usage
-        .dry_run = true,
-        .verbose = false,
-        .success_count = 0,
-        .error_count = 0,
-        .skipped_count = 0,
+        .server_addr = "127.0.0.1:3141",
+        .tls_config = TlsConfig{},
+        .username = null,
+        .password = null,
     };
 
-    try std.testing.expect(ctx.dry_run == true);
-    try std.testing.expect(ctx.verbose == false);
-    try std.testing.expectEqual(@as(u32, 0), ctx.success_count);
-    try std.testing.expectEqual(@as(u32, 0), ctx.error_count);
-    try std.testing.expectEqual(@as(u32, 0), ctx.skipped_count);
+    try std.testing.expect(std.mem.eql(u8, ctx.server_addr, "127.0.0.1:3141"));
+    try std.testing.expect(ctx.username == null);
+    try std.testing.expect(ctx.password == null);
+    try std.testing.expect(!ctx.tls_config.insecure);
 }
 
 test "heap allocation pattern for QUIC client stability" {
@@ -2210,4 +2285,21 @@ test "heap allocation pattern for QUIC client stability" {
     // The key insight: ptr.allocator remains valid because ptr is heap-allocated
     // If TestStruct were returned by value, the allocator field reference
     // would point to invalid stack memory after the function returns.
+}
+
+// SEC-MIG-10: Path traversal validation tests
+test "isPathSafe rejects path traversal" {
+    try std.testing.expect(!isPathSafe("../etc/passwd"));
+    try std.testing.expect(!isPathSafe("foo/../bar"));
+    try std.testing.expect(!isPathSafe(".."));
+    try std.testing.expect(!isPathSafe("foo/.."));
+    try std.testing.expect(!isPathSafe(""));
+}
+
+test "isPathSafe accepts valid paths" {
+    try std.testing.expect(isPathSafe("migrations"));
+    try std.testing.expect(isPathSafe("./migrations"));
+    try std.testing.expect(isPathSafe("/var/lib/geode/migrations"));
+    try std.testing.expect(isPathSafe("backups/2026"));
+    try std.testing.expect(isPathSafe("."));
 }
