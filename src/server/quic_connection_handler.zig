@@ -449,6 +449,8 @@ pub const SharedConnState = struct {
     memcurve_profile: bool = false,
     env_spill_threshold: usize = 0,
     env_storage_checksum_error: bool = false,
+    /// #683: Cached env config pointer (global lifetime, not owned).
+    env_config: ?*const server_init.EnvironmentConfig = null,
     /// Number of active streams (including the first one). Used to know when
     /// the connection is idle. Atomic so the acceptor thread and stream handler
     /// threads can update it without a mutex.
@@ -608,27 +610,12 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.federation_manager = &federation_manager;
     state.distributed_planner = &dist_planner;
 
-    // Env-driven optimizer/inline flags (same as first stream).
-    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk false;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| false;
-    state.inline_results_enabled = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS")) |v| blk: {
-        defer gpa.free(v);
-        if (v.len == 0) break :blk true;
-        if (v[0] == '0') break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "false")) break :blk false;
-        if (std.ascii.eqlIgnoreCase(v, "off")) break :blk false;
-        break :blk true;
-    } else |_| true;
-    state.inline_results_max_rows = if (std.process.getEnvVarOwned(gpa, "GEODE_INLINE_RESULTS_MAX_ROWS")) |v| blk: {
-        defer gpa.free(v);
-        break :blk std.fmt.parseInt(usize, v, 10) catch state.inline_results_max_rows;
-    } else |_| state.inline_results_max_rows;
+    // #683: Use cached env config from SharedConnState instead of per-stream syscalls.
+    if (cs.env_config) |ec| {
+        state.query_optimizer_enabled = ec.query_optimizer_enabled;
+        state.inline_results_enabled = ec.inline_results_enabled;
+        state.inline_results_max_rows = ec.inline_results_max_rows;
+    }
 
     defer {
         state.resetResult();
@@ -1035,6 +1022,7 @@ pub fn handleQuicConnection(
         .memcurve_profile = memcurve_profile,
         .env_spill_threshold = env_spill_threshold,
         .env_storage_checksum_error = env_storage_checksum_error,
+        .env_config = env_config,
     };
     conn_state.captureFromState(&state) catch |err| {
         // S7: Do NOT allow unauthenticated streams — close connection on capture failure

@@ -144,6 +144,8 @@ const ConnectionContext = struct {
     shared_ast_cache: ?*query_ast_cache.SharedAstCache,
     // Issue #460: Shared cross-connection query optimizer
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
+    // #683: Cached env config to avoid per-connection syscalls
+    env_config: *const server_init.EnvironmentConfig = undefined,
 };
 
 // GAP-0202: Callback wrapper for thread pool execution
@@ -162,6 +164,7 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.security_manager,
         ctx.shared_ast_cache,
         ctx.shared_optimizer,
+        ctx.env_config,
     ) catch |err| {
         log.err("Error handling QUIC connection (async)", &.{
             Attr.string("error", @errorName(err)),
@@ -341,6 +344,29 @@ pub fn main() !void {
         logger.setLevel(logger.parseLevel(lla));
     }
     log.info("server.start", &.{Attr.string("level", log_level_arg orelse "info")});
+
+    // GAP-0503: Gate distributed mode — refuse to start with cluster config unless
+    // --enable-experimental-distributed is set.
+    // CANARY: REQ=REQ-GAP-0503-DIST-GATE; FEATURE="DistributedModeGate"; ASPECT=ServerStartup; STATUS=IMPL; OWNER=core; UPDATED=2026-04-05
+    {
+        const has_cluster_token = if (comptime builtin.os.tag != .windows)
+            (std.posix.getenv("GEODE_CLUSTER_TOKEN") != null)
+        else
+            false;
+
+        if (has_cluster_token and !config.enable_experimental_distributed) {
+            log.err("GEODE_CLUSTER_TOKEN is set but distributed mode is not enabled.", &.{});
+            log.err("Distributed mode is experimental and not production-ready.", &.{});
+            log.err("To proceed, restart with --enable-experimental-distributed flag.", &.{});
+            std.debug.print(
+                \\error: GEODE_CLUSTER_TOKEN is set but distributed mode is not enabled.
+                \\Distributed mode is experimental and not production-ready.
+                \\Use --enable-experimental-distributed to proceed at your own risk.
+                \\
+            , .{});
+            return;
+        }
+    }
 
     // GAP-0269: Track total startup time for operator diagnostics
     const startup_begin = std.time.milliTimestamp();
@@ -673,7 +699,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -758,6 +784,7 @@ pub fn main() !void {
                 .security_manager = init_ctx.security_manager,
                 .shared_ast_cache = init_ctx.shared_ast_cache,
                 .shared_optimizer = init_ctx.shared_optimizer,
+                .env_config = &init_ctx.env_config,
             };
 
             // Submit to thread pool for async handling
