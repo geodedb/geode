@@ -591,6 +591,30 @@ test "Env variable lookup" {
     try std.testing.expect(env.get("y") == null);
 }
 
+test "Env getParam uses param_names not names - R4 regression" {
+    const allocator = std.testing.allocator;
+
+    // Correct: params in param_names/param_values => getParam finds them
+    const correct_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = &[_][]const u8{"age"},
+        .param_values = &[_]Value{.{ .Int = 30 }},
+        .allocator = allocator,
+    };
+    try std.testing.expect(correct_env.getParam("age") != null);
+    try std.testing.expectEqual(@as(i64, 30), correct_env.getParam("age").?.Int);
+
+    // Bug scenario: params placed in names/values instead of param_names/param_values
+    // getParam must NOT find them there (this is what NodeCollector2 was doing wrong)
+    const buggy_env = Env{
+        .names = &[_][]const u8{"age"},
+        .values = &[_]Value{.{ .Int = 30 }},
+        .allocator = allocator,
+    };
+    try std.testing.expect(buggy_env.getParam("age") == null);
+}
+
 test "Value equality" {
     const v1 = Value{ .Int = 42 };
     const v2 = Value{ .Int = 42 };

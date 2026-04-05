@@ -1118,23 +1118,46 @@ pub const SecurityManager = struct {
             if (default_password_env) |env| {
                 break :blk env;
             }
-            // GAP-0146: Generate cryptographically random password in production
-            if (builtin.mode != .Debug) {
-                // Production: Generate random 32-byte password (hex encoded to 64 chars)
-                std.crypto.random.bytes(&generated_password_buf);
-                generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
-                // GAP-0481: Do NOT log any portion of the generated password via structured logger.
-                // Write to stderr only so operators see it without it reaching log aggregators.
-                std.debug.print("\n[GEODE SECURITY] Generated random admin password — REQUIRES IMMEDIATE CHANGE\n" ++
-                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var before starting in production.\n" ++
-                    "[GEODE SECURITY] Password: {s}\n\n", .{generated_password_hex});
-                log.warn("Generated random admin password — set GEODE_DEFAULT_PASSWORD env var (see stderr)", &.{
-                    Attr.string("action", "Set GEODE_DEFAULT_PASSWORD env var to use a custom password"),
-                });
+            // SEC-04: Generate cryptographically random password in ALL build modes.
+            // No hardcoded fallback — always random when env var is not set.
+            std.crypto.random.bytes(&generated_password_buf);
+            generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
+
+            // SEC-05: Write generated password to a file instead of stderr.
+            // This prevents password leakage into log aggregators or terminal scrollback.
+            const data_dir = std.process.getEnvVarOwned(self.allocator, "GEODE_DATA_DIR") catch null;
+            defer if (data_dir) |d| self.allocator.free(d);
+            const pw_dir = data_dir orelse ".";
+            const pw_path = std.fmt.allocPrint(self.allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
+                // If we cannot even format the path, log a warning but continue.
+                log.warn("Failed to allocate password file path", &.{});
                 break :blk generated_password_hex[0..64];
+            };
+            defer self.allocator.free(pw_path);
+
+            if (std.fs.cwd().createFile(pw_path, .{ .mode = 0o600 })) |file| {
+                defer file.close();
+                file.writeAll(generated_password_hex[0..64]) catch |err| {
+                    log.warn("Failed to write admin password file", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
+                std.debug.print("\n[GEODE SECURITY] Generated random admin password written to: {s}\n" ++
+                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var before starting in production.\n\n", .{pw_path});
+            } else |err| {
+                log.warn("Failed to create admin password file", &.{
+                    Attr.string("path", pw_path),
+                    Attr.string("error", @errorName(err)),
+                });
+                // Fallback: print location hint only (no password) so operator knows something went wrong
+                std.debug.print("\n[GEODE SECURITY] Could not write admin password file to {s}: {s}\n" ++
+                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var to configure the admin password.\n\n", .{ pw_path, @errorName(err) });
             }
-            // Debug builds: Use "geodesic" for testing convenience
-            break :blk "geodesic";
+
+            log.warn("Generated random admin password — see password file in data directory", &.{
+                Attr.string("action", "Set GEODE_DEFAULT_PASSWORD env var to use a custom password"),
+            });
+            break :blk generated_password_hex[0..64];
         };
         defer if (default_password_env) |env| self.allocator.free(env);
 

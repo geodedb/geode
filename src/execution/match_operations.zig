@@ -5102,8 +5102,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (node.properties.get(prop.key)) |node_prop_val| {
                                     const node_val = propertyValueToValue(node_prop_val);
                                     const prop_env = eval.Env{
-                                        .names = p_names,
-                                        .values = p_values,
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .param_names = p_names,
+                                        .param_values = p_values,
                                         .allocator = alloc,
                                     };
                                     const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
