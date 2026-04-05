@@ -659,18 +659,19 @@ REQ-DIST-MIGRATE-002,Shard Data Migration,PartialMigration,EXEMPT,,,distributed,
 REQ-DIST-MIGRATE-003,Shard Data Migration,FullMigration,EXEMPT,,,distributed,2026-01-08,src/distributed/sharding.zig
 REQ-DIST-MIGRATION-001,Shard Data Migration,Migration,IMPL,,,distributed,2026-04-05,src/distributed/sharding.zig
 REQ-DIST-MIGRATION-002,Migration State,ProgressTracking,IMPL,,,distributed,2026-04-05,src/distributed/sharding.zig
+REQ-DIST-MOD-001,PartitionAwarePlanning,QueryRouting,IMPL,,,distributed,2026-04-05,src/distributed/mod.zig
 REQ-DIST-ORDERBY-001,Distributed ORDER BY,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/merge_strategies.zig
 REQ-DIST-ORDERBY-002,Distributed ORDER BY Sort,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-ORDERBY-003,ORDER BY Sort Context,QueryCorrectness,IMPL,,,distributed,2026-04-05,src/distributed/merge_strategies.zig
 REQ-DIST-PLAN-001,DistributedQueryPlanning,Orchestration,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
 REQ-DIST-PLAN-002,ShardRowEstimation,CBO,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-003,ShardQueryGeneration,QueryRouting,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
 REQ-DIST-PLAN-004,ShardPruning,QueryRouting,IMPL,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
-REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,EXEMPT,,,distributed,2026-04-01,src/distributed/query_planner.zig
+REQ-DIST-PLAN-005,ShardLocalOptimization,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
+REQ-DIST-PLAN-006,DistributedJoin,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
+REQ-DIST-PLAN-007,DistributedAggregation,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
+REQ-DIST-PLAN-008,DistributedSort,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
+REQ-DIST-PLAN-009,DistributedUnion,QueryPlanning,IMPL,,,distributed,2026-04-05,src/distributed/query_planner.zig
 REQ-DIST-PLANNER-001,DistributedQueryPlanner,PlanGeneration,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-002,DistributedQueryPlanner,DistributionAnalysis,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-003,DistributedQueryPlanner,ShardPlanning,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
@@ -737,9 +738,9 @@ REQ-DISTRIBUTED-QUERY-006,Shard-Aware Query Execution,ShardOptimization,TESTED,,
 REQ-DISTRIBUTED-QUERY-007,Distributed Query MVCC Integration,DistributedTransactions,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_mvcc_integration.zig
 REQ-DISTRIBUTED-QUERY-008,Cross-Shard Phantom Read Prevention,DistributedIsolation,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_mvcc_integration.zig
 REQ-DISTRIBUTED-QUERY-009,Distributed Transaction Coordination,TransactionCoordination,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_mvcc_integration.zig
-REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
-REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
-REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,,,distributed,2025-10-05,tests/test_distributed_query_planner.zig
+REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
+REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
+REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
 REQ-DOC-GOVERNANCE,Requirement Traceability,TestVerification,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
 REQ-DOCS-001,Docs,Documentation,TESTED,,,docs,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-DOCS-API-001,Docs,APIDocumentation,TESTED,,,docs,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig

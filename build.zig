@@ -1137,6 +1137,19 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_e2e_ts_tests.step);
     test_step.dependOn(&run_ts_store_tests.step);
 
+    // GAP-D007: Distributed query planner unit tests
+    const dist_query_planner_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_distributed_query_planner.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    dist_query_planner_test_mod.addImport("geode", root_mod);
+    const dist_query_planner_tests = b.addTest(.{
+        .root_module = dist_query_planner_test_mod,
+    });
+    const run_dist_query_planner_tests = b.addRunArtifact(dist_query_planner_tests);
+    test_step.dependOn(&run_dist_query_planner_tests.step);
+
     // SEC-D009: Nonce tracker unit tests
     const nonce_tracker_tests = b.addTest(.{
         .root_module = b.createModule(.{

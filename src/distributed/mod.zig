@@ -56,21 +56,47 @@ pub const PartitionAwarePlanner = struct {
         self.shard_manager.deinit();
     }
 
+    // CANARY: REQ=REQ-DIST-MOD-001; FEATURE="PartitionAwarePlanning"; ASPECT=QueryRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn planQuery(self: *PartitionAwarePlanner, query: []const u8) !QueryPlan {
-        // Parse query to identify accessed nodes/edges
+        // Extract identifiers from the query that could map to shard keys
         const accessed_keys = try self.extractAccessedKeys(query);
         defer self.allocator.free(accessed_keys);
 
-        // Determine which partitions are needed
-        var partitions = std.ArrayList(Partition){};
+        // Determine which partitions are needed by looking up each key in the shard manager
+        var partitions = std.ArrayList(Partition).init(self.allocator);
 
         for (accessed_keys) |key| {
             if (self.shard_manager.getShard(key)) |shard| {
-                try partitions.append(.{
+                // Use record_count from shard statistics when available
+                const estimated_rows: u64 = if (shard.record_count > 0)
+                    shard.record_count
+                else
+                    100; // fallback
+
+                try partitions.append(self.allocator, .{
                     .shard_id = shard.id,
                     .node_id = shard.node_id,
                     .predicate = key,
-                    .estimated_rows = 100, // Simplified estimate
+                    .estimated_rows = estimated_rows,
+                });
+            }
+        }
+
+        // If no shards matched but the shard manager has shards, route to all
+        if (partitions.items.len == 0) {
+            var iter = self.shard_manager.shards.iterator();
+            while (iter.next()) |entry| {
+                const shard = entry.value_ptr.*;
+                const estimated_rows: u64 = if (shard.record_count > 0)
+                    shard.record_count
+                else
+                    100;
+
+                try partitions.append(self.allocator, .{
+                    .shard_id = shard.id,
+                    .node_id = shard.node_id,
+                    .predicate = "",
+                    .estimated_rows = estimated_rows,
                 });
             }
         }
@@ -83,25 +109,43 @@ pub const PartitionAwarePlanner = struct {
 
         return QueryPlan{
             .query = query,
-            .partitions = try partitions.toOwnedSlice(),
+            .partitions = try partitions.toOwnedSlice(self.allocator),
             .execution_order = execution_order,
             .requires_2pc = requires_2pc,
             .estimated_cost = self.estimateCost(partitions.items),
         };
     }
 
+    /// Extract potential shard routing keys from a query string.
+    /// Looks for identifiers in MATCH patterns that could serve as partition keys.
     fn extractAccessedKeys(self: *PartitionAwarePlanner, query: []const u8) ![][]const u8 {
-        // Simplified: extract node IDs from query
-        _ = self;
-        var keys = std.ArrayList([]const u8){};
+        var keys = std.ArrayList([]const u8).init(self.allocator);
 
-        // In real implementation, parse query AST
-        if (std.mem.indexOf(u8, query, "MATCH") != null) {
-            try keys.append("node1");
-            try keys.append("node2");
+        // Extract identifiers from patterns like (varName:Label) or (varName)
+        // by scanning for parenthesized sequences
+        var i: usize = 0;
+        while (i < query.len) : (i += 1) {
+            if (query[i] == '(' and i + 1 < query.len) {
+                // Find the closing paren
+                const start = i + 1;
+                var end = start;
+                while (end < query.len and query[end] != ')' and query[end] != ':') : (end += 1) {}
+                if (end > start) {
+                    const ident = std.mem.trim(u8, query[start..end], " \t");
+                    if (ident.len > 0) {
+                        try keys.append(self.allocator, ident);
+                    }
+                }
+            }
         }
 
-        return try keys.toOwnedSlice();
+        // If no structured identifiers found, use the query text itself as a key
+        // so consistent hashing at least routes deterministically
+        if (keys.items.len == 0 and query.len > 0) {
+            try keys.append(self.allocator, query);
+        }
+
+        return try keys.toOwnedSlice(self.allocator);
     }
 
     fn requiresTwoPhaseCommit(self: *PartitionAwarePlanner, query: []const u8, partitions: []Partition) bool {

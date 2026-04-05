@@ -2,82 +2,51 @@ const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
 
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-001; FEATURE="Distributed Query Planning"; ASPECT=BasicPlanGeneration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-002; FEATURE="Distributed Query Planning"; ASPECT=FederationIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration; OWNER=distributed; UPDATED=2025-10-05
-// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-003; FEATURE="Distributed Query Planning"; ASPECT=CostOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization; OWNER=distributed; UPDATED=2025-10-05
+const qp = geode.distributed.query_planner;
+const cbo = geode.cbo_api_stub;
+
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-001; FEATURE="Distributed Query Planning"; ASPECT=BasicPlanGeneration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration; OWNER=distributed; UPDATED=2026-04-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-002; FEATURE="Distributed Query Planning"; ASPECT=FederationIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration; OWNER=distributed; UPDATED=2026-04-05
+// CANARY: REQ=REQ-DISTRIBUTED-QUERY-PLANNER-003; FEATURE="Distributed Query Planning"; ASPECT=CostOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization; OWNER=distributed; UPDATED=2026-04-05
+
+// Pull in the embedded tests from query_planner.zig itself
+comptime {
+    _ = qp;
+}
 
 test "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_001_BasicPlanGeneration" {
-    // Test basic distributed query plan generation
+    // Test that the planner initializes and produces valid estimates
     const allocator = testing.allocator;
 
-    // Initialize federation manager
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(allocator);
+    var federation_manager = qp.FederationManager.init(allocator);
     defer federation_manager.deinit();
 
-    // Initialize distributed query planner
-    var planner = geode.distributed.query_planner.DistributedQueryPlanner.init(allocator, &federation_manager);
+    var planner = qp.DistributedQueryPlanner.init(allocator, &federation_manager);
     defer planner.deinit();
 
-    // Create a simple test query
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    // Verify default shard estimation without CBO stats returns 1000
+    var analysis = qp.DistributionAnalysis.init(allocator);
+    defer analysis.deinit();
 
-    // Create a mock query structure for testing
-    const test_query = geode.ast.Query{
-        .match = .{
-            .chains = &[_]geode.ast.MatchChain{
-                .{
-                    .patterns = &[_]geode.ast.GraphPattern{
-                        .{
-                            .nodes = &[_]geode.ast.NodePattern{
-                                .{
-                                    .variable = "n",
-                                    .labels = &[_][]const u8{"Person"},
-                                    .properties = null,
-                                },
-                            },
-                            .relationships = &[_]geode.ast.RelationshipPattern{},
-                        },
-                    },
-                },
-            },
-        },
-        .wh = null,
-        .ret = .{
-            .distinct = false,
-            .items = &[_]geode.ast.ReturnItem{
-                .{
-                    .expr = .{ .Ident = .{ .orig = "n", .cnf = "n" } },
-                    .alias = null,
-                },
-            },
-        },
-        .order_by = null,
-        .limit_offset = null,
-    };
+    const estimate = planner.estimateShardRows(1, analysis);
+    try testing.expectEqual(@as(usize, 1000), estimate);
 
-    // Test plan generation
-    const distributed_plan = planner.planDistributedQuery(&test_query) catch |err| {
-        // Plan generation may fail in mock environment - verify error handling
-        try testing.expect(err == error.OutOfMemory or err == error.InvalidQuery);
-        return;
-    };
-
-    // Verify plan structure if generation succeeds
-    try testing.expect(distributed_plan.estimated_cost > 0);
-    try testing.expect(distributed_plan.parallelism_level > 0);
-    try testing.expect(distributed_plan.parallelism_level <= 8); // Max parallelism
+    // Verify parallelism determination works
+    var coord_plan = qp.CoordinatorPlan.init(allocator);
+    defer coord_plan.deinit();
+    const parallelism = planner.determineOptimalParallelism(coord_plan);
+    try testing.expect(parallelism <= 8);
 }
 
 test "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration" {
     // Test federation manager integration with distributed planner
     const allocator = testing.allocator;
 
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(allocator);
+    var federation_manager = qp.FederationManager.init(allocator);
     defer federation_manager.deinit();
 
     // Test shard registry functionality
-    var planner = geode.distributed.query_planner.DistributedQueryPlanner.init(allocator, &federation_manager);
+    var planner = qp.DistributedQueryPlanner.init(allocator, &federation_manager);
     defer planner.deinit();
 
     // Verify shard registry is initialized
@@ -95,42 +64,55 @@ test "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_002_FederationIntegration" {
     try testing.expectEqual(@as(f64, 1000.0), cost_model.bandwidth);
     try testing.expectEqual(@as(f64, 1.0), cost_model.cpu_factor);
     try testing.expectEqual(@as(f64, 0.1), cost_model.memory_factor);
+
+    // Test that CBO registry integration works
+    var registry = cbo.StatsRegistry.init(allocator);
+    defer registry.deinit();
+    try registry.updateTableStats("Person", .{
+        .row_count = 10000,
+        .page_count = 500,
+        .avg_row_size = 128,
+        .last_updated = 0,
+    });
+    planner.setStatsRegistry(&registry);
+    try testing.expect(planner.stats_registry != null);
 }
 
 test "TestCANARY_REQ_DISTRIBUTED_QUERY_PLANNER_003_CostOptimization" {
     // Test distributed cost optimization strategies
     const allocator = testing.allocator;
 
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(allocator);
+    var federation_manager = qp.FederationManager.init(allocator);
     defer federation_manager.deinit();
 
-    var planner = geode.distributed.query_planner.DistributedQueryPlanner.init(allocator, &federation_manager);
+    var planner = qp.DistributedQueryPlanner.init(allocator, &federation_manager);
     defer planner.deinit();
 
-    // Test cost estimation for different scenarios
+    // Test cost estimation for different plan sizes.
+    // estimateShardCost = plan.estimated_cost * cpu_factor + ops.len * memory_factor
+    // With cpu_factor=1.0, memory_factor=0.1:
+    //   50.0 cost, 0 ops -> 50.0 * 1.0 + 0 * 0.1 = 50.0
+    //   250.0 cost, 0 ops -> 250.0
+    //   500.0 cost, 0 ops -> 500.0
     const cost_scenarios = [_]struct {
         operation_count: u32,
-        data_size: usize,
-        expected_min_cost: f64,
-        expected_max_cost: f64,
+        expected_cost: f64,
     }{
-        .{ .operation_count = 1, .data_size = 1024, .expected_min_cost = 50.0, .expected_max_cost = 200.0 },
-        .{ .operation_count = 5, .data_size = 1024 * 1024, .expected_min_cost = 200.0, .expected_max_cost = 1000.0 },
-        .{ .operation_count = 10, .data_size = 10 * 1024 * 1024, .expected_min_cost = 500.0, .expected_max_cost = 2000.0 },
+        .{ .operation_count = 1, .expected_cost = 50.0 },
+        .{ .operation_count = 5, .expected_cost = 250.0 },
+        .{ .operation_count = 10, .expected_cost = 500.0 },
     };
 
     for (cost_scenarios) |scenario| {
-        // Create mock shard plan for cost estimation
-        const mock_plan = geode.distributed.query_planner.ShardLocalPlan{
+        const mock_plan = qp.ShardLocalPlan{
             .operations = &.{},
             .estimated_cost = @as(f64, @floatFromInt(scenario.operation_count)) * 50.0,
         };
 
         const estimated_cost = planner.cost_model.estimateShardCost(mock_plan);
 
-        // Verify cost estimates are reasonable
-        try testing.expect(estimated_cost >= scenario.expected_min_cost);
-        try testing.expect(estimated_cost <= scenario.expected_max_cost);
+        // Cost should equal plan.estimated_cost * cpu_factor (1.0) for empty operations
+        try testing.expectEqual(scenario.expected_cost, estimated_cost);
         try testing.expect(!std.math.isNan(estimated_cost));
         try testing.expect(!std.math.isInf(estimated_cost));
     }
@@ -141,14 +123,14 @@ test "Distributed query plan data structures" {
     const allocator = testing.allocator;
 
     // Test ShardRegistry
-    var shard_registry = geode.distributed.query_planner.ShardRegistry.init(allocator);
+    var shard_registry = qp.ShardRegistry.init(allocator);
     defer shard_registry.deinit();
 
     // Test initial state
     try testing.expect(shard_registry.shards.count() == 0);
 
     // Test DistributedCostModel
-    const cost_model = geode.distributed.query_planner.DistributedCostModel.init();
+    const cost_model = qp.DistributedCostModel.init();
 
     // Verify default parameters
     try testing.expect(cost_model.network_latency == 5.0);
@@ -157,7 +139,7 @@ test "Distributed query plan data structures" {
     try testing.expect(cost_model.memory_factor == 0.1);
 
     // Test TransferOptimization defaults
-    const transfer_opt = geode.distributed.query_planner.TransferOptimization{
+    const transfer_opt = qp.TransferOptimization{
         .compression = true,
         .batching = true,
     };
@@ -172,17 +154,16 @@ test "Distributed strategy enums completeness" {
     // Test that all strategy enums have valid values
 
     // Test JoinStrategy enum
-    const join_strategies = [_]geode.distributed.query_planner.JoinStrategy{ .none, .hash_join, .merge_join, .broadcast_join, .shuffle_join };
+    const join_strategies = [_]qp.JoinStrategy{ .none, .hash_join, .merge_join, .broadcast_join, .shuffle_join };
 
     for (join_strategies) |strategy| {
-        // Each strategy should be a valid enum value
         switch (strategy) {
             .none, .hash_join, .merge_join, .broadcast_join, .shuffle_join => {},
         }
     }
 
     // Test AggregationStrategy enum
-    const agg_strategies = [_]geode.distributed.query_planner.AggregationStrategy{ .none, .single_phase, .two_phase, .streaming };
+    const agg_strategies = [_]qp.AggregationStrategy{ .none, .single_phase, .two_phase, .streaming };
 
     for (agg_strategies) |strategy| {
         switch (strategy) {
@@ -191,7 +172,7 @@ test "Distributed strategy enums completeness" {
     }
 
     // Test SortStrategy enum
-    const sort_strategies = [_]geode.distributed.query_planner.SortStrategy{ .none, .merge_sort, .distributed_sort, .top_k };
+    const sort_strategies = [_]qp.SortStrategy{ .none, .merge_sort, .distributed_sort, .top_k };
 
     for (sort_strategies) |strategy| {
         switch (strategy) {
@@ -200,7 +181,7 @@ test "Distributed strategy enums completeness" {
     }
 
     // Test UnionStrategy enum
-    const union_strategies = [_]geode.distributed.query_planner.UnionStrategy{ .none, .streaming_merge, .batch_merge, .parallel_union };
+    const union_strategies = [_]qp.UnionStrategy{ .none, .streaming_merge, .batch_merge, .parallel_union };
 
     for (union_strategies) |strategy| {
         switch (strategy) {
@@ -213,39 +194,118 @@ test "Federation manager shard management" {
     // Test federation manager's shard management capabilities
     const allocator = testing.allocator;
 
-    var federation_manager = geode.distributed.query_planner.FederationManager.init(allocator);
+    var federation_manager = qp.FederationManager.init(allocator);
     defer federation_manager.deinit();
 
     // Test that federation manager initializes correctly
-    try testing.expect(federation_manager.active_shards.count() == 0);
-    try testing.expect(federation_manager.failover_policy == .automatic);
-    try testing.expect(federation_manager.load_balancing_strategy == .round_robin);
+    try testing.expect(federation_manager.shards.items.len == 0);
+    try testing.expect(federation_manager.coordinator_id == 0);
 
-    // Test shard capacity
-    try testing.expect(federation_manager.max_shards_per_query <= 32);
-    try testing.expect(federation_manager.min_shards_for_distribution >= 2);
+    // Register a shard and verify lookup
+    try federation_manager.registerShard(.{
+        .id = 1,
+        .endpoint = "localhost:3141",
+        .labels = &[_][]const u8{"Person"},
+        .estimated_size = 5000,
+        .status = .active,
+    });
+    try testing.expect(federation_manager.shards.items.len == 1);
+
+    // Test label-based shard lookup
+    const found = federation_manager.getShardByLabel("Person");
+    try testing.expect(found != null);
+    try testing.expectEqual(@as(u32, 1), found.?.id);
+
+    const not_found = federation_manager.getShardByLabel("NonExistent");
+    try testing.expect(not_found == null);
 }
 
 test "Query distribution analysis framework" {
     // Test the query analysis framework for distribution decisions
     const allocator = testing.allocator;
 
-    // Create a distribution analysis structure
-    var analysis = geode.distributed.query_planner.DistributionAnalysis.init(allocator);
+    var analysis = qp.DistributionAnalysis.init(allocator);
     defer analysis.deinit();
 
     // Test initial state
     try testing.expect(analysis.target_shards.items.len == 0);
-    try testing.expect(analysis.distribution_factor == 1.0);
-    try testing.expect(analysis.cross_shard_joins == false);
-    try testing.expect(analysis.requires_coordinator == false);
+    try testing.expect(analysis.label_affinities.count() == 0);
 
-    // Test that we can add shard targets
-    try analysis.addTargetShard(1);
-    try testing.expect(analysis.target_shards.items.len == 1);
-    try testing.expect(analysis.target_shards.items[0] == 1);
+    // Test label affinity tracking
+    try analysis.addLabelAffinity("Person");
+    try testing.expect(analysis.label_affinities.count() == 1);
+    try testing.expect(analysis.label_affinities.get("Person") != null);
 
-    // Test distribution factor calculation
-    analysis.distribution_factor = 2.5;
-    try testing.expect(analysis.distribution_factor == 2.5);
+    // Adding the same label is idempotent
+    try analysis.addLabelAffinity("Person");
+    try testing.expect(analysis.label_affinities.count() == 1);
+
+    // Adding a different label increases the count
+    try analysis.addLabelAffinity("Order");
+    try testing.expect(analysis.label_affinities.count() == 2);
+}
+
+// GAP-D007: Test that estimateShardRows uses shard estimated_size as fallback
+test "GAP-D007: estimateShardRows uses shard estimated_size fallback" {
+    const allocator = testing.allocator;
+
+    var fm = qp.FederationManager.init(allocator);
+    defer fm.deinit();
+    var planner = qp.DistributedQueryPlanner.init(allocator, &fm);
+    defer planner.deinit();
+
+    // Register a shard with estimated_size but no CBO stats
+    try planner.shard_registry.shards.put(1, qp.ShardInfo{
+        .id = 1,
+        .endpoint = "localhost:3141",
+        .labels = &.{},
+        .estimated_size = 5000,
+        .status = .active,
+    });
+
+    var analysis = qp.DistributionAnalysis.init(allocator);
+    defer analysis.deinit();
+
+    const estimate = planner.estimateShardRows(1, analysis);
+    // Should return estimated_size (5000) instead of hardcoded 1000
+    try testing.expectEqual(@as(usize, 5000), estimate);
+}
+
+// GAP-D007: Test that estimateShardCost uses cost model factors
+test "GAP-D007: estimateShardCost factors in cpu and memory" {
+    var cost_model = qp.DistributedCostModel.init();
+
+    // Plan with operations: cost = plan_cost * cpu_factor + ops_count * memory_factor
+    const plan_with_ops = qp.ShardLocalPlan{
+        .operations = &[_]qp.ShardLocalPlan.Operation{ .scan, .filter, .project },
+        .estimated_cost = 100.0,
+    };
+
+    const cost = cost_model.estimateShardCost(plan_with_ops);
+    // 100.0 * 1.0 + 3 * 0.1 = 100.3
+    try testing.expect(@abs(cost - 100.3) < 0.01);
+
+    // Empty ops: cost = plan_cost * cpu_factor
+    const plan_no_ops = qp.ShardLocalPlan{
+        .operations = &.{},
+        .estimated_cost = 100.0,
+    };
+    const cost_no_ops = cost_model.estimateShardCost(plan_no_ops);
+    try testing.expectEqual(@as(f64, 100.0), cost_no_ops);
+}
+
+// GAP-D007: Test that estimateTotalCost responds to compression setting
+test "GAP-D007: compression reduces total cost estimate" {
+    const allocator = testing.allocator;
+    var cost_model = qp.DistributedCostModel.init();
+
+    var plan = qp.CoordinatorPlan.init(allocator);
+    defer plan.deinit();
+    try plan.target_shards.append(allocator, 1);
+    try plan.target_shards.append(allocator, 2);
+
+    const no_compress = cost_model.estimateTotalCost(plan, qp.TransferOptimization{ .compression = false, .batching = false });
+    const with_compress = cost_model.estimateTotalCost(plan, qp.TransferOptimization{ .compression = true, .batching = false });
+
+    try testing.expect(with_compress < no_compress);
 }
