@@ -228,30 +228,14 @@ pub const Connection = struct {
     /// Build HELLO request for inter-node federation authentication.
     /// GAP-0490: Reads GEODE_CLUSTER_TOKEN from environment; sends as geode-cluster user.
     // CANARY: REQ=REQ-GAP-0490-FEDERATION-CLIENT-AUTH; FEATURE="FederationAuth"; ASPECT=ClientToken; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
-    fn buildFederationHelloRequest(allocator: std.mem.Allocator, tenant_id: ?[]const u8) schema.HelloRequest {
+    fn buildFederationHelloRequest(allocator: std.mem.Allocator, tenant_id: ?[]const u8) error{ MissingClusterToken, OutOfMemory }!schema.HelloRequest {
         const tid = tenant_id;
+        // SEC-10: Refuse federation connection when GEODE_CLUSTER_TOKEN is unset
         const token = std.process.getenv("GEODE_CLUSTER_TOKEN") orelse {
-            log.warn("GEODE_CLUSTER_TOKEN not set — federation connections may be rejected by auth-enabled nodes", &.{});
-            return schema.HelloRequest{
-                .username = "",
-                .password = "",
-                .tenant_id = tid,
-                .client_name = "geode-federation",
-                .client_version = "",
-                .wanted_conformance = "",
-            };
+            log.err("CRITICAL: GEODE_CLUSTER_TOKEN must be set for federation connections — refusing to connect", &.{});
+            return error.MissingClusterToken;
         };
-        const password_copy = allocator.dupe(u8, token) catch {
-            log.warn("GEODE_CLUSTER_TOKEN: allocation failed, sending empty credentials", &.{});
-            return schema.HelloRequest{
-                .username = "",
-                .password = "",
-                .tenant_id = tid,
-                .client_name = "geode-federation",
-                .client_version = "",
-                .wanted_conformance = "",
-            };
-        };
+        const password_copy = try allocator.dupe(u8, token);
         return schema.HelloRequest{
             .username = "geode-cluster",
             .password = password_copy,
@@ -303,7 +287,7 @@ pub const Connection = struct {
         // GAP-0490: Use GEODE_CLUSTER_TOKEN for inter-node authentication
         var hello_arena = std.heap.ArenaAllocator.init(self.allocator);
         defer hello_arena.deinit();
-        const hello_req = buildFederationHelloRequest(hello_arena.allocator(), self.config.tenant_id);
+        const hello_req = try buildFederationHelloRequest(hello_arena.allocator(), self.config.tenant_id);
         try writeProtoMessage(self.allocator, self.stream.?, .{ .hello = hello_req });
 
         var resp_arena = std.heap.ArenaAllocator.init(self.allocator);
