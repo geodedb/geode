@@ -7,6 +7,8 @@ const proto_schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
 
+const cluster_auth = @import("cluster_auth.zig");
+
 const logging = @import("logging");
 const log = logging.scoped("twophase");
 const Attr = logging.Attr;
@@ -14,6 +16,12 @@ const Attr = logging.Attr;
 pub const ParticipantNode = @import("twophase_participant.zig").ParticipantNode;
 
 const fd = protobuf.fd;
+
+/// SEC-D003: Read the cluster token from environment for 2PC message authentication.
+/// Returns the token string or empty slice if not set.
+fn getClusterToken() []const u8 {
+    return std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "";
+}
 
 /// Two-Phase Commit transaction states
 pub const TransactionState = enum {
@@ -556,12 +564,14 @@ pub const Transaction = struct {
             participant.state = .preparing;
 
             // Create and send prepare message
+            // SEC-D003: Include cluster token for inter-node authentication
             const msg = TwoPhaseMessage{
                 .msg_type = .PREPARE,
                 .transaction_id = self.id,
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
                 .operations = self.operations,
+                .auth_token = getClusterToken(),
             };
 
             // Send message to participant (async with timeout)
@@ -605,6 +615,7 @@ pub const Transaction = struct {
             participant.state = .committing;
 
             // Create and send commit message
+            // SEC-D003: Include cluster token for inter-node authentication
             var ops = std.ArrayList(Operation).init(self.allocator);
             defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
@@ -613,6 +624,7 @@ pub const Transaction = struct {
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
                 .operations = ops,
+                .auth_token = getClusterToken(),
             };
 
             // Send commit message (with retry for reliability)
@@ -646,6 +658,7 @@ pub const Transaction = struct {
             participant.state = .aborting;
 
             // Create and send abort message
+            // SEC-D003: Include cluster token for inter-node authentication
             var ops = std.ArrayList(Operation).init(self.allocator);
             defer ops.deinit(self.allocator);
             const msg = TwoPhaseMessage{
@@ -654,6 +667,7 @@ pub const Transaction = struct {
                 .coordinator_id = self.coordinator_id,
                 .timestamp = std.time.timestamp(),
                 .operations = ops,
+                .auth_token = getClusterToken(),
             };
 
             // Send abort message (best effort - proceed even if some fail)
@@ -960,6 +974,7 @@ pub const TwoPCCoordinator = struct {
     }
 
     /// Handle inbound 2PC messages (participant side).
+    // SEC-D003: Validate cluster token on incoming 2PC messages.
     pub fn handleMessage(self: *TwoPCCoordinator, from: []const u8, message_type: MessageType, payload: []const u8) !void {
         if (!self.enable_participant) return;
 
@@ -969,6 +984,19 @@ pub const TwoPCCoordinator = struct {
             return err;
         };
         defer msg.deinit(self.allocator);
+
+        // SEC-D003: Validate auth_token if GEODE_CLUSTER_TOKEN is configured.
+        // When the environment variable is set, reject any message without a valid token.
+        const expected_token = std.posix.getenv("GEODE_CLUSTER_TOKEN");
+        if (expected_token) |_| {
+            if (!cluster_auth.validateClusterToken(msg.auth_token)) {
+                log.warn("2PC message rejected: invalid cluster token", &.{
+                    Attr.string("from", from),
+                    Attr.string("txn_id", msg.transaction_id),
+                });
+                return error.AuthFailed;
+            }
+        }
 
         const response: ?TwoPhaseResponse = switch (message_type) {
             .PREPARE => blk: {
@@ -1192,4 +1220,25 @@ test "Transaction.abort applies undo log via store" {
 
     try testing.expect(store.getNodePtr(77) == null);
     try testing.expect(txn.state == .aborted);
+}
+
+test "getClusterToken returns empty when env not set" {
+    // In test environment GEODE_CLUSTER_TOKEN is not set
+    const token = getClusterToken();
+    try testing.expectEqualStrings("", token);
+}
+
+test "prepare message includes auth_token field" {
+    // Verify that the TwoPhaseMessage struct accepts auth_token field
+    var ops = std.ArrayList(Operation).init(testing.allocator);
+    defer ops.deinit(testing.allocator);
+    const msg = TwoPhaseMessage{
+        .msg_type = .PREPARE,
+        .transaction_id = "txn-test",
+        .coordinator_id = "coord-test",
+        .timestamp = 12345,
+        .operations = ops,
+        .auth_token = "test-token-value",
+    };
+    try testing.expectEqualStrings("test-token-value", msg.auth_token);
 }
