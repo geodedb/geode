@@ -3528,6 +3528,7 @@ REQ-SEC-NONCE-001,Nonce Replay Protection,NonceTracker,IMPL,,,security,2026-04-0
 REQ-SEC-PERMISSION-CHECK-001,Security,PermissionCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-POLICY-EVAL-001,Security,PolicyEvaluation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,IMPL,,,security,2026-04-01,docs/superpowers/plans/2026-04-01-security-hardening.md
+REQ-SEC-RAFT-ATOMIC-001,Atomic Raft State Persistence,TOCTOU,TESTED,,,security,2026-04-05,src/distributed/raft_consensus.zig
 REQ-SEC-RATE-LIMIT-001,AuthRateLimiting,PerIPRateLimit,TESTED,,,security,2026-03-26,src/server/auth_rate_limiter.zig
 REQ-SEC-RATE-LIMIT-002,AuthRateLimiting,PeerIPExtraction,IMPL,,,transport,2026-03-26,src/transport/quic.zig
 REQ-SEC-RATE-LIMIT-003,AuthRateLimiting,GlobalInstance,IMPL,,,security,2026-03-26,src/server/quic_connection_handler.zig

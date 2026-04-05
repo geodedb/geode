@@ -303,7 +303,10 @@ pub const PersistentStorage = struct {
         return std.fmt.parseInt(u64, trimmed, 10) catch null;
     }
 
+    // CANARY: REQ=REQ-SEC-RAFT-ATOMIC-001; FEATURE="Atomic Raft State Persistence"; ASPECT=TOCTOU; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
     /// Write data to file_name atomically via write-to-temp-then-rename.
+    /// SEC-D011: Crash-safe persistence -- writes to a .tmp file, fsyncs, then renames
+    /// so that a crash mid-write never corrupts the final file.
     fn atomicWriteFile(dir: std.fs.Dir, name: []const u8, data: []const u8) !void {
         var tmp_buf: [256]u8 = undefined;
         const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
@@ -1056,4 +1059,52 @@ test "encodeRaftFrame includes auth_token and decodeRaftFrame exposes it" {
     try std.testing.expectEqual(@as(u64, 1), decoded.term);
     // Without GEODE_CLUSTER_TOKEN set, auth_token should be empty
     try std.testing.expectEqualStrings("", decoded.auth_token);
+}
+
+test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
+    // SEC-D011: Verify atomic write pattern (write-to-temp, fsync, rename) persists correctly.
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer allocator.free(dir_path);
+
+    var storage = PersistentStorage.init(allocator, dir_path) catch unreachable;
+    defer storage.close();
+
+    // saveCurrentTerm round-trip
+    try storage.saveCurrentTerm(42);
+    const term = try storage.getCurrentTerm();
+    try std.testing.expectEqual(@as(?u64, 42), term);
+
+    // Overwrite with different value
+    try storage.saveCurrentTerm(99);
+    const term2 = try storage.getCurrentTerm();
+    try std.testing.expectEqual(@as(?u64, 99), term2);
+
+    // saveVotedFor round-trip
+    try storage.saveVotedFor(7);
+    const voted = try storage.getVotedFor();
+    try std.testing.expectEqual(@as(?u64, 7), voted);
+
+    // saveVotedFor(null) deletes the file
+    try storage.saveVotedFor(null);
+    const voted_null = try storage.getVotedFor();
+    try std.testing.expectEqual(@as(?u64, null), voted_null);
+
+    // Verify .tmp file does not persist (atomic rename should have cleaned up)
+    var dir = try std.fs.cwd().openDir(dir_path, .{});
+    defer dir.close();
+    const tmp_exists = dir.openFile("current_term.tmp", .{});
+    if (tmp_exists) |f| {
+        f.close();
+        return error.TmpFileNotCleaned;
+    } else |err| {
+        try std.testing.expectEqual(error.FileNotFound, err);
+    }
 }
