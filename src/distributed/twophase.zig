@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const quic = @import("transport/quic");
 const protobuf = @import("protobuf");
 const dist_schema = @import("distributed_schema");
+const proto_schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
 
@@ -393,9 +394,56 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     return protobuf.decode(TwoPhaseResponse, &reader, allocator);
 }
 
-/// Apply an undo operation to rollback a change
-fn applyUndoOperation(entry: UndoEntry) !void {
-    _ = entry;
+/// Apply an undo operation to rollback a change.
+/// For CREATE operations, this deletes the created node/edge.
+/// For UPDATE/DELETE operations, pre-image restoration is not yet
+/// implemented so only a warning is logged.
+fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
+    const gs = store orelse {
+        log.warn("2PC undo skipped: no graph store available", &.{});
+        return;
+    };
+
+    switch (entry.operation) {
+        .node_op => |node_op| switch (node_op.op_type) {
+            .CREATE => {
+                log.info("2PC undo: deleting created node", &.{
+                    Attr.int("node_id", @intCast(node_op.node_id)),
+                });
+                gs.deleteNode(node_op.node_id);
+            },
+            .UPDATE => {
+                log.warn("2PC undo for UPDATE requires pre-image storage (not yet implemented)", &.{
+                    Attr.int("node_id", @intCast(node_op.node_id)),
+                });
+            },
+            .DELETE => {
+                log.warn("2PC undo for DELETE requires pre-image storage (not yet implemented)", &.{
+                    Attr.int("node_id", @intCast(node_op.node_id)),
+                });
+            },
+            else => {},
+        },
+        .edge_op => |edge_op| switch (edge_op.op_type) {
+            .CREATE => {
+                log.info("2PC undo: deleting created edge", &.{
+                    Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                });
+                gs.deleteEdge(edge_op.edge_id);
+            },
+            .UPDATE => {
+                log.warn("2PC undo for UPDATE requires pre-image storage (not yet implemented)", &.{
+                    Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                });
+            },
+            .DELETE => {
+                log.warn("2PC undo for DELETE requires pre-image storage (not yet implemented)", &.{
+                    Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                });
+            },
+            else => {},
+        },
+    }
 }
 
 /// 2PC transaction context
@@ -412,6 +460,7 @@ pub const Transaction = struct {
     operations: std.ArrayList(Operation),
     isolation_level: IsolationLevel,
     savepoints: std.ArrayList(Savepoint),
+    store: ?*graph_store.GraphStore,
 
     pub fn init(
         allocator: Allocator,
@@ -420,6 +469,7 @@ pub const Transaction = struct {
         send_fn: SendFn,
         send_ctx: ?*anyopaque,
         timeout_ms: u64,
+        store: ?*graph_store.GraphStore,
     ) !Transaction {
         return .{
             .allocator = allocator,
@@ -434,6 +484,7 @@ pub const Transaction = struct {
             .operations = std.ArrayList(Operation).init(allocator),
             .isolation_level = .read_committed,
             .savepoints = std.ArrayList(Savepoint).init(allocator),
+            .store = store,
         };
     }
 
@@ -614,8 +665,8 @@ pub const Transaction = struct {
 
             // Apply undo log to rollback changes
             while (participant.undo_log.popOrNull()) |undo_entry| {
-                // Apply undo operation to restore previous state
-                try applyUndoOperation(undo_entry);
+                // Apply undo operation to restore previous state (best-effort)
+                applyUndoOperation(self.store, undo_entry);
             }
 
             participant.state = .aborted;
@@ -641,6 +692,7 @@ pub const Coordinator = struct {
     default_timeout_ms: u64 = 30_000,
     send_fn: SendFn = defaultSendMessage,
     send_ctx: ?*anyopaque = null,
+    store: ?*graph_store.GraphStore = null,
 
     pub const LogWriter = struct {
         allocator: Allocator,
@@ -713,6 +765,7 @@ pub const Coordinator = struct {
             self.send_fn,
             self.send_ctx,
             self.default_timeout_ms,
+            self.store,
         );
         try self.transactions.put(txn.id, txn);
 
@@ -846,6 +899,7 @@ pub const TwoPCCoordinator = struct {
         const participant_id = try allocator.dupe(u8, config.participant_id orelse config.coordinator_id);
         var coordinator = Coordinator.init(allocator, coord_id);
         coordinator.default_timeout_ms = config.default_timeout_ms;
+        coordinator.store = config.store;
 
         var result = TwoPCCoordinator{
             .allocator = allocator,
@@ -1011,3 +1065,131 @@ pub const TwoPCCoordinator = struct {
         return stats;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+const testing = std.testing;
+
+fn stubSend(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
+    return error.ConnectionRefused;
+}
+
+test "applyUndoOperation deletes created node" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create a node in the store that the undo should remove.
+    try store.createNodeWithId(42, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try testing.expect(store.getNodePtr(42) != null);
+
+    // Build an undo entry representing a CREATE node operation.
+    const undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .CREATE,
+                .node_id = 42,
+                .label = "",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+    };
+
+    applyUndoOperation(&store, undo);
+
+    // The node should have been deleted.
+    try testing.expect(store.getNodePtr(42) == null);
+}
+
+test "applyUndoOperation deletes created edge" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create source and target nodes, then an edge.
+    try store.createNodeWithId(1, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.createNodeWithId(2, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.createEdgeWithId(100, 1, 2, "KNOWS", graph_store.DEFAULT_GRAPH_NAME);
+    try testing.expect(store.getEdgePtr(100) != null);
+
+    const undo = UndoEntry{
+        .operation = .{
+            .edge_op = .{
+                .op_type = .CREATE,
+                .edge_id = 100,
+                .source_id = 1,
+                .target_id = 2,
+                .edge_type = "",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+    };
+
+    applyUndoOperation(&store, undo);
+
+    // The edge should have been deleted.
+    try testing.expect(store.getEdgePtr(100) == null);
+}
+
+test "applyUndoOperation without store does not crash" {
+    const undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .CREATE,
+                .node_id = 99,
+                .label = "",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = 0,
+    };
+
+    // Should complete without error even when store is null.
+    applyUndoOperation(null, undo);
+}
+
+test "Transaction.abort applies undo log via store" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create a node that the abort should undo.
+    try store.createNodeWithId(77, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try testing.expect(store.getNodePtr(77) != null);
+
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-abort-test",
+        "coord-1",
+        stubSend,
+        null,
+        30_000,
+        &store,
+    );
+    defer txn.deinit();
+
+    // Add a participant and push an undo entry representing node creation.
+    try txn.addParticipant("p1", "localhost:9999");
+    try txn.participants.items[0].undo_log.append(testing.allocator, .{
+        .operation = .{
+            .node_op = .{
+                .op_type = .CREATE,
+                .node_id = 77,
+                .label = "",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+    });
+
+    // Abort the transaction -- this should apply undo and delete node 77.
+    try txn.abort();
+
+    try testing.expect(store.getNodePtr(77) == null);
+    try testing.expect(txn.state == .aborted);
+}
