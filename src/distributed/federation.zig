@@ -1056,10 +1056,12 @@ pub const FederationManager = struct {
 };
 
 /// Query result cache
+/// PERF-D012: Bounded cache with max_entries and oldest-entry eviction
 pub const QueryCache = struct {
     allocator: std.mem.Allocator,
     cache: std.StringHashMap(CacheEntry),
     ttl_seconds: u64,
+    max_entries: usize,
 
     const CacheEntry = struct {
         results: QueryResults,
@@ -1071,6 +1073,7 @@ pub const QueryCache = struct {
             .allocator = allocator,
             .cache = std.StringHashMap(CacheEntry).init(allocator),
             .ttl_seconds = ttl_seconds,
+            .max_entries = 256,
         };
     }
 
@@ -1110,10 +1113,37 @@ pub const QueryCache = struct {
             old.deinit(self.allocator);
         }
 
+        // PERF-D012: Evict oldest entry when cache is at capacity
+        if (self.cache.count() >= self.max_entries) {
+            self.evictOldest();
+        }
+
         try self.cache.put(key, CacheEntry{
             .results = try cloneQueryResults(self.allocator, results),
             .timestamp = std.time.milliTimestamp(),
         });
+    }
+
+    /// PERF-D012: Evict the oldest cache entry by timestamp
+    fn evictOldest(self: *QueryCache) void {
+        var oldest_key: ?[]const u8 = null;
+        var oldest_time: i64 = std.math.maxInt(i64);
+
+        var iter = self.cache.iterator();
+        while (iter.next()) |entry| {
+            if (entry.value_ptr.timestamp < oldest_time) {
+                oldest_time = entry.value_ptr.timestamp;
+                oldest_key = entry.key_ptr.*;
+            }
+        }
+
+        if (oldest_key) |key| {
+            if (self.cache.fetchRemove(key)) |kv| {
+                var res = kv.value.results;
+                res.deinit(self.allocator);
+                self.allocator.free(kv.key);
+            }
+        }
     }
 
     fn computeKey(self: *QueryCache, query: FederatedQuery) []const u8 {

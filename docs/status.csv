@@ -630,8 +630,8 @@ REQ-DELETE-PROPS-001,DeletePropertyFilter,PropertyMatching,TESTED,,,crud_operati
 REQ-DELETE-PROPS-002,DeletePropertyFilter,PropertyEvaluation,TESTED,,,crud_operations,2026-02-02,src/execution/crud_operations.zig
 REQ-DELETE-WHERE-001,DeleteWhereEvaluation,WhereClause,TESTED,,,crud_operations,2026-01-09,src/execution/crud_operations.zig
 REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-performance.md
-REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
-REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
+REQ-DIST-2PC-001,Two-Phase Commit Messaging,Prepare,EXEMPT,,,distributed,2026-04-05,src/distributed/twophase.zig
+REQ-DIST-2PC-002,Two-Phase Commit Messaging,Commit,EXEMPT,,,distributed,2026-04-05,src/distributed/twophase.zig
 REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig

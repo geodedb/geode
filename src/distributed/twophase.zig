@@ -538,98 +538,139 @@ pub const Transaction = struct {
         return error.SavepointNotFound;
     }
 
+    // PERF-D003: Worker context for parallel prepare
+    const PrepareWorkerCtx = struct {
+        txn: *Transaction,
+        idx: usize,
+        votes: []bool,
+    };
+
+    // PERF-D003: Worker function for parallel prepare
+    fn prepareWorker(ctx: PrepareWorkerCtx) void {
+        const participant = &ctx.txn.participants.items[ctx.idx];
+        const msg = TwoPhaseMessage{
+            .msg_type = .PREPARE,
+            .transaction_id = ctx.txn.id,
+            .coordinator_id = ctx.txn.coordinator_id,
+            .timestamp = std.time.timestamp(),
+            .operations = ctx.txn.operations,
+            .auth_token = getClusterToken(),
+        };
+        const response = ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms) catch {
+            participant.prepare_response = .VOTE_TIMEOUT;
+            return;
+        };
+        defer response.deinit(ctx.txn.allocator);
+        participant.prepare_response = response.vote;
+        participant.last_message_time = std.time.timestamp();
+        if (response.vote == .VOTE_COMMIT) {
+            ctx.votes[ctx.idx] = true;
+        }
+    }
+
+    // PERF-D004: Worker context for parallel commit
+    const CommitWorkerCtx = struct {
+        txn: *Transaction,
+        idx: usize,
+    };
+
+    // PERF-D004: Worker function for parallel commit
+    fn commitWorker(ctx: CommitWorkerCtx) void {
+        const participant = &ctx.txn.participants.items[ctx.idx];
+        var ops = std.ArrayList(Operation).init(ctx.txn.allocator);
+        defer ops.deinit(ctx.txn.allocator);
+        const msg = TwoPhaseMessage{
+            .msg_type = .COMMIT,
+            .transaction_id = ctx.txn.id,
+            .coordinator_id = ctx.txn.coordinator_id,
+            .timestamp = std.time.timestamp(),
+            .operations = ops,
+            .auth_token = getClusterToken(),
+        };
+        var retries: u32 = 0;
+        const max_retries: u32 = 3;
+        while (retries < max_retries) : (retries += 1) {
+            if (ctx.txn.send_fn(ctx.txn.send_ctx, participant.endpoint, msg, ctx.txn.timeout_ms)) |resp| {
+                resp.deinit(ctx.txn.allocator);
+            } else |_| {
+                const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
+                std.time.sleep(backoff_ms * std.time.ns_per_ms);
+                continue;
+            }
+            break;
+        }
+        participant.state = .committed;
+        participant.last_message_time = std.time.timestamp();
+    }
+
+    // PERF-D003: Parallel prepare -- contact all participants concurrently
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
-
-        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
-        // Send prepare messages to all participants
-        var all_voted_commit = true;
+        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-05
+        const participant_count = self.participants.items.len;
+        if (participant_count == 0) {
+            self.state = .prepared;
+            return true;
+        }
+        const vote_results = try self.allocator.alloc(bool, participant_count);
+        defer self.allocator.free(vote_results);
+        for (vote_results) |*v| v.* = false;
         for (self.participants.items) |*participant| {
             participant.state = .preparing;
-
-            // Create and send prepare message
-            // SEC-D003: Include cluster token for inter-node authentication
-            const msg = TwoPhaseMessage{
-                .msg_type = .PREPARE,
-                .transaction_id = self.id,
-                .coordinator_id = self.coordinator_id,
-                .timestamp = std.time.timestamp(),
-                .operations = self.operations,
-                .auth_token = getClusterToken(),
-            };
-
-            // Send message to participant (async with timeout)
-            const response = self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms) catch |err| {
-                // Network error - treat as abort vote
-                participant.prepare_response = .VOTE_TIMEOUT;
+        }
+        var threads = try self.allocator.alloc(?std.Thread, participant_count);
+        defer self.allocator.free(threads);
+        for (0..participant_count) |idx| {
+            threads[idx] = std.Thread.spawn(.{}, prepareWorker, .{PrepareWorkerCtx{
+                .txn = self,
+                .idx = idx,
+                .votes = vote_results,
+            }}) catch null;
+        }
+        for (threads) |maybe_thread| {
+            if (maybe_thread) |t| t.join();
+        }
+        var all_voted_commit = true;
+        for (vote_results) |v| {
+            if (!v) {
                 all_voted_commit = false;
-                _ = err;
-                continue;
-            };
-            defer response.deinit(self.allocator);
-
-            participant.prepare_response = response.vote;
-            participant.last_message_time = std.time.timestamp();
-
-            if (response.vote != .VOTE_COMMIT) {
-                all_voted_commit = false;
+                break;
             }
         }
-
-        // Check all votes
         if (!all_voted_commit) {
             self.state = .aborting;
             return false;
         }
-
         self.state = .prepared;
         return true;
     }
 
+    // PERF-D004: Parallel commit -- contact all participants concurrently
     pub fn commit(self: *Transaction) !void {
         if (self.state != .prepared) {
             return error.InvalidState;
         }
-
         self.state = .committing;
-
-        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
-        // Send commit messages to all participants
+        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-05
+        const participant_count = self.participants.items.len;
+        if (participant_count == 0) {
+            self.state = .committed;
+            return;
+        }
         for (self.participants.items) |*participant| {
             participant.state = .committing;
-
-            // Create and send commit message
-            // SEC-D003: Include cluster token for inter-node authentication
-            var ops = std.ArrayList(Operation).init(self.allocator);
-            defer ops.deinit(self.allocator);
-            const msg = TwoPhaseMessage{
-                .msg_type = .COMMIT,
-                .transaction_id = self.id,
-                .coordinator_id = self.coordinator_id,
-                .timestamp = std.time.timestamp(),
-                .operations = ops,
-                .auth_token = getClusterToken(),
-            };
-
-            // Send commit message (with retry for reliability)
-            var retries: u32 = 0;
-            const max_retries: u32 = 3;
-            while (retries < max_retries) : (retries += 1) {
-                if (self.send_fn(self.send_ctx, participant.endpoint, msg, self.timeout_ms)) |resp| {
-                    resp.deinit(self.allocator);
-                } else |_| {
-                    // Retry after exponential backoff
-                    const backoff_ms: u64 = @as(u64, 100) << @as(u6, @intCast(retries));
-                    std.time.sleep(backoff_ms * std.time.ns_per_ms);
-                    continue;
-                }
-                break;
-            }
-
-            participant.state = .committed;
-            participant.last_message_time = std.time.timestamp();
         }
-
+        var threads = try self.allocator.alloc(?std.Thread, participant_count);
+        defer self.allocator.free(threads);
+        for (0..participant_count) |idx| {
+            threads[idx] = std.Thread.spawn(.{}, commitWorker, .{CommitWorkerCtx{
+                .txn = self,
+                .idx = idx,
+            }}) catch null;
+        }
+        for (threads) |maybe_thread| {
+            if (maybe_thread) |t| t.join();
+        }
         self.state = .committed;
     }
 
@@ -1225,4 +1266,221 @@ test "prepare message includes auth_token field" {
         .auth_token = "test-token-value",
     };
     try testing.expectEqualStrings("test-token-value", msg.auth_token);
+}
+
+fn stubSendCommit(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
+    return TwoPhaseResponse{
+        .msg_type = .PREPARE_RESPONSE,
+        .transaction_id = "txn-init-test",
+        .participant_id = "p1",
+        .vote = .VOTE_COMMIT,
+        .timestamp = 0,
+    };
+}
+
+fn stubSendAbort(_: ?*anyopaque, _: []const u8, _: TwoPhaseMessage, _: u64) anyerror!TwoPhaseResponse {
+    return TwoPhaseResponse{
+        .msg_type = .PREPARE_RESPONSE,
+        .transaction_id = "txn-init-test",
+        .participant_id = "p1",
+        .vote = .VOTE_ABORT,
+        .timestamp = 0,
+    };
+}
+
+test "Transaction.init creates valid initial state" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-init-test",
+        "coord-1",
+        stubSend,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try testing.expectEqualStrings("txn-init-test", txn.id);
+    try testing.expectEqualStrings("coord-1", txn.coordinator_id);
+    try testing.expectEqual(TransactionState.active, txn.state);
+    try testing.expectEqual(@as(u64, 5000), txn.timeout_ms);
+    try testing.expectEqual(@as(usize, 0), txn.participants.items.len);
+    try testing.expectEqual(@as(usize, 0), txn.operations.items.len);
+    try testing.expectEqual(@as(usize, 0), txn.savepoints.items.len);
+    try testing.expectEqual(IsolationLevel.read_committed, txn.isolation_level);
+    try testing.expect(txn.store == null);
+}
+
+test "Transaction.prepare transitions to prepared when all vote commit" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-prep-ok",
+        "coord-1",
+        stubSendCommit,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "localhost:9001");
+
+    const can_commit = try txn.prepare();
+    try testing.expect(can_commit);
+    try testing.expectEqual(TransactionState.prepared, txn.state);
+}
+
+test "Transaction.prepare transitions to aborting when participant votes abort" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-prep-abort",
+        "coord-1",
+        stubSendAbort,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "localhost:9001");
+
+    const can_commit = try txn.prepare();
+    try testing.expect(!can_commit);
+    try testing.expectEqual(TransactionState.aborting, txn.state);
+}
+
+test "Transaction.prepare transitions to aborting on send failure" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-prep-fail",
+        "coord-1",
+        stubSend, // stubSend returns ConnectionRefused
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "localhost:9001");
+
+    const can_commit = try txn.prepare();
+    try testing.expect(!can_commit);
+    try testing.expectEqual(TransactionState.aborting, txn.state);
+}
+
+test "Transaction.commit transitions from prepared to committed" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-commit-ok",
+        "coord-1",
+        stubSendCommit,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "localhost:9001");
+
+    // Must prepare first
+    const can_commit = try txn.prepare();
+    try testing.expect(can_commit);
+
+    try txn.commit();
+    try testing.expectEqual(TransactionState.committed, txn.state);
+}
+
+test "Transaction.commit rejects non-prepared state" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-commit-bad",
+        "coord-1",
+        stubSend,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    // Transaction is in 'active' state, not 'prepared'
+    const result = txn.commit();
+    try testing.expectError(error.InvalidState, result);
+}
+
+test "Transaction.addParticipant and createSavepoint" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-misc",
+        "coord-1",
+        stubSend,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    try txn.addParticipant("p1", "localhost:9001");
+    try txn.addParticipant("p2", "localhost:9002");
+    try testing.expectEqual(@as(usize, 2), txn.participants.items.len);
+    try testing.expectEqualStrings("p1", txn.participants.items[0].id);
+    try testing.expectEqualStrings("p2", txn.participants.items[1].id);
+
+    try txn.createSavepoint("sp1");
+    try testing.expectEqual(@as(usize, 1), txn.savepoints.items.len);
+    try testing.expectEqualStrings("sp1", txn.savepoints.items[0].name);
+}
+
+test "Transaction.rollbackToSavepoint removes operations after savepoint" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-rollback",
+        "coord-1",
+        stubSend,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    // Add an operation, create savepoint, add another operation
+    try txn.addOperation(.{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 1,
+            .label = "",
+            .graph_name = "",
+            .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+        },
+    });
+    try txn.createSavepoint("sp1");
+    try txn.addOperation(.{
+        .node_op = .{
+            .op_type = .CREATE,
+            .node_id = 2,
+            .label = "",
+            .graph_name = "",
+            .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+        },
+    });
+
+    try testing.expectEqual(@as(usize, 2), txn.operations.items.len);
+
+    try txn.rollbackToSavepoint("sp1");
+    try testing.expectEqual(@as(usize, 1), txn.operations.items.len);
+}
+
+test "Transaction.rollbackToSavepoint returns error for unknown savepoint" {
+    var txn = try Transaction.init(
+        testing.allocator,
+        "txn-rollback-bad",
+        "coord-1",
+        stubSend,
+        null,
+        5000,
+        null,
+    );
+    defer txn.deinit();
+
+    const result = txn.rollbackToSavepoint("nonexistent");
+    try testing.expectError(error.SavepointNotFound, result);
 }

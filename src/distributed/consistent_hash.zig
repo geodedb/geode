@@ -87,15 +87,12 @@ pub const ConsistentHash = struct {
         }.lessThan);
     }
 
-    pub fn getNode(self: *ConsistentHash, key: []const u8) ?Node {
-        if (self.ring.items.len == 0) return null;
-
-        const key_hash = self.hash(key);
-
-        // Binary search for the first node with hash >= key_hash
+    /// PERF-D015: Binary search helper for O(log n) ring lookup.
+    /// Returns index of first node with hash >= key_hash, or 0 on wrap-around.
+    fn findStartIndex(self: *ConsistentHash, key_hash: u64) usize {
+        if (self.ring.items.len == 0) return 0;
         var left: usize = 0;
         var right: usize = self.ring.items.len;
-
         while (left < right) {
             const mid = (left + right) / 2;
             if (self.ring.items[mid].hash < key_hash) {
@@ -104,15 +101,17 @@ pub const ConsistentHash = struct {
                 right = mid;
             }
         }
-
-        // If we've gone past the end, wrap around to the first node
-        if (left >= self.ring.items.len) {
-            return self.ring.items[0];
-        }
-
-        return self.ring.items[left];
+        if (left >= self.ring.items.len) return 0;
+        return left;
     }
 
+    pub fn getNode(self: *ConsistentHash, key: []const u8) ?Node {
+        if (self.ring.items.len == 0) return null;
+        const idx = self.findStartIndex(self.hash(key));
+        return self.ring.items[idx];
+    }
+
+    /// PERF-D015: Uses binary search instead of O(n) linear scan
     pub fn getNodes(self: *ConsistentHash, key: []const u8, count: usize) ![]Node {
         if (self.ring.items.len == 0) return &[_]Node{};
 
@@ -121,16 +120,8 @@ pub const ConsistentHash = struct {
         var seen_ids = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_ids.deinit();
 
-        const key_hash = self.hash(key);
-        var start_idx: usize = 0;
-
-        // Find starting position
-        for (self.ring.items, 0..) |node, i| {
-            if (node.hash >= key_hash) {
-                start_idx = i;
-                break;
-            }
-        }
+        // PERF-D015: O(log n) binary search instead of O(n) linear scan
+        const start_idx = self.findStartIndex(self.hash(key));
 
         // Collect unique nodes
         var i: usize = 0;

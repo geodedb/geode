@@ -208,7 +208,7 @@ pub const QueryCoordinator = struct {
             }
         }
 
-        self.metrics.concurrent_queries += 1;
+        _ = self.metrics.concurrent_queries.fetchAdd(1, .monotonic);
         return results;
     }
 
@@ -806,27 +806,28 @@ const TopKHeap = struct {
 /// Coordinator metrics
 /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=Metrics; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
 const CoordinatorMetrics = struct {
-    total_queries: u64,
-    total_time_ms: u64,
-    shard_queries: u64,
-    merge_time_ms: u64,
+    // PERF-D010: Atomic counters for thread-safe metrics updates
+    total_queries: std.atomic.Value(u64),
+    total_time_ms: std.atomic.Value(u64),
+    shard_queries: std.atomic.Value(u64),
+    merge_time_ms: std.atomic.Value(u64),
     /// GAP-0184: Track concurrent query executions
-    concurrent_queries: u64,
+    concurrent_queries: std.atomic.Value(u64),
 
     fn init() CoordinatorMetrics {
         return .{
-            .total_queries = 0,
-            .total_time_ms = 0,
-            .shard_queries = 0,
-            .merge_time_ms = 0,
-            .concurrent_queries = 0,
+            .total_queries = std.atomic.Value(u64).init(0),
+            .total_time_ms = std.atomic.Value(u64).init(0),
+            .shard_queries = std.atomic.Value(u64).init(0),
+            .merge_time_ms = std.atomic.Value(u64).init(0),
+            .concurrent_queries = std.atomic.Value(u64).init(0),
         };
     }
 
     fn recordQuery(self: *CoordinatorMetrics, time_ms: u64, shard_count: usize) void {
-        self.total_queries += 1;
-        self.total_time_ms += time_ms;
-        self.shard_queries += @as(u64, @intCast(shard_count));
+        _ = self.total_queries.fetchAdd(1, .monotonic);
+        _ = self.total_time_ms.fetchAdd(time_ms, .monotonic);
+        _ = self.shard_queries.fetchAdd(@as(u64, @intCast(shard_count)), .monotonic);
     }
 };
 
@@ -845,8 +846,8 @@ test "QueryCoordinator: initialization" {
     try std.testing.expect(config.enable_parallel_scatter == true);
 
     // Verify metrics are initialized
-    try std.testing.expect(coordinator.metrics.total_queries == 0);
-    try std.testing.expect(coordinator.metrics.concurrent_queries == 0);
+    try std.testing.expect(coordinator.metrics.total_queries.load(.monotonic) == 0);
+    try std.testing.expect(coordinator.metrics.concurrent_queries.load(.monotonic) == 0);
 }
 
 test "QueryCoordinator: metrics tracking" {
@@ -857,15 +858,15 @@ test "QueryCoordinator: metrics tracking" {
 
     // Record a query
     coordinator.metrics.recordQuery(100, 3);
-    try std.testing.expect(coordinator.metrics.total_queries == 1);
-    try std.testing.expect(coordinator.metrics.total_time_ms == 100);
-    try std.testing.expect(coordinator.metrics.shard_queries == 3);
+    try std.testing.expect(coordinator.metrics.total_queries.load(.monotonic) == 1);
+    try std.testing.expect(coordinator.metrics.total_time_ms.load(.monotonic) == 100);
+    try std.testing.expect(coordinator.metrics.shard_queries.load(.monotonic) == 3);
 
     // Record another query
     coordinator.metrics.recordQuery(50, 2);
-    try std.testing.expect(coordinator.metrics.total_queries == 2);
-    try std.testing.expect(coordinator.metrics.total_time_ms == 150);
-    try std.testing.expect(coordinator.metrics.shard_queries == 5);
+    try std.testing.expect(coordinator.metrics.total_queries.load(.monotonic) == 2);
+    try std.testing.expect(coordinator.metrics.total_time_ms.load(.monotonic) == 150);
+    try std.testing.expect(coordinator.metrics.shard_queries.load(.monotonic) == 5);
 }
 
 test "QueryCoordinator: parallel scatter configuration" {
@@ -919,14 +920,14 @@ test "CoordinatorMetrics: concurrent queries tracking" {
     var metrics = CoordinatorMetrics.init();
 
     // Initial state
-    try std.testing.expect(metrics.concurrent_queries == 0);
+    try std.testing.expect(metrics.concurrent_queries.load(.monotonic) == 0);
 
     // Simulate concurrent execution
-    metrics.concurrent_queries += 1;
-    try std.testing.expect(metrics.concurrent_queries == 1);
+    _ = metrics.concurrent_queries.fetchAdd(1, .monotonic);
+    try std.testing.expect(metrics.concurrent_queries.load(.monotonic) == 1);
 
     // Track multiple concurrent executions
-    metrics.concurrent_queries += 1;
-    metrics.concurrent_queries += 1;
-    try std.testing.expect(metrics.concurrent_queries == 3);
+    _ = metrics.concurrent_queries.fetchAdd(1, .monotonic);
+    _ = metrics.concurrent_queries.fetchAdd(1, .monotonic);
+    try std.testing.expect(metrics.concurrent_queries.load(.monotonic) == 3);
 }
