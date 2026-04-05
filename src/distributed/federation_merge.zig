@@ -10,58 +10,21 @@ const protobuf = @import("protobuf");
 const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
 
-// ---------------------------------------------------------------------------
-// Binding-row helpers
-// ---------------------------------------------------------------------------
-
-pub fn freeBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) void {
-    for (row.cols) |val| {
-        value_utilities.freeValue(allocator, val);
-    }
-    if (row.cols.len > 0) allocator.free(row.cols);
-}
-
-pub fn cloneBindingRow(allocator: std.mem.Allocator, row: protocol.BindingRow) !protocol.BindingRow {
-    var cols = try allocator.alloc(protocol.BindingValue, row.cols.len);
-    errdefer {
-        for (cols) |val| value_utilities.freeValue(allocator, val);
-        allocator.free(cols);
-    }
-    for (row.cols, 0..) |val, i| {
-        cols[i] = try value_utilities.duplicateValue(allocator, val);
-    }
-    return .{ .cols = cols };
-}
+const result_utils = @import("result_utils.zig");
 
 // ---------------------------------------------------------------------------
-// Schema helpers
+// Binding-row helpers — delegated to result_utils.zig
 // ---------------------------------------------------------------------------
 
-pub fn freeSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) void {
-    for (schema_defs) |col| {
-        allocator.free(col.name);
-        allocator.free(col.data_type);
-    }
-    allocator.free(schema_defs);
-}
+pub const freeBindingRow = result_utils.freeBindingRow;
+pub const cloneBindingRow = result_utils.cloneBindingRow;
 
-pub fn cloneSchema(allocator: std.mem.Allocator, schema_defs: []const protocol.ColumnDef) ![]const protocol.ColumnDef {
-    var cols = try allocator.alloc(protocol.ColumnDef, schema_defs.len);
-    errdefer {
-        for (cols) |col| {
-            allocator.free(col.name);
-            allocator.free(col.data_type);
-        }
-        allocator.free(cols);
-    }
-    for (schema_defs, 0..) |col, i| {
-        cols[i] = .{
-            .name = try allocator.dupe(u8, col.name),
-            .data_type = try allocator.dupe(u8, col.data_type),
-        };
-    }
-    return cols;
-}
+// ---------------------------------------------------------------------------
+// Schema helpers — delegated to result_utils.zig
+// ---------------------------------------------------------------------------
+
+pub const freeSchema = result_utils.freeSchema;
+pub const cloneSchema = result_utils.cloneSchema;
 
 // ---------------------------------------------------------------------------
 // Order metadata helpers
