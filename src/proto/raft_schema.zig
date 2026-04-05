@@ -346,7 +346,7 @@ pub const RaftEnvelope = struct {
         .from = fd(2, .{ .scalar = .uint64 }),
         .nonce = fd(10, .{ .scalar = .uint64 }),
         .message = fd(null, .{ .oneof = RaftMessage }),
-        .auth_token = fd(10, .{ .scalar = .string }),
+        .auth_token = fd(11, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *RaftEnvelope, allocator: std.mem.Allocator) void {

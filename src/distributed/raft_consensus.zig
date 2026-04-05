@@ -10,6 +10,8 @@ const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
 
+const cluster_auth = @import("cluster_auth.zig");
+
 const logging = @import("logging");
 const log = logging.scoped("raft");
 const Attr = logging.Attr;
@@ -385,11 +387,13 @@ pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message)
 
     const proto_msg = try messageToProto(allocator, msg);
     // SEC-D009: Generate cryptographic nonce for replay protection.
+    // SEC-D001: Include cluster token for inter-node authentication.
     var envelope = raft_schema.RaftEnvelope{
         .term = term,
         .from = from,
         .nonce = nonce_tracker.NonceTracker.generateNonce(),
         .message = proto_msg,
+        .auth_token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "",
     };
     defer envelope.deinit(allocator);
 
@@ -404,9 +408,12 @@ pub const DecodedRaftFrame = struct {
     from: u64,
     /// SEC-D009: Nonce for replay protection (0 if absent / legacy frame).
     nonce: u64 = 0,
+    /// SEC-D001: Cluster authentication token carried in the Raft envelope.
+    auth_token: []const u8 = "",
     body: Message,
 
     pub fn deinit(self: DecodedRaftFrame, allocator: Allocator) void {
+        if (self.auth_token.len > 0) allocator.free(self.auth_token);
         var msg = self.body;
         freeMessage(allocator, &msg);
     }
@@ -419,7 +426,12 @@ pub fn decodeRaftFrame(allocator: Allocator, payload: []const u8) !DecodedRaftFr
 
     const msg = decoded.message orelse return error.InvalidFrame;
     const body = try protoToMessage(allocator, msg);
-    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .nonce = decoded.nonce, .body = body };
+    // SEC-D001: Carry auth_token through to caller for validation.
+    const token_copy = if (decoded.auth_token.len > 0)
+        try allocator.dupe(u8, decoded.auth_token)
+    else
+        @as([]const u8, "");
+    return DecodedRaftFrame{ .term = decoded.term, .from = decoded.from, .nonce = decoded.nonce, .auth_token = token_copy, .body = body };
 }
 
 pub fn writeRaftFrame(allocator: Allocator, stream: anytype, from: u64, term: u64, msg: Message) !void {
@@ -1027,4 +1039,21 @@ test "serializeCommand: write data is not empty" {
     try std.testing.expect(bytes.len > 1);
     // The payload must be recoverable
     try std.testing.expectEqualStrings(payload, bytes[1..]);
+}
+
+test "encodeRaftFrame includes auth_token and decodeRaftFrame exposes it" {
+    // SEC-D001: Verify auth_token round-trips through Raft frame encoding.
+    // In test env, GEODE_CLUSTER_TOKEN is not set, so auth_token will be "".
+    const allocator = std.testing.allocator;
+    const msg = Message{ .noop = {} };
+    const encoded = try encodeRaftFrame(allocator, 42, 1, msg);
+    defer allocator.free(encoded);
+
+    const decoded = try decodeRaftFrame(allocator, encoded);
+    defer decoded.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 42), decoded.from);
+    try std.testing.expectEqual(@as(u64, 1), decoded.term);
+    // Without GEODE_CLUSTER_TOKEN set, auth_token should be empty
+    try std.testing.expectEqualStrings("", decoded.auth_token);
 }

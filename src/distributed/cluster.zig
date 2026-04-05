@@ -9,6 +9,8 @@ const fd = protobuf.fd;
 const quic = @import("transport/quic");
 const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
+const cluster_auth = @import("cluster_auth.zig");
+
 const logging = @import("logging");
 const log = logging.scoped("cluster");
 const Attr = logging.Attr;
@@ -43,12 +45,15 @@ const Message = struct {
     key: ?[]const u8 = null,
     client_id: ?[]const u8 = null,
     data: ?[]const u8 = null,
+    /// SEC-D002: Cluster authentication token for JOIN_CLUSTER and other operations.
+    auth_token: []const u8 = "",
 
     pub const _desc_table = .{
         .msg_type = fd(1, .{ .scalar = .@"enum" }),
         .key = fd(2, .{ .scalar = .string }),
         .client_id = fd(3, .{ .scalar = .string }),
         .data = fd(4, .{ .scalar = .bytes }),
+        .auth_token = fd(5, .{ .scalar = .string }),
     };
 
     pub fn deinit(self: *Message, allocator: std.mem.Allocator) void {
@@ -487,6 +492,17 @@ pub const ClusterCoordinator = struct {
             };
             defer frame_res.deinit(self.allocator);
 
+            // SEC-D001: Validate cluster token on incoming Raft frames.
+            // When GEODE_CLUSTER_TOKEN is configured, reject frames without valid token.
+            if (std.posix.getenv("GEODE_CLUSTER_TOKEN")) |_| {
+                if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
+                    log.warn("Raft frame rejected: invalid cluster token", &.{
+                        Attr.uint("from", frame_res.from),
+                    });
+                    continue;
+                }
+            }
+
             // SEC-D009: Validate nonce to prevent replay attacks.
             if (!self.raft_nonce_tracker.checkAndRecord(frame_res.nonce)) {
                 log.warn("Raft frame rejected: replay or missing nonce", &.{
@@ -510,6 +526,20 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
+        // SEC-D002: Validate cluster token before revealing topology.
+        // When GEODE_CLUSTER_TOKEN is configured, reject join requests without valid token.
+        if (std.posix.getenv("GEODE_CLUSTER_TOKEN")) |_| {
+            if (!cluster_auth.validateClusterToken(msg.auth_token)) {
+                log.warn("JOIN_CLUSTER rejected: invalid cluster token", &.{
+                    Attr.string("client_id", msg.client_id orelse "unknown"),
+                });
+                return Response{
+                    .status = .ERR,
+                    .data = null,
+                };
+            }
+        }
+
         if (self.raft.state != .leader) {
             return Response{
                 .status = .REDIRECT,
@@ -1173,3 +1203,26 @@ pub const ClusterCoordinator = struct {
         port: u16,
     };
 };
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+const testing = std.testing;
+
+test "Message struct carries auth_token field" {
+    // SEC-D002: Verify the Message struct includes auth_token for JOIN_CLUSTER authentication.
+    const msg = Message{
+        .msg_type = .JOIN_CLUSTER,
+        .key = null,
+        .client_id = "test-node",
+        .data = null,
+        .auth_token = "my-secret-token",
+    };
+    try testing.expectEqualStrings("my-secret-token", msg.auth_token);
+    try testing.expectEqual(MessageType.JOIN_CLUSTER, msg.msg_type);
+}
+
+test "Message auth_token defaults to empty" {
+    const msg = Message{};
+    try testing.expectEqualStrings("", msg.auth_token);
+}
