@@ -4288,6 +4288,62 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;
 }
 
+/// Opaque handle returned by per-graph lock helpers.  Callers pass this back
+/// to the corresponding release function.  When `managed_graph` is non-null
+/// the per-graph path was used; when null the global rwlock was used instead.
+pub const GraphLockHandle = struct {
+    managed_graph: ?*graph_storage_adapter.ManagedGraph,
+    is_write: bool,
+};
+
+/// Acquire a shared (read) lock scoped to `graph_name`.  If the per-graph
+/// StorageAdapter is available the lock is per-graph; otherwise falls back
+/// to the global store rwlock for backward compatibility (tests, single-
+/// graph deployments without an adapter).
+pub fn acquireGraphReadLock(graph_name: []const u8) GraphLockHandle {
+    if (global_adapter) |adapter| {
+        if (adapter.acquireGraphReadLock(graph_name)) |mg| {
+            return .{ .managed_graph = mg, .is_write = false };
+        } else |_| {}
+    }
+    // Fallback: use global store lock
+    acquireStoreLock();
+    return .{ .managed_graph = null, .is_write = false };
+}
+
+/// Acquire an exclusive (write) lock scoped to `graph_name`.  Falls back
+/// to the global store write-lock when no adapter is available.
+pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
+    if (global_adapter) |adapter| {
+        if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
+            return .{ .managed_graph = mg, .is_write = true };
+        } else |_| {}
+    }
+    acquireStoreWriteLock();
+    return .{ .managed_graph = null, .is_write = true };
+}
+
+/// Release a lock previously acquired via `acquireGraphReadLock` or
+/// `acquireGraphWriteLock`.
+pub fn releaseGraphLock(handle: GraphLockHandle) void {
+    if (handle.managed_graph) |mg| {
+        if (global_adapter) |adapter| {
+            if (handle.is_write) {
+                adapter.releaseGraphWriteLock(mg);
+            } else {
+                adapter.releaseGraphReadLock(mg);
+            }
+            return;
+        }
+    }
+    // Fallback: release global lock
+    if (handle.is_write) {
+        releaseStoreWriteLock();
+    } else {
+        releaseStoreLock();
+    }
+}
+
 pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*graph_storage_adapter.StorageAdapter {
     if (global_adapter) |existing| {
         if (std.mem.eql(u8, existing.data_dir, data_dir)) {

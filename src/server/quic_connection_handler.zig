@@ -1403,8 +1403,9 @@ fn handleAlterUserSetPassword(
 fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) void {
     state.resetResult();
     if (state.in_txn) {
-        graph_store.acquireStoreWriteLock();
-        defer graph_store.releaseStoreWriteLock();
+        const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+        const lock_handle = graph_store.acquireGraphWriteLock(graph_name);
+        defer graph_store.releaseGraphLock(lock_handle);
         const store = graph_store.getGlobalStore(gpa);
         txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
             log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
@@ -1992,24 +1993,22 @@ fn handleClientMessage(
             // #52: Lock is released explicitly after execution completes but BEFORE
             // response serialization and network send, to avoid holding the global
             // write lock during slow I/O operations.
+            // P1: Per-graph locking — queries against different graphs no longer serialize.
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
+            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
-                if (is_mutation) {
-                    graph_store.acquireStoreWriteLock();
-                } else {
-                    graph_store.acquireStoreLock();
-                }
+                graph_lock_handle = if (is_mutation)
+                    graph_store.acquireGraphWriteLock(query_graph_name)
+                else
+                    graph_store.acquireGraphReadLock(query_graph_name);
             }
             // Safety net: release on any unexpected error path not explicitly handled.
             var lock_released = false;
             defer {
-                if (!lock_released and needs_store_lock) {
-                    if (is_mutation) {
-                        graph_store.releaseStoreWriteLock();
-                    } else {
-                        graph_store.releaseStoreLock();
-                    }
+                if (!lock_released) {
+                    if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                 }
             }
 
@@ -2071,7 +2070,7 @@ fn handleClientMessage(
                             const profile_is_dirty = store.isDirty();
 
                             if (needs_store_lock) {
-                                if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                                 lock_released = true;
                             }
 
@@ -2134,7 +2133,7 @@ fn handleClientMessage(
                     // #52: Release lock before serialization and network send.
                     // exec_result is a thread-local copy; store stats are captured above.
                     if (needs_store_lock) {
-                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         lock_released = true;
                     }
 
@@ -2179,7 +2178,7 @@ fn handleClientMessage(
                                     errdefer active_stream.deinit();
 
                                     if (needs_store_lock) {
-                                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                                         lock_released = true;
                                     }
 
@@ -2199,12 +2198,12 @@ fn handleClientMessage(
                                     var page_final = false;
                                     if (state.inline_results_enabled) inline_blk: {
                                         const inline_max = if (state.inline_results_max_rows == 0) node_scan_stream.default_inline_rows else state.inline_results_max_rows;
-                                        // Acquire store read lock while materializing nodes to
+                                        // P1: Acquire per-graph read lock while materializing nodes to
                                         // prevent data races with concurrent ingest holding the
                                         // write lock (same protection as the PULL handler).
-                                        graph_store.acquireStoreLock();
+                                        const inline_lock = graph_store.acquireGraphReadLock(query_graph_name);
                                         var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
-                                            graph_store.releaseStoreLock();
+                                            graph_store.releaseGraphLock(inline_lock);
                                             // Inline page failed (e.g. concurrent ingest modified
                                             // nodes).  Reset the stream cursor so PULL starts from
                                             // the beginning and fall through to store the stream
@@ -2215,7 +2214,7 @@ fn handleClientMessage(
                                             active_stream.next_index = 0;
                                             break :inline_blk;
                                         };
-                                        graph_store.releaseStoreLock();
+                                        graph_store.releaseGraphLock(inline_lock);
                                         defer page_result.result.deinit(gpa);
 
                                         var page_arena = std.heap.ArenaAllocator.init(gpa);
@@ -2272,7 +2271,7 @@ fn handleClientMessage(
                     // Everything below (flags, ordering, serialization, send, txn state update)
                     // does not access the store and does not need the lock.
                     if (needs_store_lock) {
-                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         lock_released = true;
                     }
 
@@ -2400,11 +2399,12 @@ fn handleClientMessage(
             const pa = pull_arena.allocator();
 
             if (state.active_node_scan_stream) |*active_stream| {
-                // Acquire store read lock while materializing nodes to prevent
+                // P1: Acquire per-graph read lock while materializing nodes to prevent
                 // data races with concurrent ingest holding the write lock.
-                graph_store.acquireStoreLock();
+                const pull_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const pull_lock = graph_store.acquireGraphReadLock(pull_graph_name);
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
-                    graph_store.releaseStoreLock();
+                    graph_store.releaseGraphLock(pull_lock);
                     // Node disappeared during concurrent ingest — send empty
                     // final page so the client sees what was collected so far.
                     log.warn("PULL page build failed, closing stream", &.{
@@ -2420,7 +2420,7 @@ fn handleClientMessage(
                     state.resetResult();
                     return;
                 };
-                graph_store.releaseStoreLock();
+                graph_store.releaseGraphLock(pull_lock);
                 defer page_result.result.deinit(gpa);
 
                 const page = try proto_util.buildDataPageFromRows(pa, page_result.result.rows, page_result.final, false, &.{});
@@ -2541,8 +2541,10 @@ fn handleClientMessage(
             }
             if (state.in_txn) {
                 // GAP-0001: Rollback reverses mutations on the store — needs exclusive lock
-                graph_store.acquireStoreWriteLock();
-                defer graph_store.releaseStoreWriteLock();
+                // P1: Per-graph write lock scoped to the session's current graph.
+                const rb_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rb_lock = graph_store.acquireGraphWriteLock(rb_graph);
+                defer graph_store.releaseGraphLock(rb_lock);
                 const store = graph_store.getGlobalStore(gpa);
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});
@@ -2586,8 +2588,10 @@ fn handleClientMessage(
             if (!state.in_txn) {
                 try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = false } });
             } else {
-                graph_store.acquireStoreWriteLock();
-                defer graph_store.releaseStoreWriteLock();
+                // P1: Per-graph write lock for rollback-to-savepoint.
+                const rts_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const rts_lock = graph_store.acquireGraphWriteLock(rts_graph);
+                defer graph_store.releaseGraphLock(rts_lock);
                 const store = graph_store.getGlobalStore(gpa);
                 const undo = txn_undo_log.getGlobalUndoLog(gpa);
                 undo.rollbackToSavepoint(rt_req.name, store) catch {
@@ -2650,6 +2654,8 @@ fn handleClientMessage(
             }
             // GAP-0001: Backup reads from the store — shared lock prevents
             // concurrent mutations from corrupting the snapshot.
+            // NOTE: Backup is a cross-graph operation; global lock is intentional.
+            // TODO(P1): Consider multi-graph lock acquisition for backup.
             graph_store.acquireStoreLock();
             defer graph_store.releaseStoreLock();
             const backup_dir = "./server_backups";
@@ -2752,6 +2758,8 @@ fn handleClientMessage(
                 }
             }
             // GAP-0001: Restore mutates on-disk state — exclusive write lock
+            // NOTE: Restore is a cross-graph operation; global lock is intentional.
+            // TODO(P1): Consider multi-graph lock acquisition for restore.
             graph_store.acquireStoreWriteLock();
             defer graph_store.releaseStoreWriteLock();
             if (!restore_req.confirm) {
