@@ -19,6 +19,34 @@ pub var global_audit_logger: ?audit_mod.AuditLogger = null;
 pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
 pub var global_audit_file_path: []const u8 = "/etc/geode/geode_audit.jsonl";
 
+/// Get or create an audit logger suitable for test procedures.
+/// Prefers the server's existing audit logger (audit_mod.global_audit_logger) to avoid
+/// creating conflicting file handles and mutex state. Falls back to the dispatch module's
+/// own logger only if the server logger is unavailable.
+fn getOrCreateTestLogger(allocator: std.mem.Allocator) !*audit_mod.AuditLogger {
+    // First, try the server's global audit logger — this is the preferred path
+    // because the server already owns the audit file and mutex.
+    audit_mod.global_audit_logger_mutex.lock();
+    const server_logger = audit_mod.global_audit_logger;
+    audit_mod.global_audit_logger_mutex.unlock();
+    if (server_logger) |logger| {
+        return logger;
+    }
+
+    // Fall back to dispatch module's own logger (e.g., in unit test or standalone mode)
+    global_audit_logger_mutex.lock();
+    defer global_audit_logger_mutex.unlock();
+    if (global_audit_logger == null) {
+        global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
+            .enabled = true,
+            .file_path = "audit_test.jsonl",
+        });
+    }
+    // Return a pointer to the optional's payload — safe because global_audit_logger
+    // is a module-level var and remains alive for the process lifetime.
+    return &global_audit_logger.?;
+}
+
 /// Execute an audit.* procedure. Returns null if not recognized.
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -1259,19 +1287,10 @@ pub fn execute(
         };
     } else if (std.mem.eql(u8, proc_name, "audit.performance_test")) {
         // CANARY: REQ=REQ-AUDIT-PROC-027; FEATURE="AuditProcedures"; ASPECT=PerformanceTesting; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-        // Initialize audit logger if needed
-        if (global_audit_logger == null) {
-            global_audit_logger_mutex.lock();
-            defer global_audit_logger_mutex.unlock();
-            if (global_audit_logger == null) {
-                global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                    .enabled = true,
-                    .file_path = "audit_performance.jsonl",
-                });
-            }
-        }
+        // Use the server's existing audit logger to avoid conflicting file handles
+        const logger = try getOrCreateTestLogger(allocator);
         // Perform real performance testing
-        const result = try global_audit_logger.?.performanceTest(allocator);
+        const result = try logger.performanceTest(allocator);
         const columns = try allocator.alloc([]const u8, 5);
         columns[0] = try allocator.dupe(u8, "events_per_second");
         columns[1] = try allocator.dupe(u8, "avg_latency_ms");
@@ -1293,19 +1312,10 @@ pub fn execute(
         };
     } else if (std.mem.eql(u8, proc_name, "audit.memory_usage_test")) {
         // CANARY: REQ=REQ-AUDIT-PROC-028; FEATURE="AuditProcedures"; ASPECT=MemoryUsage; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-        // Initialize audit logger if needed
-        if (global_audit_logger == null) {
-            global_audit_logger_mutex.lock();
-            defer global_audit_logger_mutex.unlock();
-            if (global_audit_logger == null) {
-                global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                    .enabled = true,
-                    .file_path = "audit_memory.jsonl",
-                });
-            }
-        }
+        // Use the server's existing audit logger to avoid conflicting file handles
+        const logger = try getOrCreateTestLogger(allocator);
         // Perform real memory usage testing
-        const result = try global_audit_logger.?.memoryUsageTest(allocator);
+        const result = try logger.memoryUsageTest(allocator);
         const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "baseline_mb");
         columns[1] = try allocator.dupe(u8, "peak_mb");
@@ -1325,19 +1335,10 @@ pub fn execute(
         };
     } else if (std.mem.eql(u8, proc_name, "audit.concurrent_access_test")) {
         // CANARY: REQ=REQ-AUDIT-PROC-029; FEATURE="AuditProcedures"; ASPECT=ConcurrentAccess; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
-        // Initialize audit logger if needed
-        if (global_audit_logger == null) {
-            global_audit_logger_mutex.lock();
-            defer global_audit_logger_mutex.unlock();
-            if (global_audit_logger == null) {
-                global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
-                    .enabled = true,
-                    .file_path = "audit_concurrent.jsonl",
-                });
-            }
-        }
+        // Use the server's existing audit logger to avoid conflicting file handles
+        const logger = try getOrCreateTestLogger(allocator);
         // Perform real concurrent access testing
-        const result = try global_audit_logger.?.concurrentAccessTest(allocator);
+        const result = try logger.concurrentAccessTest(allocator);
         const columns = try allocator.alloc([]const u8, 4);
         columns[0] = try allocator.dupe(u8, "threads_tested");
         columns[1] = try allocator.dupe(u8, "race_conditions");

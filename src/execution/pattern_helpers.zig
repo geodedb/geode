@@ -4,9 +4,11 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
+const execution = @import("../execution.zig");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const value_types = @import("../value_types.zig");
+const valuesEqual = execution.valuesEqual;
 
 // Local type aliases
 pub const Value = value_types.Value;
@@ -31,6 +33,7 @@ pub const PatternInfo = struct {
     match_props: ?[]ast.Property = null,
     has_relationship: bool = false,
     rel_type: ?[]const u8 = null,
+    rel_props: ?[]ast.Property = null,
     left_node_var: ?[]const u8 = null,
     right_node_var: ?[]const u8 = null,
     rel_var: ?[]const u8 = null,
@@ -63,6 +66,7 @@ pub fn extractPatternInfo(q: ast.Query) PatternInfo {
 
             // Get relationship info
             info.rel_var = hop.rel.name;
+            info.rel_props = hop.rel.props;
             if (hop.rel.types.len > 0) {
                 info.rel_type = hop.rel.types[0];
             }
@@ -140,6 +144,12 @@ pub fn dispatchToMultiChainHandler(q: ast.Query, all_simple_nodes: bool) Dispatc
         }
         // Handle multiple independent node patterns (all required)
         return .multi_node_match;
+    }
+
+    // Handle single chain with multiple hops (e.g., (a)-[:E]->(b)-[:E]->(c)-[:E]->(a))
+    // Route through multi-chain handler which now supports multi-hop chains
+    if (q.match.chains.len == 1 and q.match.chains[0].hops.len > 1) {
+        return .multi_chain_relationship_match;
     }
 
     // CANARY: REQ=REQ-GQL-MULTI-CHAIN-REL-002; FEATURE="MultiChainRelationshipMatch"; ASPECT=Dispatch; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
@@ -252,6 +262,27 @@ pub fn matchesLabels(node: *graph_store.Node, required_labels: []const []const u
             }
         }
         if (!found) return false;
+    }
+    return true;
+}
+
+/// Check if an edge's properties match the required property constraints from a RelPattern.
+/// Returns true if all required properties exist and match, or if no properties are required.
+pub fn matchesEdgeProperties(allocator: std.mem.Allocator, edge: graph_store.Edge, required_props: ?[]const ast.Property) bool {
+    const props = required_props orelse return true;
+    const empty_env = Env{
+        .names = &.{},
+        .values = &.{},
+        .allocator = allocator,
+    };
+    for (props) |prop| {
+        if (edge.properties.get(prop.key)) |edge_prop_val| {
+            const edge_val = propertyValueToValue(edge_prop_val);
+            const expected_val = eval.evalExpr(allocator, prop.value.*, empty_env) catch return true;
+            if (!valuesEqual(edge_val, expected_val)) return false;
+        } else {
+            return false;
+        }
     }
     return true;
 }

@@ -37,6 +37,7 @@ pub const checkAllSimpleNodes = pattern_helpers.checkAllSimpleNodes;
 pub const dispatchToMultiChainHandler = pattern_helpers.dispatchToMultiChainHandler;
 const containsVariableReference = pattern_helpers.containsVariableReference;
 const matchesLabels = pattern_helpers.matchesLabels;
+const matchesEdgeProperties = pattern_helpers.matchesEdgeProperties;
 const getWithExpressionName = pattern_helpers.getWithExpressionName;
 const computeAggregationForGroup = pattern_helpers.computeAggregationForGroup;
 const whereExprReferencesVar = pattern_helpers.whereExprReferencesVar;
@@ -335,18 +336,80 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
     }
 
+    // Handle DELETE items (MATCH ... CREATE ... DELETE p)
+    if (q.delete_items.len > 0) {
+        const store = graph_store.getWritableGlobalStore(allocator);
+        for (q.delete_items) |item| {
+            switch (item) {
+                .Variable => |var_name| {
+                    // Look up the node ID from the match bindings
+                    for (match_result.columns, 0..) |col_name, ci| {
+                        if (std.mem.eql(u8, col_name, var_name)) {
+                            for (match_result.rows) |row| {
+                                if (ci < row.len and row[ci] == .Node) {
+                                    const node_id = row[ci].Node.id;
+                                    // Detach delete: remove edges first, then node
+                                    store.deleteNode(node_id);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                },
+                .Node => |var_name| {
+                    for (match_result.columns, 0..) |col_name, ci| {
+                        if (std.mem.eql(u8, col_name, var_name)) {
+                            for (match_result.rows) |row| {
+                                if (ci < row.len and row[ci] == .Node) {
+                                    const node_id = row[ci].Node.id;
+                                    store.deleteNode(node_id);
+                                }
+                            }
+                            break;
+                        }
+                    }
+                },
+                .Relationship => {},
+            }
+        }
+    }
+
+    // Handle REMOVE clauses (MATCH ... CREATE ... REMOVE o.prop)
+    if (q.remove_clauses.len > 0) {
+        const store = graph_store.getWritableGlobalStore(allocator);
+        for (q.remove_clauses) |clause| {
+            switch (clause) {
+                .Property => |prop| {
+                    for (match_result.columns, 0..) |col_name, ci| {
+                        if (std.mem.eql(u8, col_name, prop.object)) {
+                            for (match_result.rows) |row| {
+                                if (ci < row.len and row[ci] == .Node) {
+                                    const node_id = row[ci].Node.id;
+                                    if (store.nodes.getPtr(node_id)) |node| {
+                                        _ = node.properties.fetchRemove(prop.property);
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                },
+                .Labels => {},
+            }
+        }
+    }
+
     // Handle RETURN clause
     if (q.ret.items.len > 0) {
-        // Check if RETURN uses count(*) aggregation — only for count(*), not count(variable)
+        // Check if RETURN uses count() aggregation — handles count(*) and count(variable)
         if (q.ret.items.len == 1 and q.ret.items[0].expr == .Call) {
             const call = q.ret.items[0].expr.Call;
-            const is_count_star = call.callee.* == .Ident and
+            const is_count = call.callee.* == .Ident and
                 (std.mem.eql(u8, call.callee.Ident.orig, "count") or
                     std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
-                call.args.len == 1 and call.args[0].* == .Ident and
-                std.mem.eql(u8, call.args[0].Ident.orig, "*");
-            if (is_count_star) {
-                // Return the total count
+                call.args.len == 1;
+            if (is_count) {
+                // Return the total count (works for both count(*) and count(variable))
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
 
@@ -1314,6 +1377,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const hop = first_chain.hops[0];
         const left_labels = hop.left.labels;
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
+        const rel_props = hop.rel.props;
         const right_labels = hop.right.labels;
         // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=DirectionHandling; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
         // Get relationship direction for proper edge traversal
@@ -1335,6 +1399,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1350,6 +1415,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1377,6 +1443,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -1391,6 +1458,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |left_node| {
                         if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
@@ -1407,6 +1475,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             defer if (typed_edges.len > 0) allocator.free(typed_edges);
 
             for (typed_edges) |edge| {
+                if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                 const from_node = store.nodes.getPtr(edge.from_id) orelse continue;
                 const to_node = store.nodes.getPtr(edge.to_id) orelse continue;
 
@@ -1439,6 +1508,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
 
                 for (outgoing_edges) |edge| {
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1450,6 +1520,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 }
 
                 for (incoming_edges) |edge| {
+                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1483,6 +1554,100 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
             }
+        }
+    }
+
+    // Process remaining hops of the first chain (for multi-hop patterns like (a)-[:E]->(b)-[:E]->(c))
+    if (first_chain.hops.len > 1) {
+        for (first_chain.hops[1..]) |extra_hop| {
+            const extra_left_var = extra_hop.left.name;
+            const extra_rel_type: ?[]const u8 = if (extra_hop.rel.types.len > 0) extra_hop.rel.types[0] else null;
+            const extra_rel_props_m = extra_hop.rel.props;
+            const extra_right_labels = extra_hop.right.labels;
+            const extra_right_var = extra_hop.right.name;
+            const extra_right_props = extra_hop.right.props;
+            const extra_rel_dir = extra_hop.rel.dir;
+
+            var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
+
+            for (bindings.items) |*existing| {
+                const left_node = if (extra_left_var) |lv| existing.vars.get(lv) else null;
+
+                if (left_node) |ln| {
+                    const outgoing_edges = if (extra_rel_dir == .right or extra_rel_dir == .undirected) store.getEdgesFrom(allocator, ln.id) else &[_]graph_store.Edge{};
+                    const incoming_edges = if (extra_rel_dir == .left or extra_rel_dir == .undirected) store.getEdgesTo(allocator, ln.id) else &[_]graph_store.Edge{};
+
+                    for (outgoing_edges) |edge| {
+                        if (extra_rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+                        if (!matchesEdgeProperties(allocator, edge, extra_rel_props_m)) continue;
+
+                        if (store.nodes.getPtr(edge.to_id)) |right_node| {
+                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
+                            if (!matchesLabels(right_node, extra_right_labels)) continue;
+                            // Check right node properties
+                            if (extra_right_props) |rprops| {
+                                var passes = true;
+                                const empty_env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = allocator };
+                                for (rprops) |prop| {
+                                    if (right_node.properties.get(prop.key)) |npv| {
+                                        const nv = propertyValueToValue(npv);
+                                        const pv = eval.evalExpr(allocator, prop.value.*, empty_env) catch {
+                                            passes = false;
+                                            break;
+                                        };
+                                        if (!valuesEqual(nv, pv)) {
+                                            passes = false;
+                                            break;
+                                        }
+                                    } else {
+                                        passes = false;
+                                        break;
+                                    }
+                                }
+                                if (!passes) continue;
+                            }
+                            // Check cyclic constraint: if right_var already bound, the target must match
+                            if (extra_right_var) |rv| {
+                                if (existing.vars.get(rv)) |already_bound| {
+                                    if (already_bound.id != right_node.id) continue;
+                                }
+                            }
+                            var new_binding = try existing.clone();
+                            if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_bindings.append(allocator, new_binding);
+                        }
+                    }
+
+                    for (incoming_edges) |edge| {
+                        if (extra_rel_type) |rt| {
+                            if (!std.mem.eql(u8, edge.label, rt)) continue;
+                        }
+                        if (!matchesEdgeProperties(allocator, edge, extra_rel_props_m)) continue;
+
+                        if (store.nodes.getPtr(edge.from_id)) |right_node| {
+                            if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
+                            if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
+                            if (!matchesLabels(right_node, extra_right_labels)) continue;
+                            if (extra_right_var) |rv| {
+                                if (existing.vars.get(rv)) |already_bound| {
+                                    if (already_bound.id != right_node.id) continue;
+                                }
+                            }
+                            var new_binding = try existing.clone();
+                            if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_bindings.append(allocator, new_binding);
+                        }
+                    }
+                }
+            }
+
+            // Replace bindings with extended set
+            for (bindings.items) |*b| b.deinit();
+            bindings.deinit(allocator);
+            bindings = new_bindings;
         }
     }
 
@@ -3272,6 +3437,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     const match_props = pattern_info.match_props;
     const has_relationship = pattern_info.has_relationship;
     const rel_type = pattern_info.rel_type;
+    const rel_props_filter = pattern_info.rel_props;
     const left_node_var = pattern_info.left_node_var;
     const right_node_var = pattern_info.right_node_var;
     const rel_var = pattern_info.rel_var;
@@ -4360,6 +4526,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // Filter by relationship properties
+                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
@@ -4450,6 +4618,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // Filter by relationship properties
+                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
@@ -4697,17 +4867,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (!passes_right_props) continue;
                         }
 
-                        // Check if already in matched_nodes (deduplicate)
-                        var already_added = false;
-                        for (matched_nodes.items) |existing| {
-                            if (existing.id == target_node_ptr.id) {
-                                already_added = true;
-                                break;
-                            }
-                        }
-                        if (!already_added) {
-                            try matched_nodes.append(allocator, target_node_ptr);
-                        }
+                        // Add each matching path's end node (no dedup - count(*) counts paths, not unique nodes)
+                        try matched_nodes.append(allocator, target_node_ptr);
                     }
                 }
 
@@ -5841,6 +6002,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // Filter by relationship properties if specified
+                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
@@ -6051,6 +6214,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // Filter by relationship properties if specified
+                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;

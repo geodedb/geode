@@ -1248,6 +1248,7 @@ pub fn evalCollectionFunction(
             .List => |l| return Value{ .Int = @intCast(l.len) },
             .Str => |s| return Value{ .Int = @intCast(s.len) },
             .Map => |m| return Value{ .Int = @intCast(m.count()) },
+            .Path => |p| return Value{ .Int = @intCast(p.edges.len) },
             .ExtValue => |ext| switch (ext) {
                 .List => |l| return Value{ .Int = @intCast(l.len) },
                 else => return Value{ .Int = 0 },

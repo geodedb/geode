@@ -2799,11 +2799,11 @@ pub const Parser = struct {
                     max_len = null;
                 }
                 // if min was integer before dotdot, keep it; else min defaults 0
-                if (min_len == null) min_len = 0;
+                if (min_len == null) min_len = 1;
             }
             if (min_len == null and max_len == null) {
-                // plain * => 0..∞
-                min_len = 0;
+                // plain * => 1..∞ (at least one hop per GQL/Cypher convention)
+                min_len = 1;
                 max_len = null;
             }
             if (min_len != null and max_len != null and min_len.? > max_len.?) {
