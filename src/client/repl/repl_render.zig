@@ -96,7 +96,7 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
         }
         try writer.print("+", .{});
     }
-    try writer.print("\n", .{});
+    try writer.print("\r\n", .{});
 
     // Print header
     try writer.print("|", .{});
@@ -106,7 +106,7 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
         for (0..padding) |_| try writer.print(" ", .{});
         try writer.print(" |", .{});
     }
-    try writer.print("\n", .{});
+    try writer.print("\r\n", .{});
 
     // Print separator
     try writer.print("+", .{});
@@ -116,7 +116,7 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
         }
         try writer.print("+", .{});
     }
-    try writer.print("\n", .{});
+    try writer.print("\r\n", .{});
 
     // Print rows
     for (rows.items) |row| {
@@ -132,7 +132,7 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
             for (0..padding) |_| try writer.print(" ", .{});
             try writer.print(" |", .{});
         }
-        try writer.print("\n", .{});
+        try writer.print("\r\n", .{});
     }
 
     // Print bottom separator
@@ -143,7 +143,7 @@ fn renderTable(writer: anytype, allocator: std.mem.Allocator, data: []const u8) 
         }
         try writer.print("+", .{});
     }
-    try writer.print("\n", .{});
+    try writer.print("\r\n", .{});
 }
 
 fn escapeString(s: []const u8) []const u8 {

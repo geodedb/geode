@@ -146,7 +146,7 @@ test "cli transport response parity: csv and table goldens" {
     defer allocator.free(table_rendered);
 
     try std.testing.expectEqualStrings(
-        "+-------+-----+\n| name  | age |\n+-------+-----+\n| Alice | 31  |\n| Bob   | 42  |\n+-------+-----+\n(2 rows)\n",
+        "+-------+-----+\r\n| name  | age |\r\n+-------+-----+\r\n| Alice | 31  |\r\n| Bob   | 42  |\r\n+-------+-----+\r\n(2 rows)\r\n",
         table_rendered,
     );
 }

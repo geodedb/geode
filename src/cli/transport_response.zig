@@ -173,11 +173,11 @@ pub fn renderTransportResponseWithStreams(
         if (view.error_message.len > 0) {
             try err_out.writeAll("Error: ");
             try err_out.writeAll(view.error_message);
-            try err_out.writeAll("\n");
+            try err_out.writeAll("\r\n");
         } else if (view.error_status.len > 0) {
             try err_out.writeAll("Error (");
             try err_out.writeAll(view.error_status);
-            try err_out.writeAll(")\n");
+            try err_out.writeAll(")\r\n");
         }
         return true;
     }
@@ -185,7 +185,7 @@ pub fn renderTransportResponseWithStreams(
     if (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00")) {
         try err_out.writeAll("Error (");
         try err_out.writeAll(view.status_class);
-        try err_out.writeAll(")\n");
+        try err_out.writeAll(")\r\n");
         return true;
     }
 
@@ -193,7 +193,7 @@ pub fn renderTransportResponseWithStreams(
         if (view.result_payload) |payload| {
             try out.writeAll(payload);
             if (payload.len == 0 or payload[payload.len - 1] != '\n') {
-                try out.writeAll("\n");
+                try out.writeAll("\r\n");
             }
         }
         return false;
@@ -261,7 +261,7 @@ pub fn renderTransportResponseWithStreams(
                         for (0..w + 2) |_| _ = out_writer.writeAll("-") catch {};
                         _ = out_writer.writeAll("+") catch {};
                     }
-                    _ = out_writer.writeAll("\n") catch {};
+                    _ = out_writer.writeAll("\r\n") catch {};
                 }
             }.f;
 
@@ -275,7 +275,7 @@ pub fn renderTransportResponseWithStreams(
                 for (col.name.len..width) |_| _ = out.writeAll(" ") catch {};
                 _ = out.writeAll(" |") catch {};
             }
-            _ = out.writeAll("\n") catch {};
+            _ = out.writeAll("\r\n") catch {};
 
             printSeparator(out, col_widths.items);
 
@@ -288,16 +288,16 @@ pub fn renderTransportResponseWithStreams(
                     for (cell.len..width) |_| _ = out.writeAll(" ") catch {};
                     _ = out.writeAll(" |") catch {};
                 }
-                _ = out.writeAll("\n") catch {};
+                _ = out.writeAll("\r\n") catch {};
             }
 
             printSeparator(out, col_widths.items);
 
             const row_count = rows.items.len;
             if (row_count == 1) {
-                _ = out.writeAll("(1 row)\n") catch {};
+                _ = out.writeAll("(1 row)\r\n") catch {};
             } else {
-                const count_str = std.fmt.allocPrint(allocator, "({d} rows)\n", .{row_count}) catch "(? rows)\n";
+                const count_str = std.fmt.allocPrint(allocator, "({d} rows)\r\n", .{row_count}) catch "(? rows)\r\n";
                 defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
                 _ = out.writeAll(count_str) catch {};
             }
