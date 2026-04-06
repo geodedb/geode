@@ -47,12 +47,29 @@ pub const NodeOperation = dist_schema.NodeOperation;
 pub const EdgeOperation = dist_schema.EdgeOperation;
 
 /// Undo log entry for rollback
+// CANARY: REQ=REQ-DIST-2PC-UNDO-001; FEATURE="2PC Undo Pre-Image Storage"; ASPECT=AtomicRollback; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
 pub const UndoEntry = struct {
     operation: Operation,
     timestamp: i64,
+    /// Serialized properties captured before the mutation (for UPDATE/DELETE undo).
+    /// Stored as MapEntry slices so restore can call applyMapEntriesToNode/Edge directly.
+    pre_image_props: ?std.ArrayListUnmanaged(proto_schema.MapEntry) = null,
+    /// Labels present on the node before deletion (for DELETE undo node re-creation).
+    pre_image_labels: ?std.ArrayListUnmanaged([]const u8) = null,
+    /// Graph name for DELETE undo node/edge re-creation.
+    pre_image_graph_name: []const u8 = "",
 
     pub fn deinit(self: *UndoEntry, allocator: Allocator) void {
         self.operation.deinit(allocator);
+        if (self.pre_image_props) |*props| {
+            for (props.items) |*entry| entry.deinit(allocator);
+            props.deinit(allocator);
+        }
+        if (self.pre_image_labels) |*labels| {
+            for (labels.items) |lbl| allocator.free(lbl);
+            labels.deinit(allocator);
+        }
+        if (self.pre_image_graph_name.len > 0) allocator.free(self.pre_image_graph_name);
     }
 };
 
@@ -151,15 +168,20 @@ pub const TwoPhaseTransport = struct {
     }
 
     /// Get or create a connection to endpoint (format: "host:port")
+    // PERF-D002: Narrow the mutex window so the 5-second QUIC handshake does not
+    // block all other 2PC traffic.  Pattern mirrors PERF-D001 in network_transport.
     pub fn getConnection(self: *TwoPhaseTransport, endpoint: []const u8) !*ConnectionEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (self.connections.getPtr(endpoint)) |entry| {
-            entry.last_used = std.time.timestamp();
-            return entry;
+        // Phase 1: Check cache under lock (fast path).
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            if (self.connections.getPtr(endpoint)) |entry| {
+                entry.last_used = std.time.timestamp();
+                return entry;
+            }
         }
 
+        // Phase 2: Connect + handshake WITHOUT holding the mutex.
         // Parse endpoint into host and port
         // GAP-0144: Secure TLS connections for 2PC coordination
         // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
@@ -174,7 +196,9 @@ pub const TwoPhaseTransport = struct {
             log.warn("SECURITY WARNING: 2PC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
         }
 
-        // Create new connection with TLS verification by default
+        // Create new connection with TLS verification by default.
+        // The mutex is NOT held here — connectInsecure + waitForHandshake can take
+        // up to 5 seconds and must not stall unrelated 2PC participants.
         var client = quic.QuicClient.init(self.allocator);
         client.connectInsecure(host, port, allow_insecure) catch |err| {
             log.err("2PC transport failed to connect", &.{
@@ -184,7 +208,6 @@ pub const TwoPhaseTransport = struct {
             return error.ConnectionFailed;
         };
 
-        // Wait for handshake
         client.waitForHandshake(5) catch |err| {
             client.deinit();
             log.err("2PC transport handshake failed", &.{
@@ -194,15 +217,31 @@ pub const TwoPhaseTransport = struct {
             return error.HandshakeFailed;
         };
 
-        const entry = ConnectionEntry{
-            .client = client,
-            .stream = null,
-            .last_used = std.time.timestamp(),
-            .endpoint = try self.allocator.dupe(u8, endpoint),
-        };
+        // Phase 3: Store the new connection under lock.
+        // A concurrent caller may have raced us and already inserted an entry for
+        // this endpoint.  In that case we discard our freshly-created client and
+        // return the existing entry to avoid leaking a connection.
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
 
-        try self.connections.put(endpoint, entry);
-        return self.connections.getPtr(endpoint).?;
+            if (self.connections.getPtr(endpoint)) |existing| {
+                // Another goroutine won the race; clean up ours and use theirs.
+                client.deinit();
+                existing.last_used = std.time.timestamp();
+                return existing;
+            }
+
+            const entry = ConnectionEntry{
+                .client = client,
+                .stream = null,
+                .last_used = std.time.timestamp(),
+                .endpoint = try self.allocator.dupe(u8, endpoint),
+            };
+
+            try self.connections.put(endpoint, entry);
+            return self.connections.getPtr(endpoint).?;
+        }
     }
 
     // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
@@ -388,10 +427,72 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     return protobuf.decode(TwoPhaseResponse, &reader, allocator);
 }
 
+// CANARY: REQ=REQ-DIST-2PC-UNDO-002; FEATURE="2PC Undo Pre-Image Capture"; ASPECT=NodeCapture; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+/// Capture a node's current properties and labels into pre-image fields on an UndoEntry.
+/// Called before applying an UPDATE or DELETE operation so the undo can restore state.
+pub fn captureNodePreImage(allocator: Allocator, store: *graph_store.GraphStore, node_id: u64, entry: *UndoEntry) !void {
+    const node = store.getNodePtr(node_id) orelse return;
+
+    // Capture properties as MapEntry list
+    var props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    errdefer {
+        for (props.items) |*e| e.deinit(allocator);
+        props.deinit(allocator);
+    }
+    var prop_it = node.properties.iterator();
+    while (prop_it.next()) |kv| {
+        const key = try allocator.dupe(u8, kv.key_ptr.*);
+        errdefer allocator.free(key);
+        var proto_val = try value_convert.propertyValueToProto(allocator, kv.value_ptr.*);
+        errdefer proto_val.deinit(allocator);
+        try props.append(allocator, .{ .key = key, .value = proto_val });
+    }
+    entry.pre_image_props = props;
+
+    // Capture labels (for DELETE undo re-creation)
+    var labels = std.ArrayListUnmanaged([]const u8){};
+    errdefer {
+        for (labels.items) |lbl| allocator.free(lbl);
+        labels.deinit(allocator);
+    }
+    for (node.labels) |lbl| {
+        try labels.append(allocator, try allocator.dupe(u8, lbl));
+    }
+    entry.pre_image_labels = labels;
+
+    // Capture graph name
+    entry.pre_image_graph_name = try allocator.dupe(u8, node.graph_name);
+}
+
+// CANARY: REQ=REQ-DIST-2PC-UNDO-003; FEATURE="2PC Undo Pre-Image Capture"; ASPECT=EdgeCapture; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+/// Capture an edge's current properties into pre-image fields on an UndoEntry.
+/// Called before applying an UPDATE or DELETE operation so the undo can restore state.
+pub fn captureEdgePreImage(allocator: Allocator, store: *graph_store.GraphStore, edge_id: u64, entry: *UndoEntry) !void {
+    const edge = store.getEdgePtr(edge_id) orelse return;
+
+    var props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    errdefer {
+        for (props.items) |*e| e.deinit(allocator);
+        props.deinit(allocator);
+    }
+    var prop_it = edge.properties.iterator();
+    while (prop_it.next()) |kv| {
+        const key = try allocator.dupe(u8, kv.key_ptr.*);
+        errdefer allocator.free(key);
+        var proto_val = try value_convert.propertyValueToProto(allocator, kv.value_ptr.*);
+        errdefer proto_val.deinit(allocator);
+        try props.append(allocator, .{ .key = key, .value = proto_val });
+    }
+    entry.pre_image_props = props;
+
+    entry.pre_image_graph_name = try allocator.dupe(u8, edge.graph_name);
+}
+
+// CANARY: REQ=REQ-DIST-2PC-UNDO-004; FEATURE="2PC Undo Apply"; ASPECT=AtomicRollback; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
 /// Apply an undo operation to rollback a change.
-/// For CREATE operations, this deletes the created node/edge.
-/// For UPDATE/DELETE operations, pre-image restoration is not yet
-/// implemented so only a warning is logged.
+/// - CREATE: deletes the created node/edge.
+/// - UPDATE: restores properties from the captured pre-image.
+/// - DELETE: re-creates the node/edge from the captured pre-image.
 fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
     const gs = store orelse {
         log.warn("2PC undo skipped: no graph store available", &.{});
@@ -407,14 +508,62 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                 gs.deleteNode(node_op.node_id);
             },
             .UPDATE => {
-                log.warn("2PC undo for UPDATE requires pre-image storage (not yet implemented)", &.{
+                const props = entry.pre_image_props orelse {
+                    log.warn("2PC undo for node UPDATE: no pre-image captured, skipping restore", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                    });
+                    return;
+                };
+                log.info("2PC undo: restoring node properties from pre-image", &.{
                     Attr.int("node_id", @intCast(node_op.node_id)),
+                    Attr.int("prop_count", @intCast(props.items.len)),
                 });
+                // Use a scratch allocator for transient proto→PropertyValue conversions.
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const scratch = gpa.allocator();
+                value_convert.applyMapEntriesToNode(gs, scratch, node_op.node_id, props.items) catch |err| {
+                    log.err("2PC undo: failed to restore node properties", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             .DELETE => {
-                log.warn("2PC undo for DELETE requires pre-image storage (not yet implemented)", &.{
+                const props = entry.pre_image_props orelse {
+                    log.warn("2PC undo for node DELETE: no pre-image captured, cannot re-create node", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                    });
+                    return;
+                };
+                const graph_name = if (entry.pre_image_graph_name.len > 0)
+                    entry.pre_image_graph_name
+                else
+                    graph_store.DEFAULT_GRAPH_NAME;
+
+                // Re-create the node with its original labels
+                const labels: []const []const u8 = if (entry.pre_image_labels) |lbls| lbls.items else &.{};
+                log.info("2PC undo: re-creating deleted node", &.{
                     Attr.int("node_id", @intCast(node_op.node_id)),
+                    Attr.int("label_count", @intCast(labels.len)),
+                    Attr.int("prop_count", @intCast(props.items.len)),
                 });
+                gs.createNodeWithId(node_op.node_id, labels, graph_name) catch |err| {
+                    log.err("2PC undo: failed to re-create deleted node", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return;
+                };
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const scratch = gpa.allocator();
+                value_convert.applyMapEntriesToNode(gs, scratch, node_op.node_id, props.items) catch |err| {
+                    log.err("2PC undo: failed to restore node properties after re-creation", &.{
+                        Attr.int("node_id", @intCast(node_op.node_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             else => {},
         },
@@ -426,14 +575,63 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                 gs.deleteEdge(edge_op.edge_id);
             },
             .UPDATE => {
-                log.warn("2PC undo for UPDATE requires pre-image storage (not yet implemented)", &.{
+                const props = entry.pre_image_props orelse {
+                    log.warn("2PC undo for edge UPDATE: no pre-image captured, skipping restore", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                    });
+                    return;
+                };
+                log.info("2PC undo: restoring edge properties from pre-image", &.{
                     Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                    Attr.int("prop_count", @intCast(props.items.len)),
                 });
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const scratch = gpa.allocator();
+                value_convert.applyMapEntriesToEdge(gs, scratch, edge_op.edge_id, props.items) catch |err| {
+                    log.err("2PC undo: failed to restore edge properties", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             .DELETE => {
-                log.warn("2PC undo for DELETE requires pre-image storage (not yet implemented)", &.{
+                const props = entry.pre_image_props orelse {
+                    log.warn("2PC undo for edge DELETE: no pre-image captured, cannot re-create edge", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                    });
+                    return;
+                };
+                const graph_name = if (entry.pre_image_graph_name.len > 0)
+                    entry.pre_image_graph_name
+                else
+                    graph_store.DEFAULT_GRAPH_NAME;
+                log.info("2PC undo: re-creating deleted edge", &.{
                     Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                    Attr.int("prop_count", @intCast(props.items.len)),
                 });
+                gs.createEdgeWithId(
+                    edge_op.edge_id,
+                    edge_op.source_id,
+                    edge_op.target_id,
+                    edge_op.edge_type,
+                    graph_name,
+                ) catch |err| {
+                    log.err("2PC undo: failed to re-create deleted edge", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                    return;
+                };
+                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                defer _ = gpa.deinit();
+                const scratch = gpa.allocator();
+                value_convert.applyMapEntriesToEdge(gs, scratch, edge_op.edge_id, props.items) catch |err| {
+                    log.err("2PC undo: failed to restore edge properties after re-creation", &.{
+                        Attr.int("edge_id", @intCast(edge_op.edge_id)),
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             },
             else => {},
         },
@@ -1579,4 +1777,191 @@ test "TwoPCCoordinator.handleMessage rejects zero nonce" {
 
     const r = coord.handleMessage("remote-node", .PREPARE, payload);
     try testing.expectError(error.ReplayDetected, r);
+}
+
+// CANARY: REQ=REQ-DIST-2PC-UNDO-005; FEATURE="2PC Undo Pre-Image Tests"; ASPECT=TestCoverage; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "applyUndoOperation UPDATE node restores pre-image properties" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create a node and set an initial property (pre-image state).
+    try store.createNodeWithId(200, &.{"Person"}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.setNodeProperty(200, "name", .{ .String = "Alice" });
+    try store.setNodeProperty(200, "age", .{ .Int = 30 });
+
+    // Simulate that the operation mutated the properties (post-image in store now).
+    try store.setNodeProperty(200, "name", .{ .String = "AliceModified" });
+    try store.setNodeProperty(200, "age", .{ .Int = 99 });
+
+    // Build an undo entry for UPDATE with pre-image = original values.
+    var pre_props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    const name_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Alice", .kind = .STRING } } };
+    const age_val = proto_schema.Value{ .kind = .{ .int_val = .{ .value = 30, .kind = .INT } } };
+    try pre_props.append(testing.allocator, .{ .key = "name", .value = name_val });
+    try pre_props.append(testing.allocator, .{ .key = "age", .value = age_val });
+
+    var undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .UPDATE,
+                .node_id = 200,
+                .label = "Person",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+        .pre_image_props = pre_props,
+    };
+    defer undo.deinit(testing.allocator);
+
+    applyUndoOperation(&store, undo);
+
+    // Properties should be restored to pre-image values.
+    const name_pv = store.getNodeProperty(200, "name") orelse return error.PropertyMissing;
+    try testing.expectEqualStrings("Alice", name_pv.String);
+    const age_pv = store.getNodeProperty(200, "age") orelse return error.PropertyMissing;
+    try testing.expectEqual(@as(i64, 30), age_pv.Int);
+}
+
+test "applyUndoOperation DELETE node re-creates node from pre-image" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create a node, set properties, capture pre-image, then delete.
+    try store.createNodeWithId(201, &.{"Car"}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.setNodeProperty(201, "model", .{ .String = "Sedan" });
+
+    // Build undo entry for DELETE with pre-image.
+    var pre_props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    const model_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Sedan", .kind = .STRING } } };
+    try pre_props.append(testing.allocator, .{ .key = "model", .value = model_val });
+
+    var pre_labels = std.ArrayListUnmanaged([]const u8){};
+    try pre_labels.append(testing.allocator, try testing.allocator.dupe(u8, "Car"));
+
+    var undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .DELETE,
+                .node_id = 201,
+                .label = "Car",
+                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+        .pre_image_props = pre_props,
+        .pre_image_labels = pre_labels,
+        .pre_image_graph_name = try testing.allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
+    };
+    defer undo.deinit(testing.allocator);
+
+    // Delete the node to simulate the operation that needs to be undone.
+    store.deleteNode(201);
+    try testing.expect(store.getNodePtr(201) == null);
+
+    // Apply undo -- should re-create the node.
+    applyUndoOperation(&store, undo);
+
+    try testing.expect(store.getNodePtr(201) != null);
+    const model_pv = store.getNodeProperty(201, "model") orelse return error.PropertyMissing;
+    try testing.expectEqualStrings("Sedan", model_pv.String);
+}
+
+test "captureNodePreImage captures properties and labels" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(300, &.{"Widget"}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.setNodeProperty(300, "color", .{ .String = "blue" });
+    try store.setNodeProperty(300, "count", .{ .Int = 5 });
+
+    var undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .UPDATE,
+                .node_id = 300,
+                .label = "Widget",
+                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+    };
+    defer undo.deinit(testing.allocator);
+
+    try captureNodePreImage(testing.allocator, &store, 300, &undo);
+
+    // Pre-image should have 2 properties captured.
+    try testing.expect(undo.pre_image_props != null);
+    try testing.expectEqual(@as(usize, 2), undo.pre_image_props.?.items.len);
+
+    // Labels should be captured.
+    try testing.expect(undo.pre_image_labels != null);
+    try testing.expectEqual(@as(usize, 1), undo.pre_image_labels.?.items.len);
+    try testing.expectEqualStrings("Widget", undo.pre_image_labels.?.items[0]);
+
+    // Graph name should be captured.
+    try testing.expectEqualStrings(graph_store.DEFAULT_GRAPH_NAME, undo.pre_image_graph_name);
+}
+
+test "captureEdgePreImage captures edge properties" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(1, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.createNodeWithId(2, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.createEdgeWithId(400, 1, 2, "LIKES", graph_store.DEFAULT_GRAPH_NAME);
+    try store.setEdgeProperty(400, "since", .{ .Int = 2020 });
+
+    var undo = UndoEntry{
+        .operation = .{
+            .edge_op = .{
+                .op_type = .UPDATE,
+                .edge_id = 400,
+                .source_id = 1,
+                .target_id = 2,
+                .edge_type = "LIKES",
+                .graph_name = graph_store.DEFAULT_GRAPH_NAME,
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+    };
+    defer undo.deinit(testing.allocator);
+
+    try captureEdgePreImage(testing.allocator, &store, 400, &undo);
+
+    try testing.expect(undo.pre_image_props != null);
+    try testing.expectEqual(@as(usize, 1), undo.pre_image_props.?.items.len);
+    try testing.expectEqualStrings("since", undo.pre_image_props.?.items[0].key);
+}
+
+test "applyUndoOperation UPDATE node without pre-image logs warning and is no-op" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    try store.createNodeWithId(500, &.{}, graph_store.DEFAULT_GRAPH_NAME);
+    try store.setNodeProperty(500, "x", .{ .Int = 42 });
+
+    const undo = UndoEntry{
+        .operation = .{
+            .node_op = .{
+                .op_type = .UPDATE,
+                .node_id = 500,
+                .label = "",
+                .graph_name = "",
+                .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
+            },
+        },
+        .timestamp = std.time.timestamp(),
+        // No pre_image_props — should log warning and leave property intact.
+    };
+
+    applyUndoOperation(&store, undo);
+
+    // Property should be unchanged since no pre-image was available.
+    const x_pv = store.getNodeProperty(500, "x") orelse return error.PropertyMissing;
+    try testing.expectEqual(@as(i64, 42), x_pv.Int);
 }

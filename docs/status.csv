@@ -639,6 +639,11 @@ REQ-DIST-2PC-003,Two-Phase Commit Messaging,Abort,EXEMPT,,,distributed,2026-01-0
 REQ-DIST-2PC-MSG-001,Two-Phase Commit Message Format,Protocol,EXEMPT,,,distributed,2026-01-08,src/distributed/twophase.zig
 REQ-DIST-2PC-TRANSPORT-001,Two-Phase Commit Network Transport,QUICMessaging,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig
 REQ-DIST-2PC-UNDO-001,2PC Undo Operations,CreateReversal,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-replication-and-2pc-undo.md
+REQ-DIST-2PC-UNDO-001,2PC Undo Pre-Image Storage,AtomicRollback,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
+REQ-DIST-2PC-UNDO-002,2PC Undo Pre-Image Capture,NodeCapture,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
+REQ-DIST-2PC-UNDO-003,2PC Undo Pre-Image Capture,EdgeCapture,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
+REQ-DIST-2PC-UNDO-004,2PC Undo Apply,AtomicRollback,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
+REQ-DIST-2PC-UNDO-005,2PC Undo Pre-Image Tests,TestCoverage,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,TESTED,,,distributed,2026-04-05,src/graph_store.zig
 REQ-DIST-CLUSTER-002,ClusterReplicationSnapshot,Serialization,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-replication-and-2pc-undo.md
