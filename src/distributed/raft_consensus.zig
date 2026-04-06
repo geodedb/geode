@@ -132,6 +132,8 @@ pub const Statistics = struct {
     entries_appended: u64,
     entries_committed: u64,
     entries_applied: u64,
+    // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ApplyErrorCount; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+    apply_errors: u64,
     snapshots_sent: u64,
     snapshots_received: u64,
 };
@@ -965,7 +967,15 @@ pub const RaftNode = struct {
             if (entry.kind == .normal and entry.data.len > 0) {
                 if (self.apply_callback) |callback| {
                     const cmd = deserializeCommand(entry.data) catch Command{ .write = entry.data };
-                    _ = callback(self.allocator, cmd) catch {};
+                    // CANARY: REQ=QUAL-D005; FEATURE="Raft Apply Callback Error Visibility"; ASPECT=ErrorLogging; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+                    _ = callback(self.allocator, cmd) catch |err| {
+                        log.err("Raft apply_callback failed — committed entry not applied", &.{
+                            Attr.string("error", @errorName(err)),
+                            Attr.uint("entry_index", entry.index),
+                            Attr.uint("term", self.current_term),
+                        });
+                        self.stats.apply_errors += 1;
+                    };
                 }
             }
             self.stats.entries_applied += 1;
