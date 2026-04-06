@@ -14,10 +14,12 @@ Geode is a **feature-complete graph database** with strong compliance and active
 
 ### Known Limitations
 
-- **Multi-tenancy isolation is partial**: Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress
-- **Distributed module**: Activates when `GEODE_CLUSTER_TOKEN` is set; Raft consensus, 2PC transactions, federation queries, and sharding are functional
-- **Auth defaults**: Authentication is enabled by default but must be configured with credentials before deployment
-- **CANARY coverage gap**: 14.2% of CANARY markers remain at IMPL status (implemented but not yet fully tested)
+- **Multi-tenancy query isolation NOT enforced (GAP-0509, Critical)**: `getAllNodesForTenant()` exists but is dead code — the query execution engine (`src/execution.zig`, `src/eval.zig`) calls `getAllNodes()` which iterates all nodes across all tenants. Connection-level tenant quotas work, but query-level data isolation does not. Do NOT deploy multi-tenant without addressing this.
+- **RLS supports label-only filtering (GAP-0510, High)**: The expression-based RLS engine (`rls_core.zig`, `rls_enhanced.zig` — 3,924 lines) is implemented but not wired to production code paths. Only the label-based post-filter (`rls_filter.zig`) runs. Property-based, temporal, and IP-based RLS policies documented in ADVANCED_SECURITY_FEATURES are non-functional.
+- **Distributed module has partial test coverage (GAP-0513, High)**: 10 of ~20 distributed files (3,540 lines including sharding.zig, query_transport.zig, merge_strategies.zig) have zero unit tests. Activates when `GEODE_CLUSTER_TOKEN` is set.
+- **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment
+- **CANARY coverage gap**: ~15% of CANARY markers remain at IMPL status (implemented but not yet fully tested)
+- **Full audit report**: See [docs/FULL_AUDIT_2026_04_06.md](docs/FULL_AUDIT_2026_04_06.md) for comprehensive findings
 
 ## 📚 Documentation Structure
 
@@ -312,7 +314,7 @@ Never hold a higher-tier mutex while acquiring a lower-tier one. Thread-local at
 
 **ALL HIGH/MEDIUM/LOW PRIORITY TODO ITEMS COMPLETED**
 
-Based on [TODO.md](docs/TODO.md), all major development priorities have been implemented with comprehensive testing and documentation. The project is **DEVELOPMENT READY** -- all planned features are implemented, but operators should review the Known Limitations section above before deploying to production.
+Based on [TODO.md](docs/TODO.md), all major development priorities have been implemented with comprehensive testing and documentation. The project is **DEVELOPMENT READY (single-tenant)** -- core features are implemented, but multi-tenancy query isolation and expression RLS are not yet wired. Operators MUST review the Known Limitations section above before deploying.
 
 **Multi-tenancy caveat:** Multi-tenancy isolation is partial. Graph-level isolation and FLE per-tenant keys work, but tenant_id enforcement at the query execution layer, per-tenant quotas, and full RLS expression coverage are still in progress. See [FEATURES_OVERVIEW.md](docs/FEATURES_OVERVIEW.md) for details.
 
@@ -332,7 +334,7 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been imp
 **See the complete documentation in [`./docs/`](docs/)** for detailed technical specifications, API references, performance analysis, and implementation guides.
 
 *Last Updated: April 2026*
-*Status: DEVELOPMENT READY - 100% GQL compliance, 97.4% test coverage, all planned features implemented (see Known Limitations)*
+*Status: DEVELOPMENT READY (single-tenant) - 100% GQL compliance, 97.4% test pass rate (see Known Limitations for multi-tenant and distributed gaps)*
 *License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
 
 ## Important Development Guidelines

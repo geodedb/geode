@@ -13,6 +13,12 @@ pub fn prependGraphContextIfNeeded(
 ) !?[]u8 {
     const graph_name = graph orelse return null;
     if (startsWithUseGraph(query_text)) return null;
+    // Defense-in-depth: validate graph name is a safe identifier [a-zA-Z_][a-zA-Z0-9_]*
+    if (graph_name.len == 0) return error.InvalidGraphName;
+    if (!std.ascii.isAlphabetic(graph_name[0]) and graph_name[0] != '_') return error.InvalidGraphName;
+    for (graph_name[1..]) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_') return error.InvalidGraphName;
+    }
     return try std.fmt.allocPrint(allocator, "USE GRAPH {s}; {s}", .{ graph_name, query_text });
 }
 
