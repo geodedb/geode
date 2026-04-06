@@ -647,8 +647,11 @@ REQ-DIST-CLUSTER-004,DistributedCluster,Topology,IMPL,,,distributed,2026-04-01,s
 REQ-DIST-CMP-001,Distributed Value Comparison,Distributed,TESTED,,,protocol,2026-02-03,src/protocol.zig
 REQ-DIST-CONN-001,Distributed Query Connection,ConnectionInit,IMPL,,,distributed,2026-04-05,src/distributed/query_transport.zig
 REQ-DIST-FED-PARALLEL-001,Parallel Federation Ops,RemoteExecution,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
+REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-06,src/distributed/federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-001,Distributed Federation Merge,CloneOrderKeys,TESTED,,,dist,2026-04-06,tests/test_federation_merge.zig
+REQ-DIST-FEDERATION-MERGE-002,Distributed Federation Merge,CloneOrderDirs,TESTED,,,dist,2026-04-06,src/distributed/federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-002,Distributed Federation Merge,CloneOrderDirs,TESTED,,,dist,2026-04-06,tests/test_federation_merge.zig
+REQ-DIST-FEDERATION-MERGE-003,Distributed Federation Merge,HashRowDeterminism,TESTED,,,dist,2026-04-06,src/distributed/federation_merge.zig
 REQ-DIST-FEDERATION-MERGE-003,Distributed Federation Merge,HashRowDeterminism,TESTED,,,dist,2026-04-06,tests/test_federation_merge.zig
 REQ-DIST-FRAG-001,Fragment Serialization,Core,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_transport.zig
 REQ-DIST-FRAG-002,Fragment Deserialization,Core,IMPL,,,distributed,2026-04-05,src/distributed/enhanced_query_transport.zig

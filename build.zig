@@ -1235,6 +1235,17 @@ pub fn build(b: *std.Build) void {
     const run_query_transport_registry_tests = b.addRunArtifact(query_transport_registry_tests);
     test_step.dependOn(&run_query_transport_registry_tests.step);
 
+    // GAP-0513: federation_merge pure-helper unit tests (standalone, no distributed module import)
+    const federation_merge_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_federation_merge.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_federation_merge_tests = b.addRunArtifact(federation_merge_tests);
+    test_step.dependOn(&run_federation_merge_tests.step);
+
     // Raft consensus PersistentStorage file-backed round-trip tests
     const raft_ps_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),

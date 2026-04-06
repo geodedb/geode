@@ -213,10 +213,70 @@ pub fn readProtoMessage(
 /// Hash a binding row into an allocated hex string for use as a deduplication key.
 /// The hash covers all column values by their raw byte representation.
 pub fn hashRow(allocator: std.mem.Allocator, row: protocol.BindingRow) ![]u8 {
-    var hasher = std.hash_map.DefaultHasher.init();
+    var hasher = std.hash.Wyhash.init(0);
     for (row.cols) |binding| {
         hasher.update(std.mem.asBytes(&binding));
     }
     const hash_value = hasher.final();
     return try std.fmt.allocPrint(allocator, "{x}", .{hash_value});
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests — pure helpers only (no QUIC stream or protobuf I/O)
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-001; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderKeys; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+test "cloneOrderKeys: deep-clone 2-element slice, values match and pointers differ" {
+    const allocator = std.testing.allocator;
+
+    const orig = [_][]const u8{ "alpha", "beta" };
+    const cloned = try cloneOrderKeys(allocator, &orig);
+    defer {
+        for (cloned) |k| allocator.free(k);
+        allocator.free(cloned);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), cloned.len);
+    try std.testing.expectEqualStrings("alpha", cloned[0]);
+    try std.testing.expectEqualStrings("beta", cloned[1]);
+
+    // Pointers must differ — these are independent heap copies.
+    try std.testing.expect(orig[0].ptr != cloned[0].ptr);
+    try std.testing.expect(orig[1].ptr != cloned[1].ptr);
+}
+
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-002; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderDirs; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+test "cloneOrderDirs: copy 2-element bool slice, values match" {
+    const allocator = std.testing.allocator;
+
+    const orig = [_]bool{ true, false };
+    const cloned = try cloneOrderDirs(allocator, &orig);
+    defer allocator.free(cloned);
+
+    try std.testing.expectEqual(@as(usize, 2), cloned.len);
+    try std.testing.expectEqual(true, cloned[0]);
+    try std.testing.expectEqual(false, cloned[1]);
+}
+
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-003; FEATURE="Distributed Federation Merge"; ASPECT=HashRowDeterminism; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+test "hashRow: same row produces same hash, different row produces different hash" {
+    const allocator = std.testing.allocator;
+
+    const cols_a = [_]protocol.BindingValue{.{ .Int = 42 }};
+    const cols_b = [_]protocol.BindingValue{.{ .Int = 99 }};
+
+    const row_a = protocol.BindingRow{ .cols = &cols_a };
+    const row_b = protocol.BindingRow{ .cols = &cols_b };
+
+    const h1 = try hashRow(allocator, row_a);
+    defer allocator.free(h1);
+    const h2 = try hashRow(allocator, row_a);
+    defer allocator.free(h2);
+    const h3 = try hashRow(allocator, row_b);
+    defer allocator.free(h3);
+
+    // Determinism: same row must hash identically.
+    try std.testing.expectEqualStrings(h1, h2);
+    // Discrimination: different rows must produce different hashes.
+    try std.testing.expect(!std.mem.eql(u8, h1, h3));
 }
