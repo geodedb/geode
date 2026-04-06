@@ -1695,3 +1695,71 @@ These are open bugs that may relate to requirement violations but are tracked as
 - **GAP-0253 (ECDSA):** Closed 2026-03-13 — P256/P384 sign/verify implemented in `cryptographic.zig`
 - **60 security findings** from previous audit: 47 closed/implemented, 6 closed (won't-do by policy), all resolved
 - See [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) for full resolved history
+
+---
+
+## Bug Report: Connection Pool Stale Transaction State (2026-04-06)
+
+### GAP-0510: Pool returns connections with stale server-side transactions after QUIC failure
+
+- **Category:** Reliability / Connection Pool
+- **Severity:** High (P1)
+- **Component:** `geode.Pool` / QUIC transport / `database/sql` driver
+- **Reporter:** devnw.dev/msft topology pipeline (parallel collectors + Geode flush)
+- **Date:** 2026-04-06
+
+#### Symptoms
+
+When a QUIC connection drops mid-transaction (e.g., `driver: bad connection`), subsequent `BeginTx()` calls on pool connections return:
+
+```
+batch begin tx: geode: transaction already in progress
+```
+
+This cascades: a single "bad connection" event triggers 200+ consecutive "transaction already in progress" failures across the pool, even with retry and exponential backoff. The stale transactions are server-side state that the client's deferred `tx.Rollback()` never clears because the underlying QUIC stream is gone.
+
+#### Reproduction
+
+1. Open a `geode.Pool` with `MaxOpenConns=8`
+2. Run a workload that executes chunked transactions in parallel (8 goroutines, each doing `pool.BeginTx` + N statements + `tx.Commit`)
+3. Induce a QUIC connection failure mid-transaction (network blip, server GC pause, or large batch exceeding stream timeout)
+4. Observe that ALL subsequent `BeginTx` calls fail with "transaction already in progress" until the pool recycles connections
+
+#### Evidence (from topology-metrics.jsonl)
+
+```json
+{"source":"geode","op":"pipeline_exec","records":61546,"error":"statement 1: driver: bad connection"}
+{"source":"geode","op":"pipeline_exec","records":308,"error":"batch begin tx: geode: transaction already in progress"}
+{"source":"geode","op":"pipeline_exec","records":2,"error":"batch begin tx: geode: transaction already in progress"}
+// ... 234 total "transaction already in progress" errors following 1 "bad connection"
+```
+
+#### Root Cause Analysis
+
+1. Goroutine A executes `pool.BeginTx()` -- gets connection C1, sends `BEGIN` to server
+2. Server acknowledges, connection C1 now has an active transaction
+3. Goroutine A executes statements; QUIC stream fails mid-way -- returns `driver: bad connection`
+4. Goroutine A's deferred `tx.Rollback()` fails silently (QUIC stream is dead, ROLLBACK never reaches server)
+5. Connection C1 is returned to pool (or a new connection is opened on the same QUIC session)
+6. Server still holds the active transaction on that session/connection
+7. Goroutine B gets the connection from pool, calls `BeginTx()` -- server rejects with "transaction already in progress"
+
+#### Workarounds Attempted (client-side)
+
+1. **`pool.DB().Conn(ctx)` per worker** -- did NOT fix; `sql.Conn` still draws from the same pool
+2. **ROLLBACK before retry** -- partially helps; `conn.ExecContext(ctx, "ROLLBACK")` before `BeginTx` clears the stale transaction, but only if the connection is reachable
+3. **Increased pool size** (`MaxOpenConns=16`) -- reduces frequency but doesn't eliminate
+4. **Watermark advancement on failure** -- prevents unbounded retry growth (flush watermarks advance even on failed flushes since MERGE is idempotent)
+
+#### Recommended Server/Driver Fix
+
+1. **Connection health check on pool checkout:** Before returning a pooled connection, send a lightweight probe (e.g., `RETURN 1`) and discard connections that fail or report active transactions
+2. **Auto-ROLLBACK on connection reuse:** When the driver detects a `BeginTx` on a connection that already has an active transaction, automatically send `ROLLBACK` before the `BEGIN`
+3. **QUIC session invalidation:** When a QUIC stream fails, mark the entire session as unhealthy so the pool discards all connections on that session rather than reusing them
+4. **`sql.Driver.ResetSession` implementation:** Implement the `database/sql/driver.SessionResetter` interface so `database/sql` can call `ResetSession()` on checkout, which should send a `ROLLBACK` if a transaction is active
+
+#### Impact
+
+- Large batch MERGE workloads (10k+ statements) are unreliable over QUIC
+- Parallel workers amplify the failure: one bad connection poisons the entire pool
+- The `updateSnapshot` re-MERGE (run at end of topology collection) acts as a recovery mechanism since MERGE is idempotent, but incremental flushes during collection are lost

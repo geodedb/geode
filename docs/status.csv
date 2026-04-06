@@ -3583,6 +3583,7 @@ REQ-SEC-RLS-WIRE-004,RLS Query Enforcement,ServerInit,IMPL,,,security,2026-03-26
 REQ-SEC-RLS-WIRE-005,RLS Query Enforcement,UnitTests,IMPL,,,security,2026-03-26,build.zig
 REQ-SEC-RLS-WIRE-006,RLS Query Enforcement,ExecutionContext,IMPL,,,security,2026-03-26,src/execution.zig
 REQ-SEC-RLS-WIRE-007,RLS Property Filtering,SharedTypes,TESTED,,,security,2026-04-01,src/security/rls_types.zig
+REQ-SEC-RLS-WIRE-007,RLS Query Enforcement,SecurityContext,IMPL,,,security,2026-04-06,docs/superpowers/plans/2026-04-06-gap-0510-rls-expression-wiring.md
 REQ-SEC-RLS-WIRE-007,RLS Query Enforcement,SecurityContext,IMPL,,,security,2026-04-06,src/execution.zig
 REQ-SEC-RLS-WIRE-008,RLS Property Filtering,PolicyCRUD,TESTED,,,security,2026-04-01,src/security/rls_types.zig
 REQ-SEC-RLS-WIRE-010,RLS Expression Wiring,ValueBridge,TESTED,,,security,2026-04-06,build.zig
