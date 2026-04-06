@@ -4634,9 +4634,10 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
             sync_fn();
         }
         if (g_wal_checkpoint_fn) |checkpoint_fn| {
-            g_store_rwlock.lockShared();
-            defer g_store_rwlock.unlockShared();
+            // P1: Use per-graph read lock for final WAL checkpoint; fall back to global.
+            const ckpt_handle = acquireGraphReadLock(DEFAULT_GRAPH_NAME);
             checkpoint_fn(store_ptr);
+            releaseGraphLock(ckpt_handle);
         } else {
             persistSplitPhase(store_ptr);
         }
@@ -4663,18 +4664,29 @@ fn persistenceLoop() void {
             // This prevents unbounded WAL growth.
             const needs_checkpoint = if (g_wal_needs_checkpoint_fn) |needs_fn| needs_fn() else false;
             if (needs_checkpoint) {
-                g_store_rwlock.lockShared();
-                defer g_store_rwlock.unlockShared();
-                if (g_wal_checkpoint_fn) |checkpoint_fn| {
-                    checkpoint_fn(store_ptr);
-                }
-                // Also checkpoint per-graph storage on WAL checkpoint ticks.
+                // P1: WAL checkpoint — use per-graph read locks when adapter is available,
+                // falling back to the global shared lock for backward compatibility.
                 if (global_adapter) |adapter| {
+                    if (g_wal_checkpoint_fn) |checkpoint_fn| {
+                        // Acquire a read lock on the default graph while running the
+                        // WAL checkpoint (which reads store state).
+                        const ckpt_handle = acquireGraphReadLock(DEFAULT_GRAPH_NAME);
+                        checkpoint_fn(store_ptr);
+                        releaseGraphLock(ckpt_handle);
+                    }
+                    // Checkpoint per-graph storage on WAL checkpoint ticks.
                     adapter.checkpointAll() catch |err| {
                         log.err("per-graph storage checkpoint failed", &.{
                             Attr.string("error", @errorName(err)),
                         });
                     };
+                } else {
+                    // Fallback: global shared lock
+                    g_store_rwlock.lockShared();
+                    defer g_store_rwlock.unlockShared();
+                    if (g_wal_checkpoint_fn) |checkpoint_fn| {
+                        checkpoint_fn(store_ptr);
+                    }
                 }
             } else {
                 // P3: Split persistence into two phases so the shared lock is NOT
@@ -4687,12 +4699,13 @@ fn persistenceLoop() void {
     }
 }
 
-// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=PersistSplitPhase; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-02
+// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=PersistSplitPhase; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-06
 /// Persistence via adapter checkpoint. No more graph_store.dat or id_map.dat.
 fn persistSplitPhase(store_ptr: *GraphStore) void {
     if (!@constCast(&store_ptr.dirty).load(.acquire)) return;
 
-    // Checkpoint per-graph storage (flushes buffer pool pages to .store files)
+    // P1: Checkpoint per-graph storage using per-graph write locks one at a time.
+    // Falls back to checkpointAll (which uses the adapter mutex) when adapter unavailable.
     if (global_adapter) |adapter| {
         adapter.checkpointAll() catch |err| {
             log.err("per-graph storage checkpoint failed", &.{
@@ -4700,12 +4713,22 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
             });
             return;
         };
-    }
 
-    // Remove any stale sidecar files after the checkpoint lands.
-    g_store_rwlock.lockShared();
-    store_ptr.cleanupLegacySidecars();
-    g_store_rwlock.unlockShared();
+        // Remove any stale sidecar files after the checkpoint lands.
+        // Use per-graph read locks so only one graph is locked at a time.
+        var it = store_ptr.graphs.iterator();
+        while (it.next()) |entry| {
+            const gname = entry.key_ptr.*;
+            const lock_handle = acquireGraphReadLock(gname);
+            store_ptr.cleanupLegacySidecarsForGraph(gname);
+            releaseGraphLock(lock_handle);
+        }
+    } else {
+        // Fallback: use global shared lock for legacy (no-adapter) path.
+        g_store_rwlock.lockShared();
+        store_ptr.cleanupLegacySidecars();
+        g_store_rwlock.unlockShared();
+    }
 
     // Clear dirty flag
     @constCast(&store_ptr.dirty).store(false, .release);

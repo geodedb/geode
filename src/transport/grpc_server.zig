@@ -282,8 +282,9 @@ fn deinitServerState(state: *server_state.ServerState) void {
 fn invalidateAuthenticatedSession(allocator: std.mem.Allocator, state: *server_state.ServerState) void {
     state.resetResult();
     if (state.in_txn) {
-        graph_store.acquireStoreWriteLock();
-        defer graph_store.releaseStoreWriteLock();
+        const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+        const lock_handle = graph_store.acquireGraphWriteLock(graph_name);
+        defer graph_store.releaseGraphLock(lock_handle);
         const store_ptr = graph_store.getGlobalStore(allocator);
         txn_undo_log.getGlobalUndoLog(allocator).rollback(store_ptr) catch |err| {
             log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
@@ -1880,23 +1881,21 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             // #564: Acquire the appropriate store lock based on query type.
             // Without this, gRPC queries ran with no synchronization, allowing
             // concurrent mutations to corrupt shared HashMaps and ArrayLists.
+            // P1: Per-graph locking — queries against different graphs no longer serialize.
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and query_traits.isMutatingProgram(&parse_result.program);
+            const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+            var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
-                if (is_mutation) {
-                    graph_store.acquireStoreWriteLock();
-                } else {
-                    graph_store.acquireStoreLock();
-                }
+                graph_lock_handle = if (is_mutation)
+                    graph_store.acquireGraphWriteLock(query_graph_name)
+                else
+                    graph_store.acquireGraphReadLock(query_graph_name);
             }
             var lock_released = false;
             defer {
-                if (!lock_released and needs_store_lock) {
-                    if (is_mutation) {
-                        graph_store.releaseStoreWriteLock();
-                    } else {
-                        graph_store.releaseStoreLock();
-                    }
+                if (!lock_released) {
+                    if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                 }
             }
 
@@ -1960,7 +1959,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                             const profile_is_dirty = store_ptr.isDirty();
 
                             if (needs_store_lock) {
-                                if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                                 lock_released = true;
                             }
 
@@ -2014,7 +2013,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
-                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         lock_released = true;
                     }
 
@@ -2062,7 +2061,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     errdefer active_stream.deinit();
 
                                     if (needs_store_lock) {
-                                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                                         lock_released = true;
                                     }
 
@@ -2110,7 +2109,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
-                        if (is_mutation) graph_store.releaseStoreWriteLock() else graph_store.releaseStoreLock();
+                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
                         lock_released = true;
                     }
 
@@ -2634,8 +2633,9 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     }
 
     // GAP-0255: Acquire shared store lock for backup consistency (parity with QUIC handler).
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
+    // P1: Per-graph locking — back up with a read lock on the default graph.
+    const backup_lock_handle = graph_store.acquireGraphReadLock(graph_store.DEFAULT_GRAPH_NAME);
+    defer graph_store.releaseGraphLock(backup_lock_handle);
 
     const backup_dir = "./server_backups";
     var mgr = SimplifiedBackupManager.init(allocator, backup_dir, .{
