@@ -203,6 +203,9 @@ pub const ManagedGraph = struct {
     label_dict: LabelStringDict,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// Per-graph RwLock for concurrent read access. Queries acquire shared;
+    /// mutations and persistence acquire exclusive. Part of P1 lock migration.
+    rwlock: std.Thread.RwLock = .{},
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -1239,6 +1242,94 @@ pub const StorageAdapter = struct {
         const mg = try self.requireExistingGraphLocked(graph_name);
         return mg.engine.checkIntegrity();
     }
+
+    // ------------------------------------------------------------------
+    // Per-graph RwLock acquisition API (P1 lock migration)
+    // ------------------------------------------------------------------
+
+    /// Acquire a shared (read) lock on the named graph.
+    /// Caller MUST call releaseGraphReadLock when done.
+    pub fn acquireGraphReadLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        self.mutex.lock();
+        const mg = self.engines.get(graph_name) orelse {
+            self.mutex.unlock();
+            return error.GraphNotFound;
+        };
+        self.mutex.unlock();
+        mg.rwlock.lockShared();
+        return mg;
+    }
+
+    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.rwlock.unlockShared();
+    }
+
+    /// Acquire an exclusive (write) lock on the named graph.
+    /// Caller MUST call releaseGraphWriteLock when done.
+    pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+        self.mutex.lock();
+        const mg = self.engines.get(graph_name) orelse {
+            self.mutex.unlock();
+            return error.GraphNotFound;
+        };
+        self.mutex.unlock();
+        mg.rwlock.lock();
+        return mg;
+    }
+
+    pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
+        mg.rwlock.unlock();
+    }
+
+    /// Acquire shared (read) locks on multiple named graphs simultaneously.
+    /// Locks are acquired in alphabetical order to prevent deadlocks.
+    /// Caller MUST pass the returned slice to releaseMultiGraphReadLocks when done.
+    pub fn acquireMultiGraphReadLocks(
+        self: *StorageAdapter,
+        allocator: std.mem.Allocator,
+        graph_names: []const []const u8,
+    ) ![]GraphLockHandle {
+        // Sort alphabetically for deadlock prevention.
+        const sorted = try allocator.dupe([]const u8, graph_names);
+        defer allocator.free(sorted);
+        std.mem.sort([]const u8, sorted, {}, struct {
+            fn lt(_: void, a: []const u8, b: []const u8) bool {
+                return std.mem.lessThan(u8, a, b);
+            }
+        }.lt);
+
+        var handles = try allocator.alloc(GraphLockHandle, sorted.len);
+        var acquired: usize = 0;
+        errdefer {
+            while (acquired > 0) {
+                acquired -= 1;
+                self.releaseGraphReadLock(handles[acquired].mg);
+            }
+            allocator.free(handles);
+        }
+
+        for (sorted) |name| {
+            const mg = try self.acquireGraphReadLock(name);
+            handles[acquired] = .{ .graph_name = name, .mg = mg };
+            acquired += 1;
+        }
+
+        return handles;
+    }
+
+    /// Release all locks acquired by acquireMultiGraphReadLocks and free the slice.
+    pub fn releaseMultiGraphReadLocks(self: *StorageAdapter, allocator: std.mem.Allocator, handles: []GraphLockHandle) void {
+        for (handles) |h| {
+            self.releaseGraphReadLock(h.mg);
+        }
+        allocator.free(handles);
+    }
+};
+
+/// Handle returned by acquireMultiGraphReadLocks, pairing a graph name with its locked ManagedGraph.
+pub const GraphLockHandle = struct {
+    graph_name: []const u8,
+    mg: *ManagedGraph,
 };
 
 // ============================================================================
@@ -1588,4 +1679,103 @@ test "StorageAdapter: registry header next ids include unloaded graphs" {
     try std.testing.expectEqual(@as(usize, 2), registry.graphCount());
     try std.testing.expectEqual(@as(u64, 3), registry.next_node_id);
     try std.testing.expectEqual(@as(u64, 2), registry.next_edge_id);
+}
+
+test "StorageAdapter: acquireGraphReadLock and releaseGraphReadLock" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("lock_test_graph");
+
+    // Acquire a shared read lock and verify we get back a valid ManagedGraph.
+    const mg = try adapter.acquireGraphReadLock("lock_test_graph");
+    try std.testing.expectEqualStrings("lock_test_graph", mg.name);
+    adapter.releaseGraphReadLock(mg);
+
+    // Error on nonexistent graph.
+    try std.testing.expectError(error.GraphNotFound, adapter.acquireGraphReadLock("no_such_graph"));
+}
+
+test "StorageAdapter: acquireGraphWriteLock and releaseGraphWriteLock" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("write_lock_graph");
+
+    const mg = try adapter.acquireGraphWriteLock("write_lock_graph");
+    try std.testing.expectEqualStrings("write_lock_graph", mg.name);
+    adapter.releaseGraphWriteLock(mg);
+
+    // Error on nonexistent graph.
+    try std.testing.expectError(error.GraphNotFound, adapter.acquireGraphWriteLock("no_such_graph"));
+}
+
+test "StorageAdapter: acquireMultiGraphReadLocks acquires in alphabetical order" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("zebra");
+    _ = try adapter.getOrCreateGraph("alpha");
+    _ = try adapter.getOrCreateGraph("mango");
+
+    const names = &[_][]const u8{ "zebra", "alpha", "mango" };
+    const handles = try adapter.acquireMultiGraphReadLocks(allocator, names);
+    defer adapter.releaseMultiGraphReadLocks(allocator, handles);
+
+    try std.testing.expectEqual(@as(usize, 3), handles.len);
+
+    // Verify all three graphs are locked and names are accessible.
+    var found_alpha = false;
+    var found_mango = false;
+    var found_zebra = false;
+    for (handles) |h| {
+        if (std.mem.eql(u8, h.graph_name, "alpha")) found_alpha = true;
+        if (std.mem.eql(u8, h.graph_name, "mango")) found_mango = true;
+        if (std.mem.eql(u8, h.graph_name, "zebra")) found_zebra = true;
+    }
+    try std.testing.expect(found_alpha);
+    try std.testing.expect(found_mango);
+    try std.testing.expect(found_zebra);
+}
+
+test "StorageAdapter: acquireMultiGraphReadLocks returns error on missing graph" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    _ = try adapter.getOrCreateGraph("exists");
+
+    const names = &[_][]const u8{ "exists", "does_not_exist" };
+    try std.testing.expectError(error.GraphNotFound, adapter.acquireMultiGraphReadLocks(allocator, names));
 }
