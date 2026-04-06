@@ -146,9 +146,12 @@
         },
 
         // Page-based graph storage engine
+        // Updated 2026-04-06: full audit closure — AES-GCM nonce fix, HMAC hardening,
+        // bounds checks, O(1) property lookup, B+tree persistence, engine decomposition,
+        // edge-ID index, multi-op transactions, index catalog integrity
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#e8fa877950a683457672aad7900a2d40ebe080dd",
-            .hash = "graph_storage-0.1.0-9UyJSwuhCACMUfNJ5h1iSydFaNyfV_6WH8WFr3Yn7diz",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#cde8c6f5ee31535562e6b50da00abf9200d6de23",
+            .hash = "graph_storage-0.1.0-9UyJS-G_CQAiz_L_2taQlRA4CQXwiZrCioidMDMWx-wu",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
