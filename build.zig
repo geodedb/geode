@@ -1211,6 +1211,19 @@ pub fn build(b: *std.Build) void {
     const run_fed_latency_agg_tests = b.addRunArtifact(fed_latency_agg_tests);
     test_step.dependOn(&run_fed_latency_agg_tests.step);
 
+    // GAP-0513: network_transport compile-time verification tests
+    const network_transport_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/network_transport.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    network_transport_test_mod.addImport("protobuf", protobuf_mod);
+    network_transport_test_mod.addImport("distributed_schema", distributed_schema_mod);
+    network_transport_test_mod.addImport("transport/quic", transport_quic_mod);
+    const network_transport_tests = b.addTest(.{ .root_module = network_transport_test_mod });
+    const run_network_transport_tests = b.addRunArtifact(network_transport_tests);
+    test_step.dependOn(&run_network_transport_tests.step);
+
     // Raft consensus PersistentStorage file-backed round-trip tests
     const raft_ps_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),

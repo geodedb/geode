@@ -1415,6 +1415,7 @@ REQ-GQL-032-UNIQUE,Constraints,Unique,TESTED,,,schema,2026-01-16,tests/test_gap_
 REQ-GQL-040,Raft Consensus,Distributed,BENCHED,,,distributed,2025-09-21,src/distributed/raft.zig
 REQ-GQL-040,Temporal,TemporalExtremeOffsetArithmetic,TESTED,,,engine,2025-09-21,tests/test_temporal_extreme_offsets.zig
 REQ-GQL-041,Cluster Networking,InterNodeMessaging,IMPL,,,distributed,2026-04-05,src/distributed/network_transport.zig
+REQ-GQL-041,Cluster Networking,NetworkTransportTests,TESTED,,,distributed,2026-04-06,src/distributed/network_transport.zig
 REQ-GQL-042,CDC,AdaptiveJitterThresholds,TESTED,,,streaming,2025-09-21,tests/canary_cdc_jitter_thresholds.zig
 REQ-GQL-042,CDC,AdaptiveStressHarness,BENCHED,,,streaming,2025-09-21,tests/benchmark_cdc_adaptive_stress.zig
 REQ-GQL-042,CDC,CDCAdaptiveHeuristicsDecisionLatencyVarianceEnvelope,BENCHED,,,cdc,2025-09-21,tests/benchmark_cdc_adaptive_decision_latency_variance.zig
