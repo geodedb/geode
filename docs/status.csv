@@ -77,6 +77,7 @@ REQ-2PC-COMMIT-001,2PC Commit Handler,StorageApplication,EXEMPT,,,distributed,20
 REQ-2PC-COORD-001,2PC,Coordinator,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-2PC-PARTICIPANT-001,2PC,Participant,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-2PC-PARTICIPANT-001,2PC Participant Node,StorageOps,EXEMPT,,,distributed,2026-01-10,src/distributed/twophase_participant.zig
+REQ-2PC-PARTICIPANT-TEST-001,2PC Participant Unit Tests,TestCoverage,TESTED,,,distributed,2026-04-06,src/distributed/twophase_participant.zig
 REQ-2PC-PREPARE-001,2PC,Prepare,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-2PC-ROLLBACK-001,2PC,Rollback,TESTED,,,txn,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-2PC-TIMEOUT-001,2PCTimeout,Transport,EXEMPT,,,distributed,2026-01-09,src/distributed/twophase.zig

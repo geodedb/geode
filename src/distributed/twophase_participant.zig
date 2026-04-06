@@ -29,7 +29,7 @@ pub const ParticipantNode = struct {
         coordinator_id: []const u8,
         state: TransactionState,
         write_set: []u8,
-        locks: std.ArrayList(Lock),
+        locks: std.ArrayListUnmanaged(Lock),
 
         pub fn deinit(self: *LocalTransaction, allocator: Allocator) void {
             allocator.free(self.id);
@@ -147,7 +147,7 @@ pub const ParticipantNode = struct {
             .coordinator_id = try self.allocator.dupe(u8, msg.coordinator_id),
             .state = .preparing,
             .write_set = try self.allocator.dupe(u8, payload),
-            .locks = std.ArrayList(Lock).init(self.allocator),
+            .locks = std.ArrayListUnmanaged(Lock){},
         };
         errdefer local_txn.deinit(self.allocator);
 
@@ -287,3 +287,94 @@ pub const ParticipantNode = struct {
         }
     }
 };
+
+// CANARY: REQ=REQ-2PC-PARTICIPANT-TEST-001; FEATURE="2PC Participant Unit Tests"; ASPECT=TestCoverage; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "ResourceManager.acquireLock: first acquire succeeds" {
+    const allocator = std.testing.allocator;
+    var rm = ParticipantNode.ResourceManager.init(allocator);
+    defer rm.deinit();
+
+    const acquired = try rm.acquireLock(42, "txn-1", .exclusive);
+    try std.testing.expect(acquired);
+}
+
+test "ResourceManager.acquireLock: same txn re-acquire is idempotent, different txn conflicts" {
+    const allocator = std.testing.allocator;
+    var rm = ParticipantNode.ResourceManager.init(allocator);
+    defer rm.deinit();
+
+    // First acquire by txn-1
+    const first = try rm.acquireLock(10, "txn-1", .exclusive);
+    try std.testing.expect(first);
+
+    // Same txn re-acquires — should succeed (idempotent)
+    const same = try rm.acquireLock(10, "txn-1", .exclusive);
+    try std.testing.expect(same);
+
+    // Different txn conflicts — should fail
+    const conflict = try rm.acquireLock(10, "txn-2", .exclusive);
+    try std.testing.expect(!conflict);
+}
+
+test "ResourceManager.releaseLock: after release, different txn can acquire" {
+    const allocator = std.testing.allocator;
+    var rm = ParticipantNode.ResourceManager.init(allocator);
+    defer rm.deinit();
+
+    // txn-1 acquires resource 99
+    const acquired = try rm.acquireLock(99, "txn-1", .exclusive);
+    try std.testing.expect(acquired);
+
+    // txn-2 cannot acquire while txn-1 holds it
+    const blocked = try rm.acquireLock(99, "txn-2", .exclusive);
+    try std.testing.expect(!blocked);
+
+    // txn-1 releases
+    try rm.releaseLock(99, "txn-1");
+
+    // txn-2 can now acquire
+    const reacquired = try rm.acquireLock(99, "txn-2", .exclusive);
+    try std.testing.expect(reacquired);
+}
+
+test "ParticipantNode.handleAbort: aborts prepared transaction, map becomes empty" {
+    const allocator = std.testing.allocator;
+    var rm = ParticipantNode.ResourceManager.init(allocator);
+    defer rm.deinit();
+
+    var node = ParticipantNode.init(allocator, "node-1", &rm);
+    defer node.deinit();
+
+    // Manually insert a prepared transaction (heap-allocate id so handleAbort can free it)
+    const txn_id = try allocator.dupe(u8, "txn-abort-test");
+    const coordinator_id = try allocator.dupe(u8, "coord-1");
+    const write_set = try allocator.dupe(u8, "");
+    const local_txn = ParticipantNode.LocalTransaction{
+        .id = txn_id,
+        .coordinator_id = coordinator_id,
+        .state = .prepared,
+        .write_set = write_set,
+        .locks = std.ArrayListUnmanaged(ParticipantNode.Lock){},
+    };
+    try node.transactions.put(txn_id, local_txn);
+
+    try std.testing.expect(node.transactions.count() == 1);
+
+    // Abort the transaction
+    try node.handleAbort(txn_id);
+
+    // Transaction should be removed
+    try std.testing.expect(node.transactions.count() == 0);
+}
+
+test "ParticipantNode.handleAbort: unknown transaction returns error.TransactionNotFound" {
+    const allocator = std.testing.allocator;
+    var rm = ParticipantNode.ResourceManager.init(allocator);
+    defer rm.deinit();
+
+    var node = ParticipantNode.init(allocator, "node-1", &rm);
+    defer node.deinit();
+
+    const result = node.handleAbort("nonexistent-txn");
+    try std.testing.expectError(error.TransactionNotFound, result);
+}
