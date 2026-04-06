@@ -1372,6 +1372,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     }
 
     const first_chain = q.match.chains[0];
+    // Synthetic key for tracking the rightmost node across hops (supports anonymous intermediates)
+    const chain_last_right_key = "__chain_last_right__";
+    const needs_hop_tracking = first_chain.hops.len > 1;
     if (first_chain.hops.len > 0) {
         // First chain has relationships
         const hop = first_chain.hops[0];
@@ -1393,7 +1396,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const left_node = store.nodes.getPtr(node_id) orelse continue;
 
                 const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
+                defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                 for (outgoing_edges) |edge| {
                     if (rel_type) |rt| {
@@ -1407,6 +1412,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1423,6 +1429,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1437,7 +1444,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                 // Find edges TO this right node (for outgoing/right direction from left)
                 const incoming_to_right = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesTo(allocator, right_node.id) else &[_]graph_store.Edge{};
+                defer if (incoming_to_right.len > 0) allocator.free(incoming_to_right);
                 const outgoing_from_right = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesFrom(allocator, right_node.id) else &[_]graph_store.Edge{};
+                defer if (outgoing_from_right.len > 0) allocator.free(outgoing_from_right);
 
                 for (incoming_to_right) |edge| {
                     if (rel_type) |rt| {
@@ -1450,6 +1459,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1465,6 +1475,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1484,6 +1495,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1492,6 +1504,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1505,7 +1518,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
 
                 const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+                defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
+                defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                 for (outgoing_edges) |edge| {
                     if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
@@ -1515,6 +1530,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1527,6 +1543,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
@@ -1571,11 +1588,15 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
 
             for (bindings.items) |*existing| {
-                const left_node = if (extra_left_var) |lv| existing.vars.get(lv) else null;
+                // Look up the left node by its variable name, or fall back to the
+                // synthetic tracker for anonymous intermediate nodes.
+                const left_node = if (extra_left_var) |lv| existing.vars.get(lv) else existing.vars.get(chain_last_right_key);
 
                 if (left_node) |ln| {
                     const outgoing_edges = if (extra_rel_dir == .right or extra_rel_dir == .undirected) store.getEdgesFrom(allocator, ln.id) else &[_]graph_store.Edge{};
+                    defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
                     const incoming_edges = if (extra_rel_dir == .left or extra_rel_dir == .undirected) store.getEdgesTo(allocator, ln.id) else &[_]graph_store.Edge{};
+                    defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                     for (outgoing_edges) |edge| {
                         if (extra_rel_type) |rt| {
@@ -1617,6 +1638,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             }
                             var new_binding = try existing.clone();
                             if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_binding.vars.put(chain_last_right_key, right_node);
                             try new_bindings.append(allocator, new_binding);
                         }
                     }
@@ -1638,6 +1660,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             }
                             var new_binding = try existing.clone();
                             if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            try new_binding.vars.put(chain_last_right_key, right_node);
                             try new_bindings.append(allocator, new_binding);
                         }
                     }
@@ -1675,7 +1698,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             if (left_node) |ln| {
                 // Find edges from this node matching the relationship type and direction
                 const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, ln.id) else &[_]graph_store.Edge{};
+                defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
                 const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, ln.id) else &[_]graph_store.Edge{};
+                defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                 // Process outgoing edges
                 for (outgoing_edges) |edge| {
@@ -1726,7 +1751,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
                     // Find matching edges from this node based on direction
                     const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, new_left_node.id) else &[_]graph_store.Edge{};
+                    defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
                     const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, new_left_node.id) else &[_]graph_store.Edge{};
+                    defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                     // Process outgoing edges
                     for (outgoing_edges) |edge| {

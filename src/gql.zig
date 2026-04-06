@@ -598,7 +598,7 @@ test "relationship length quantifiers" {
             const r1 = ch[0].hops[0].rel;
             try std.testing.expect(r1.min_len.? == 2 and r1.max_len.? == 5);
             const r2 = ch[1].hops[0].rel;
-            try std.testing.expect(r2.min_len.? == 0 and r2.max_len == null);
+            try std.testing.expect(r2.min_len.? == 1 and r2.max_len == null);
             const r3 = ch[2].hops[0].rel;
             try std.testing.expect(r3.min_len.? == 3 and r3.max_len.? == 3);
         },

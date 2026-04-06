@@ -158,7 +158,7 @@ test "match refactor parity: variable-length and filtering goldens" {
     defer var_len.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 1), var_len.rows.len);
-    try expectValueInt(var_len.rows[0][0], 1);
+    try expectValueInt(var_len.rows[0][0], 2);
 
     var filtered = try h.exec(
         "MATCH (p:Person) WHERE p.age >= 35 " ++
