@@ -148,6 +148,7 @@ Replace the current single `g_store_rwlock` with a two-level locking scheme:
 ### Persistence Thread
 
 The persistence thread iterates `graph_handles` (acquiring `graph_handles_mutex` briefly to snapshot the handle list), then for each dirty handle:
+
 1. Acquire the handle's write lock
 2. Serialize and write the per-graph file
 3. Clear dirty flag
@@ -313,3 +314,28 @@ Any spec that creates graphs or relies on data persistence needs verification ag
 - `src/txn_undo_log.zig` — Transaction undo routing to correct GraphHandle
 - `src/cli/backup_cli.zig` — CLI backup command updates
 - `src/distributed/cluster.zig` — Cluster replication graph routing
+
+## Cross-Graph Lock Ordering (P1 Addendum — 2026-04-06)
+
+When a query touches multiple named graphs (e.g., cross-graph joins), per-graph
+locks MUST be acquired in **alphabetical order by graph name** (case-sensitive,
+using byte comparison). This prevents ABBA deadlocks.
+
+### Protocol
+
+1. Parse the query to determine which graph(s) are referenced.
+2. Sort graph names alphabetically: `["analytics", "default", "social"]`.
+3. Acquire per-graph RwLocks in sorted order.
+4. Execute the query.
+5. Release locks in reverse order (standard LIFO).
+
+### Special Cases
+
+- **Single-graph queries:** No ordering needed — acquire one lock.
+- **`USE GRAPH` changes:** The session's current graph is resolved at parse time.
+  The lock for the previous graph is NOT held during the switch.
+- **`graph_handles_mutex`:** Held ONLY during CREATE/DROP GRAPH and handle
+  lookups. NEVER held while acquiring a per-graph RwLock (prevents priority
+  inversion with the persistence thread).
+- **Persistence thread:** Acquires per-graph WRITE locks one at a time for
+  checkpointing. Does NOT hold `graph_handles_mutex` during writes.

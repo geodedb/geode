@@ -273,7 +273,8 @@ When acquiring multiple mutexes, always acquire in this order (lower tier first)
 
 | Tier | Mutex | Module | Notes |
 |------|-------|--------|-------|
-| 1 | `store_mutex` | `graph_store.zig` | Graph data — outermost lock |
+| 0 | `graph_handles_mutex` | `graph_storage_adapter.zig` | Graph handle map — brief lookups only, NEVER during data ops |
+| 1 | `store_mutex` / per-graph `rwlock` | `graph_store.zig` / `graph_storage_adapter.zig` | Graph data — per-graph locks use alphabetical acquire order for multi-graph |
 | 2 | `catalog_mutex` | `execution.zig` | Schema catalog |
 | 3 | `connections_mutex` | `transport/quic.zig` | QUIC connection list |
 | 3 | `pending_destroy_mutex` | `transport/quic.zig` | Deferred cleanup |
