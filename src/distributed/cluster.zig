@@ -195,6 +195,13 @@ pub const ClusterCoordinator = struct {
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     max_connections: u32 = 100,
 
+    // QUAL-D004: Shutdown signal and thread handles for graceful stop.
+    shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    raft_thread: ?std.Thread = null,
+    network_thread: ?std.Thread = null,
+    health_thread: ?std.Thread = null,
+    replication_thread: ?std.Thread = null,
+
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
         return self.cluster_state.replication_map;
@@ -349,6 +356,7 @@ pub const ClusterCoordinator = struct {
     }
 
     pub fn deinit(self: *ClusterCoordinator) void {
+        self.stop();
         self.raft_nonce_tracker.deinit();
         self.raft.deinit();
         self.allocator.destroy(self.raft);
@@ -396,26 +404,40 @@ pub const ClusterCoordinator = struct {
         self.health_monitor.health_checks.deinit();
     }
 
+    // QUAL-D004: start() spawns background threads and returns immediately.
+    // Call stop() (or deinit()) to signal shutdown and join all threads.
     pub fn start(self: *ClusterCoordinator) !void {
-        // Start Raft consensus
-        const raft_thread = try std.Thread.spawn(.{}, raftLoop, .{self});
-        defer raft_thread.join();
+        self.shutdown.store(false, .release);
+        self.raft_thread = try std.Thread.spawn(.{}, raftLoop, .{self});
+        self.network_thread = try std.Thread.spawn(.{}, networkLoop, .{self});
+        self.health_thread = try std.Thread.spawn(.{}, healthLoop, .{self});
+        self.replication_thread = try std.Thread.spawn(.{}, replicationLoop, .{self});
+    }
 
-        // Start network transport
-        const network_thread = try std.Thread.spawn(.{}, networkLoop, .{self});
-        defer network_thread.join();
-
-        // Start health monitoring
-        const health_thread = try std.Thread.spawn(.{}, healthLoop, .{self});
-        defer health_thread.join();
-
-        // Start replication
-        const replication_thread = try std.Thread.spawn(.{}, replicationLoop, .{self});
-        defer replication_thread.join();
+    pub fn stop(self: *ClusterCoordinator) void {
+        self.shutdown.store(true, .release);
+        // networkLoop's accept() has a 50ms internal timeout so it will
+        // observe the shutdown flag within one polling cycle.
+        if (self.raft_thread) |t| {
+            t.join();
+            self.raft_thread = null;
+        }
+        if (self.network_thread) |t| {
+            t.join();
+            self.network_thread = null;
+        }
+        if (self.health_thread) |t| {
+            t.join();
+            self.health_thread = null;
+        }
+        if (self.replication_thread) |t| {
+            t.join();
+            self.replication_thread = null;
+        }
     }
 
     fn raftLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown.load(.acquire)) {
             try self.raft.tick();
             std.time.sleep(10 * std.time.ns_per_ms);
         }
@@ -429,8 +451,15 @@ pub const ClusterCoordinator = struct {
             try self.network_transport.quic_server.?.listen();
         }
 
-        while (true) {
-            const conn = try self.network_transport.quic_server.?.accept();
+        while (!self.shutdown.load(.acquire)) {
+            const conn = self.network_transport.quic_server.?.accept() catch |err| switch (err) {
+                error.WouldBlock => continue,
+                else => {
+                    if (self.shutdown.load(.acquire)) break;
+                    log.err("Accept failed", &.{Attr.string("error", @errorName(err))});
+                    continue;
+                },
+            };
 
             // PERF-D006: Connection semaphore - reject if at capacity
             if (self.active_connections.load(.acquire) >= self.max_connections) {
@@ -448,7 +477,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn healthLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown.load(.acquire)) {
             for (self.cluster_state.nodes.items) |*node| {
                 if (node.id == self.node_id) continue;
 
@@ -465,7 +494,7 @@ pub const ClusterCoordinator = struct {
     }
 
     fn replicationLoop(self: *ClusterCoordinator) !void {
-        while (true) {
+        while (!self.shutdown.load(.acquire)) {
             if (self.raft.state == .leader) {
                 try self.performReplication();
             }
