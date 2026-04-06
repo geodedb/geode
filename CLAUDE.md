@@ -14,7 +14,7 @@ Geode is a **feature-complete graph database** with strong compliance and active
 
 ### Known Limitations
 
-- **Multi-tenancy query isolation NOT enforced (GAP-0509, Critical)**: `getAllNodesForTenant()` exists but is dead code — the query execution engine (`src/execution.zig`, `src/eval.zig`) calls `getAllNodes()` which iterates all nodes across all tenants. Connection-level tenant quotas work, but query-level data isolation does not. Do NOT deploy multi-tenant without addressing this.
+- **Multi-tenancy query isolation implemented (GAP-0509, Closed 2026-04-06)**: `getNodesByLabels`, `getEdgesByType`, and all edge traversal paths now accept an optional `tenant_id` parameter and filter accordingly. ML algorithms (`Node2Vec`, GraphSAGE, `pageRank`) use `getAllNodesForTenant(allocator, null)` — `null` means cross-tenant/admin-level and is backward compatible. Per-tenant quotas and full RLS expression coverage are still in progress.
 - **RLS supports label-only filtering (GAP-0510, High)**: The expression-based RLS engine (`rls_core.zig`, `rls_enhanced.zig` — 3,924 lines) is implemented but not wired to production code paths. Only the label-based post-filter (`rls_filter.zig`) runs. Property-based, temporal, and IP-based RLS policies documented in ADVANCED_SECURITY_FEATURES are non-functional.
 - **Distributed module has partial test coverage (GAP-0513, High)**: 10 of ~20 distributed files (3,540 lines including sharding.zig, query_transport.zig, merge_strategies.zig) have zero unit tests. Activates when `GEODE_CLUSTER_TOKEN` is set.
 - **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment

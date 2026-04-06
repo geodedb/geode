@@ -31,6 +31,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Evidence:** `src/graph_store.zig:305,367-368,3738` — GraphStore is singleton; `tenant_id` is a single mutable field; `setTenant()` mutates global
 - **Impact:** All sessions share one GraphStore. No isolation boundary between tenants.
 - **Fix:** Per-tenant graph namespacing or per-tenant GraphStore instances
+- **Re-closed (2026-04-06):** Tenant filtering added to `getNodesByLabels`, `getEdgesByType`, and all edge traversal paths. ML/analytics callers (`trainNode2Vec`, GraphSAGE embedding update, `pageRank`) retrofitted to use `getAllNodesForTenant(allocator, null)` — `null` means cross-tenant (admin-level), preserving backward compatibility.
 
 ### GAP-0280: RLS expression engine is dead code — **CLOSED (2026-04-01)**
 
