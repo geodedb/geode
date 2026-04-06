@@ -409,6 +409,10 @@ pub const ExecutionContext = struct {
     // here for future in-execution RLS integration (e.g., predicate push-down).
     // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
     rls_engine: ?*anyopaque = null,
+    // GAP-0510: Security context for in-execution RLS expression evaluation.
+    // Contains user identity, roles, and session attributes needed by checkRowAccess().
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-007; FEATURE="RLS Query Enforcement"; ASPECT=SecurityContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+    security_context: ?*anyopaque = null,
     // GAP-0280: Pointer to the shared timeseries Store for timeseries.value() lookups.
     // Set at server startup and shared across all connections (read-only during queries).
     // CANARY: REQ=REQ-TIMESERIES-WIRE-002; FEATURE="TimeseriesServerWiring"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/eval.zig; OWNER=engine; UPDATED=2026-04-01
