@@ -471,3 +471,177 @@ pub fn extractNumeric(val: protocol.Value) f64 {
         else => 0.0,
     };
 }
+
+// ============================================================
+// Unit tests
+// ============================================================
+
+test "extractNumeric: Int, Double, SmallInt, Null, Bool" {
+    // CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=TESTED; TEST=src/distributed/merge_strategies.zig; OWNER=dist; UPDATED=2026-04-06
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), extractNumeric(.{ .Int = 42 }), 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 3.14), extractNumeric(.{ .Double = 3.14 }), 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, -5.0), extractNumeric(.{ .SmallInt = -5 }), 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), extractNumeric(.{ .Null = {} }), 1e-9);
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), extractNumeric(.{ .Bool = true }), 1e-9);
+}
+
+test "hashRow: same row produces same hash, different rows produce different hashes" {
+    const allocator = std.testing.allocator;
+
+    const cols_a = [_]protocol.BindingValue{
+        .{ .Int = 10 },
+        .{ .Str = "hello" },
+    };
+    const cols_b = [_]protocol.BindingValue{
+        .{ .Int = 99 },
+        .{ .Str = "world" },
+    };
+
+    const row_a = protocol.BindingRow{ .cols = &cols_a };
+    const row_b = protocol.BindingRow{ .cols = &cols_b };
+
+    const h1 = try hashRow(allocator, row_a);
+    defer allocator.free(h1);
+    const h2 = try hashRow(allocator, row_a);
+    defer allocator.free(h2);
+    const h3 = try hashRow(allocator, row_b);
+    defer allocator.free(h3);
+
+    // Same row → same hash
+    try std.testing.expectEqualStrings(h1, h2);
+    // Different rows → different hashes
+    try std.testing.expect(!std.mem.eql(u8, h1, h3));
+}
+
+test "hashRowColumns: empty key_columns vs specific columns produce different results" {
+    const allocator = std.testing.allocator;
+
+    const cols = [_]protocol.BindingValue{
+        .{ .Int = 1 },
+        .{ .Int = 2 },
+        .{ .Int = 3 },
+    };
+    const row = protocol.BindingRow{ .cols = &cols };
+
+    // Empty key_columns → hash all columns
+    const h_all = try hashRowColumns(allocator, row, &.{});
+    defer allocator.free(h_all);
+
+    // Hash only column 0 (just the first element)
+    const h_col0 = try hashRowColumns(allocator, row, &.{0});
+    defer allocator.free(h_col0);
+
+    // They should differ because one covers all three columns and the other just one
+    try std.testing.expect(!std.mem.eql(u8, h_all, h_col0));
+
+    // Determinism check: same call twice must match
+    const h_col0_again = try hashRowColumns(allocator, row, &.{0});
+    defer allocator.free(h_col0_again);
+    try std.testing.expectEqualStrings(h_col0, h_col0_again);
+}
+
+test "CoordinatorMetrics: init, recordQuery, recordCacheHit, recordMergeTime" {
+    var m = CoordinatorMetrics.init();
+    try std.testing.expectEqual(@as(u64, 0), m.total_queries);
+    try std.testing.expectEqual(@as(u64, 0), m.cache_hits);
+    try std.testing.expectEqual(@as(u64, 0), m.merge_time_ms);
+    try std.testing.expectEqual(@as(u64, 0), m.shard_queries);
+
+    m.recordQuery(50, 3);
+    m.recordQuery(100, 5);
+    try std.testing.expectEqual(@as(u64, 2), m.total_queries);
+    try std.testing.expectEqual(@as(u64, 150), m.total_time_ms);
+    try std.testing.expectEqual(@as(u64, 8), m.shard_queries);
+
+    m.recordCacheHit();
+    try std.testing.expectEqual(@as(u64, 1), m.cache_hits);
+
+    m.recordMergeTime(25);
+    try std.testing.expectEqual(@as(u64, 25), m.merge_time_ms);
+}
+
+test "DistributedQueryOptimizer.optimizeQuery: default→union_all, global_ordering→merge_sorted, aggregation→hash_aggregate" {
+    const allocator = std.testing.allocator;
+
+    var optimizer = try DistributedQueryOptimizer.init(allocator);
+    defer optimizer.deinit();
+
+    var shard_reg = try ShardRegistry.init(allocator);
+    defer shard_reg.deinit();
+
+    // Default analysis (no ordering, no aggregation) → union_all
+    {
+        var analysis = QueryAnalysis.init(allocator);
+        defer analysis.deinit();
+        var plan = try optimizer.optimizeQuery(analysis, &shard_reg);
+        defer plan.deinit();
+        try std.testing.expectEqual(MergeStrategy.union_all, plan.merge_strategy);
+    }
+
+    // has_global_ordering → merge_sorted (takes priority over aggregation)
+    {
+        var analysis = QueryAnalysis.init(allocator);
+        defer analysis.deinit();
+        analysis.has_global_ordering = true;
+        var plan = try optimizer.optimizeQuery(analysis, &shard_reg);
+        defer plan.deinit();
+        try std.testing.expectEqual(MergeStrategy.merge_sorted, plan.merge_strategy);
+    }
+
+    // has_aggregation (no ordering) → hash_aggregate
+    {
+        var analysis = QueryAnalysis.init(allocator);
+        defer analysis.deinit();
+        analysis.has_aggregation = true;
+        var plan = try optimizer.optimizeQuery(analysis, &shard_reg);
+        defer plan.deinit();
+        try std.testing.expectEqual(MergeStrategy.hash_aggregate, plan.merge_strategy);
+    }
+}
+
+test "QueryCache.hashQuery: deterministic for same input" {
+    const allocator = std.testing.allocator;
+
+    var cache = try QueryCache.init(allocator);
+    defer cache.deinit();
+
+    const h1 = try cache.hashQuery("MATCH (n) RETURN n", &.{});
+    defer allocator.free(h1);
+    const h2 = try cache.hashQuery("MATCH (n) RETURN n", &.{});
+    defer allocator.free(h2);
+
+    try std.testing.expectEqualStrings(h1, h2);
+
+    // Different queries should produce different hashes
+    const h3 = try cache.hashQuery("RETURN 1 AS x", &.{});
+    defer allocator.free(h3);
+    try std.testing.expect(!std.mem.eql(u8, h1, h3));
+}
+
+test "cloneOrderKeys and cloneOrderDirs: roundtrip clone/free" {
+    const allocator = std.testing.allocator;
+
+    const orig_keys = [_][]const u8{ "name", "age", "score" };
+    const cloned_keys = try cloneOrderKeys(allocator, &orig_keys);
+    defer {
+        for (cloned_keys) |k| allocator.free(k);
+        allocator.free(cloned_keys);
+    }
+
+    try std.testing.expectEqual(@as(usize, 3), cloned_keys.len);
+    try std.testing.expectEqualStrings("name", cloned_keys[0]);
+    try std.testing.expectEqualStrings("age", cloned_keys[1]);
+    try std.testing.expectEqualStrings("score", cloned_keys[2]);
+
+    // Ensure keys are independent copies (not aliases)
+    try std.testing.expect(orig_keys[0].ptr != cloned_keys[0].ptr);
+
+    const orig_dirs = [_]bool{ true, false, true };
+    const cloned_dirs = try cloneOrderDirs(allocator, &orig_dirs);
+    defer allocator.free(cloned_dirs);
+
+    try std.testing.expectEqual(@as(usize, 3), cloned_dirs.len);
+    try std.testing.expectEqual(true, cloned_dirs[0]);
+    try std.testing.expectEqual(false, cloned_dirs[1]);
+    try std.testing.expectEqual(true, cloned_dirs[2]);
+}

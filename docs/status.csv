@@ -684,6 +684,7 @@ REQ-DIST-PLANNER-009,DistributedQueryPlanner,UnionPlanning,IMPL,,,distributed,20
 REQ-DIST-PLANNER-ESTIMATE-001,DistributedQueryPlanner,RowEstimation,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-PLANNER-REWRITE-001,DistributedQueryPlanner,ShardQueryGeneration,IMPL,,,distributed,2026-04-01,docs/superpowers/plans/2026-04-01-distributed-query-planner.md
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,IMPL,,,dist,2026-04-05,src/distributed/merge_strategies.zig
+REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,MergeStrategies,TESTED,,,dist,2026-04-06,src/distributed/merge_strategies.zig
 REQ-DIST-QUERY-COORD-001,Enhanced Query Coordination,QueryCoordination,IMPL,,,dist,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-002,Query Optimization,DistributedOptimization,IMPL,,,dist,2026-04-05,src/distributed/enhanced_query_coordinator.zig
 REQ-DIST-QUERY-COORD-INT-001,Distributed Query Coordination Integration Tests,IntegrationTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination_integration.zig
