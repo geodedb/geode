@@ -1329,17 +1329,20 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     // MatchBinding type for tracking variable->node mappings (named differently to avoid shadowing)
     const MatchBinding = struct {
         vars: std.StringHashMap(*graph_store.Node),
+        edge_vars: std.StringHashMap(*graph_store.Edge),
         alloc: std.mem.Allocator,
 
         fn init(alloc: std.mem.Allocator) @This() {
             return .{
                 .vars = std.StringHashMap(*graph_store.Node).init(alloc),
+                .edge_vars = std.StringHashMap(*graph_store.Edge).init(alloc),
                 .alloc = alloc,
             };
         }
 
         fn deinit(self: *@This()) void {
             self.vars.deinit();
+            self.edge_vars.deinit();
         }
 
         fn clone(self: *const @This()) !@This() {
@@ -1349,6 +1352,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             var iter = self.vars.iterator();
             while (iter.next()) |entry| {
                 try new_binding.vars.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            try new_binding.edge_vars.ensureTotalCapacity(@intCast(self.edge_vars.count() + 2));
+            var edge_iter = self.edge_vars.iterator();
+            while (edge_iter.next()) |entry| {
+                try new_binding.edge_vars.put(entry.key_ptr.*, entry.value_ptr.*);
             }
             return new_binding;
         }
@@ -1412,6 +1420,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1429,6 +1438,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1459,6 +1469,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1475,6 +1486,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1495,6 +1507,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1504,6 +1517,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1530,6 +1544,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1543,6 +1558,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
+                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1584,6 +1600,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             const extra_right_var = extra_hop.right.name;
             const extra_right_props = extra_hop.right.props;
             const extra_rel_dir = extra_hop.rel.dir;
+            const extra_rel_var = extra_hop.rel.name;
 
             var new_bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, @max(bindings.items.len, 8));
 
@@ -1638,6 +1655,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             }
                             var new_binding = try existing.clone();
                             if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            if (extra_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                             try new_binding.vars.put(chain_last_right_key, right_node);
                             try new_bindings.append(allocator, new_binding);
                         }
@@ -1660,6 +1678,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             }
                             var new_binding = try existing.clone();
                             if (extra_right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            if (extra_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                             try new_binding.vars.put(chain_last_right_key, right_node);
                             try new_bindings.append(allocator, new_binding);
                         }
@@ -1683,6 +1702,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         const rel_type: ?[]const u8 = if (hop.rel.types.len > 0) hop.rel.types[0] else null;
         const right_labels = hop.right.labels;
         const right_var = hop.right.name;
+        const chain_rel_var = hop.rel.name;
         // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SubsequentChains; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
         const rel_dir = hop.rel.dir;
 
@@ -1716,6 +1736,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
                         if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                        if (chain_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                         try new_bindings.append(allocator, new_binding);
                     }
                 }
@@ -1734,6 +1755,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         // #557: clone() now pre-sizes HashMap to avoid rehash
                         var new_binding = try existing.clone();
                         if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                        if (chain_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                         try new_bindings.append(allocator, new_binding);
                     }
                 }
@@ -1770,6 +1792,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             var new_binding = try existing.clone();
                             if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
                             if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            if (chain_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                             try new_bindings.append(allocator, new_binding);
                         }
                     }
@@ -1789,6 +1812,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             var new_binding = try existing.clone();
                             if (left_var) |lv| try new_binding.vars.put(lv, new_left_node);
                             if (right_var) |rv| try new_binding.vars.put(rv, right_node);
+                            if (chain_rel_var) |rn| if (store.edges.getPtr(edge.id)) |ep| try new_binding.edge_vars.put(rn, ep);
                             try new_bindings.append(allocator, new_binding);
                         }
                     }
@@ -1803,16 +1827,16 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         new_bindings.deinit(allocator);
     }
 
-    // Generate columns from RETURN clause
-    const items = q.ret.items;
-    const columns = try generateUniqueColumnNames(allocator, items);
+    // Determine which items to evaluate per binding: WITH items if present, else RETURN items
+    const eval_items = if (q.with_clause) |wc| wc.items else q.ret.items;
+    const eval_columns = try generateUniqueColumnNames(allocator, eval_items);
 
-    // Evaluate RETURN expressions for each binding
+    // Evaluate expressions for each binding
     // #560: Pre-size rows based on bindings count; reuse env ArrayLists across iterations
     var rows = try std.ArrayList([]Value).initCapacity(allocator, bindings.items.len);
 
     // #560: Allocate env lists once, reuse per binding (avoid per-row alloc/dealloc)
-    const max_vars: u32 = if (bindings.items.len > 0) @intCast(bindings.items[0].vars.count() + 4) else 8;
+    const max_vars: u32 = if (bindings.items.len > 0) @intCast(bindings.items[0].vars.count() + bindings.items[0].edge_vars.count() + 4) else 8;
     var env_names = try std.ArrayList([]const u8).initCapacity(allocator, max_vars);
     defer env_names.deinit(allocator);
     var env_values = try std.ArrayList(Value).initCapacity(allocator, max_vars);
@@ -1827,6 +1851,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         while (var_iter.next()) |entry| {
             try env_names.append(allocator, entry.key_ptr.*);
             try env_values.append(allocator, Value{ .Node = entry.value_ptr.* });
+        }
+
+        // Add edge/relationship variables to the environment
+        var edge_iter = binding.edge_vars.iterator();
+        while (edge_iter.next()) |entry| {
+            try env_names.append(allocator, entry.key_ptr.*);
+            try env_values.append(allocator, Value{ .Edge = entry.value_ptr.* });
         }
 
         const env = Env{
@@ -1847,21 +1878,56 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             if (!passes) continue;
         }
 
-        // Evaluate RETURN items
-        var row = try allocator.alloc(Value, items.len);
-        for (items, 0..) |item, i| {
+        // Evaluate items (WITH items if present, RETURN items otherwise)
+        var row = try allocator.alloc(Value, eval_items.len);
+        for (eval_items, 0..) |item, i| {
             row[i] = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
         }
         try rows.append(allocator, row);
     }
 
-    // CANARY: REQ=REQ-GQL-ORDER-MULTICHAIN-001; FEATURE="OrderByMultiChain"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-    // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
+    // Build intermediate result
     var result = ExecutionResult{
-        .columns = columns,
+        .columns = eval_columns,
         .rows = try rows.toOwnedSlice(allocator),
         .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
     };
+
+    // If WITH clause exists, apply RETURN projection on the WITH result
+    if (q.with_clause != null) {
+        const items = q.ret.items;
+        // Check if RETURN items are the same as WITH items (query chaining)
+        const same_items = q.with_clause.?.items.ptr == items.ptr and q.with_clause.?.items.len == items.len;
+        if (!same_items and items.len > 0) {
+            const ret_columns = try generateUniqueColumnNames(allocator, items);
+            var ret_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
+            for (result.rows) |row| {
+                const ret_env = Env{
+                    .names = result.columns,
+                    .values = row,
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                var ret_row = try allocator.alloc(Value, items.len);
+                for (items, 0..) |item, i| {
+                    ret_row[i] = eval.evalExpr(allocator, item.expr, ret_env) catch Value{ .Null = {} };
+                }
+                try ret_rows.append(allocator, ret_row);
+            }
+            // Free old columns
+            for (result.columns) |col| allocator.free(col);
+            allocator.free(result.columns);
+            result.columns = ret_columns;
+            // Free old rows
+            for (result.rows) |row| allocator.free(row);
+            allocator.free(result.rows);
+            result.rows = try ret_rows.toOwnedSlice(allocator);
+        }
+    }
+
+    // CANARY: REQ=REQ-GQL-ORDER-MULTICHAIN-001; FEATURE="OrderByMultiChain"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
+    // Apply ORDER BY AFTER collecting relationship match results to sort final projected results
 
     if (q.order_by) |order| {
         try sortRows(allocator, &result, order);
