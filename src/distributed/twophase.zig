@@ -1022,17 +1022,14 @@ pub const TwoPCCoordinator = struct {
         };
         defer msg.deinit(self.allocator);
 
-        // SEC-D003: Validate auth_token if GEODE_CLUSTER_TOKEN is configured.
-        // When the environment variable is set, reject any message without a valid token.
-        const expected_token = std.posix.getenv("GEODE_CLUSTER_TOKEN");
-        if (expected_token) |_| {
-            if (!cluster_auth.validateClusterToken(msg.auth_token)) {
-                log.warn("2PC message rejected: invalid cluster token", &.{
-                    Attr.string("from", from),
-                    Attr.string("txn_id", msg.transaction_id),
-                });
-                return error.AuthFailed;
-            }
+        // SEC-D003: Always validate auth_token on 2PC messages.
+        // Reject any message without a valid token regardless of whether env var is set.
+        if (!cluster_auth.validateClusterToken(msg.auth_token)) {
+            log.warn("2PC message rejected: invalid or missing cluster token", &.{
+                Attr.string("from", from),
+                Attr.string("txn_id", msg.transaction_id),
+            });
+            return error.AuthFailed;
         }
 
         // SEC-D009: Validate nonce to prevent replay attacks on 2PC messages.

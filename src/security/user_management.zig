@@ -217,7 +217,7 @@ const AuthSnapshot = struct {
 /// Global user store - LRU cache backed by optional persistent resolver.
 var user_store_mutex = std.Thread.Mutex{};
 var user_store: ?UserCache = null;
-var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var persistent_resolver: ?PersistentUserResolver = null;
 
 const default_auth_cache_entries: usize = 256;

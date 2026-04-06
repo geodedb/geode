@@ -111,7 +111,7 @@ pub const KMSProvider = struct {
         return switch (self.config.provider_type) {
             .local_dev => "local-dev-master-key-v1",
             .external_kms => {
-                const seed_str = if (self.config.seed) |s| s else 0x1234567890ABCDEF;
+                const seed_str = self.config.seed orelse return error.MissingSeed;
                 var buf: [64]u8 = undefined;
                 const slice = std.fmt.bufPrint(&buf, "external-kms-{x}", .{seed_str}) catch return error.BufferTooSmall;
                 const owned = try self.allocator.dupe(u8, slice);
@@ -165,47 +165,44 @@ pub const KMSProvider = struct {
         const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("LOCAL_DEV_WRAP", key_id);
         std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
 
-        // Use deterministic nonce derived from key_id (for reproducibility in tests)
+        // Use cryptographically random nonce (required for AES-GCM security)
         var nonce: [12]u8 = undefined;
-        std.crypto.secureZero(u8, &nonce);
-        const key_hash = std.hash.crc.Crc32.hash(key_id);
-        std.mem.writeInt(u32, nonce[0..4], key_hash, .little);
+        std.crypto.random.bytes(&nonce);
 
         // AES-256-GCM encrypt with authentication tag
-        // Output format: ciphertext || tag (plaintext.len + 16 bytes)
-        var ciphertext = try self.allocator.alloc(u8, plaintext.len + 16);
+        // Output format: nonce (12) || ciphertext || tag (16)
+        var output = try self.allocator.alloc(u8, 12 + plaintext.len + 16);
         var tag: [16]u8 = undefined;
 
-        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(ciphertext[0..plaintext.len], &tag, plaintext, "", nonce, wrap_key);
+        // Prepend nonce so unwrap can recover it
+        @memcpy(output[0..12], &nonce);
+        std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(output[12 .. 12 + plaintext.len], &tag, plaintext, "", nonce, wrap_key);
 
-        // Append tag to ciphertext
-        @memcpy(ciphertext[plaintext.len..], &tag);
+        // Append tag
+        @memcpy(output[12 + plaintext.len ..], &tag);
 
         const key_id_copy = try self.allocator.dupe(u8, key_id);
-        return WrappedKey{ .key_id = key_id_copy, .ciphertext = ciphertext };
+        return WrappedKey{ .key_id = key_id_copy, .ciphertext = output };
     }
 
     /// Local development unwrap using AES-256-GCM
     /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-002; FEATURE="AES-GCM Local KMS Unwrap"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
     fn unwrapLocalDev(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
-        // Minimum size: 16 bytes for tag
-        if (wrapped.ciphertext.len < 16) return error.InvalidCiphertext;
+        // Minimum size: 12 bytes nonce + 16 bytes tag
+        if (wrapped.ciphertext.len < 28) return error.InvalidCiphertext;
 
         // Derive same key from key_id using HKDF (extract-then-expand)
         var wrap_key: [32]u8 = undefined;
         const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("LOCAL_DEV_WRAP", wrapped.key_id);
         std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
 
-        // Reconstruct nonce
-        var nonce: [12]u8 = undefined;
-        std.crypto.secureZero(u8, &nonce);
-        const key_hash = std.hash.crc.Crc32.hash(wrapped.key_id);
-        std.mem.writeInt(u32, nonce[0..4], key_hash, .little);
+        // Extract nonce from ciphertext prefix (12 bytes)
+        const nonce: [12]u8 = wrapped.ciphertext[0..12].*;
 
-        // Split ciphertext and tag
-        const plaintext_len = wrapped.ciphertext.len - 16;
-        const ct = wrapped.ciphertext[0..plaintext_len];
-        const tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[plaintext_len..][0..16]);
+        // Split ciphertext and tag (after nonce)
+        const plaintext_len = wrapped.ciphertext.len - 12 - 16;
+        const ct = wrapped.ciphertext[12 .. 12 + plaintext_len];
+        const tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[12 + plaintext_len ..][0..16]);
 
         // AES-256-GCM decrypt with tag verification
         const plaintext = try self.allocator.alloc(u8, plaintext_len);
@@ -221,7 +218,7 @@ pub const KMSProvider = struct {
     fn wrapExternalKMS(self: *KMSProvider, key_id: MasterKeyId, plaintext: []const u8) !WrappedKey {
         if (plaintext.len != 32) return error.InvalidKeyLength;
 
-        const seed = self.config.seed orelse 0x1234567890ABCDEF;
+        const seed = self.config.seed orelse return error.MissingSeed;
         if (self.external_client == null) {
             // GAP-0216: Handle potential error from LocalSimulated KMS init
             self.external_client = try external_kms.Client.init(self.allocator, seed);
@@ -250,7 +247,7 @@ pub const KMSProvider = struct {
     fn unwrapExternalKMS(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
         if (wrapped.metadata == null) return error.MissingMetadata;
 
-        const seed = self.config.seed orelse 0x1234567890ABCDEF;
+        const seed = self.config.seed orelse return error.MissingSeed;
         if (self.external_client == null) {
             // GAP-0216: Handle potential error from LocalSimulated KMS init
             self.external_client = try external_kms.Client.init(self.allocator, seed);

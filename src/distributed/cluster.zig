@@ -492,15 +492,13 @@ pub const ClusterCoordinator = struct {
             };
             defer frame_res.deinit(self.allocator);
 
-            // SEC-D001: Validate cluster token on incoming Raft frames.
-            // When GEODE_CLUSTER_TOKEN is configured, reject frames without valid token.
-            if (std.posix.getenv("GEODE_CLUSTER_TOKEN")) |_| {
-                if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
-                    log.warn("Raft frame rejected: invalid cluster token", &.{
-                        Attr.uint("from", frame_res.from),
-                    });
-                    continue;
-                }
+            // SEC-D001: Always validate cluster token on incoming Raft frames.
+            // Reject frames without valid token regardless of whether env var is set.
+            if (!cluster_auth.validateClusterToken(frame_res.auth_token)) {
+                log.warn("Raft frame rejected: invalid or missing cluster token", &.{
+                    Attr.uint("from", frame_res.from),
+                });
+                continue;
             }
 
             // SEC-D009: Validate nonce to prevent replay attacks.
@@ -526,18 +524,16 @@ pub const ClusterCoordinator = struct {
     }
 
     fn handleJoinCluster(self: *ClusterCoordinator, msg: Message) !Response {
-        // SEC-D002: Validate cluster token before revealing topology.
-        // When GEODE_CLUSTER_TOKEN is configured, reject join requests without valid token.
-        if (std.posix.getenv("GEODE_CLUSTER_TOKEN")) |_| {
-            if (!cluster_auth.validateClusterToken(msg.auth_token)) {
-                log.warn("JOIN_CLUSTER rejected: invalid cluster token", &.{
-                    Attr.string("client_id", msg.client_id orelse "unknown"),
-                });
-                return Response{
-                    .status = .ERR,
-                    .data = null,
-                };
-            }
+        // SEC-D002: Always validate cluster token before revealing topology.
+        // Reject join requests without valid token regardless of whether env var is set.
+        if (!cluster_auth.validateClusterToken(msg.auth_token)) {
+            log.warn("JOIN_CLUSTER rejected: invalid or missing cluster token", &.{
+                Attr.string("client_id", msg.client_id orelse "unknown"),
+            });
+            return Response{
+                .status = .ERR,
+                .data = null,
+            };
         }
 
         if (self.raft.state != .leader) {

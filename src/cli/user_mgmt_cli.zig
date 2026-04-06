@@ -208,17 +208,9 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
                 std.debug.print("Generated password: {s}\n", .{generated_pw});
                 break :blk &generated_pw;
             }
-            if (is_production_build) {
-                // Production builds require explicit password
-                std.debug.print("Error: --password is required in production builds\n", .{});
-                std.debug.print("Use --password <password> or --generate-password\n", .{});
-                std.process.exit(@intFromEnum(ExitCode.usage_error));
-            }
-            // Debug builds: use simple default for testing convenience
-            if (password_is_default) {
-                std.debug.print("Warning: Using default test password. Use --password in production.\n", .{});
-            }
-            break :blk "testpass123!";
+            // All builds require explicit password
+            std.debug.print("Error: --password or --generate-password is required\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
 
         // Check if user already exists
@@ -372,13 +364,10 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         } else {
             // User doesn't exist - create
             if (new_password == null) {
-                if (is_production_build) {
-                    std.debug.print("Error: --password is required to create new user in production\n", .{});
-                    std.process.exit(@intFromEnum(ExitCode.usage_error));
-                }
-                std.debug.print("Warning: Creating user with default test password\n", .{});
+                std.debug.print("Error: --password is required to create new user\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
             }
-            const pw = new_password orelse "testpass123!";
+            const pw = new_password.?;
             if (!requirePasswordStrong(pw)) {
                 std.debug.print("Error: password does not meet policy requirements (min 8 chars, letters and numbers)\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.general_error));

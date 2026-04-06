@@ -386,7 +386,7 @@ pub fn executeTde(
                 kms_mod.KMSProviderType.local_dev,
             .endpoint = if (endpoint.len > 0) endpoint else null,
             .auth_token = if (auth_token.len > 0) auth_token else null,
-            .seed = 0x1234567890ABCDEF, // Default seed for external KMS
+            .seed = null, // Seed must be explicitly configured; null triggers error in production
         };
 
         // Initialize the provider
