@@ -409,13 +409,16 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                     std.mem.eql(u8, call.callee.Ident.orig, "COUNT")) and
                 call.args.len == 1;
             if (is_count) {
-                // Return the total count (works for both count(*) and count(variable))
+                // GQL semantics: count() in MATCH...CREATE context counts output
+                // rows, not total created elements. Each matched row produces
+                // exactly one output row, so count(var) == number of matched rows.
+                const count_value: i64 = @intCast(match_result.rows.len);
                 var columns = try allocator.alloc([]const u8, 1);
                 columns[0] = try allocator.dupe(u8, q.ret.items[0].alias orelse "count");
 
                 var rows = try allocator.alloc([]Value, 1);
                 var ret_row = try allocator.alloc(Value, 1);
-                ret_row[0] = Value{ .Int = total_created_count };
+                ret_row[0] = Value{ .Int = count_value };
                 rows[0] = ret_row;
 
                 return ExecutionResult{
