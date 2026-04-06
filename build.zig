@@ -1161,6 +1161,32 @@ pub fn build(b: *std.Build) void {
     const run_nonce_tracker_tests = b.addRunArtifact(nonce_tracker_tests);
     test_step.dependOn(&run_nonce_tracker_tests.step);
 
+    // GAP-0513: ConsistentHash ring unit tests
+    const consistent_hash_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/consistent_hash.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    consistent_hash_test_mod.addImport("logging", logging_mod);
+    const consistent_hash_tests = b.addTest(.{
+        .root_module = consistent_hash_test_mod,
+    });
+    const run_consistent_hash_tests = b.addRunArtifact(consistent_hash_tests);
+    test_step.dependOn(&run_consistent_hash_tests.step);
+
+    // GAP-0513: cluster_health unit tests
+    const cluster_health_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/cluster_health.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cluster_health_test_mod.addImport("logging", logging_mod);
+    const cluster_health_tests = b.addTest(.{
+        .root_module = cluster_health_test_mod,
+    });
+    const run_cluster_health_tests = b.addRunArtifact(cluster_health_tests);
+    test_step.dependOn(&run_cluster_health_tests.step);
+
     // SEC-D014: Raft persistent state atomic write tests
     const raft_persistent_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/raft_persistent.zig"),
