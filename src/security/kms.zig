@@ -192,25 +192,42 @@ pub const KMSProvider = struct {
     /// Local development unwrap using AES-256-GCM
     /// CANARY: REQ=REQ-GQL-KMS-LOCALDEV-002; FEATURE="AES-GCM Local KMS Unwrap"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/geode_tde_security.yml; OWNER=security; UPDATED=2026-01-12
     fn unwrapLocalDev(self: *KMSProvider, wrapped: WrappedKey) ![]u8 {
-        // Minimum size: 12 bytes nonce + 16 bytes tag
-        if (wrapped.ciphertext.len < 28) return error.InvalidCiphertext;
+        // Minimum size: 16 bytes for tag (old format) or 28 bytes for nonce+tag (new format)
+        if (wrapped.ciphertext.len < 16) return error.InvalidCiphertext;
 
         // Derive same key from key_id using HKDF (extract-then-expand)
         var wrap_key: [32]u8 = undefined;
         const prk = std.crypto.kdf.hkdf.HkdfSha256.extract("LOCAL_DEV_WRAP", wrapped.key_id);
         std.crypto.kdf.hkdf.HkdfSha256.expand(&wrap_key, "", prk);
 
-        // Extract nonce from ciphertext prefix (12 bytes)
-        const nonce: [12]u8 = wrapped.ciphertext[0..12].*;
+        // Try new format first: nonce (12) || ciphertext || tag (16)
+        if (wrapped.ciphertext.len >= 28) {
+            const nonce: [12]u8 = wrapped.ciphertext[0..12].*;
+            const new_plaintext_len = wrapped.ciphertext.len - 12 - 16;
+            const new_ct = wrapped.ciphertext[12 .. 12 + new_plaintext_len];
+            const new_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[12 + new_plaintext_len ..][0..16]);
 
-        // Split ciphertext and tag (after nonce)
-        const plaintext_len = wrapped.ciphertext.len - 12 - 16;
-        const ct = wrapped.ciphertext[12 .. 12 + plaintext_len];
-        const tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[12 + plaintext_len ..][0..16]);
+            const plaintext = try self.allocator.alloc(u8, new_plaintext_len);
+            if (std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, new_ct, new_tag.*, "", nonce, wrap_key)) |_| {
+                return plaintext;
+            } else |_| {
+                self.allocator.free(plaintext);
+                // Fall through to legacy format
+            }
+        }
 
-        // AES-256-GCM decrypt with tag verification
-        const plaintext = try self.allocator.alloc(u8, plaintext_len);
-        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, ct, tag.*, "", nonce, wrap_key) catch {
+        // Legacy format: ciphertext || tag (16), deterministic nonce from CRC32(key_id)
+        const legacy_plaintext_len = wrapped.ciphertext.len - 16;
+        const legacy_ct = wrapped.ciphertext[0..legacy_plaintext_len];
+        const legacy_tag: *const [16]u8 = @ptrCast(wrapped.ciphertext[legacy_plaintext_len..][0..16]);
+
+        var legacy_nonce: [12]u8 = undefined;
+        std.crypto.secureZero(u8, &legacy_nonce);
+        const key_hash = std.hash.crc.Crc32.hash(wrapped.key_id);
+        std.mem.writeInt(u32, legacy_nonce[0..4], key_hash, .little);
+
+        const plaintext = try self.allocator.alloc(u8, legacy_plaintext_len);
+        std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(plaintext, legacy_ct, legacy_tag.*, "", legacy_nonce, wrap_key) catch {
             self.allocator.free(plaintext);
             return error.DecryptionFailed;
         };

@@ -2294,6 +2294,9 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
                 state.allocator.free(old);
             }
             state.current_graph = try state.allocator.dupe(u8, graph_name);
+            // Sync session graph for HELLO on reconnect
+            if (state.session.graph) |old_graph| state.allocator.free(old_graph);
+            state.session.graph = try state.allocator.dupe(u8, graph_name);
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
             try stdout.writeAll(msg);
