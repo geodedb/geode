@@ -2593,11 +2593,15 @@ pub const GraphStore = struct {
 
     // Accepts caller-provided allocator to avoid concurrent threads contending
     // on self.allocator (same class of bug as GAP-0425 getNodesByLabels fix).
-    pub fn getEdgesByType(self: *GraphStore, allocator: std.mem.Allocator, edge_type: []const u8) []Edge {
+    // GAP-0509: tenant_id filters edges to a specific tenant when non-null.
+    pub fn getEdgesByType(self: *GraphStore, allocator: std.mem.Allocator, edge_type: []const u8, tenant_id: ?[]const u8) []Edge {
         var count: usize = 0;
         var iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
             if (std.mem.eql(u8, edge.label, edge_type)) {
+                if (tenant_id) |tid| {
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                }
                 count += 1;
             }
         }
@@ -2607,6 +2611,9 @@ pub const GraphStore = struct {
         iter = self.edges.valueIterator();
         while (iter.next()) |edge| {
             if (std.mem.eql(u8, edge.label, edge_type)) {
+                if (tenant_id) |tid| {
+                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+                }
                 result[i] = edge.*;
                 i += 1;
             }

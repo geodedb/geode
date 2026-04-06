@@ -1415,6 +1415,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1433,6 +1434,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1497,7 +1499,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else if (rel_type) |rt| {
             // #558: No labels at all but relationship type present — use edge type scan
-            const typed_edges = store.getEdgesByType(allocator, rt);
+            const typed_edges = store.getEdgesByType(allocator, rt, filter_tenant);
             defer if (typed_edges.len > 0) allocator.free(typed_edges);
 
             for (typed_edges) |edge| {
@@ -1540,6 +1542,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
 
                 for (outgoing_edges) |edge| {
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1554,6 +1557,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 }
 
                 for (incoming_edges) |edge| {
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                     if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1622,6 +1626,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (extra_rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge, extra_rel_props_m)) continue;
 
                         if (store.nodes.getPtr(edge.to_id)) |right_node| {
@@ -1668,6 +1673,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (extra_rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         if (!matchesEdgeProperties(allocator, edge, extra_rel_props_m)) continue;
 
                         if (store.nodes.getPtr(edge.from_id)) |right_node| {
@@ -1730,6 +1736,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1749,6 +1756,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
+                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1785,6 +1793,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                         if (store.nodes.getPtr(edge.to_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -1805,6 +1814,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                         if (store.nodes.getPtr(edge.from_id)) |right_node| {
                             if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
@@ -2226,6 +2236,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
                 }
+                // GAP-0509: Filter edge by tenant
+                if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                 const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
 
                 // Filter right node by graph
@@ -2305,6 +2317,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 if (rel_type) |rt| {
                     if (!std.mem.eql(u8, edge.label, rt)) continue;
                 }
+                // GAP-0509: Filter edge by tenant
+                if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                 const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
 
                 // Filter right node by graph
@@ -2600,6 +2614,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         const right_node = store.nodes.getPtr(edge.to_id) orelse continue;
 
                         // Filter by labels
@@ -2668,6 +2684,8 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         const right_node = store.nodes.getPtr(edge.from_id) orelse continue;
 
                         // Filter by labels
@@ -3724,6 +3742,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     }
                                     if (!matches_type) continue;
                                 }
+                                // GAP-0509: Filter edge by tenant
+                                if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                                 const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
                                 const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
@@ -3998,6 +4018,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                         // Get the target node (to_id for outgoing edges)
                         const right_node_id = edge.to_id;
@@ -4144,6 +4166,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
 
                         // Get the target node (from_id for incoming edges)
                         const right_node_id = edge.from_id;
@@ -4622,6 +4646,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         // Filter by relationship properties
                         if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
@@ -4714,6 +4740,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         // Filter by relationship properties
                         if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
@@ -6098,6 +6126,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         // Filter by relationship properties if specified
                         if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
@@ -6310,6 +6340,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (rel_type) |rt| {
                             if (!std.mem.eql(u8, edge.label, rt)) continue;
                         }
+                        // GAP-0509: Filter edge by tenant
+                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
                         // Filter by relationship properties if specified
                         if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
 
