@@ -622,7 +622,9 @@ pub const SecurityManager = struct {
             }
             if (require) break;
         }
-        if (!has_dynamic) self.mfa_require_cache.put(u.id, require) catch {};
+        if (!has_dynamic) self.mfa_require_cache.put(u.id, require) catch |err| {
+            log.warn("MFA cache update failed", &.{Attr.string("error", @errorName(err))});
+        };
         return require;
     }
 
@@ -961,7 +963,9 @@ pub const SecurityManager = struct {
         const matches = constantTimeEqual64(&computed_hex, stored_hash);
         if (matches) {
             // Flag for migration: legacy Blake2b accounts must re-hash with Argon2id
-            self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch {};
+            self.audit_log.append(.password_migration_needed, 0, "Legacy Blake2b hash verified — account should migrate to Argon2id", .{}) catch |err| {
+                log.warn("Audit log append failed for password migration event", &.{Attr.string("error", @errorName(err))});
+            };
         }
         return matches;
     }
@@ -1481,7 +1485,9 @@ pub const SecurityManager = struct {
         // Note: MFA completion assumes password reset already handled in initial auth
         const token = try self.createSession(user.id);
         // Mark elevation using configured TTL
-        self.markStepUp(token, self.elevation_ttl_ms) catch {};
+        self.markStepUp(token, self.elevation_ttl_ms) catch |err| {
+            log.warn("Step-up auth marking failed", &.{Attr.string("error", @errorName(err))});
+        };
         try self.audit_log.logSuccessfulLogin(user.id, user.username);
         return token;
     }

@@ -175,6 +175,10 @@ editors/vscode/*.vsix
 *.key
 *.pem
 
+# Geode credential files (generated at runtime)
+.geode_admin_password
+.geode_hmac_key
+
 # OS files
 .DS_Store
 Thumbs.db

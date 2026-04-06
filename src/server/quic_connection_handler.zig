@@ -929,7 +929,7 @@ pub fn handleQuicConnection(
             if (provider.authenticate(&identity)) |auth_result_opt| {
                 if (auth_result_opt) |auth_result| {
                     // Store the authenticated user from the mTLS certificate
-                    state.authenticated_user = std.fmt.allocPrint(gpa, "mtls:{}", .{auth_result.user_id}) catch null;
+                    state.authenticated_user = try std.fmt.allocPrint(gpa, "mtls:{}", .{auth_result.user_id});
                     log.info("mTLS: Authenticated user via certificate", &.{
                         Attr.int("user_id", @intCast(auth_result.user_id)),
                     });

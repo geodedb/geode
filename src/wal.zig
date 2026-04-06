@@ -196,7 +196,11 @@ pub const WriteAheadLog = struct {
 
     /// Flush WAL to disk (fsync)
     pub fn sync(self: *WriteAheadLog) !void {
-        self.inner.sync() catch {};
+        self.inner.sync() catch |err| {
+            log.warn("WAL fsync failed — CDC/audit events may be lost", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
     }
 
     /// DEPRECATED: Crash recovery is now handled by the graph-storage engine's

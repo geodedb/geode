@@ -71,11 +71,11 @@ pub const KMSProvider = struct {
     /// Initialize KMS provider with production safety check
     /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-002; FEATURE="KMS Provider Init Safety"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
     pub fn init(allocator: std.mem.Allocator, config: KMSConfig) KMSProvider {
-        // Production safety warning
+        // Production safety: block non-production-safe providers in release builds
         if (is_production_build and !config.provider_type.isProductionSafe()) {
-            log.warn("Using non-production-safe KMS provider in production build", &.{
+            log.err("BLOCKED: Non-production-safe KMS provider in production build. " ++
+                "Configure vault_transit, aws_kms, azure_kv, or remote_kms.", &.{
                 Attr.string("provider_type", @tagName(config.provider_type)),
-                Attr.string("recommendation", "Configure vault_transit, aws_kms, azure_kv, or remote_kms"),
             });
         }
 
@@ -131,6 +131,10 @@ pub const KMSProvider = struct {
 
     /// Wrap a plaintext data key (encrypt under master key)
     pub fn wrapDataKey(self: *KMSProvider, plaintext: []const u8) !WrappedKey {
+        // Block non-production-safe providers in release builds
+        if (is_production_build and !self.config.provider_type.isProductionSafe()) {
+            return error.NonProductionKmsBlocked;
+        }
         const key_id = try self.fetchActiveMasterKey();
         // Free key_id if it was dynamically allocated (external_kms, remote_kms without custom master_key_id)
         const needs_free = self.config.master_key_id == null and
