@@ -1810,6 +1810,23 @@ pub fn build(b: *std.Build) void {
     const run_rls_filter_tests = b.addRunArtifact(rls_filter_tests);
     test_step.dependOn(&run_rls_filter_tests.step);
 
+    // GAP-0510 Task 1: RLS value bridge — standalone module + unit tests
+    // Converts execution Value / PropertyValue → rls_core.Value for checkRowAccess().
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-010; FEATURE="RLS Expression Wiring"; ASPECT=ValueBridge; STATUS=TESTED; OWNER=security; UPDATED=2026-04-06
+    const rls_value_bridge_mod = b.createModule(.{
+        .root_source_file = b.path("src/security/rls_value_bridge.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    rls_value_bridge_mod.addImport("rls", rls_mod);
+    rls_value_bridge_mod.addImport("geode", root_mod);
+    rls_value_bridge_mod.addImport("logging", logging_mod);
+    root_mod.addImport("rls_value_bridge", rls_value_bridge_mod);
+
+    const rls_value_bridge_tests = b.addTest(.{ .root_module = rls_value_bridge_mod });
+    const run_rls_value_bridge_tests = b.addRunArtifact(rls_value_bridge_tests);
+    test_step.dependOn(&run_rls_value_bridge_tests.step);
+
     const audit_security_mod = b.createModule(.{ .root_source_file = b.path("src/security/audit.zig"), .target = target, .optimize = optimize });
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);
