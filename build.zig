@@ -1200,6 +1200,17 @@ pub fn build(b: *std.Build) void {
     const run_raft_persistent_tests = b.addRunArtifact(raft_persistent_tests);
     test_step.dependOn(&run_raft_persistent_tests.step);
 
+    // GAP-0513: federation_latency_aggregate unit tests (Welford stats, reservoir, archive ring)
+    const fed_latency_agg_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/federation_latency_aggregate.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fed_latency_agg_test_mod.addImport("federation_flag", b.createModule(.{ .root_source_file = b.path("src/distributed/federation_flag.zig"), .target = target, .optimize = optimize }));
+    const fed_latency_agg_tests = b.addTest(.{ .root_module = fed_latency_agg_test_mod });
+    const run_fed_latency_agg_tests = b.addRunArtifact(fed_latency_agg_tests);
+    test_step.dependOn(&run_fed_latency_agg_tests.step);
+
     // Raft consensus PersistentStorage file-backed round-trip tests
     const raft_ps_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_raft_persistent_storage.zig"),

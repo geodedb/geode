@@ -1,5 +1,5 @@
 const std = @import("std");
-const fed_flag = @import("src/distributed/federation_flag.zig");
+const fed_flag = @import("federation_flag.zig");
 
 // Federation latency aggregate module
 // Maintains lightweight in-memory aggregates for mismatch latency sampling cycles.
@@ -170,6 +170,8 @@ pub fn resetAll() void {
 
     g_current = .{};
     g_archive = .{};
+    // Reset the shared federation mismatch flag so tests start from a clean state.
+    fed_flag.g_last_federation_mismatch.store(false, .release);
 }
 
 pub fn archiveLen() usize {
@@ -195,4 +197,84 @@ pub fn schemaValidate() bool {
         last_cycle = s.cycle_id;
     }
     return true;
+}
+
+// CANARY: REQ=REQ-GQL-024; FEATURE="FederationLatencyAggregates"; ASPECT=Tests; STATUS=TESTED; TEST="federation_latency_aggregate unit tests"; OWNER=federation; UPDATED=2026-04-06
+
+test "recordLatency updates count, min, max, mean" {
+    resetAll();
+    recordLatency(100, false);
+    recordLatency(200, false);
+    const snap = snapshotCurrent();
+    try std.testing.expectEqual(@as(u64, 2), snap.count);
+    try std.testing.expectEqual(@as(u64, 100), snap.min_ns);
+    try std.testing.expectEqual(@as(u64, 200), snap.max_ns);
+    // mean should be 150 (Welford exact for two samples)
+    const mean_diff = snap.mean_ns - 150.0;
+    const abs_diff = if (mean_diff < 0) -mean_diff else mean_diff;
+    try std.testing.expect(abs_diff < 0.001);
+}
+
+test "recordLatency mismatch increments streak, non-mismatch resets streak" {
+    resetAll();
+    recordLatency(500, true);
+    recordLatency(600, true);
+    const snap1 = snapshotCurrent();
+    try std.testing.expectEqual(@as(u64, 2), snap1.streak);
+    recordLatency(700, false);
+    const snap2 = snapshotCurrent();
+    try std.testing.expectEqual(@as(u64, 0), snap2.streak);
+}
+
+test "finalizeCycle archives snapshot and resets current" {
+    resetAll();
+    recordLatency(300, false);
+    recordLatency(400, false);
+    const snap = finalizeCycle();
+    try std.testing.expectEqual(@as(u64, 2), snap.count);
+    try std.testing.expectEqual(@as(u64, 300), snap.min_ns);
+    try std.testing.expectEqual(@as(u64, 400), snap.max_ns);
+    // after finalize, current should be reset (count=0)
+    const cur = snapshotCurrent();
+    try std.testing.expectEqual(@as(u64, 0), cur.count);
+    try std.testing.expectEqual(@as(usize, 1), archiveLen());
+}
+
+test "findSnapshot retrieves by cycle_id and returns null for non-existent" {
+    resetAll();
+    recordLatency(1000, false);
+    const snap = finalizeCycle();
+    const found = findSnapshot(snap.cycle_id);
+    try std.testing.expect(found != null);
+    try std.testing.expectEqual(snap.cycle_id, found.?.cycle_id);
+    try std.testing.expectEqual(@as(u64, 1), found.?.count);
+    // non-existent cycle_id
+    const missing = findSnapshot(snap.cycle_id + 9999);
+    try std.testing.expect(missing == null);
+}
+
+test "schemaValidate passes for valid archive" {
+    resetAll();
+    recordLatency(100, false);
+    _ = finalizeCycle();
+    recordLatency(200, false);
+    _ = finalizeCycle();
+    try std.testing.expect(schemaValidate());
+}
+
+test "archiveLen ring wraps at 16" {
+    resetAll();
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        recordLatency(100 + i, false);
+        _ = finalizeCycle();
+    }
+    try std.testing.expectEqual(@as(usize, 16), archiveLen());
+}
+
+test "p95_ns with single sample equals that sample" {
+    resetAll();
+    recordLatency(42, false);
+    const snap = snapshotCurrent();
+    try std.testing.expectEqual(@as(u64, 42), snap.p95_ns);
 }

@@ -1356,6 +1356,7 @@ REQ-GQL-024,FederationLatencyAggregates,Streak,TESTED,,,federation,2025-09-26,te
 REQ-GQL-024,FederationLatencyAggregates,Summary,IMPL,,,federation,2026-04-05,src/distributed/federation_latency_aggregate.zig
 REQ-GQL-024,FederationLatencyAggregates,Summary,TESTED,,,federation,2025-09-26,tests/test_federation_latency_aggregates.zig
 REQ-GQL-024,FederationLatencyAggregates,TailLatencyP999Envelope,BENCHED,,,federation,2025-09-26,benchmarks/benchmark_federation_latency_aggregate_variance.zig
+REQ-GQL-024,FederationLatencyAggregates,Tests,TESTED,,,federation,2026-04-06,src/distributed/federation_latency_aggregate.zig
 REQ-GQL-024,FederationLatencyAggregates,VarianceEnvelope,BENCHED,,,federation,2025-09-26,benchmarks/benchmark_federation_latency_aggregate_variance.zig
 REQ-GQL-024,FederationLatencyAggregates,VarianceEnvelope,BENCHED,,,federation,2025-09-26,tests/benchmark_federation_latency_aggregate_variance.zig
 REQ-GQL-024,FederationMismatchFlag,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
