@@ -168,6 +168,18 @@ pub const ShardManager = struct {
     }
 
     pub fn deinit(self: *ShardManager) void {
+        // Free unique address strings allocated by addShard via allocPrint.
+        // Each addShard call produces virtual_nodes ring entries sharing one address pointer,
+        // so we deduplicate by pointer value before freeing.
+        var seen = std.AutoHashMap(usize, void).init(self.allocator);
+        defer seen.deinit();
+        for (self.consistent_hash.ring.items) |node| {
+            const ptr = @intFromPtr(node.address.ptr);
+            if (!seen.contains(ptr)) {
+                seen.put(ptr, {}) catch {};
+                self.allocator.free(node.address);
+            }
+        }
         self.consistent_hash.deinit();
         self.shards.deinit();
     }
@@ -180,7 +192,7 @@ pub const ShardManager = struct {
         try self.consistent_hash.addNode(.{
             .id = shard.id,
             .hash = 0, // Will be calculated
-            .address = try std.fmt.allocPrint(self.allocator, "{}", .{shard.primary.address}),
+            .address = try std.fmt.allocPrint(self.allocator, "{f}", .{shard.primary.address}),
             .weight = 1.0,
             .metadata = null,
         });
@@ -189,7 +201,7 @@ pub const ShardManager = struct {
     // Get shard for a given key
     pub fn getShardForKey(self: *ShardManager, key: []const u8) !*Shard {
         const shard_id = switch (self.partition_strategy) {
-            .hash => self.consistent_hash.getNode(key).id,
+            .hash => (self.consistent_hash.getNode(key) orelse return error.ShardNotFound).id,
             .range => self.getRangeShardId(key),
             .graph_aware => self.getGraphAwareShardId(key),
             .geo_distributed => self.getGeoShardId(key),
@@ -205,7 +217,7 @@ pub const ShardManager = struct {
         const ideal_per_shard = total_nodes / self.shards.count();
 
         var migrations = std.ArrayList(Migration){};
-        defer migrations.deinit();
+        defer migrations.deinit(self.allocator);
 
         // Identify shards that need rebalancing
         var it = self.shards.iterator();
@@ -214,7 +226,7 @@ pub const ShardManager = struct {
             const deviation = @as(i64, @intCast(shard.statistics.node_count)) - @as(i64, @intCast(ideal_per_shard));
 
             if (@abs(deviation) > @as(i64, @intCast(ideal_per_shard / 10))) { // 10% threshold
-                try migrations.append(.{
+                try migrations.append(self.allocator, .{
                     .source_shard = shard.id,
                     .target_shard = self.findTargetShard(shard.id),
                     .key_range = self.calculateMigrationRange(shard, @intCast(deviation)),
@@ -350,20 +362,20 @@ pub const ShardManager = struct {
     // Query routing for distributed queries
     pub fn routeQuery(self: *ShardManager, query: Query) !QueryPlan {
         var affected_shards = std.ArrayList(u64){};
-        defer affected_shards.deinit();
+        defer affected_shards.deinit(self.allocator);
 
         // Determine which shards are affected by the query
         switch (query.type) {
             .point_lookup => {
                 const shard = try self.getShardForKey(query.key);
-                try affected_shards.append(shard.id);
+                try affected_shards.append(self.allocator, shard.id);
             },
             .range_scan => {
                 var it = self.shards.iterator();
                 while (it.next()) |entry| {
                     const shard = entry.value_ptr;
                     if (self.rangeOverlaps(query.range, shard.key_range)) {
-                        try affected_shards.append(shard.id);
+                        try affected_shards.append(self.allocator, shard.id);
                     }
                 }
             },
@@ -371,13 +383,13 @@ pub const ShardManager = struct {
                 // Query all shards
                 var it = self.shards.iterator();
                 while (it.next()) |entry| {
-                    try affected_shards.append(entry.key_ptr.*);
+                    try affected_shards.append(self.allocator, entry.key_ptr.*);
                 }
             },
         }
 
         return QueryPlan{
-            .shards = try affected_shards.toOwnedSlice(),
+            .shards = try affected_shards.toOwnedSlice(self.allocator),
             .execution_strategy = self.determineExecutionStrategy(query, affected_shards.items.len),
         };
     }
@@ -496,6 +508,7 @@ pub const ShardManager = struct {
         target_shard: *Shard,
         transport: *TransportCallback,
     ) !void {
+        _ = self;
         const source_addr = source_shard.primary.address;
         const target_addr = target_shard.primary.address;
 
@@ -637,7 +650,7 @@ pub const ShardManager = struct {
     }
 
     fn allocateReplicas(self: *ShardManager, count: u32) ![]ShardNode {
-        var replicas = try self.allocator.alloc(ShardNode, count);
+        const replicas = try self.allocator.alloc(ShardNode, count);
         for (replicas, 0..) |*replica, i| {
             replica.* = ShardNode{
                 .id = @intCast(std.time.timestamp() + i),
@@ -756,7 +769,8 @@ pub const ShardManager = struct {
             }
         }
         // Fallback to first shard if no range matches
-        if (self.shards.iterator().next()) |entry| {
+        var fallback_it = self.shards.iterator();
+        if (fallback_it.next()) |entry| {
             return entry.key_ptr.*;
         }
         return 0;
@@ -792,7 +806,7 @@ pub const ShardManager = struct {
         }
 
         // Fallback to consistent hashing
-        return self.consistent_hash.getNode(key).id;
+        return (self.consistent_hash.getNode(key) orelse return 0).id;
     }
 
     // CANARY: REQ=REQ-DIST-GEO-SHARD-001; FEATURE="Geo-Distributed Sharding"; ASPECT=LocalityAware; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
@@ -828,12 +842,12 @@ pub const ShardManager = struct {
         }
 
         // Fallback to consistent hashing for unknown regions
-        return self.consistent_hash.getNode(key).id;
+        return (self.consistent_hash.getNode(key) orelse return 0).id;
     }
 };
 
-// Sharding manager using consistent hashing
-pub const ShardManager = struct {
+// Simple sharding manager using consistent hashing
+pub const SimpleShardManager = struct {
     allocator: Allocator,
     consistent_hash: ConsistentHash,
     shards: std.AutoHashMap(u64, Shard),
@@ -924,13 +938,13 @@ pub const ShardManager = struct {
             var iter = self.shards.iterator();
             while (iter.next()) |entry| {
                 if (entry.value_ptr.node_id == node.id) {
-                    try replicas.append(entry.value_ptr.*);
+                    try replicas.append(self.allocator, entry.value_ptr.*);
                     break;
                 }
             }
         }
 
-        return try replicas.toOwnedSlice();
+        return try replicas.toOwnedSlice(self.allocator);
     }
 
     pub fn splitShard(self: *ShardManager, shard_id: u64) !void {
@@ -1045,17 +1059,17 @@ pub const ShardManager = struct {
 
         // Find shards that need splitting or merging
         var to_split = std.ArrayList(u64){};
-        defer to_split.deinit();
+        defer to_split.deinit(self.allocator);
         var to_merge = std.ArrayList(u64){};
-        defer to_merge.deinit();
+        defer to_merge.deinit(self.allocator);
 
         iter = self.shards.iterator();
         while (iter.next()) |entry| {
             const shard = entry.value_ptr.*;
             if (shard.size_bytes > avg_size + threshold) {
-                try to_split.append(shard.id);
+                try to_split.append(self.allocator, shard.id);
             } else if (shard.size_bytes < avg_size - threshold) {
-                try to_merge.append(shard.id);
+                try to_merge.append(self.allocator, shard.id);
             }
         }
 
@@ -1071,3 +1085,146 @@ pub const ShardManager = struct {
         }
     }
 };
+
+// CANARY: REQ=REQ-GAP-0513-DIST-SHARD-001; FEATURE="ShardManager"; ASPECT=UnitTests; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "enhanced ShardManager init and deinit sets fields correctly" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sm = ShardManager.init(allocator, 3, .hash);
+    defer sm.deinit();
+
+    try testing.expectEqual(@as(u32, 3), sm.replication_factor);
+    try testing.expectEqual(ShardManager.PartitionStrategy.hash, sm.partition_strategy);
+    try testing.expect(sm.transport_callback == null);
+}
+
+// CANARY: REQ=REQ-GAP-0513-DIST-SHARD-002; FEATURE="ShardManager"; ASPECT=AddShard; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "enhanced ShardManager addShard stores shard in map" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sm = ShardManager.init(allocator, 1, .hash);
+    defer sm.deinit();
+
+    const shard_id: u64 = 42;
+    const shard = ShardManager.Shard{
+        .id = shard_id,
+        .primary = .{
+            .id = 1,
+            .address = net.Address.initIp4(.{ 127, 0, 0, 1 }, 7001),
+            .role = .primary,
+            .status = .healthy,
+            .last_heartbeat = 0,
+        },
+        .replicas = &[_]ShardManager.ShardNode{},
+        .key_range = null,
+        .status = .active,
+        .statistics = .{
+            .node_count = 0,
+            .edge_count = 0,
+            .size_bytes = 0,
+            .read_qps = 0,
+            .write_qps = 0,
+            .last_updated = 0,
+        },
+    };
+
+    try sm.addShard(shard);
+
+    try testing.expect(sm.shards.contains(shard_id));
+}
+
+// CANARY: REQ=REQ-GAP-0513-DIST-SHARD-003; FEATURE="ShardManager"; ASPECT=MergeError; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "enhanced ShardManager mergeShards returns ShardNotFound for missing shards" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sm = ShardManager.init(allocator, 1, .hash);
+    defer sm.deinit();
+
+    const result = sm.mergeShards(999, 888);
+    try testing.expectError(error.ShardNotFound, result);
+}
+
+// CANARY: REQ=REQ-GAP-0513-DIST-SHARD-004; FEATURE="ShardManager"; ASPECT=TransportCallback; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "enhanced ShardManager setTransportCallback sets field" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sm = ShardManager.init(allocator, 2, .range);
+    defer sm.deinit();
+
+    // Verify transport_callback starts as null
+    try testing.expect(sm.transport_callback == null);
+
+    // Create a dummy transport callback
+    var cb = ShardManager.TransportCallback{
+        .context = undefined,
+        .requestBatchFn = struct {
+            fn f(
+                _: *anyopaque,
+                _: net.Address,
+                _: u64,
+                _: u64,
+                _: u64,
+                buf: []u8,
+            ) ShardManager.TransportError![]u8 {
+                return buf[0..0];
+            }
+        }.f,
+        .sendBatchFn = struct {
+            fn f(
+                _: *anyopaque,
+                _: net.Address,
+                _: u64,
+                _: []const u8,
+                _: u32,
+            ) ShardManager.TransportError!bool {
+                return true;
+            }
+        }.f,
+    };
+
+    sm.setTransportCallback(&cb);
+    try testing.expect(sm.transport_callback != null);
+    try testing.expectEqual(&cb, sm.transport_callback.?);
+}
+
+// CANARY: REQ=REQ-GAP-0513-DIST-SHARD-005; FEATURE="ShardManager"; ASPECT=GetShardForKey; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+test "enhanced ShardManager getShardForKey with hash strategy returns added shard" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var sm = ShardManager.init(allocator, 1, .hash);
+    defer sm.deinit();
+
+    const shard_id: u64 = 77;
+    const shard = ShardManager.Shard{
+        .id = shard_id,
+        .primary = .{
+            .id = 1,
+            .address = net.Address.initIp4(.{ 127, 0, 0, 1 }, 7002),
+            .role = .primary,
+            .status = .healthy,
+            .last_heartbeat = 0,
+        },
+        .replicas = &[_]ShardManager.ShardNode{},
+        .key_range = null,
+        .status = .active,
+        .statistics = .{
+            .node_count = 10,
+            .edge_count = 5,
+            .size_bytes = 1024,
+            .read_qps = 0,
+            .write_qps = 0,
+            .last_updated = 0,
+        },
+    };
+
+    try sm.addShard(shard);
+
+    // With only one shard in the ring, any key lookup must return that shard
+    const found = try sm.getShardForKey("some-graph-key");
+    try testing.expectEqual(shard_id, found.id);
+}

@@ -1235,6 +1235,17 @@ pub fn build(b: *std.Build) void {
     const run_query_transport_registry_tests = b.addRunArtifact(query_transport_registry_tests);
     test_step.dependOn(&run_query_transport_registry_tests.step);
 
+    // GAP-0513: sharding.zig unit tests (enhanced ShardManager init/add/merge/callback/key-lookup)
+    const sharding_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/distributed/sharding.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sharding_test_mod.addImport("logging", logging_mod);
+    const sharding_tests = b.addTest(.{ .root_module = sharding_test_mod });
+    const run_sharding_tests = b.addRunArtifact(sharding_tests);
+    test_step.dependOn(&run_sharding_tests.step);
+
     // GAP-0513: federation_merge pure-helper unit tests (standalone, no distributed module import)
     const federation_merge_tests = b.addTest(.{
         .root_module = b.createModule(.{

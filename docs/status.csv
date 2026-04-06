@@ -1032,6 +1032,11 @@ REQ-GAP-0513-DIST-HASH-001,ConsistentHash,RingOperations,TESTED,,,distributed,20
 REQ-GAP-0513-DIST-HEALTH-001,ClusterHealth,evaluateNodeHealth,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig
 REQ-GAP-0513-DIST-HEALTH-002,ClusterHealth,updateHealthStatus,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig
 REQ-GAP-0513-DIST-HEALTH-003,ClusterHealth,estimateReplicationLag,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig
+REQ-GAP-0513-DIST-SHARD-001,ShardManager,UnitTests,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
+REQ-GAP-0513-DIST-SHARD-002,ShardManager,AddShard,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
+REQ-GAP-0513-DIST-SHARD-003,ShardManager,MergeError,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
+REQ-GAP-0513-DIST-SHARD-004,ShardManager,TransportCallback,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
+REQ-GAP-0513-DIST-SHARD-005,ShardManager,GetShardForKey,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig

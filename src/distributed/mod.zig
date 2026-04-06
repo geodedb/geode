@@ -28,7 +28,7 @@ pub const ShardInfo = struct {
 // Partition-aware query planner
 pub const PartitionAwarePlanner = struct {
     allocator: std.mem.Allocator,
-    shard_manager: sharding.ShardManager,
+    shard_manager: sharding.SimpleShardManager,
 
     pub const QueryPlan = struct {
         query: []const u8,
@@ -48,7 +48,7 @@ pub const PartitionAwarePlanner = struct {
     pub fn init(allocator: std.mem.Allocator) PartitionAwarePlanner {
         return .{
             .allocator = allocator,
-            .shard_manager = sharding.ShardManager.init(allocator, 3),
+            .shard_manager = sharding.SimpleShardManager.init(allocator, 3),
         };
     }
 
