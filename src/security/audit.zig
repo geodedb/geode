@@ -59,7 +59,8 @@ pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
 // audit events created on this thread carry the correct tenant context.
 // CANARY: REQ=REQ-AUDIT-TENANT-001; FEATURE="AuditTenantId"; ASPECT=PerThreadTenant; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
 var audit_tenant_mutex: std.Thread.Mutex = .{};
-var per_thread_audit_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(std.heap.page_allocator);
+var audit_tenant_gpa: std.heap.GeneralPurposeAllocator(.{}) = std.heap.GeneralPurposeAllocator(.{}){};
+var per_thread_audit_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(audit_tenant_gpa.allocator());
 
 /// Set the current tenant_id for audit events on this thread.
 pub fn setCurrentAuditTenantId(tenant_id: ?[]const u8) void {
