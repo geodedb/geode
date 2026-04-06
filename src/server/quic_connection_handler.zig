@@ -1128,6 +1128,31 @@ pub fn handleQuicConnection(
     // The conn_state wait loop handles waiting for additional streams.
 }
 
+/// Sync ServerState.current_graph from the execution session after a program
+/// that may contain USE GRAPH statements.  Without this, `state.current_graph`
+/// stays null and every downstream consumer (per-graph locking, RLS filtering,
+/// PULL materialisation) falls back to DEFAULT_GRAPH_NAME — which is wrong when
+/// the session has been switched to a different graph.
+fn syncGraphFromSession(state: *ServerState) void {
+    const new_graph: ?[]const u8 = if (state.exec_session) |sess| sess.graph else null;
+
+    // If session graph hasn't changed, nothing to do.
+    if (state.current_graph) |cur| {
+        if (new_graph) |ng| {
+            if (std.mem.eql(u8, cur, ng)) return;
+        }
+    } else if (new_graph == null) {
+        return;
+    }
+
+    // Free old value and duplicate the new one (state owns its copy).
+    if (state.current_graph) |old| state.allocator.free(old);
+    state.current_graph = if (new_graph) |ng|
+        state.allocator.dupe(u8, ng) catch null
+    else
+        null;
+}
+
 fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Program) void {
     var has_start: bool = false;
     var has_commit: bool = false;
@@ -1734,6 +1759,10 @@ fn handleClientMessage(
                 }
             }
 
+            // Sync ServerState.current_graph from exec_session so that
+            // per-graph locking, RLS, and PULL use the correct graph.
+            syncGraphFromSession(state);
+
             const session_id = try generateSessionId(gpa);
             const resp = schema.QuicServerMessage{ .hello = .{
                 .success = true,
@@ -2240,6 +2269,7 @@ fn handleClientMessage(
                                         active_stream.deinit();
                                     }
 
+                                    syncGraphFromSession(state);
                                     updateTxnStateFromProgram(state, &parse_result.program);
                                     return;
                                 }
@@ -2337,6 +2367,7 @@ fn handleClientMessage(
                         }
                     }
 
+                    syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program);
                 },
             }
