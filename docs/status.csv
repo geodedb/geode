@@ -1017,6 +1017,7 @@ REQ-GAP-0490-FEDERATION-SERVER-AUTH,FederationAuth,ServerValidation,TESTED,,,sec
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/rls_core.zig
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/test_rls_injection.zig
 REQ-GAP-0503-DIST-GATE,DistributedMode,ServerStartup,TESTED,,,core,2026-04-05,src/server/main.zig
+REQ-GAP-0513-DIST-HASH-001,ConsistentHash,RingOperations,TESTED,,,distributed,2026-04-06,src/distributed/consistent_hash.zig
 REQ-GAP-0513-DIST-HEALTH-001,ClusterHealth,evaluateNodeHealth,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig
 REQ-GAP-0513-DIST-HEALTH-002,ClusterHealth,updateHealthStatus,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig
 REQ-GAP-0513-DIST-HEALTH-003,ClusterHealth,estimateReplicationLag,TESTED,,,distributed,2026-04-06,src/distributed/cluster_health.zig

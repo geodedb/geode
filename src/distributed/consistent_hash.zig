@@ -5,6 +5,8 @@ const logging = @import("logging");
 const log = logging.scoped("sharding");
 const Attr = logging.Attr;
 
+// CANARY: REQ=REQ-GAP-0513-DIST-HASH-001; FEATURE="ConsistentHash"; ASPECT=RingOperations; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
+
 // Consistent hashing for sharding
 pub const ConsistentHash = struct {
     allocator: Allocator,
@@ -36,7 +38,7 @@ pub const ConsistentHash = struct {
     }
 
     pub fn deinit(self: *ConsistentHash) void {
-        self.ring.deinit();
+        self.ring.deinit(self.allocator);
     }
 
     pub fn addNode(self: *ConsistentHash, node: Node) !void {
@@ -50,11 +52,11 @@ pub const ConsistentHash = struct {
             );
             defer self.allocator.free(virtual_key);
 
-            const hash = self.hash(virtual_key);
+            const node_hash = self.hash(virtual_key);
 
-            try self.ring.append(.{
+            try self.ring.append(self.allocator, .{
                 .id = node.id,
-                .hash = hash,
+                .hash = node_hash,
                 .address = node.address,
                 .weight = node.weight,
                 .metadata = node.metadata,
@@ -117,6 +119,7 @@ pub const ConsistentHash = struct {
 
         const max_count = @min(count, self.ring.items.len / self.virtual_nodes);
         var nodes = std.ArrayList(Node){};
+        errdefer nodes.deinit(self.allocator);
         var seen_ids = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_ids.deinit();
 
@@ -130,12 +133,12 @@ pub const ConsistentHash = struct {
             const node = self.ring.items[idx];
 
             if (!seen_ids.contains(node.id)) {
-                try nodes.append(node);
+                try nodes.append(self.allocator, node);
                 try seen_ids.put(node.id, {});
             }
         }
 
-        return try nodes.toOwnedSlice();
+        return try nodes.toOwnedSlice(self.allocator);
     }
 
     fn hash(self: *ConsistentHash, key: []const u8) u64 {
@@ -146,11 +149,7 @@ pub const ConsistentHash = struct {
                 h.update(key);
                 break :blk h.final();
             },
-            .murmur3 => blk: {
-                var h = std.hash.Murmur3_32.init(0);
-                h.update(key);
-                break :blk h.final();
-            },
+            .murmur3 => @as(u64, std.hash.Murmur3_32.hashWithSeed(key, 0)),
         };
     }
 
@@ -185,3 +184,102 @@ pub const ConsistentHash = struct {
         }
     }
 };
+
+// ----------------------------------------------------------------------------
+// Unit tests
+// ----------------------------------------------------------------------------
+
+test "ConsistentHash.getNode: empty ring returns null" {
+    const ally = std.testing.allocator;
+    var ch = ConsistentHash.init(ally, 10, .xxhash);
+    defer ch.deinit();
+
+    const result = ch.getNode("any-key");
+    try std.testing.expectEqual(@as(?ConsistentHash.Node, null), result);
+}
+
+test "ConsistentHash.addNode + getNode: deterministic mapping" {
+    const ally = std.testing.allocator;
+    var ch = ConsistentHash.init(ally, 10, .xxhash);
+    defer ch.deinit();
+
+    try ch.addNode(.{ .id = 1, .hash = 0, .address = "10.0.0.1:9000" });
+    try ch.addNode(.{ .id = 2, .hash = 0, .address = "10.0.0.2:9000" });
+
+    const node_a = ch.getNode("hello");
+    const node_b = ch.getNode("hello");
+
+    try std.testing.expect(node_a != null);
+    try std.testing.expect(node_b != null);
+    try std.testing.expectEqual(node_a.?.id, node_b.?.id);
+}
+
+test "ConsistentHash.removeNode: removed node no longer serves requests" {
+    const ally = std.testing.allocator;
+    var ch = ConsistentHash.init(ally, 10, .xxhash);
+    defer ch.deinit();
+
+    try ch.addNode(.{ .id = 1, .hash = 0, .address = "10.0.0.1:9000" });
+    try ch.addNode(.{ .id = 2, .hash = 0, .address = "10.0.0.2:9000" });
+
+    ch.removeNode(1);
+
+    // After removing node 1, every key must map to node 2
+    var i: usize = 0;
+    while (i < 20) : (i += 1) {
+        const key = try std.fmt.allocPrint(ally, "key-{}", .{i});
+        defer ally.free(key);
+        const node = ch.getNode(key);
+        try std.testing.expect(node != null);
+        try std.testing.expectEqual(@as(u64, 2), node.?.id);
+    }
+}
+
+test "ConsistentHash.getNodes: returns unique nodes up to requested count" {
+    const ally = std.testing.allocator;
+    var ch = ConsistentHash.init(ally, 10, .xxhash);
+    defer ch.deinit();
+
+    try ch.addNode(.{ .id = 1, .hash = 0, .address = "10.0.0.1:9000" });
+    try ch.addNode(.{ .id = 2, .hash = 0, .address = "10.0.0.2:9000" });
+    try ch.addNode(.{ .id = 3, .hash = 0, .address = "10.0.0.3:9000" });
+
+    const nodes = try ch.getNodes("some-key", 2);
+    defer ally.free(nodes);
+
+    try std.testing.expect(nodes.len <= 2);
+
+    // Verify uniqueness of returned node ids
+    if (nodes.len == 2) {
+        try std.testing.expect(nodes[0].id != nodes[1].id);
+    }
+}
+
+test "ConsistentHash: all hash functions produce deterministic results" {
+    const ally = std.testing.allocator;
+    const fns = [_]ConsistentHash.HashFunction{ .xxhash, .fnv1a, .murmur3 };
+
+    for (fns) |hash_fn| {
+        var ch = ConsistentHash.init(ally, 10, hash_fn);
+        defer ch.deinit();
+
+        try ch.addNode(.{ .id = 42, .hash = 0, .address = "127.0.0.1:9000" });
+
+        const node_a = ch.getNode("deterministic-key");
+        const node_b = ch.getNode("deterministic-key");
+        try std.testing.expect(node_a != null);
+        try std.testing.expect(node_b != null);
+        try std.testing.expectEqual(node_a.?.id, node_b.?.id);
+    }
+}
+
+test "ConsistentHash.rebalance: no crash with two nodes" {
+    const ally = std.testing.allocator;
+    var ch = ConsistentHash.init(ally, 10, .xxhash);
+    defer ch.deinit();
+
+    try ch.addNode(.{ .id = 1, .hash = 0, .address = "10.0.0.1:9000" });
+    try ch.addNode(.{ .id = 2, .hash = 0, .address = "10.0.0.2:9000" });
+
+    try ch.rebalance();
+}
