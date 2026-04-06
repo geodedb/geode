@@ -1106,29 +1106,29 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_buf = try std.ArrayList(u8).initCapacity(self.allocator, 128);
                         const key_writer = key_buf.writer(self.allocator);
                         for (self.group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) key_writer.writeAll("|") catch {};
+                            if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
                             switch (key_val) {
-                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
-                                .Str => |s| key_writer.writeAll(s) catch {},
-                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                                .Null => key_writer.writeAll("null") catch {},
-                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                                else => key_writer.writeAll("?") catch {},
+                                .Int => |i| try key_writer.print("{d}", .{i}),
+                                .Str => |s| try key_writer.writeAll(s),
+                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                                .Null => try key_writer.writeAll("null"),
+                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                                else => try key_writer.writeAll("?"),
                             }
                         }
-                        const group_key = key_buf.toOwnedSlice(self.allocator) catch "";
+                        const group_key = try key_buf.toOwnedSlice(self.allocator);
 
                         // Add to group
                         if (self.binding_groups.getPtr(group_key)) |group_list| {
-                            group_list.append(self.allocator, env) catch {};
+                            try group_list.append(self.allocator, env);
                             self.allocator.free(group_key);
                         } else {
                             // GAP-0220 FIX: Use try for proper error propagation
                             var new_list = try std.ArrayList(Env).initCapacity(self.allocator, 4);
-                            new_list.append(self.allocator, env) catch {};
-                            self.binding_groups.put(group_key, new_list) catch {};
-                            self.group_keys_list.append(self.allocator, group_key) catch {};
+                            try new_list.append(self.allocator, env);
+                            try self.binding_groups.put(group_key, new_list);
+                            try self.group_keys_list.append(self.allocator, group_key);
                         }
                         return;
                     }
@@ -3263,31 +3263,31 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
             const key_writer = key_buf.writer(allocator);
             for (group_by.keys, 0..) |key_expr, k| {
-                if (k > 0) key_writer.writeAll("|") catch {};
+                if (k > 0) try key_writer.writeAll("|");
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                 // Serialize key value to string
                 switch (key_val) {
-                    .Int => |i| key_writer.print("{d}", .{i}) catch {},
-                    .Str => |s| key_writer.writeAll(s) catch {},
-                    .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                    .Null => key_writer.writeAll("null") catch {},
-                    .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                    .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
-                    else => key_writer.writeAll("?") catch {},
+                    .Int => |i| try key_writer.print("{d}", .{i}),
+                    .Str => |s| try key_writer.writeAll(s),
+                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                    .Null => try key_writer.writeAll("null"),
+                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
+                    else => try key_writer.writeAll("?"),
                 }
             }
-            const group_key = key_buf.toOwnedSlice(allocator) catch "";
+            const group_key = try key_buf.toOwnedSlice(allocator);
 
             // Add row to its group
             if (groups.getPtr(group_key)) |group_list| {
-                group_list.append(allocator, input_row) catch {};
+                try group_list.append(allocator, input_row);
                 allocator.free(group_key);
             } else {
                 // GAP-0220 FIX: Use try for proper error propagation
                 var new_list = try std.ArrayList([]Value).initCapacity(allocator, 4);
-                new_list.append(allocator, input_row) catch {};
-                groups.put(group_key, new_list) catch {};
-                group_keys_list.append(allocator, group_key) catch {};
+                try new_list.append(allocator, input_row);
+                try groups.put(group_key, new_list);
+                try group_keys_list.append(allocator, group_key);
             }
         }
 
@@ -4111,30 +4111,30 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
                         const key_writer = key_buf.writer(allocator);
                         for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) key_writer.writeAll("|") catch {};
+                            if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                             switch (key_val) {
-                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
-                                .Str => |s| key_writer.writeAll(s) catch {},
-                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                                .Null => key_writer.writeAll("null") catch {},
-                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
-                                else => key_writer.writeAll("?") catch {},
+                                .Int => |i| try key_writer.print("{d}", .{i}),
+                                .Str => |s| try key_writer.writeAll(s),
+                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                                .Null => try key_writer.writeAll("null"),
+                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
+                                else => try key_writer.writeAll("?"),
                             }
                         }
-                        const group_key = key_buf.toOwnedSlice(allocator) catch "";
+                        const group_key = try key_buf.toOwnedSlice(allocator);
 
                         // Add binding to its group
                         if (binding_groups.getPtr(group_key)) |group_list| {
-                            group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
                             allocator.free(group_key);
                         } else {
                             // GAP-0220 FIX: Use try for proper error propagation
                             var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
-                            binding_groups.put(group_key, new_list) catch {};
-                            group_keys_list.append(allocator, group_key) catch {};
+                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
+                            try binding_groups.put(group_key, new_list);
+                            try group_keys_list.append(allocator, group_key);
                         }
                     }
 
@@ -4254,29 +4254,29 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
                         const key_writer = key_buf.writer(allocator);
                         for (group_by.keys, 0..) |key_expr, k| {
-                            if (k > 0) key_writer.writeAll("|") catch {};
+                            if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                             switch (key_val) {
-                                .Int => |i| key_writer.print("{d}", .{i}) catch {},
-                                .Str => |s| key_writer.writeAll(s) catch {},
-                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                                .Null => key_writer.writeAll("null") catch {},
-                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
-                                else => key_writer.writeAll("?") catch {},
+                                .Int => |i| try key_writer.print("{d}", .{i}),
+                                .Str => |s| try key_writer.writeAll(s),
+                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                                .Null => try key_writer.writeAll("null"),
+                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
+                                else => try key_writer.writeAll("?"),
                             }
                         }
-                        const group_key = key_buf.toOwnedSlice(allocator) catch "";
+                        const group_key = try key_buf.toOwnedSlice(allocator);
 
                         // Add binding to its group
                         if (binding_groups.getPtr(group_key)) |group_list| {
-                            group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
+                            try group_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
                             allocator.free(group_key);
                         } else {
                             var new_list = try std.ArrayList(BindingRow).initCapacity(allocator, 4);
-                            new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values }) catch {};
-                            binding_groups.put(group_key, new_list) catch {};
-                            group_keys_list.append(allocator, group_key) catch {};
+                            try new_list.append(allocator, BindingRow{ .env_names = env_names, .env_values = env_values });
+                            try binding_groups.put(group_key, new_list);
+                            try group_keys_list.append(allocator, group_key);
                         }
                     }
                 }

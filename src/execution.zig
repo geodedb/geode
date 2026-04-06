@@ -2368,30 +2368,30 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
             var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
             const key_writer = key_buf.writer(allocator);
             for (gb.keys, 0..) |key_expr, k| {
-                if (k > 0) key_writer.writeAll("|") catch {};
+                if (k > 0) try key_writer.writeAll("|");
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                 // Serialize key value to string
                 switch (key_val) {
-                    .Int => |i| key_writer.print("{d}", .{i}) catch {},
-                    .Str => |s| key_writer.writeAll(s) catch {},
-                    .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                    .Null => key_writer.writeAll("null") catch {},
-                    .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                    .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
-                    else => key_writer.writeAll("?") catch {},
+                    .Int => |i| try key_writer.print("{d}", .{i}),
+                    .Str => |s| try key_writer.writeAll(s),
+                    .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                    .Null => try key_writer.writeAll("null"),
+                    .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                    .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
+                    else => try key_writer.writeAll("?"),
                 }
             }
-            const group_key = key_buf.toOwnedSlice(allocator) catch "";
+            const group_key = try key_buf.toOwnedSlice(allocator);
 
             // Add row to its group
             if (groups.getPtr(group_key)) |group_list| {
-                group_list.append(allocator, input_row) catch {};
+                try group_list.append(allocator, input_row);
                 allocator.free(group_key);
             } else {
                 // GAP-0220 FIX: Use try for proper error propagation
                 var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
-                new_list.append(allocator, input_row) catch {};
-                groups.put(group_key, new_list) catch {};
+                try new_list.append(allocator, input_row);
+                try groups.put(group_key, new_list);
                 group_keys_list.append(allocator, group_key) catch {};
             }
         }
@@ -2510,31 +2510,31 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     var first_key = true;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
-                            if (!first_key) key_writer.writeAll("|") catch {};
+                            if (!first_key) try key_writer.writeAll("|");
                             first_key = false;
                             const key_val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
                             switch (key_val) {
-                                .Int => |iv| key_writer.print("{d}", .{iv}) catch {},
-                                .Str => |s| key_writer.writeAll(s) catch {},
-                                .Bool => |b| key_writer.writeAll(if (b) "true" else "false") catch {},
-                                .Null => key_writer.writeAll("null") catch {},
-                                .Node => |n| key_writer.print("node:{d}", .{n.id}) catch {},
-                                .Edge => |e| key_writer.print("edge:{d}", .{e.id}) catch {},
-                                else => key_writer.writeAll("?") catch {},
+                                .Int => |iv| try key_writer.print("{d}", .{iv}),
+                                .Str => |s| try key_writer.writeAll(s),
+                                .Bool => |b| try key_writer.writeAll(if (b) "true" else "false"),
+                                .Null => try key_writer.writeAll("null"),
+                                .Node => |n| try key_writer.print("node:{d}", .{n.id}),
+                                .Edge => |e| try key_writer.print("edge:{d}", .{e.id}),
+                                else => try key_writer.writeAll("?"),
                             }
                         }
                     }
-                    const group_key = key_buf.toOwnedSlice(allocator) catch "";
+                    const group_key = try key_buf.toOwnedSlice(allocator);
 
                     if (groups.getPtr(group_key)) |group_list| {
-                        group_list.append(allocator, input_row) catch {};
+                        try group_list.append(allocator, input_row);
                         allocator.free(group_key);
                     } else {
                         // GAP-0220 FIX: Use try for proper error propagation
                         var new_list = try std.ArrayList([]const Value).initCapacity(allocator, 4);
-                        new_list.append(allocator, input_row) catch {};
-                        groups.put(group_key, new_list) catch {};
-                        group_keys_list.append(allocator, group_key) catch {};
+                        try new_list.append(allocator, input_row);
+                        try groups.put(group_key, new_list);
+                        try group_keys_list.append(allocator, group_key);
                     }
                 }
 
