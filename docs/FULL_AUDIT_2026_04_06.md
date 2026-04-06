@@ -28,7 +28,7 @@
 |--------|-------|----------|--------|
 | GAP-0509 | Cross-tenant query isolation NOT enforced (reopened GAP-0279) | Critical | Open |
 | GAP-0256 | Unsigned release artifacts, no SBOM | Critical | Blocked |
-| GAP-0510 | RLS expression engine (3,924 lines) is dead code (reopened GAP-0280) | High | Open |
+| GAP-0510 | RLS expression engine (3,924 lines) is dead code (reopened GAP-0280) | High | Closed |
 | GAP-0513 | Distributed module: 3,540 lines / 10 files with zero tests | High | Open |
 | GAP-0517 | "DEVELOPMENT READY" claim overstated | High | Open |
 | GAP-0246 | LDAP/AD authentication | High | Blocked |
