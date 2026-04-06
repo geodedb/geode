@@ -150,8 +150,8 @@
         // bounds checks, O(1) property lookup, B+tree persistence, engine decomposition,
         // edge-ID index, multi-op transactions, index catalog integrity
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#cde8c6f5ee31535562e6b50da00abf9200d6de23",
-            .hash = "graph_storage-0.1.0-9UyJS-G_CQAiz_L_2taQlRA4CQXwiZrCioidMDMWx-wu",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#269e6179825081b7d3cbc8b36c62fe2f4081cb9b",
+            .hash = "graph_storage-0.1.0-9UyJS8PhCQAkdOtd5_HtPNssahdo_Cr0RfVlyZvJAXpL",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
