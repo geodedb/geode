@@ -1176,7 +1176,7 @@ pub const GraphStore = struct {
     // Issue #391: Get nodes that have ALL specified labels in a graph
     // Accepts a caller-provided allocator for the result list to avoid
     // concurrent threads contending on self.allocator (GAP-0425 fix).
-    pub fn getNodesByLabels(self: *const GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, labels: []const []const u8) !std.ArrayList(u64) {
+    pub fn getNodesByLabels(self: *const GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, labels: []const []const u8, tenant_id: ?[]const u8) !std.ArrayList(u64) {
         var result = std.ArrayList(u64).empty;
 
         if (labels.len == 0) {
@@ -1189,6 +1189,10 @@ pub const GraphStore = struct {
         // For each candidate node, check if it has all other labels
         for (first_nodes) |node_id| {
             if (self.nodes.get(node_id)) |node| {
+                // GAP-0509: Filter by tenant_id when specified
+                if (tenant_id) |tid| {
+                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+                }
                 var has_all = true;
                 for (labels[1..]) |required_label| {
                     var found = false;
@@ -4972,7 +4976,7 @@ test "TestGetNodesByLabels" {
 
     // Query for nodes with both Person AND Employee
     var query_labels = [_][]const u8{ "Person", "Employee" };
-    var result = try store.getNodesByLabels(testing.allocator, "test_graph", &query_labels);
+    var result = try store.getNodesByLabels(testing.allocator, "test_graph", &query_labels, null);
     defer result.deinit(testing.allocator);
 
     try testing.expect(result.items.len == 1);
