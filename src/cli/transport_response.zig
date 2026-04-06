@@ -235,6 +235,9 @@ pub fn renderTransportResponseWithStreams(
     if (std.mem.eql(u8, format, "table")) {
         // PostgreSQL-style table format with borders
         if (rows_text) |rows| {
+            // Skip degenerate table when there are no columns (e.g. USE GRAPH result)
+            if (view.columns.len == 0 and rows.items.len == 0) return false;
+
             var col_widths = try std.ArrayList(usize).initCapacity(allocator, view.columns.len);
             defer col_widths.deinit(allocator);
 

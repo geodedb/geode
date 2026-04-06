@@ -651,11 +651,18 @@ pub const StorageAdapter = struct {
     /// label index (the engine's deleteNode sets NODE_FLAG_DELETED but does
     /// not remove the entry from the label posting list).
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
-        const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
+        // Brief mutex hold: look up ManagedGraph and label ID, then release.
+        // The ManagedGraph is stable while the caller holds the per-graph
+        // rwlock, so the expensive scan below does not need the adapter mutex.
+        // Holding mutex during the scan caused ABBA deadlocks with concurrent
+        // ingest (QUIC handler: rwlock → mutex; ingest: mutex → rwlock).
+        const mg, const label_id = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            const mg = try self.requireExistingGraphLocked(graph_name);
+            const lid = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
+            break :blk .{ mg, lid };
+        };
         const raw_ids = try mg.engine.scanLabel(label_id, allocator);
 
         // Filter out deleted/empty nodes whose slot IDs are still present

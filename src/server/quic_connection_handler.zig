@@ -622,6 +622,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
 
     defer {
         state.resetResult();
+        if (state.current_graph) |g| gpa.free(g);
         if (state.exec_session) |*sess| sess.deinit();
         if (state.session_config) |*cfg| cfg.deinit();
         if (state.authenticated_user) |u| gpa.free(u);
@@ -872,6 +873,7 @@ pub fn handleQuicConnection(
         }
 
         state.resetResult();
+        if (state.current_graph) |g| gpa.free(g);
         if (state.exec_session) |*sess| sess.deinit();
         if (state.session_config) |*cfg| cfg.deinit();
         if (state.authenticated_user) |u| gpa.free(u);
