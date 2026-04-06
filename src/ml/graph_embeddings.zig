@@ -404,8 +404,8 @@ pub const GraphEmbeddingsManager = struct {
 fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, config: EmbeddingConfig) !void {
     log.info("Training Node2Vec algorithm with p={d:.2}, q={d:.2}", .{ config.p, config.q });
 
-    // Initialize embeddings for all nodes
-    const nodes = try graph.getAllNodes(manager.allocator);
+    // Initialize embeddings for all nodes (null = cross-tenant, admin-level operation)
+    const nodes = try graph.getAllNodesForTenant(manager.allocator, null);
     defer manager.allocator.free(nodes);
 
     for (nodes) |node_id| {
@@ -470,7 +470,8 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
         }
     }
 
-    const nodes = try graph.getAllNodes(manager.allocator);
+    // null = cross-tenant, admin-level ML operation
+    const nodes = try graph.getAllNodesForTenant(manager.allocator, null);
     defer manager.allocator.free(nodes);
 
     // Initialize embeddings

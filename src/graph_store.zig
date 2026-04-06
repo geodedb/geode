@@ -5409,3 +5409,56 @@ test "serializeSnapshot JSON escaping in strings" {
     // Escaped newline in graph name
     try testing.expect(std.mem.indexOf(u8, snapshot, "graph\\nnewline") != null);
 }
+
+// CANARY: REQ=REQ-MULTI-TENANT-009; FEATURE="TenantQueryIsolation"; ASPECT=UnitTest; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-06
+// GAP-0509: Verify getNodesByLabels, getAllNodesForTenant, and getEdgesByType all filter by tenant_id
+test "GAP-0509: getNodesByLabels filters by tenant_id" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create nodes for two tenants in the same graph
+    var labels = [_][]const u8{"Widget"};
+    const na1 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    const na2 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_a");
+    const nb1 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant_b");
+
+    // getNodesByLabels with tenant filter returns only that tenant's nodes
+    var query_labels = [_][]const u8{"Widget"};
+    var result_a = try store.getNodesByLabels(testing.allocator, "default", &query_labels, "tenant_a");
+    defer result_a.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), result_a.items.len);
+
+    var result_b = try store.getNodesByLabels(testing.allocator, "default", &query_labels, "tenant_b");
+    defer result_b.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 1), result_b.items.len);
+    try testing.expectEqual(nb1, result_b.items[0]);
+
+    // null tenant filter returns all nodes (cross-tenant, admin-level)
+    var result_all = try store.getNodesByLabels(testing.allocator, "default", &query_labels, null);
+    defer result_all.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), result_all.items.len);
+
+    // getAllNodesForTenant: null returns all, specific tenant filters correctly
+    const all_nodes = try store.getAllNodesForTenant(testing.allocator, null);
+    defer testing.allocator.free(all_nodes);
+    try testing.expectEqual(@as(usize, 3), all_nodes.len);
+
+    const tenant_a_nodes = try store.getAllNodesForTenant(testing.allocator, "tenant_a");
+    defer testing.allocator.free(tenant_a_nodes);
+    try testing.expectEqual(@as(usize, 2), tenant_a_nodes.len);
+
+    // getEdgesByType also filters by tenant
+    const edge_ab = try store.createEdgeWithGraphAndTenant(na1, na2, "LINKED", "default", "tenant_a");
+    _ = edge_ab;
+    const edge_b = try store.createEdgeWithGraphAndTenant(nb1, na1, "LINKED", "default", "tenant_b");
+    _ = edge_b;
+
+    const edges_a = store.getEdgesByType(testing.allocator, "LINKED", "tenant_a");
+    defer testing.allocator.free(edges_a);
+    try testing.expectEqual(@as(usize, 1), edges_a.len);
+    try testing.expectEqualStrings("tenant_a", edges_a[0].tenant_id);
+
+    const edges_all = store.getEdgesByType(testing.allocator, "LINKED", null);
+    defer testing.allocator.free(edges_all);
+    try testing.expectEqual(@as(usize, 2), edges_all.len);
+}

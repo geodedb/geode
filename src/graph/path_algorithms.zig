@@ -149,7 +149,8 @@ pub const PathAlgorithms = struct {
         max_iterations: usize,
         tolerance: f64,
     ) ![]CentralityResult {
-        const nodes = try graph.getAllNodes(self.allocator);
+        // null = cross-tenant, admin-level operation (pageRank operates on the full graph)
+        const nodes = try graph.getAllNodesForTenant(self.allocator, null);
         defer self.allocator.free(nodes);
 
         const n = @as(f64, @floatFromInt(nodes.len));
