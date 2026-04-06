@@ -1746,7 +1746,7 @@ fn handleClientMessage(
             try sendQuicMessage(gpa, stream, resp);
         },
         .execute => |exec_req| {
-            log.info("PROTOBUF .execute received", &.{
+            log.debug("PROTOBUF .execute received", &.{
                 Attr.int("query_len", @intCast(exec_req.query.len)),
             });
 
