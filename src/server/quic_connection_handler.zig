@@ -1942,6 +1942,9 @@ fn handleClientMessage(
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                // GAP-0510 Task 3b: Wire expression RLS engine pointer into execution context.
+                // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+                .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
             };
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;

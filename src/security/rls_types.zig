@@ -276,3 +276,18 @@ pub fn setGlobalRLSFilterEngine(engine: ?*RLSFilterEngine) void {
 pub fn getGlobalRLSFilterEngine() ?*RLSFilterEngine {
     return g_rls_filter_engine;
 }
+
+// GAP-0510 Task 3a: Global accessor for the expression-based RLS engine (rls_core.zig).
+// Stored as ?*anyopaque to avoid pulling the full rls_core dependency into this
+// lightweight shared-types module.  Set once at server startup; read by
+// ExecutionContext wiring in the connection handler.
+// CANARY: REQ=REQ-SEC-RLS-WIRE-011; FEATURE="RLS Expression Wiring"; ASPECT=ExprEngineGlobal; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+var g_expr_rls_engine: ?*anyopaque = null;
+
+pub fn setGlobalExprRLSEngine(engine: ?*anyopaque) void {
+    g_expr_rls_engine = engine;
+}
+
+pub fn getGlobalExprRLSEngine() ?*anyopaque {
+    return g_expr_rls_engine;
+}

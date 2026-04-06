@@ -612,6 +612,17 @@ pub fn main() !void {
         rls_filter_mod.setGlobalRLSFilterEngine(&rls_engine);
         defer rls_filter_mod.setGlobalRLSFilterEngine(null);
 
+        // GAP-0510 Task 3: Also initialize the rls_types shared label-filter engine so
+        // that match_operations.zig (part of the geode root module) can access it via
+        // @import("rls_types").getGlobalRLSFilterEngine().  Both engines start empty;
+        // policies added at runtime go to both through the procedure/admin API.
+        // CANARY: REQ=REQ-SEC-RLS-WIRE-012; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitLabelEngine; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+        const rls_types_mod = @import("rls_types");
+        var rls_types_engine = rls_types_mod.RLSFilterEngine.init(gpa);
+        defer rls_types_engine.deinit();
+        rls_types_mod.setGlobalRLSFilterEngine(&rls_types_engine);
+        defer rls_types_mod.setGlobalRLSFilterEngine(null);
+
         // GAP-0280: Initialize a server-wide timeseries Store so that
         // timeseries.value() calls in the QUIC/gRPC execution path return
         // real data instead of NULL.  The store lives on the main thread's
