@@ -1431,17 +1431,18 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(left_node.*)) continue;
 
-                const outgoing_edges = if (rel_dir == .right or rel_dir == .undirected) store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
-                defer if (outgoing_edges.len > 0) allocator.free(outgoing_edges);
-                const incoming_edges = if (rel_dir == .left or rel_dir == .undirected) store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
-                defer if (incoming_edges.len > 0) allocator.free(incoming_edges);
+                // Zero-copy edge iteration: use getOutgoingEdgeIds/getIncomingEdgeIds
+                // to avoid allocating a temporary Edge slice per node.
+                const outgoing_edge_ids = if (rel_dir == .right or rel_dir == .undirected) store.getOutgoingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
+                const incoming_edge_ids = if (rel_dir == .left or rel_dir == .undirected) store.getIncomingEdgeIds(left_node.id) orelse &[_]u64{} else &[_]u64{};
 
-                for (outgoing_edges) |edge| {
+                for (outgoing_edge_ids) |edge_id| {
+                    const edge = store.edges.getPtr(edge_id) orelse continue;
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
-                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
+                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.to_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1450,18 +1451,19 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
-                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
+                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
                 }
 
-                for (incoming_edges) |edge| {
+                for (incoming_edge_ids) |edge_id| {
+                    const edge = store.edges.getPtr(edge_id) orelse continue;
                     if (rel_type) |rt| {
                         if (!std.mem.eql(u8, edge.label, rt)) continue;
                     }
-                    if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
-                    if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
+                    if (!passesTenantFilterEdge(edge.*, filter_tenant)) continue;
+                    if (!matchesEdgeProperties(allocator, edge.*, rel_props)) continue;
                     if (store.nodes.getPtr(edge.from_id)) |right_node| {
                         if (!std.mem.eql(u8, right_node.graph_name, filter_graph)) continue;
                         if (!passesTenantFilter(right_node.*, filter_tenant)) continue;
@@ -1470,7 +1472,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, left_node);
                         if (hop.right.name) |v| try binding.vars.put(v, right_node);
-                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
+                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, right_node);
                         try bindings.append(allocator, binding);
                     }
@@ -3554,6 +3556,29 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     }
 
     return final_result;
+}
+
+/// Apply ORDER BY sorting and DISTINCT deduplication to a query result.
+/// Extracted from executeMatchQueryImpl for readability.
+fn applyFinalOrderAndDistinct(
+    allocator: std.mem.Allocator,
+    result: *ExecutionResult,
+    order_by: ?ast.OrderBy,
+    return_items: []const ast.ReturnItem,
+    distinct: bool,
+) !void {
+    // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
+    // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-002; FEATURE="OrderByAliasedColumn"; ASPECT=SimpleMatchPath; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
+    // D05 Fix: Apply ORDER BY with RETURN items to enable expression matching for aliased columns
+    // This allows ORDER BY n.name to work when RETURN clause uses n.name AS alias
+    if (order_by) |order| {
+        try sortRowsEx(allocator, result, order, return_items);
+    }
+
+    // Apply DISTINCT deduplication if requested
+    if (distinct) {
+        try applyDistinct(allocator, result);
+    }
 }
 
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -7013,18 +7038,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
         }
 
-        // CANARY: REQ=REQ-GQL-ORDER-POST-WITH-001; FEATURE="OrderByPostWith"; ASPECT=FinalSort; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-26
-        // CANARY: REQ=REQ-GQL-ORDERBY-ALIAS-002; FEATURE="OrderByAliasedColumn"; ASPECT=SimpleMatchPath; STATUS=TESTED; TEST=geodetestlab/specs/order_by_sorting_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
-        // D05 Fix: Apply ORDER BY with RETURN items to enable expression matching for aliased columns
-        // This allows ORDER BY n.name to work when RETURN clause uses n.name AS alias
-        if (q.order_by) |order| {
-            try sortRowsEx(allocator, &result, order, q.ret.items);
-        }
-
-        // Apply DISTINCT deduplication if requested
-        if (q.ret.distinct) {
-            try applyDistinct(allocator, &result);
-        }
+        try applyFinalOrderAndDistinct(allocator, &result, q.order_by, q.ret.items, q.ret.distinct);
 
         return result;
     }
