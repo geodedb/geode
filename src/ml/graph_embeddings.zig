@@ -10,6 +10,7 @@ const expect = std.testing.expect;
 
 // Use lib.zig to access other modules properly
 const geode = @import("../lib.zig");
+const user_management = @import("../security/user_management.zig");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=ML; STATUS=EXEMPT; OWNER=ml; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -270,8 +271,22 @@ pub const GraphEmbeddingsManager = struct {
         log.info("Registered {} ML algorithms", .{self.algorithm_registry.count()});
     }
 
-    /// Train embeddings using specified algorithm
-    pub fn trainEmbeddings(self: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, algorithm: MLAlgorithm, custom_config: ?EmbeddingConfig) !void {
+    /// Train embeddings using specified algorithm.
+    /// ML training accesses all nodes cross-tenant (null tenant_id) and requires Admin role
+    /// when authentication is enabled.
+    pub fn trainEmbeddings(self: *GraphEmbeddingsManager, graph: *const geode.graph_common.GraphStore, algorithm: MLAlgorithm, custom_config: ?EmbeddingConfig, caller_role: ?user_management.Role) !void {
+        // ML training is a cross-tenant admin-level operation (getAllNodesForTenant with null tenant_id).
+        // Require Admin role when authentication is enabled.
+        const auth_enabled = user_management.isAuthEnabled();
+        if (auth_enabled) {
+            if (caller_role) |role| {
+                if (role != .Admin) return error.InsufficientPrivileges;
+            } else {
+                // No role provided but auth is enabled — deny access
+                return error.InsufficientPrivileges;
+            }
+        }
+
         const config = custom_config orelse self.config;
         const start_time = std.time.milliTimestamp();
 

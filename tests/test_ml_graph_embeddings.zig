@@ -177,7 +177,7 @@ test "Node2Vec training with small graph" {
     defer manager.deinit();
 
     // Train Node2Vec embeddings
-    try manager.trainEmbeddings(&graph, .node2vec, config);
+    try manager.trainEmbeddings(&graph, .node2vec, config, null);
 
     // Verify embeddings were created
     try expectEqual(@as(u64, 5), manager.embeddings.count());
@@ -230,7 +230,7 @@ test "GraphSAGE training and neighbor aggregation" {
     defer manager.deinit();
 
     // Train GraphSAGE embeddings
-    try manager.trainEmbeddings(&graph, .graphsage, config);
+    try manager.trainEmbeddings(&graph, .graphsage, config, null);
 
     // Verify embeddings creation
     try expectEqual(@as(u64, 6), manager.embeddings.count());
@@ -501,7 +501,7 @@ test "DeepWalk algorithm training" {
     defer manager.deinit();
 
     // Train DeepWalk (which is Node2Vec with p=1, q=1)
-    try manager.trainEmbeddings(&graph, .deepwalk, config);
+    try manager.trainEmbeddings(&graph, .deepwalk, config, null);
 
     // Verify all nodes have embeddings
     try expectEqual(@as(u64, 4), manager.embeddings.count());
