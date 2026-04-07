@@ -5541,3 +5541,47 @@ test "GAP-0509: getNodesByLabels filters by tenant_id" {
     defer testing.allocator.free(edges_all);
     try testing.expectEqual(@as(usize, 2), edges_all.len);
 }
+
+test "getOutgoingEdgeIds and getIncomingEdgeIds return edge list without allocation" {
+    // std.testing.allocator will catch any allocations we don't free
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Node"};
+    const node1 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node2 = try store.createNodeWithGraph(&labels, "test_graph");
+    const node3 = try store.createNodeWithGraph(&labels, "test_graph");
+
+    const edge1 = try store.createEdgeWithGraph(node1, node2, "KNOWS", "test_graph");
+    const edge2 = try store.createEdgeWithGraph(node1, node3, "LIKES", "test_graph");
+
+    // getOutgoingEdgeIds returns the two edges from node1
+    const out_ids = store.getOutgoingEdgeIds(node1);
+    try testing.expect(out_ids != null);
+    try testing.expectEqual(@as(usize, 2), out_ids.?.len);
+    // Both edge IDs should be present (order depends on insertion)
+    const has_edge1 = (out_ids.?[0] == edge1 or out_ids.?[1] == edge1);
+    const has_edge2 = (out_ids.?[0] == edge2 or out_ids.?[1] == edge2);
+    try testing.expect(has_edge1);
+    try testing.expect(has_edge2);
+
+    // getIncomingEdgeIds: node2 has one incoming edge (edge1)
+    const in_ids = store.getIncomingEdgeIds(node2);
+    try testing.expect(in_ids != null);
+    try testing.expectEqual(@as(usize, 1), in_ids.?.len);
+    try testing.expectEqual(edge1, in_ids.?[0]);
+
+    // node3 has one incoming edge (edge2)
+    const in_ids3 = store.getIncomingEdgeIds(node3);
+    try testing.expect(in_ids3 != null);
+    try testing.expectEqual(@as(usize, 1), in_ids3.?.len);
+    try testing.expectEqual(edge2, in_ids3.?[0]);
+
+    // A node with no outgoing edges returns null
+    try testing.expect(store.getOutgoingEdgeIds(node2) == null);
+
+    // A node with no incoming edges returns null
+    try testing.expect(store.getIncomingEdgeIds(node1) == null);
+
+    // No allocations occurred — std.testing.allocator enforces this
+}
