@@ -3582,6 +3582,259 @@ fn applyFinalOrderAndDistinct(
     }
 }
 
+/// Execute standard single-hop edge traversal for a given left node.
+/// Processes outgoing and incoming edges, applying all filters (type, tenant,
+/// properties, labels, WHERE, FILTER), SET mutations, and row building.
+/// Appends matching rows to the provided rows list.
+fn executeSingleHopEdgeTraversal(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    left_node: *graph_store.Node,
+    rows: *std.ArrayList([]Value),
+    rel_direction: u8,
+    rel_type: ?[]const u8,
+    rel_props_filter: ?[]ast.Property,
+    right_labels: [][]const u8,
+    right_props: ?[]ast.Property,
+    left_node_var: ?[]const u8,
+    rel_var: ?[]const u8,
+    right_node_var: ?[]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    filter_tenant: ?[]const u8,
+    where_clause: ?ast.Expr,
+    filter_clause: ?ast.Expr,
+    set_clauses: []const ast.SetClause,
+    has_with: bool,
+    items: []const ast.ReturnItem,
+) !void {
+    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
+    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
+    const outgoing_edges_std = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
+    const incoming_edges_std = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
+    // Note: edges are allocated by store's allocator, don't free here
+
+    // Helper to process one set of edges for a given target node ID extractor
+    const edge_sets = [_]struct { edges: []const graph_store.Edge, use_from: bool }{
+        .{ .edges = outgoing_edges_std, .use_from = false },
+        .{ .edges = incoming_edges_std, .use_from = true },
+    };
+
+    for (edge_sets) |edge_set| {
+        for (edge_set.edges) |edge| {
+            // Filter by relationship type if specified
+            if (rel_type) |rt| {
+                if (!std.mem.eql(u8, edge.label, rt)) continue;
+            }
+            // GAP-0509: Filter edge by tenant
+            if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
+            // Filter by relationship properties if specified
+            if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
+
+            // Get the target node
+            const right_node_id = if (edge_set.use_from) edge.from_id else edge.to_id;
+            const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+            // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
+            // Filter right node by labels if specified
+            if (right_labels.len > 0) {
+                var has_all_labels = true;
+                for (right_labels) |required_label| {
+                    var found = false;
+                    for (right_node_ptr.labels) |node_label| {
+                        if (std.mem.eql(u8, required_label, node_label)) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        has_all_labels = false;
+                        break;
+                    }
+                }
+                if (!has_all_labels) continue;
+            }
+
+            // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
+            // Filter right node by inline properties if specified
+            if (right_props) |props| {
+                var passes_props = true;
+                for (props) |prop| {
+                    if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = propertyValueToValue(node_prop_val);
+                        const prop_env = eval.Env{
+                            .names = param_names,
+                            .values = param_values,
+                            .allocator = allocator,
+                        };
+                        const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                            passes_props = false;
+                            break;
+                        };
+                        if (!valuesEqual(node_val, prop_val)) {
+                            passes_props = false;
+                            break;
+                        }
+                    } else {
+                        passes_props = false;
+                        break;
+                    }
+                }
+                if (!passes_props) continue;
+            }
+
+            // Create environment with all matched elements
+            // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
+            // Order must match column order: left, rel, right
+            var env_count: usize = 0;
+            if (left_node_var != null) env_count += 1;
+            if (rel_var != null) env_count += 1;
+            if (right_node_var != null) env_count += 1;
+
+            const env_names = try allocator.alloc([]const u8, env_count);
+            const env_values = try allocator.alloc(Value, env_count);
+
+            var env_idx: usize = 0;
+            if (left_node_var) |var_name| {
+                env_names[env_idx] = var_name;
+                env_values[env_idx] = Value{ .Node = left_node };
+                env_idx += 1;
+            }
+            if (rel_var) |var_name| {
+                env_names[env_idx] = var_name;
+                // Store edge as an Edge value for type() function
+                const edge_ptr = store.edges.getPtr(edge.id) orelse {
+                    env_values[env_idx] = Value{ .Null = {} };
+                    env_idx += 1;
+                    continue;
+                };
+                env_values[env_idx] = Value{ .Edge = edge_ptr };
+                env_idx += 1;
+            }
+            if (right_node_var) |var_name| {
+                env_names[env_idx] = var_name;
+                env_values[env_idx] = Value{ .Node = right_node_ptr };
+                env_idx += 1;
+            }
+
+            const env = Env{
+                .names = env_names,
+                .values = env_values,
+                .param_names = param_names,
+                .param_values = param_values,
+                .allocator = allocator,
+                .owned = true, // Owns allocated arrays
+            };
+
+            // Evaluate WHERE clause if present
+            if (where_clause) |where_expr| {
+                const where_result = try eval.evalExpr(allocator, where_expr, env);
+                const passes_where = switch (where_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+
+                if (!passes_where) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                    continue;
+                }
+            }
+
+            // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+            if (filter_clause) |filter_expr| {
+                const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+                const passes_filter = switch (filter_result) {
+                    .Bool => |b| b,
+                    .Null => false,
+                    .Int => |i| i != 0,
+                    else => false,
+                };
+
+                if (!passes_filter) {
+                    allocator.free(env_names);
+                    allocator.free(env_values);
+                    continue;
+                }
+            }
+
+            // Apply SET clauses if present
+            for (set_clauses) |set_clause| {
+                switch (set_clause) {
+                    .Property => |prop| {
+                        // Check if setting property on relationship variable
+                        if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                            const value = try eval.evalExpr(allocator, prop.value, env);
+                            try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
+                        }
+                        // Check if setting property on left node variable
+                        else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
+                            const value = try eval.evalExpr(allocator, prop.value, env);
+                            try property_mutation.setNodePropertyFromValue(allocator, store, left_node.labels, left_node.id, prop.target.property, value);
+                        }
+                        // Check if setting property on right node variable
+                        else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
+                            const value = try eval.evalExpr(allocator, prop.value, env);
+                            try property_mutation.setNodePropertyFromValue(allocator, store, right_node_ptr.labels, right_node_ptr.id, prop.target.property, value);
+                        }
+                    },
+                    .Labels => |label_set| {
+                        // Handle label setting for nodes in relationship pattern
+                        if (left_node_var != null and std.mem.eql(u8, label_set.node, left_node_var.?)) {
+                            for (label_set.labels) |label| {
+                                try store.addNodeLabel(left_node.id, label);
+                            }
+                        } else if (right_node_var != null and std.mem.eql(u8, label_set.node, right_node_var.?)) {
+                            for (label_set.labels) |label| {
+                                try store.addNodeLabel(right_node_ptr.id, label);
+                            }
+                        }
+                    },
+                    .AllProperties => |all_props| {
+                        if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
+                            const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
+                            const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                            try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
+                        } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
+                            const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                            try property_mutation.replaceNodeProperties(allocator, store, left_node, props_value);
+                        } else if (right_node_var != null and std.mem.eql(u8, all_props.node, right_node_var.?)) {
+                            const props_value = try eval.evalExpr(allocator, all_props.properties, env);
+                            try property_mutation.replaceNodeProperties(allocator, store, right_node_ptr, props_value);
+                        }
+                    },
+                }
+            }
+
+            // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
+            // When WITH clause is present, build rows containing matched node values
+            // When no WITH clause, evaluate RETURN expressions directly
+            var row: []Value = undefined;
+            if (has_with) {
+                // Build row from matched variables (env contains them)
+                row = try allocator.alloc(Value, env_values.len);
+                for (env_values, 0..) |val, i| {
+                    row[i] = val;
+                }
+            } else {
+                // Evaluate return items directly
+                row = try allocator.alloc(Value, items.len);
+                for (items, 0..) |item, i| {
+                    row[i] = try eval.evalExpr(allocator, item.expr, env);
+                }
+            }
+
+            allocator.free(env_names);
+            allocator.free(env_values);
+
+            try rows.append(allocator, row);
+        }
+    }
+}
+
 /// Execute multi-hop pattern matching with GROUP BY aggregation.
 /// Handles patterns like (a)-[:R1]->(b)-[:R2]->(c) with GROUP BY.
 /// Returns null if the chain has only a single hop (falls through to single-hop handler).
@@ -6212,424 +6465,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         try rows.append(allocator, row);
                     }
                 } else {
-                    // Standard single-hop edge traversal
-                    // CANARY: REQ=REQ-GQL-UNDIRECTED-PATTERN-001; FEATURE="UndirectedPatternMatch"; ASPECT=SingleHopEdgeTraversal; STATUS=TESTED; TEST=geodetestlab/specs/undirected_pattern_matching.yml; OWNER=engine; UPDATED=2026-01-29
-                    // Get edges based on direction: outgoing for 'r'/undirected, incoming for 'l'/undirected
-                    const outgoing_edges_std = if (rel_direction == 'r' or rel_direction == 'u') store.getEdgesFrom(allocator, left_node.id) else &[_]graph_store.Edge{};
-                    const incoming_edges_std = if (rel_direction == 'l' or rel_direction == 'u') store.getEdgesTo(allocator, left_node.id) else &[_]graph_store.Edge{};
-                    // Note: edges are allocated by store's allocator, don't free here
-
-                    // Process outgoing edges (use to_id as target)
-                    for (outgoing_edges_std) |edge| {
-                        // Filter by relationship type if specified
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
-                        // Filter by relationship properties if specified
-                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
-
-                        // Get the target node (to_id for outgoing edges)
-                        const right_node_id = edge.to_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
-
-                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
-                        // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[:REL]->(b:Product))
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // CANARY: REQ=REQ-GQL-SINGLEHOP-RIGHTNODE; FEATURE="SingleHopRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
-                        // Filter right node by inline properties if specified
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Create environment with all matched elements
-                        // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
-                        // Order must match column order in lines 6463-6466: left, rel, right
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            // Store edge as an Edge value for type() function
-                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
-                                env_values[env_idx] = Value{ .Null = {} };
-                                env_idx += 1;
-                                continue;
-                            };
-                            env_values[env_idx] = Value{ .Edge = edge_ptr };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                            .owned = true, // Owns allocated arrays (lines 1399-1400)
-                        };
-
-                        // Evaluate WHERE clause if present
-                        if (q.where_clause) |where_expr| {
-                            const where_result = try eval.evalExpr(allocator, where_expr, env);
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                        if (q.filter_clause) |filter_expr| {
-                            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                            const passes_filter = switch (filter_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_filter) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Apply SET clauses if present
-                        for (q.set_clauses) |set_clause| {
-                            switch (set_clause) {
-                                .Property => |prop| {
-                                    // Check if setting property on relationship variable
-                                    if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
-                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
-                                    }
-                                    // Check if setting property on left node variable
-                                    else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setNodePropertyFromValue(allocator, store, left_node.labels, left_node.id, prop.target.property, value);
-                                    }
-                                    // Check if setting property on right node variable
-                                    else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setNodePropertyFromValue(allocator, store, right_node_ptr.labels, right_node_ptr.id, prop.target.property, value);
-                                    }
-                                },
-                                .Labels => |label_set| {
-                                    // Handle label setting for nodes in relationship pattern
-                                    if (left_node_var != null and std.mem.eql(u8, label_set.node, left_node_var.?)) {
-                                        for (label_set.labels) |label| {
-                                            try store.addNodeLabel(left_node.id, label);
-                                        }
-                                    } else if (right_node_var != null and std.mem.eql(u8, label_set.node, right_node_var.?)) {
-                                        for (label_set.labels) |label| {
-                                            try store.addNodeLabel(right_node_ptr.id, label);
-                                        }
-                                    }
-                                },
-                                .AllProperties => |all_props| {
-                                    if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
-                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
-                                    } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceNodeProperties(allocator, store, left_node, props_value);
-                                    } else if (right_node_var != null and std.mem.eql(u8, all_props.node, right_node_var.?)) {
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceNodeProperties(allocator, store, right_node_ptr, props_value);
-                                    }
-                                },
-                            }
-                        }
-
-                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                        // When WITH clause is present, build rows containing matched node values
-                        // These rows will be transformed by executeWithClauseWithGroupBy later
-                        // When no WITH clause, evaluate RETURN expressions directly
-                        var row: []Value = undefined;
-                        if (has_with) {
-                            // Build row from matched variables (env contains them)
-                            row = try allocator.alloc(Value, env_values.len);
-                            for (env_values, 0..) |val, i| {
-                                row[i] = val;
-                            }
-                        } else {
-                            // Evaluate return items directly
-                            row = try allocator.alloc(Value, items.len);
-                            for (items, 0..) |item, i| {
-                                row[i] = try eval.evalExpr(allocator, item.expr, env);
-                            }
-                        }
-
-                        allocator.free(env_names);
-                        allocator.free(env_values);
-
-                        try rows.append(allocator, row);
-                    }
-
-                    // Process incoming edges (use from_id as target) - for undirected patterns
-                    for (incoming_edges_std) |edge| {
-                        // Filter by relationship type if specified
-                        if (rel_type) |rt| {
-                            if (!std.mem.eql(u8, edge.label, rt)) continue;
-                        }
-                        // GAP-0509: Filter edge by tenant
-                        if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
-                        // Filter by relationship properties if specified
-                        if (!matchesEdgeProperties(allocator, edge, rel_props_filter)) continue;
-
-                        // Get the target node (from_id for incoming edges)
-                        const right_node_id = edge.from_id;
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
-
-                        // Filter right node by labels if specified
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // Filter right node by inline properties if specified
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // Create environment with all matched elements
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            const edge_ptr = store.edges.getPtr(edge.id) orelse {
-                                env_values[env_idx] = Value{ .Null = {} };
-                                env_idx += 1;
-                                continue;
-                            };
-                            env_values[env_idx] = Value{ .Edge = edge_ptr };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                            .owned = true,
-                        };
-
-                        // Evaluate WHERE clause if present
-                        if (q.where_clause) |where_expr| {
-                            const where_result = try eval.evalExpr(allocator, where_expr, env);
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                        if (q.filter_clause) |filter_expr| {
-                            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                            const passes_filter = switch (filter_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_filter) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Apply SET clauses if present
-                        for (q.set_clauses) |set_clause| {
-                            switch (set_clause) {
-                                .Property => |prop| {
-                                    if (rel_var != null and std.mem.eql(u8, prop.target.object, rel_var.?)) {
-                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_ptr.label, edge_ptr.id, prop.target.property, value);
-                                    } else if (left_node_var != null and std.mem.eql(u8, prop.target.object, left_node_var.?)) {
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setNodePropertyFromValue(allocator, store, left_node.labels, left_node.id, prop.target.property, value);
-                                    } else if (right_node_var != null and std.mem.eql(u8, prop.target.object, right_node_var.?)) {
-                                        const value = try eval.evalExpr(allocator, prop.value, env);
-                                        try property_mutation.setNodePropertyFromValue(allocator, store, right_node_ptr.labels, right_node_ptr.id, prop.target.property, value);
-                                    }
-                                },
-                                .Labels => |label_set| {
-                                    if (left_node_var != null and std.mem.eql(u8, label_set.node, left_node_var.?)) {
-                                        for (label_set.labels) |label| {
-                                            try store.addNodeLabel(left_node.id, label);
-                                        }
-                                    } else if (right_node_var != null and std.mem.eql(u8, label_set.node, right_node_var.?)) {
-                                        for (label_set.labels) |label| {
-                                            try store.addNodeLabel(right_node_ptr.id, label);
-                                        }
-                                    }
-                                },
-                                .AllProperties => |all_props| {
-                                    if (rel_var != null and std.mem.eql(u8, all_props.node, rel_var.?)) {
-                                        const edge_ptr = store.edges.getPtr(edge.id) orelse continue;
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
-                                    } else if (left_node_var != null and std.mem.eql(u8, all_props.node, left_node_var.?)) {
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceNodeProperties(allocator, store, left_node, props_value);
-                                    } else if (right_node_var != null and std.mem.eql(u8, all_props.node, right_node_var.?)) {
-                                        const props_value = try eval.evalExpr(allocator, all_props.properties, env);
-                                        try property_mutation.replaceNodeProperties(allocator, store, right_node_ptr, props_value);
-                                    }
-                                },
-                            }
-                        }
-
-                        // Build row for result
-                        var row: []Value = undefined;
-                        if (has_with) {
-                            row = try allocator.alloc(Value, env_values.len);
-                            for (env_values, 0..) |val, i| {
-                                row[i] = val;
-                            }
-                        } else {
-                            row = try allocator.alloc(Value, items.len);
-                            for (items, 0..) |item, i| {
-                                row[i] = try eval.evalExpr(allocator, item.expr, env);
-                            }
-                        }
-
-                        allocator.free(env_names);
-                        allocator.free(env_values);
-
-                        try rows.append(allocator, row);
-                    }
+                    // Standard single-hop edge traversal — delegated to helper
+                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
                 }
             }
         } else {
