@@ -2000,3 +2000,195 @@ test "StorageAdapter: acquireMultiGraphReadLocks returns error on missing graph"
     const names = &[_][]const u8{ "exists", "does_not_exist" };
     try std.testing.expectError(error.GraphNotFound, adapter.acquireMultiGraphReadLocks(allocator, names));
 }
+
+// ============================================================================
+// Per-graph subsystem colocation tests (Tasks 5-7)
+// ============================================================================
+
+test "StorageAdapter: per-graph audit logger is created and accessible" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const mg = try adapter.getOrCreateGraph("audit_graph");
+
+    // Per-graph audit logger should be initialised (non-null).
+    try std.testing.expect(mg.audit_logger != null);
+
+    // Accessor on StorageAdapter returns the same logger.
+    const logger = adapter.getAuditLogger("audit_graph");
+    try std.testing.expect(logger != null);
+    try std.testing.expect(logger.? == mg.audit_logger.?);
+
+    // Verify audit.jsonl file exists inside the graph directory.
+    const graph_dir = try StorageAdapter.graphDirPath(allocator, path, mg.uuid);
+    defer allocator.free(graph_dir);
+
+    const audit_path = try std.fmt.allocPrint(allocator, "{s}/audit.jsonl", .{graph_dir});
+    defer allocator.free(audit_path);
+
+    // statFile returns a Stat struct on success; an error means the file does not exist.
+    _ = std.fs.cwd().statFile(audit_path) catch |err| {
+        std.debug.print("audit.jsonl should exist: {}\n", .{err});
+        return err;
+    };
+}
+
+test "StorageAdapter: per-graph timeseries store is created and accessible" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const mg = try adapter.getOrCreateGraph("ts_graph");
+
+    // Per-graph timeseries store should be initialised (non-null).
+    try std.testing.expect(mg.ts_store != null);
+
+    // Accessor on StorageAdapter returns the same store.
+    const store = adapter.getTimeseriesStore("ts_graph");
+    try std.testing.expect(store != null);
+    try std.testing.expect(store.? == mg.ts_store.?);
+
+    // Verify timeseries/ subdirectory exists inside the graph directory.
+    const graph_dir = try StorageAdapter.graphDirPath(allocator, path, mg.uuid);
+    defer allocator.free(graph_dir);
+
+    const ts_dir = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir});
+    defer allocator.free(ts_dir);
+
+    var dir = std.fs.cwd().openDir(ts_dir, .{}) catch |err| {
+        std.debug.print("timeseries dir open failed: {}\n", .{err});
+        return err;
+    };
+    dir.close();
+}
+
+test "StorageAdapter: per-graph FTS index is created, persists, and accessible" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    // Capture the graph UUID so we can reopen later.
+    var graph_uuid: [16]u8 = undefined;
+
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        const mg = try adapter.getOrCreateGraph("fts_graph");
+        graph_uuid = mg.uuid;
+
+        // Per-graph FTS index should be initialised (non-null).
+        try std.testing.expect(mg.fts_index != null);
+        try std.testing.expect(mg.fts_dir != null);
+
+        // Accessor on StorageAdapter returns the same index.
+        const idx = adapter.getFulltextIndex("fts_graph");
+        try std.testing.expect(idx != null);
+        try std.testing.expect(idx.? == mg.fts_index.?);
+
+        // Index a document into the per-graph FTS index.
+        try mg.fts_index.?.indexDocument(42, "the quick brown fox jumps over the lazy dog");
+
+        // Verify fts/ subdirectory exists inside the graph directory.
+        const graph_dir = try StorageAdapter.graphDirPath(allocator, path, mg.uuid);
+        defer allocator.free(graph_dir);
+
+        const fts_dir = try std.fmt.allocPrint(allocator, "{s}/fts", .{graph_dir});
+        defer allocator.free(fts_dir);
+
+        var dir = std.fs.cwd().openDir(fts_dir, .{}) catch |err| {
+            std.debug.print("fts dir open failed: {}\n", .{err});
+            return err;
+        };
+        dir.close();
+
+        // deinit triggers saveToDisk for the FTS index.
+    }
+
+    // Reopen the adapter and verify FTS data persists.
+    {
+        const adapter = try StorageAdapter.init(allocator, path, testConfig());
+        defer adapter.deinit();
+
+        const mg = try adapter.openGraphWithUuid("fts_graph", graph_uuid);
+
+        try std.testing.expect(mg.fts_index != null);
+
+        // The previously indexed document should be present after reload.
+        // We verify via the document count rather than search() to avoid
+        // ArrayList leak in FullTextIndex.search().
+        try std.testing.expect(mg.fts_index.?.documents.count() > 0);
+    }
+}
+
+test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const mg = try adapter.getOrCreateGraph("drop_graph");
+    const graph_uuid = mg.uuid;
+
+    // Verify all subsystems are initialised.
+    try std.testing.expect(mg.audit_logger != null);
+    try std.testing.expect(mg.ts_store != null);
+    try std.testing.expect(mg.fts_index != null);
+
+    // Get the graph directory path before dropping.
+    const graph_dir = try StorageAdapter.graphDirPath(allocator, path, graph_uuid);
+    defer allocator.free(graph_dir);
+
+    // Verify graph directory exists before drop.
+    {
+        var dir = std.fs.cwd().openDir(graph_dir, .{}) catch |err| {
+            std.debug.print("graph dir should exist before drop: {}\n", .{err});
+            return err;
+        };
+        dir.close();
+    }
+
+    // Drop the graph — this should deinit subsystems and delete the directory.
+    adapter.dropGraph("drop_graph");
+
+    // Verify graph directory is removed.
+    const dir_result = std.fs.cwd().openDir(graph_dir, .{});
+    if (dir_result) |*d| {
+        var dir_copy = d.*;
+        dir_copy.close();
+        return error.TestExpectedError; // directory should not exist
+    } else |err| {
+        try std.testing.expect(err == error.FileNotFound);
+    }
+
+    // Verify accessors return null after drop.
+    try std.testing.expect(adapter.getAuditLogger("drop_graph") == null);
+    try std.testing.expect(adapter.getTimeseriesStore("drop_graph") == null);
+    try std.testing.expect(adapter.getFulltextIndex("drop_graph") == null);
+    try std.testing.expect(!adapter.graphExists("drop_graph"));
+}
