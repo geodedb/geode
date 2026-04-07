@@ -8,8 +8,18 @@ const Token = FullTextIndex.Token;
 const PostingList = FullTextIndex.PostingList;
 const PostingEntry = FullTextIndex.PostingEntry;
 
+// CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=FullTextIndex; STATUS=IMPL; OWNER=security; UPDATED=2026-04-07
+
 const MAGIC = "GFTS";
 const VERSION: u16 = 1;
+
+// Sanity limits to prevent corrupted files from triggering huge allocations.
+const MAX_DOCS: u64 = 10_000_000;
+const MAX_TOKENS_PER_DOC: u64 = 100_000;
+const MAX_CONTENT_LEN: u64 = 10 * 1024 * 1024; // 10 MB
+const MAX_TERMS: u64 = 10_000_000;
+const MAX_POSITIONS_PER_ENTRY: u64 = 100_000;
+const MAX_VEC_LEN: u64 = 100_000;
 
 /// Serialize a FullTextIndex to disk at `{dir_path}/fulltext.idx`.
 /// Uses TDE-aware file writing for encryption-at-rest support.
@@ -167,6 +177,7 @@ pub fn load(allocator: std.mem.Allocator, dir_path: []const u8) !FullTextIndex {
     // Read documents
     var doc_count: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&doc_count));
+    if (doc_count > MAX_DOCS) return error.CorruptedIndex;
 
     var i: u64 = 0;
     while (i < doc_count) : (i += 1) {
@@ -177,6 +188,7 @@ pub fn load(allocator: std.mem.Allocator, dir_path: []const u8) !FullTextIndex {
     // Read inverted index
     var term_count: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&term_count));
+    if (term_count > MAX_TERMS) return error.CorruptedIndex;
 
     i = 0;
     while (i < term_count) : (i += 1) {
@@ -195,14 +207,18 @@ fn readDocument(allocator: std.mem.Allocator, reader: anytype) !Document {
     // content
     var content_len: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&content_len));
+    if (content_len > MAX_CONTENT_LEN) return error.CorruptedIndex;
     const content = try allocator.alloc(u8, content_len);
+    errdefer allocator.free(content);
     _ = try reader.readAll(content);
 
     // tokens — read serialized text but reconstruct slices pointing into content
     // to match the original memory layout (deinit frees content, not individual token.text)
     var token_count: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&token_count));
+    if (token_count > MAX_TOKENS_PER_DOC) return error.CorruptedIndex;
     const tokens = try allocator.alloc(Token, token_count);
+    errdefer allocator.free(tokens);
     for (tokens) |*token| {
         token.* = try readToken(allocator, reader, content);
     }
@@ -213,7 +229,9 @@ fn readDocument(allocator: std.mem.Allocator, reader: anytype) !Document {
     const vector: ?[]f32 = if (has_vec == 1) blk: {
         var vec_len: u64 = undefined;
         _ = try reader.readAll(std.mem.asBytes(&vec_len));
+        if (vec_len > MAX_VEC_LEN) return error.CorruptedIndex;
         const vec = try allocator.alloc(f32, vec_len);
+        errdefer allocator.free(vec);
         _ = try reader.readAll(std.mem.sliceAsBytes(vec));
         break :blk vec;
     } else null;
@@ -258,7 +276,9 @@ fn readPostingList(allocator: std.mem.Allocator, reader: anytype) !PostingList {
     // term
     var term_len: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&term_len));
+    if (term_len > MAX_CONTENT_LEN) return error.CorruptedIndex;
     const term = try allocator.alloc(u8, term_len);
+    errdefer allocator.free(term);
     _ = try reader.readAll(term);
 
     // idf
@@ -268,7 +288,9 @@ fn readPostingList(allocator: std.mem.Allocator, reader: anytype) !PostingList {
     // posting entries
     var entry_count: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&entry_count));
+    if (entry_count > MAX_DOCS) return error.CorruptedIndex;
     const entries = try allocator.alloc(PostingEntry, entry_count);
+    errdefer allocator.free(entries);
     for (entries) |*pe| {
         pe.* = try readPostingEntry(allocator, reader);
     }
@@ -294,7 +316,9 @@ fn readPostingEntry(allocator: std.mem.Allocator, reader: anytype) !PostingEntry
     // positions
     var pos_count: u64 = undefined;
     _ = try reader.readAll(std.mem.asBytes(&pos_count));
+    if (pos_count > MAX_POSITIONS_PER_ENTRY) return error.CorruptedIndex;
     const positions = try allocator.alloc(usize, pos_count);
+    errdefer allocator.free(positions);
     for (positions) |*pos| {
         var p: u64 = undefined;
         _ = try reader.readAll(std.mem.asBytes(&p));

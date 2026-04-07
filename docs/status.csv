@@ -3897,6 +3897,7 @@ REQ-TDE-ENFORCE-015,TDEEnforcement,BuildIntegration,TESTED,,,security,2026-01-28
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,<Component>,TESTED,,,security,2026-01-28,docs/TDE_FILE_LEVEL_ENCRYPTION.md
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,DomainTrie,TESTED,,,security,2026-01-28,src/index/domain_trie_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FLECatalog,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
+REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,FullTextIndex,IMPL,,,security,2026-04-07,src/index/fulltext_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,HNSWIndex,TESTED,,,security,2026-04-01,src/index/hnsw_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,IntervalTree,TESTED,,,security,2026-01-28,src/index/interval_persist.zig
 REQ-TDE-FILELEVEL-001,TDEFileLevelEncryption,JSONBIndex,TESTED,,,security,2026-01-28,src/index/jsonb_inverted_persist.zig
