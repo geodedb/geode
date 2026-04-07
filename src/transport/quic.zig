@@ -371,11 +371,11 @@ pub const QuicTransport = struct {
             // 55%+ idle CPU from 20k syscalls/sec overhead).
             // drainPendingDestroy is handled by the main accept loop thread only
             // (it acquires ep.mu which would contend with poll's internal locking).
-            self.poll(0) catch {};
+            self.poll(0) catch {}; // Best-effort cleanup
             std.Thread.sleep(100 * std.time.ns_per_us);
         }
         // Final poll to flush any remaining packets on shutdown
-        self.poll(0) catch {};
+        self.poll(0) catch {}; // Best-effort cleanup
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
@@ -472,11 +472,11 @@ pub const QuicTransport = struct {
         // Close streams and connection. The QUIC library's closeStream/
         // closeConnection are thread-safe (per-connection mutex).
         for (conn.streams.items) |stream| {
-            conn.inner.closeStream(stream.stream_id, 0) catch {};
+            conn.inner.closeStream(stream.stream_id, 0) catch {}; // Best-effort cleanup
             conn.allocator.destroy(stream);
         }
         conn.streams.deinit(conn.allocator);
-        api.closeConnection(conn.inner, 0) catch {};
+        api.closeConnection(conn.inner, 0) catch {}; // Best-effort cleanup
 
         // Queue the inner connection for deferred destruction on the main thread.
         // drainPendingDestroy() will use api.destroy() to properly remove it
@@ -497,7 +497,9 @@ pub const QuicTransport = struct {
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
         // Ensure cert directory exists
-        std.fs.cwd().makePath("certs") catch {};
+        std.fs.cwd().makePath("certs") catch |err| {
+            tlog.warn("failed to create certs directory", &.{Attr.string("error", @errorName(err))});
+        };
 
         // Generate self-signed ECDSA P-256 certificate using openssl
         // Using ECDSA P-256 for compatibility with TLS 1.3 signature schemes
@@ -679,14 +681,14 @@ pub const QuicConnection = struct {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
         for (self.streams.items) |stream| {
-            self.inner.closeStream(stream.stream_id, 0) catch {};
+            self.inner.closeStream(stream.stream_id, 0) catch {}; // Best-effort cleanup
             self.allocator.destroy(stream);
         }
         self.streams.deinit(self.allocator);
         // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-001; FEATURE="ConnectionMemoryManagement"; ASPECT=ResourceLeak; STATUS=EXEMPT; OWNER=transport; UPDATED=2025-12-27
         // Use quic_connection and null it out to prevent double-close.
         if (self.quic_connection) |qc| {
-            api.closeConnection(qc, 0) catch {};
+            api.closeConnection(qc, 0) catch {}; // Best-effort cleanup
             self.quic_connection = null;
         }
     }
@@ -795,7 +797,7 @@ pub const QuicStream = struct {
         defer {
             if (self.poll_sync) |ps| ps.leaveIo();
         }
-        self.connection.closeStream(self.stream_id, 0) catch {};
+        self.connection.closeStream(self.stream_id, 0) catch {}; // Best-effort cleanup
     }
 
     pub fn finish(self: *QuicStream) !void {
@@ -1063,7 +1065,7 @@ pub const QuicClientStream = struct {
                     blocked_retries += 1;
                     if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
                     // Poll to process incoming frames, then retry
-                    api.poll(self.endpoint, 5) catch {};
+                    api.poll(self.endpoint, 5) catch {}; // Best-effort poll for flow control
                     std.Thread.sleep(5 * std.time.ns_per_ms);
                     continue;
                 }
@@ -1073,7 +1075,7 @@ pub const QuicClientStream = struct {
                 // Congestion window full: poll to process ACKs, then retry
                 blocked_retries += 1;
                 if (blocked_retries > max_blocked_retries) return QuicError.WriteError;
-                api.poll(self.endpoint, 5) catch {};
+                api.poll(self.endpoint, 5) catch {}; // Best-effort poll for congestion
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
@@ -1091,7 +1093,7 @@ pub const QuicClientStream = struct {
             if (err == error.WouldBlock) {
                 if (debug_read) std.debug.print("[QUIC] read: WouldBlock, polling\n", .{});
                 // Drive the endpoint to allow incoming packets
-                api.poll(self.endpoint, 10) catch {};
+                api.poll(self.endpoint, 10) catch {}; // Best-effort poll for incoming data
                 return error.WouldBlock;
             }
             if (debug_read) std.debug.print("[QUIC] read: error {}\n", .{err});
@@ -1099,7 +1101,7 @@ pub const QuicClientStream = struct {
         };
         if (debug_read) std.debug.print("[QUIC] read: got {} bytes\n", .{result});
         if (result == 0) {
-            api.poll(self.endpoint, 10) catch {};
+            api.poll(self.endpoint, 10) catch {}; // Best-effort poll for incoming data
         }
         return result;
     }
@@ -1145,7 +1147,7 @@ pub const QuicClientStream = struct {
                         return error.UnexpectedEndOfStream;
                     }
                     // Poll for incoming data and wait before retrying
-                    api.poll(self.endpoint, 10) catch {};
+                    api.poll(self.endpoint, 10) catch {}; // Best-effort poll for incoming data
                     std.Thread.sleep(5 * std.time.ns_per_ms);
                     continue;
                 }
@@ -1160,7 +1162,7 @@ pub const QuicClientStream = struct {
                 if (retry_count > max_retries) {
                     return error.UnexpectedEndOfStream;
                 }
-                api.poll(self.endpoint, 10) catch {};
+                api.poll(self.endpoint, 10) catch {}; // Best-effort poll for incoming data
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
             }
@@ -1180,7 +1182,7 @@ pub const QuicClientStream = struct {
     }
 
     pub fn close(self: *QuicClientStream) void {
-        self.connection.closeStream(self.stream_id, 0) catch {};
+        self.connection.closeStream(self.stream_id, 0) catch {}; // Best-effort cleanup
         self.allocator.destroy(self);
     }
 
