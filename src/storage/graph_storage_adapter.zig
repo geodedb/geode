@@ -13,6 +13,8 @@ const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
 const audit = @import("../security/audit.zig");
+const ts_mod = @import("timeseries_lib");
+const fulltext = @import("../index/fulltext.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
@@ -207,6 +209,14 @@ pub const ManagedGraph = struct {
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
     /// May be null if audit init failed (soft failure — graph still usable).
     audit_logger: ?*audit.AuditLogger = null,
+    /// Per-graph timeseries store persisting to `{graph_dir}/timeseries/`.
+    /// May be null if timeseries init failed (soft failure — graph still usable).
+    ts_store: ?*ts_mod.Store = null,
+    /// Per-graph full-text search index persisting to `{graph_dir}/fts/`.
+    /// May be null if FTS init failed (soft failure — graph still usable).
+    fts_index: ?*fulltext.FullTextIndex = null,
+    /// Owned path to the FTS subdirectory (needed for saveToDisk on close).
+    fts_dir: ?[]const u8 = null,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Thread.RwLock = .{},
@@ -218,6 +228,25 @@ pub const ManagedGraph = struct {
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
+        if (self.fts_index) |fts| {
+            if (self.fts_dir) |dir| {
+                fts.saveToDisk(dir) catch |err| {
+                    log.warn("failed to persist per-graph FTS index: {}", .{err});
+                };
+            }
+            fts.deinit();
+            allocator.destroy(fts);
+            self.fts_index = null;
+        }
+        if (self.fts_dir) |dir| {
+            allocator.free(dir);
+            self.fts_dir = null;
+        }
+        if (self.ts_store) |tss| {
+            tss.deinit();
+            allocator.destroy(tss);
+            self.ts_store = null;
+        }
         if (self.audit_logger) |al| {
             al.deinit();
             allocator.destroy(al);
@@ -354,6 +383,28 @@ pub const StorageAdapter = struct {
         self.mutex.unlock();
 
         return if (mg) |m| m.audit_logger else null;
+    }
+
+    /// Return the per-graph timeseries store for `name`, or null if the graph
+    /// does not exist or timeseries was not initialised.  Holds `self.mutex`
+    /// only for the hash-map lookup.
+    pub fn getTimeseriesStore(self: *StorageAdapter, name: []const u8) ?*ts_mod.Store {
+        self.mutex.lock();
+        const mg = self.engines.get(name);
+        self.mutex.unlock();
+
+        return if (mg) |m| m.ts_store else null;
+    }
+
+    /// Return the per-graph full-text search index for `name`, or null if the
+    /// graph does not exist or FTS was not initialised.  Holds `self.mutex`
+    /// only for the hash-map lookup.
+    pub fn getFulltextIndex(self: *StorageAdapter, name: []const u8) ?*fulltext.FullTextIndex {
+        self.mutex.lock();
+        const mg = self.engines.get(name);
+        self.mutex.unlock();
+
+        return if (mg) |m| m.fts_index else null;
     }
 
     /// Check whether a graph with the given name exists either in memory or in
@@ -1059,6 +1110,103 @@ pub const StorageAdapter = struct {
         return al;
     }
 
+    /// Attempt to create a per-graph timeseries store. Returns null on failure
+    /// (soft failure — the graph remains usable without per-graph timeseries).
+    fn initTimeseriesForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*ts_mod.Store {
+        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
+            log.warn("failed to build graph dir path for timeseries: {}", .{err});
+            return null;
+        };
+        defer allocator.free(graph_dir);
+
+        // Build the timeseries subdirectory path.
+        const ts_dir = std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir}) catch |err| {
+            log.warn("failed to allocate timeseries dir path: {}", .{err});
+            return null;
+        };
+        defer allocator.free(ts_dir);
+
+        // Ensure the timeseries subdirectory exists.
+        std.fs.cwd().makePath(ts_dir) catch |err| {
+            log.warn("failed to create timeseries dir '{s}': {}", .{ ts_dir, err });
+            return null;
+        };
+
+        const store = allocator.create(ts_mod.Store) catch |err| {
+            log.warn("failed to allocate per-graph timeseries store: {}", .{err});
+            return null;
+        };
+        store.* = ts_mod.Store.initWithConfig(allocator, .{
+            .data_dir = ts_dir,
+        }) catch |err| {
+            log.warn("failed to init per-graph timeseries store: {}", .{err});
+            allocator.destroy(store);
+            return null;
+        };
+
+        store.loadFromDisk() catch |err| {
+            log.warn("failed to load per-graph timeseries data from disk: {}", .{err});
+            // Store is still usable in-memory, continue with it.
+        };
+
+        return store;
+    }
+
+    const FtsInitResult = struct {
+        index: *fulltext.FullTextIndex,
+        dir: []const u8,
+    };
+
+    /// Attempt to create or load a per-graph full-text search index.
+    /// Returns null on failure (soft failure — the graph remains usable without FTS).
+    fn initFtsForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8, load_existing: bool) ?FtsInitResult {
+        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
+            log.warn("failed to build graph dir path for FTS: {}", .{err});
+            return null;
+        };
+        defer allocator.free(graph_dir);
+
+        // Build the FTS subdirectory path.
+        const fts_dir = std.fmt.allocPrint(allocator, "{s}/fts", .{graph_dir}) catch |err| {
+            log.warn("failed to allocate FTS dir path: {}", .{err});
+            return null;
+        };
+        errdefer allocator.free(fts_dir);
+
+        // Ensure the FTS subdirectory exists.
+        std.fs.cwd().makePath(fts_dir) catch |err| {
+            log.warn("failed to create FTS dir '{s}': {}", .{ fts_dir, err });
+            return null;
+        };
+
+        const idx = allocator.create(fulltext.FullTextIndex) catch |err| {
+            log.warn("failed to allocate per-graph FTS index: {}", .{err});
+            return null;
+        };
+        errdefer allocator.destroy(idx);
+
+        if (load_existing) {
+            idx.* = fulltext.FullTextIndex.loadFromDisk(allocator, fts_dir) catch |err| {
+                log.warn("failed to load per-graph FTS index from disk: {}", .{err});
+                // Fall back to a fresh index.
+                idx.* = fulltext.FullTextIndex.init(allocator) catch |err2| {
+                    log.warn("failed to init fresh FTS index after load failure: {}", .{err2});
+                    allocator.destroy(idx);
+                    return null;
+                };
+                return .{ .index = idx, .dir = fts_dir };
+            };
+        } else {
+            idx.* = fulltext.FullTextIndex.init(allocator) catch |err| {
+                log.warn("failed to init per-graph FTS index: {}", .{err});
+                allocator.destroy(idx);
+                return null;
+            };
+        }
+
+        return .{ .index = idx, .dir = fts_dir };
+    }
+
     fn createGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         const graph_uuid = generateUuid();
 
@@ -1088,7 +1236,14 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
+
+        // Initialise per-graph FTS (fresh index for new graphs).
+        if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, false)) |fts_result| {
+            mg.fts_index = fts_result.index;
+            mg.fts_dir = fts_result.dir;
+        }
 
         try self.engines.put(owned_name, mg);
         self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
@@ -1129,7 +1284,14 @@ pub const StorageAdapter = struct {
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
+            .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
+
+        // Load per-graph FTS from disk (existing graphs may have persisted data).
+        if (initFtsForGraph(self.allocator, self.data_dir, graph_uuid, true)) |fts_result| {
+            mg.fts_index = fts_result.index;
+            mg.fts_dir = fts_result.dir;
+        }
 
         try self.engines.put(owned_name, mg);
         self.upsertRegistryEntryLocked(name, graph_uuid, mg.engine.manifest.node_count, mg.engine.manifest.edge_count);
