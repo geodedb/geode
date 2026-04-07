@@ -874,10 +874,14 @@ pub const StorageAdapter = struct {
     /// slice of `ScanEntry` values. Uses the engine's efficient
     /// page-scan iterator (one pin per page rather than per node).
     pub fn scanAllNodes(self: *StorageAdapter, graph_name: []const u8, allocator: Allocator) ![]ScanEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        // Brief mutex hold: look up ManagedGraph, then release.
+        // The ManagedGraph pointer is heap-allocated and only freed by
+        // dropGraph (under mutex), so using it after unlock is safe.
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
 
         const Ctx = struct {
             entries: std.ArrayList(ScanEntry),
