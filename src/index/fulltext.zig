@@ -316,6 +316,19 @@ pub const FullTextIndex = struct {
         try self.updateIdfScores();
     }
 
+    /// Persist the index to disk at `{dir_path}/fulltext.idx`.
+    pub fn saveToDisk(self: *const FullTextIndex, dir_path: []const u8) !void {
+        const persist = @import("fulltext_persist.zig");
+        try persist.save(self, dir_path);
+    }
+
+    /// Load the index from disk at `{dir_path}/fulltext.idx`.
+    /// Returns a fresh empty index if the file does not exist.
+    pub fn loadFromDisk(allocator: Allocator, dir_path: []const u8) !FullTextIndex {
+        const persist = @import("fulltext_persist.zig");
+        return try persist.load(allocator, dir_path);
+    }
+
     // Remove a document from the index
     pub fn removeDocument(self: *FullTextIndex, doc_id: u64) !void {
         // Remove from documents
