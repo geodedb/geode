@@ -85,6 +85,16 @@ pub fn getGlobalTimeseriesStore() ?*TimeseriesStore {
     return g_timeseries_store;
 }
 
+/// Get the timeseries store for a specific graph, falling back to the global
+/// store when no per-graph store is available or `graph_name` is null.
+pub fn getTimeseriesStoreForGraph(graph_name: ?[]const u8) ?*TimeseriesStore {
+    if (graph_name) |name| {
+        const adapter = graph_store.getGlobalAdapter() orelse return g_timeseries_store;
+        if (adapter.getTimeseriesStore(name)) |store| return store;
+    }
+    return g_timeseries_store;
+}
+
 // CANARY: REQ=REQ-M5.2-EVAL-REFACTOR-007; FEATURE="Circular Dependency Resolution"; ASPECT=NullCheck; STATUS=EXEMPT; OWNER=eval; UPDATED=2025-11-13
 // Phase 5 M5.2: Use isNull from value_types module
 const isNull = value_types.isNull;
@@ -877,16 +887,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // or the QUIC/gRPC server path (g_timeseries_store).
             if (std.mem.eql(u8, function_name, "timeseries.value")) {
                 if (call.args.len != 3) return EvalError.InvalidArgs;
-                const maybe_store: ?*TimeseriesStore = if (env.timeseries_store) |ptr|
-                    // Safety: @constCast is required because the external timeseries
-                    // library's getSeries/hashKey methods take *Store (mutable pointer)
-                    // even though they only perform read operations.  We cannot change
-                    // the external library signature here.  The Store is effectively
-                    // read-only at query time -- writes only happen via explicit INSERT
-                    // operations which hold the store write-lock.
-                    @constCast(ptr)
-                else
-                    g_timeseries_store;
+                const maybe_store: ?*TimeseriesStore = resolveTimeseriesStore(env, null);
 
                 if (maybe_store) |store| {
                     const device_id_val = try evalExpr(allocator, call.args[0].*, env);
@@ -4691,14 +4692,15 @@ fn tsValueToCanonical(tv: ts_gql.Value, allocator: std.mem.Allocator) EvalError!
     };
 }
 
-/// Resolve the timeseries store from the Env or global, same as timeseries.value dispatch.
-fn resolveTimeseriesStore(env: Env) ?*TimeseriesStore {
+/// Resolve the timeseries store from the Env, per-graph store, or global.
+/// Priority: (1) per-Env pointer, (2) per-graph store via adapter, (3) global.
+fn resolveTimeseriesStore(env: Env, graph_name: ?[]const u8) ?*TimeseriesStore {
     // Safety: @constCast is required because the external timeseries
     // library's getSeries/hashKey methods take *Store (mutable pointer)
     // even though they only perform read operations.  The Store is
     // effectively read-only at query time.
     if (env.timeseries_store) |ptr| return @constCast(ptr);
-    return g_timeseries_store;
+    return getTimeseriesStoreForGraph(graph_name);
 }
 
 /// GAP-0282/0290: Dispatch timeseries.* GQL function calls.
@@ -4726,7 +4728,7 @@ fn evalTimeseriesFunction(
         return result;
     }
 
-    const maybe_store = resolveTimeseriesStore(env);
+    const maybe_store = resolveTimeseriesStore(env, null);
     const store = maybe_store orelse return @as(?Value, .{ .Null = {} });
 
     // All timeseries functions require at least 2 args: (device_id, metric)
