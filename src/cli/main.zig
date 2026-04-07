@@ -88,6 +88,10 @@ const VERSION = build_options.version;
 // CANARY: REQ=REQ-REPL-QUIC-002; FEATURE="REPL QUIC Transport"; ASPECT=QuicTransportAdapter; STATUS=TESTED; TEST=tests/test_repl_quic_integration_e2e.zig; OWNER=repl; UPDATED=2026-01-15
 const repl_quic_transport = geode.repl.quic_transport;
 
+// NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
+// Output write failures are non-critical — the query result is correct
+// even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+
 // Cross-platform file handle helpers with proper error handling
 // CANARY: REQ=REQ-QUALITY-GAP-406-002; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 const StdioError = stdio_util.StdioError;

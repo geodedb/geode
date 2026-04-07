@@ -1,5 +1,9 @@
 const std = @import("std");
 
+// NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
+// Output write failures are non-critical — the query result is correct
+// even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+
 pub const ColumnInfo = struct {
     name: []const u8,
     type: []const u8,

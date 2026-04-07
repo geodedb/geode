@@ -18,6 +18,10 @@ const spice_wrapper = @import("parallel/spice");
 
 const ColumnInfo = query_result_accumulator.ColumnInfo;
 
+// NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
+// Output write failures are non-critical — the query result is correct
+// even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+
 /// Validate a graph name to prevent GQL injection (S5).
 /// Graph names must match [a-zA-Z_][a-zA-Z0-9_]*.
 fn isValidGraphName(name: []const u8) bool {

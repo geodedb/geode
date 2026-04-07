@@ -10,6 +10,10 @@ const Value = value_types.Value;
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 
+// NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
+// Output write failures are non-critical — the query result is correct
+// even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+
 // ============================================================================
 // Column Name Generation
 // ============================================================================
