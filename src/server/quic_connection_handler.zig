@@ -826,6 +826,16 @@ pub fn handleQuicConnection(
         }
     }
 
+    // If the handshake didn't complete within the timeout, return cleanly
+    // rather than calling acceptStream() which would return WouldBlock and
+    // log a misleading "Error handling QUIC connection" message.
+    if (!conn.inner.hasIncomingStreams()) {
+        log.debug("No streams after handshake timeout, closing connection", &.{
+            Attr.int("waited_ms", @intCast(total_waited_us / 1000)),
+        });
+        return;
+    }
+
     // Accept a stream for the protocol communication
     log.debug("Attempting to accept stream", &.{});
     const stream = try conn.acceptStream();
