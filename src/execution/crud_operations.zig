@@ -262,7 +262,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                     // CANARY: REQ=REQ-TXN-UNDO-009; FEATURE="TransactionUndoLog"; ASPECT=LogCreateNode; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                     // Log node creation for rollback support
                     const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log.logCreateNode(new_id, current_graph) catch {};
+                    undo_log.logCreateNode(new_id, current_graph) catch |err| {
+                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                    };
                     const var_name_copy = try allocator.dupe(u8, var_name);
                     try created_nodes.put(var_name_copy, new_id);
                     break :blk new_id;
@@ -272,7 +274,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
                 const new_id = try store.createNodeWithGraph(node_pattern.labels, target_graph);
                 // Log node creation for rollback support
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log.logCreateNode(new_id, current_graph) catch {};
+                undo_log.logCreateNode(new_id, current_graph) catch |err| {
+                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                };
                 break :blk new_id;
             };
 
@@ -345,7 +349,9 @@ pub fn executeCreateForBatch(allocator: std.mem.Allocator, create_pattern: ast.G
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             // Log edge creation for rollback support
             const undo_log_edge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_edge.logCreateEdge(edge_id, current_graph) catch {};
+            undo_log_edge.logCreateEdge(edge_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
             created_relationships += 1;
 
             // Auto-create index for edge type
@@ -481,7 +487,9 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
             const edge_id = try store.createEdgeWithGraph(left_id, right_id, edge_label, target_graph);
             // Log edge creation for rollback support
             const undo_log2 = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log2.logCreateEdge(edge_id, current_graph) catch {};
+            undo_log2.logCreateEdge(edge_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
             created_relationships_count += 1;
 
             // Auto-create index for edge type
@@ -666,7 +674,9 @@ pub fn executeCreateQuery(
             total_created_count += 1;
             // Log edge creation for rollback support
             const undo_log3 = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log3.logCreateEdge(edge_id, current_graph) catch {};
+            undo_log3.logCreateEdge(edge_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{rel_type});
@@ -1069,7 +1079,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             // CANARY: REQ=REQ-TXN-UNDO-018; FEATURE="TransactionUndoLog"; ASPECT=ExecuteCreateUndoLog; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
             // Log node creation for rollback support
             const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log.logCreateNode(node_id, current_graph) catch {};
+            undo_log.logCreateNode(node_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // Set properties if present
             if (node_pattern.props) |props| {
@@ -1101,7 +1113,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     // Log left node creation for rollback support
                     const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
+                    undo_log_left.logCreateNode(left_node_id, current_graph) catch |err| {
+                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                    };
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
@@ -1109,7 +1123,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
                 const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
+                undo_log_left2.logCreateNode(left_node_id, current_graph) catch |err| {
+                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                };
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
@@ -1132,7 +1148,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                     right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     // Log right node creation for rollback support
                     const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
+                    undo_log_right.logCreateNode(right_node_id, current_graph) catch |err| {
+                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                    };
                     try created_nodes.put(right_name, right_node_id);
                     ensureAutoIndexes(allocator, hop.right.labels);
                 }
@@ -1140,7 +1158,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 // Log right node creation for rollback support (unnamed node)
                 const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
+                undo_log_right2.logCreateNode(right_node_id, current_graph) catch |err| {
+                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
 
@@ -1163,7 +1183,9 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
             };
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
+            undo_log_merge.logCreateEdge(edge_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
@@ -1307,7 +1329,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                     // Log left node creation for rollback support
                     const undo_log_left = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log_left.logCreateNode(left_node_id, current_graph) catch {};
+                    undo_log_left.logCreateNode(left_node_id, current_graph) catch |err| {
+                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                    };
                     try created_nodes.put(left_name, left_node_id);
                     ensureAutoIndexes(allocator, hop.left.labels);
                 }
@@ -1315,7 +1339,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 left_node_id = try store.createNodeWithGraph(hop.left.labels, target_graph);
                 // Log left node creation for rollback support (unnamed node)
                 const undo_log_left2 = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log_left2.logCreateNode(left_node_id, current_graph) catch {};
+                undo_log_left2.logCreateNode(left_node_id, current_graph) catch |err| {
+                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                };
                 ensureAutoIndexes(allocator, hop.left.labels);
             }
 
@@ -1342,7 +1368,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                     right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                     // Log right node creation for rollback support
                     const undo_log_right = txn_undo_log.getGlobalUndoLog(allocator);
-                    undo_log_right.logCreateNode(right_node_id, current_graph) catch {};
+                    undo_log_right.logCreateNode(right_node_id, current_graph) catch |err| {
+                        log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                    };
                     try created_nodes.put(right_name, right_node_id);
                     ensureAutoIndexes(allocator, hop.right.labels);
                 }
@@ -1350,7 +1378,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
                 right_node_id = try store.createNodeWithGraph(hop.right.labels, target_graph);
                 // Log right node creation for rollback support (unnamed node)
                 const undo_log_right2 = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log_right2.logCreateNode(right_node_id, current_graph) catch {};
+                undo_log_right2.logCreateNode(right_node_id, current_graph) catch |err| {
+                    log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+                };
                 ensureAutoIndexes(allocator, hop.right.labels);
             }
 
@@ -1377,7 +1407,9 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
             };
             // Log edge creation for rollback support
             const undo_log_merge = txn_undo_log.getGlobalUndoLog(allocator);
-            undo_log_merge.logCreateEdge(edge_id, current_graph) catch {};
+            undo_log_merge.logCreateEdge(edge_id, current_graph) catch |err| {
+                log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+            };
 
             // Auto-create index for edge type
             ensureAutoIndexes(allocator, &.{edge_type});
