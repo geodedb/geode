@@ -260,6 +260,10 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
             config.enable_auth = true;
         } else if (std.mem.eql(u8, arg, "--no-auth")) {
+            if (@import("builtin").mode != .Debug) {
+                std.debug.print("Error: --no-auth is only available in debug builds. Use proper credentials for production.\n", .{});
+                std.process.exit(1);
+            }
             config.enable_auth = false;
             std.log.warn("Authentication disabled via --no-auth. This is NOT recommended for production use.", .{});
         } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
