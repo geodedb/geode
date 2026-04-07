@@ -452,7 +452,9 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             for (0..label_count) |i| {
                 labels[i] = try readString(payload, &offset);
             }
-            store.createNodeWithId(node_id, labels, graph_name) catch {};
+            store.createNodeWithId(node_id, labels, graph_name) catch |err| {
+                log.warn("WAL replay: createNodeWithId failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
         .CreateEdge => {
             const edge_id = try readU64(payload, &offset);
@@ -460,7 +462,9 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             const to_id = try readU64(payload, &offset);
             const label = try readString(payload, &offset);
             const graph_name = try readString(payload, &offset);
-            store.createEdgeWithId(edge_id, from_id, to_id, label, graph_name) catch {};
+            store.createEdgeWithId(edge_id, from_id, to_id, label, graph_name) catch |err| {
+                log.warn("WAL replay: createEdgeWithId failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
         .SetNodeProperty => {
             const node_id = try readU64(payload, &offset);
@@ -469,7 +473,9 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             offset += 1;
             const pv = deserializePropertyValue(store.allocator, payload, &offset, value_type) catch graph_store.PropertyValue.Null;
             defer property_codec.freePropertyValue(store.allocator, pv);
-            store.setNodeProperty(node_id, key, pv) catch {};
+            store.setNodeProperty(node_id, key, pv) catch |err| {
+                log.warn("WAL replay: setNodeProperty failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
         .RemoveNodeProperty => {
             const node_id = try readU64(payload, &offset);
@@ -483,7 +489,9 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
             offset += 1;
             const pv = deserializePropertyValue(store.allocator, payload, &offset, value_type) catch graph_store.PropertyValue.Null;
             defer property_codec.freePropertyValue(store.allocator, pv);
-            store.setEdgeProperty(edge_id, key, pv) catch {};
+            store.setEdgeProperty(edge_id, key, pv) catch |err| {
+                log.warn("WAL replay: setEdgeProperty failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
         .RemoveEdgeProperty => {
             const edge_id = try readU64(payload, &offset);
@@ -503,12 +511,16 @@ fn applyRecord(store: *graph_store.GraphStore, op_type: WalOpType, payload: []co
         .AddNodeLabel => {
             const node_id = try readU64(payload, &offset);
             const label = try readString(payload, &offset);
-            store.addNodeLabel(node_id, label) catch {};
+            store.addNodeLabel(node_id, label) catch |err| {
+                log.warn("WAL replay: addNodeLabel failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
         .RemoveNodeLabel => {
             const node_id = try readU64(payload, &offset);
             const label = try readString(payload, &offset);
-            store.removeNodeLabel(node_id, label) catch {};
+            store.removeNodeLabel(node_id, label) catch |err| {
+                log.warn("WAL replay: removeNodeLabel failed", &.{Attr.string("error", @errorName(err))});
+            };
         },
     }
 }
@@ -545,7 +557,9 @@ pub fn initGlobalWal(allocator: std.mem.Allocator, data_dir: ?[]const u8) !void 
     defer allocator.free(wal_path);
 
     // Ensure the directory exists
-    std.fs.cwd().makePath(dir) catch {};
+    std.fs.cwd().makePath(dir) catch |err| {
+        log.err("WAL: failed to create data directory", &.{Attr.string("error", @errorName(err))});
+    };
 
     g_wal_storage = try WriteAheadLog.init(allocator, wal_path);
     g_wal = &g_wal_storage.?;
@@ -643,7 +657,9 @@ fn mutationCallback(
             .label = label orelse "",
         } },
     };
-    _ = w.appendRecord(0, record) catch {};
+    _ = w.appendRecord(0, record) catch |err| {
+        log.err("WAL: appendRecord failed — mutation not logged for CDC/audit", &.{Attr.string("error", @errorName(err))});
+    };
 }
 
 /// Install the WAL mutation callback in graph_store.
@@ -664,7 +680,9 @@ pub const CHECKPOINT_INTERVAL_MS: u64 = 60_000; // 60 seconds
 
 fn walSyncHook() void {
     if (g_wal) |w| {
-        w.sync() catch {};
+        w.sync() catch |err| {
+            log.err("WAL: sync failed — CDC/audit events may not be durable", &.{Attr.string("error", @errorName(err))});
+        };
     }
 }
 
@@ -684,11 +702,15 @@ fn walCheckpointHook(store: *graph_store.GraphStore) void {
                 Attr.string("error", @errorName(err)),
             });
             // Fall back to engine checkpoint + IdMap save directly
-            store.saveToFile() catch {};
+            store.saveToFile() catch |save_err| {
+                log.err("WAL: fallback saveToFile also failed — data may not be persisted", &.{Attr.string("error", @errorName(save_err))});
+            };
         };
     } else {
         // No WAL — delegate to adapter checkpoint + IdMap save
-        store.saveToFile() catch {};
+        store.saveToFile() catch |err| {
+            log.err("WAL: saveToFile failed — data may not be persisted", &.{Attr.string("error", @errorName(err))});
+        };
     }
 }
 
