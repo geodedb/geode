@@ -3594,6 +3594,7 @@ REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,ExecContextWiring,IMPL,,,security,202
 REQ-SEC-RLS-WIRE-013,RLS Expression Wiring,UsernameRowAccess,IMPL,,,security,2026-04-06,src/security/rls_core.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,MatchLabelDeny,IMPL,,,security,2026-04-06,src/execution/match_operations.zig
 REQ-SEC-RLS-WIRE-014,RLS Expression Wiring,ServerInitExprEngine,IMPL,,,security,2026-04-06,src/server/main.zig
+REQ-SEC-RLS-WIRE-015,RLS Expression Wiring,MatchExprEval,IMPL,,,security,2026-04-06,src/execution/match_operations.zig
 REQ-SEC-SESSION-MGT-001,Security,SessionManagement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-SEC-SESSION-TIMEOUT-001,Security,SessionTimeout,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-TDE-001,Security,TDE,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
