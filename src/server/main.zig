@@ -623,6 +623,17 @@ pub fn main() !void {
         rls_types_mod.setGlobalRLSFilterEngine(&rls_types_engine);
         defer rls_types_mod.setGlobalRLSFilterEngine(null);
 
+        // GAP-0510 Task D1: Initialize the global expression RLS engine so that
+        // property-based and temporal RLS policies are evaluated during query
+        // execution.  The engine lives on the main thread's stack; connection
+        // handlers access it via rls_types.getGlobalExprRLSEngine().
+        // CANARY: REQ=REQ-SEC-RLS-WIRE-014; FEATURE="RLS Expression Wiring"; ASPECT=ServerInitExprEngine; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+        const rls_core_mod = @import("rls");
+        var expr_rls_engine = try rls_core_mod.RLSEngine.init(gpa);
+        defer expr_rls_engine.deinit();
+        rls_types_mod.setGlobalExprRLSEngine(@ptrCast(&expr_rls_engine));
+        defer rls_types_mod.setGlobalExprRLSEngine(null);
+
         // GAP-0280: Initialize a server-wide timeseries Store so that
         // timeseries.value() calls in the QUIC/gRPC execution path return
         // real data instead of NULL.  The store lives on the main thread's

@@ -1784,6 +1784,9 @@ pub fn build(b: *std.Build) void {
     // GAP-0510: Make rls_types available to the server binary so quic_connection_handler
     // and main.zig can wire the RLS filter engine global at startup.
     geode_exe.root_module.addImport("rls_types", rls_types_mod);
+    // GAP-0510 Task D1: Make rls (expression engine) available to the server binary so
+    // main.zig can initialize the global expression RLS engine at startup.
+    geode_exe.root_module.addImport("rls", rls_mod);
 
     // GAP-0496: Security test — RLS QueryRewriter must validate policy expressions to prevent GQL injection
     const rls_injection_tests = b.addTest(.{
