@@ -3195,7 +3195,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 for (with_clause.items) |item| {
                     if (!isAggregationExpr(item.expr)) {
                         const val = eval.evalExpr(allocator, item.expr, env) catch Value{ .Null = {} };
-                        writer.print("{any}|", .{val}) catch {};
+                        try writer.print("{any}|", .{val});
                     }
                 }
 
@@ -3875,25 +3875,22 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Compute group key from GROUP BY expressions
-                        var key_buf = std.ArrayList(u8).initCapacity(allocator, 64) catch continue;
+                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
                         const writer = key_buf.writer(allocator);
 
                         for (group_by.keys, 0..) |key_expr, key_idx| {
-                            if (key_idx > 0) writer.writeAll("|") catch {};
+                            if (key_idx > 0) try writer.writeAll("|");
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
                             switch (key_val) {
-                                .Null => writer.writeAll("<null>") catch {},
-                                .Int => |n| writer.print("{}", .{n}) catch {},
-                                .Str => |s| writer.writeAll(s) catch {},
-                                .Bool => |b| writer.print("{}", .{b}) catch {},
-                                else => writer.writeAll("<val>") catch {},
+                                .Null => try writer.writeAll("<null>"),
+                                .Int => |n| try writer.print("{}", .{n}),
+                                .Str => |s| try writer.writeAll(s),
+                                .Bool => |b| try writer.print("{}", .{b}),
+                                else => try writer.writeAll("<val>"),
                             }
                         }
 
-                        const group_key = key_buf.toOwnedSlice(allocator) catch {
-                            key_buf.deinit(allocator);
-                            continue;
-                        };
+                        const group_key = try key_buf.toOwnedSlice(allocator);
 
                         // Copy binding for grouping
                         var copy_names = try allocator.alloc([]const u8, binding.env_names.len);
