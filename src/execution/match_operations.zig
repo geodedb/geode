@@ -3582,6 +3582,236 @@ fn applyFinalOrderAndDistinct(
     }
 }
 
+/// Execute variable-length path traversal for a given left node.
+/// Expands BFS paths from the left node and applies right-node filters,
+/// WHERE/FILTER clauses, and row building for each valid path.
+/// Appends matching rows to the provided rows list.
+fn executeVariableLengthPathTraversal(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    left_node: *graph_store.Node,
+    rows: *std.ArrayList([]Value),
+    var_len_min: ?u32,
+    var_len_max: ?u32,
+    rel_type: ?[]const u8,
+    rel_direction: u8,
+    right_labels: [][]const u8,
+    right_props: ?[]ast.Property,
+    left_node_var: ?[]const u8,
+    right_node_var: ?[]const u8,
+    rel_var: ?[]const u8,
+    chain_path_var: ?[]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    where_clause: ?ast.Expr,
+    filter_clause: ?ast.Expr,
+    has_with: bool,
+    items: []const ast.ReturnItem,
+) !void {
+    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
+    // Use BFS path expansion for variable-length patterns
+    const min_len = var_len_min orelse 0;
+    const max_len = var_len_max;
+
+    var paths = try expandVariableLengthPaths(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction);
+    defer {
+        for (paths.items) |*path| {
+            path.deinit(allocator);
+        }
+        paths.deinit(allocator);
+    }
+
+    // Process each path found
+    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
+    // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
+    for (paths.items) |path| {
+        if (path.nodes.items.len == 0) continue; // Empty path is never valid
+
+        // Get the last node in the path as the right node
+        const right_node_id = path.nodes.items[path.nodes.items.len - 1];
+        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
+        // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
+        if (right_labels.len > 0) {
+            var has_all_labels = true;
+            for (right_labels) |required_label| {
+                var found = false;
+                for (right_node_ptr.labels) |node_label| {
+                    if (std.mem.eql(u8, required_label, node_label)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    has_all_labels = false;
+                    break;
+                }
+            }
+            if (!has_all_labels) continue;
+        }
+
+        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
+        // Filter right node by inline properties if specified
+        if (right_props) |props| {
+            var passes_props = true;
+            for (props) |prop| {
+                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
+                    const node_val = propertyValueToValue(node_prop_val);
+                    const prop_env = eval.Env{
+                        .names = param_names,
+                        .values = param_values,
+                        .allocator = allocator,
+                    };
+                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
+                        passes_props = false;
+                        break;
+                    };
+                    if (!valuesEqual(node_val, prop_val)) {
+                        passes_props = false;
+                        break;
+                    }
+                } else {
+                    passes_props = false;
+                    break;
+                }
+            }
+            if (!passes_props) continue;
+        }
+
+        // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
+        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
+        // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
+
+        // Create environment with all matched elements (including path variable if present)
+        var env_count: usize = 0;
+        if (left_node_var != null) env_count += 1;
+        if (right_node_var != null) env_count += 1;
+        if (rel_var != null) env_count += 1;
+        if (chain_path_var != null) env_count += 1;
+
+        const env_names = try allocator.alloc([]const u8, env_count);
+        const env_values = try allocator.alloc(Value, env_count);
+
+        var env_idx: usize = 0;
+        if (left_node_var) |var_name| {
+            env_names[env_idx] = var_name;
+            env_values[env_idx] = Value{ .Node = left_node };
+            env_idx += 1;
+        }
+        if (right_node_var) |var_name| {
+            env_names[env_idx] = var_name;
+            env_values[env_idx] = Value{ .Node = right_node_ptr };
+            env_idx += 1;
+        }
+        if (rel_var) |var_name| {
+            env_names[env_idx] = var_name;
+            // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
+            // For variable-length paths, bind rel_var to the list of all edges
+            // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
+            var edge_values = try allocator.alloc(Value, path.edges.items.len);
+            for (path.edges.items, 0..) |eid, i| {
+                if (store.edges.getPtr(eid)) |ep| {
+                    edge_values[i] = Value{ .Edge = ep };
+                } else {
+                    edge_values[i] = Value{ .Null = {} };
+                }
+            }
+            env_values[env_idx] = Value{ .List = edge_values };
+            env_idx += 1;
+        }
+        if (chain_path_var) |var_name| {
+            // Build the path value from the PathInfo
+            // Use dynamic arrays to handle missing nodes/edges gracefully
+            // GAP-0220 FIX: Use try for proper error propagation
+            var path_nodes_list = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
+            // GAP-0220 FIX: Use try for proper error propagation
+            var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
+
+            for (path.nodes.items) |node_id| {
+                if (store.nodes.getPtr(node_id)) |node_ptr| {
+                    path_nodes_list.append(allocator, node_ptr) catch {};
+                }
+            }
+            for (path.edges.items) |edge_id| {
+                if (store.edges.getPtr(edge_id)) |path_edge_ptr| {
+                    path_edges_list.append(allocator, path_edge_ptr) catch {};
+                }
+            }
+
+            env_names[env_idx] = var_name;
+            env_values[env_idx] = Value{ .Path = .{
+                .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
+                .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
+            } };
+            env_idx += 1;
+        }
+
+        const env = Env{
+            .names = env_names,
+            .values = env_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+            .owned = true, // Owns allocated arrays
+        };
+
+        // Evaluate WHERE clause if present
+        if (where_clause) |where_expr| {
+            const where_result = try eval.evalExpr(allocator, where_expr, env);
+            const passes_where = switch (where_result) {
+                .Bool => |b| b,
+                .Null => false,
+                .Int => |i| i != 0,
+                else => false,
+            };
+
+            if (!passes_where) {
+                allocator.free(env_names);
+                allocator.free(env_values);
+                continue;
+            }
+        }
+
+        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
+        if (filter_clause) |filter_expr| {
+            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
+            const passes_filter = switch (filter_result) {
+                .Bool => |b| b,
+                .Null => false,
+                .Int => |i| i != 0,
+                else => false,
+            };
+
+            if (!passes_filter) {
+                allocator.free(env_names);
+                allocator.free(env_values);
+                continue;
+            }
+        }
+
+        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
+        // When WITH clause is present, build rows containing matched node values
+        var row: []Value = undefined;
+        if (has_with) {
+            row = try allocator.alloc(Value, env_values.len);
+            for (env_values, 0..) |val, i| {
+                row[i] = val;
+            }
+        } else {
+            row = try allocator.alloc(Value, items.len);
+            for (items, 0..) |item, i| {
+                row[i] = try eval.evalExpr(allocator, item.expr, env);
+            }
+        }
+
+        allocator.free(env_names);
+        allocator.free(env_values);
+
+        try rows.append(allocator, row);
+    }
+}
+
 /// Execute standard single-hop edge traversal for a given left node.
 /// Processes outgoing and incoming edges, applying all filters (type, tenant,
 /// properties, labels, WHERE, FILTER), SET mutations, and row building.
@@ -6263,207 +6493,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
                 // Check if we have a variable-length path pattern
                 if (var_len_min != null or var_len_max != null) {
-                    // Use BFS path expansion for variable-length patterns
-                    const min_len = var_len_min orelse 0;
-                    const max_len = var_len_max;
-
-                    var paths = try expandVariableLengthPaths(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction);
-                    defer {
-                        for (paths.items) |*path| {
-                            path.deinit(allocator);
-                        }
-                        paths.deinit(allocator);
-                    }
-
-                    // Process each path found
-                    // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
-                    // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
-                    for (paths.items) |path| {
-                        if (path.nodes.items.len == 0) continue; // Empty path is never valid
-
-                        // Get the last node in the path as the right node
-                        const right_node_id = path.nodes.items[path.nodes.items.len - 1];
-                        const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
-
-                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=LabelFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
-                        // Filter right node by labels if specified (e.g., :Product in MATCH (a)-[*]->(b:Product))
-                        if (right_labels.len > 0) {
-                            var has_all_labels = true;
-                            for (right_labels) |required_label| {
-                                var found = false;
-                                for (right_node_ptr.labels) |node_label| {
-                                    if (std.mem.eql(u8, required_label, node_label)) {
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if (!found) {
-                                    has_all_labels = false;
-                                    break;
-                                }
-                            }
-                            if (!has_all_labels) continue;
-                        }
-
-                        // CANARY: REQ=REQ-GQL-VARLEN-RIGHTNODE; FEATURE="VariableLengthPathRightNodeFilter"; ASPECT=PropertyFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-18
-                        // Filter right node by inline properties if specified
-                        if (right_props) |props| {
-                            var passes_props = true;
-                            for (props) |prop| {
-                                if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
-                                    const node_val = propertyValueToValue(node_prop_val);
-                                    const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
-                                        .allocator = allocator,
-                                    };
-                                    const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
-                                        passes_props = false;
-                                        break;
-                                    };
-                                    if (!valuesEqual(node_val, prop_val)) {
-                                        passes_props = false;
-                                        break;
-                                    }
-                                } else {
-                                    passes_props = false;
-                                    break;
-                                }
-                            }
-                            if (!passes_props) continue;
-                        }
-
-                        // CANARY: REQ=REQ-GQL-167; FEATURE="Variable-Length Path Binding"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-14
-                        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-004; FEATURE="ZeroLengthPaths"; ASPECT=EdgeBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
-                        // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
-
-                        // Create environment with all matched elements (including path variable if present)
-                        var env_count: usize = 0;
-                        if (left_node_var != null) env_count += 1;
-                        if (right_node_var != null) env_count += 1;
-                        if (rel_var != null) env_count += 1;
-                        if (chain_path_var != null) env_count += 1;
-
-                        const env_names = try allocator.alloc([]const u8, env_count);
-                        const env_values = try allocator.alloc(Value, env_count);
-
-                        var env_idx: usize = 0;
-                        if (left_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = left_node };
-                            env_idx += 1;
-                        }
-                        if (right_node_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Node = right_node_ptr };
-                            env_idx += 1;
-                        }
-                        if (rel_var) |var_name| {
-                            env_names[env_idx] = var_name;
-                            // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
-                            // For variable-length paths, bind rel_var to the list of all edges
-                            // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
-                            var edge_values = try allocator.alloc(Value, path.edges.items.len);
-                            for (path.edges.items, 0..) |eid, i| {
-                                if (store.edges.getPtr(eid)) |ep| {
-                                    edge_values[i] = Value{ .Edge = ep };
-                                } else {
-                                    edge_values[i] = Value{ .Null = {} };
-                                }
-                            }
-                            env_values[env_idx] = Value{ .List = edge_values };
-                            env_idx += 1;
-                        }
-                        if (chain_path_var) |var_name| {
-                            // Build the path value from the PathInfo
-                            // Use dynamic arrays to handle missing nodes/edges gracefully
-                            // GAP-0220 FIX: Use try for proper error propagation
-                            var path_nodes_list = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, path.nodes.items.len);
-                            // GAP-0220 FIX: Use try for proper error propagation
-                            var path_edges_list = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, path.edges.items.len);
-
-                            for (path.nodes.items) |node_id| {
-                                if (store.nodes.getPtr(node_id)) |node_ptr| {
-                                    path_nodes_list.append(allocator, node_ptr) catch {};
-                                }
-                            }
-                            for (path.edges.items) |edge_id| {
-                                if (store.edges.getPtr(edge_id)) |path_edge_ptr| {
-                                    path_edges_list.append(allocator, path_edge_ptr) catch {};
-                                }
-                            }
-
-                            env_names[env_idx] = var_name;
-                            env_values[env_idx] = Value{ .Path = .{
-                                .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
-                                .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
-                            } };
-                            env_idx += 1;
-                        }
-
-                        const env = Env{
-                            .names = env_names,
-                            .values = env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                            .owned = true, // Owns allocated arrays (lines 1282-1283)
-                        };
-
-                        // Evaluate WHERE clause if present
-                        if (q.where_clause) |where_expr| {
-                            const where_result = try eval.evalExpr(allocator, where_expr, env);
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_where) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // Evaluate FILTER clause if present (ISO/IEC 39075:2024)
-                        if (q.filter_clause) |filter_expr| {
-                            const filter_result = try eval.evalExpr(allocator, filter_expr, env);
-                            const passes_filter = switch (filter_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-
-                            if (!passes_filter) {
-                                allocator.free(env_names);
-                                allocator.free(env_values);
-                                continue;
-                            }
-                        }
-
-                        // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
-                        // When WITH clause is present, build rows containing matched node values
-                        var row: []Value = undefined;
-                        if (has_with) {
-                            row = try allocator.alloc(Value, env_values.len);
-                            for (env_values, 0..) |val, i| {
-                                row[i] = val;
-                            }
-                        } else {
-                            row = try allocator.alloc(Value, items.len);
-                            for (items, 0..) |item, i| {
-                                row[i] = try eval.evalExpr(allocator, item.expr, env);
-                            }
-                        }
-
-                        allocator.free(env_names);
-                        allocator.free(env_values);
-
-                        try rows.append(allocator, row);
-                    }
+                    // Variable-length path traversal — delegated to helper
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items);
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
