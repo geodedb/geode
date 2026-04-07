@@ -2621,6 +2621,7 @@ pub const GraphStore = struct {
         return result;
     }
 
+    /// Deprecated: prefer getOutgoingEdgeIds for zero-copy access.
     pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result = std.ArrayList(Edge){};
         if (self.outgoing_edges.get(node_id)) |outgoing| {
@@ -2633,6 +2634,7 @@ pub const GraphStore = struct {
         return result.toOwnedSlice(allocator) catch &.{};
     }
 
+    /// Deprecated: prefer getIncomingEdgeIds for zero-copy access.
     pub fn getEdgesTo(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
         var result = std.ArrayList(Edge){};
         if (self.incoming_edges.get(node_id)) |incoming| {
