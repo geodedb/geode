@@ -258,6 +258,7 @@ pub const FullTextIndex = struct {
         defer {
             var it = term_positions.iterator();
             while (it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
                 entry.value_ptr.deinit(self.allocator);
             }
             term_positions.deinit();
@@ -269,9 +270,15 @@ pub const FullTextIndex = struct {
 
             const normalized = try self.normalize(token.text);
 
-            var positions = term_positions.get(normalized) orelse try std.ArrayList(usize).initCapacity(self.allocator, 0);
-            try positions.append(self.allocator, pos);
-            try term_positions.put(normalized, positions);
+            if (term_positions.getPtr(normalized)) |existing| {
+                // Term already seen — free the duplicate normalized string
+                self.allocator.free(normalized);
+                try existing.append(self.allocator, pos);
+            } else {
+                var positions = try std.ArrayList(usize).initCapacity(self.allocator, 0);
+                try positions.append(self.allocator, pos);
+                try term_positions.put(normalized, positions);
+            }
         }
 
         // Update inverted index
@@ -308,7 +315,9 @@ pub const FullTextIndex = struct {
             }
             posting_list.documents = new_docs;
 
-            try self.inverted_index.put(term, posting_list);
+            // Use posting_list.term as key — it's an owned dupe that
+            // outlives term_positions (whose keys are freed in defer).
+            try self.inverted_index.put(posting_list.term, posting_list);
         }
 
         // Update IDF scores

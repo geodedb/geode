@@ -1119,25 +1119,15 @@ pub const StorageAdapter = struct {
         };
         defer allocator.free(graph_dir);
 
-        // Build the timeseries subdirectory path.
-        const ts_dir = std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir}) catch |err| {
-            log.warn("failed to allocate timeseries dir path: {}", .{err});
-            return null;
-        };
-        defer allocator.free(ts_dir);
-
-        // Ensure the timeseries subdirectory exists.
-        std.fs.cwd().makePath(ts_dir) catch |err| {
-            log.warn("failed to create timeseries dir '{s}': {}", .{ ts_dir, err });
-            return null;
-        };
-
+        // Pass the graph directory as the timeseries data_dir.
+        // The timeseries library internally appends "/timeseries" to create
+        // its subdirectory — do NOT pre-create a timeseries/ subdir here.
         const store = allocator.create(ts_mod.Store) catch |err| {
             log.warn("failed to allocate per-graph timeseries store: {}", .{err});
             return null;
         };
         store.* = ts_mod.Store.initWithConfig(allocator, .{
-            .data_dir = ts_dir,
+            .data_dir = graph_dir,
         }) catch |err| {
             log.warn("failed to init per-graph timeseries store: {}", .{err});
             allocator.destroy(store);
