@@ -945,6 +945,10 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 ai += 1;
             }
         } else if (std.mem.eql(u8, argv[ai], "--no-auth")) {
+            if (@import("builtin").mode != .Debug) {
+                std.debug.print("Error: --no-auth is only available in debug builds. Use --token for production.\n", .{});
+                std.process.exit(1);
+            }
             no_auth = true;
         } else if (std.mem.eql(u8, argv[ai], "--stdio")) {
             use_stdio = true;
