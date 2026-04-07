@@ -2017,58 +2017,9 @@ test "TestCANARY_REQ_AUDIT_PWSH_001_PowerShellDeterminism" {
     // GAP-0152: Verify PowerShell compatibility test is deterministic
     const allocator = std.testing.allocator;
 
-    // Create a minimal AuditLogger for testing
-    var logger = AuditLogger{
-        .file = null,
-        .allocator = allocator,
-        .buffer = undefined,
-        .buffer_pos = 0,
-        .seq = 0,
-        .last_hash = [_]u8{0} ** 32,
-        .hmac_key = null,
-        .hash_algo = .sha256,
-        .event_listeners = undefined,
-        .retention_days = 90,
-        .index = null,
-        .format = .json,
-        .connection = null,
-        .machine_id = [_]u8{0} ** 16,
-        .instance_id = [_]u8{0} ** 16,
-        .session_counter = 0,
-        .retention_policy = .{
-            .max_age_days = 90,
-            .max_file_size_bytes = 100 * 1024 * 1024,
-            .compression_after_days = 7,
-            .archive_location = null,
-            .delete_after_archive = false,
-        },
-        .replication_targets = undefined,
-        .replication_count = 0,
-        .compliance_tags = undefined,
-        .compliance_tag_count = 0,
-        .field_encryption_keys = undefined,
-        .field_encryption_count = 0,
-        .streaming_config = undefined,
-        .sampling_rate = 1.0,
-        .dedup_enabled = false,
-        .dedup_window = undefined,
-        .metrics = undefined,
-        .perf_metrics = undefined,
-        .advanced_metrics = undefined,
-        .anomaly_detector = null,
-        .ml_enabled = false,
-        .correlation_engine = null,
-        .partition_scheme = .none,
-        .current_partition = null,
-        .integrity_verifier = null,
-        .redaction_rules = undefined,
-        .redaction_count = 0,
-        .alert_thresholds = undefined,
-        .alert_count = 0,
-        .encryption_context = null,
-        .chain_integrity_hash = [_]u8{0} ** 32,
-        .signing_key = null,
-    };
+    // Use the proper constructor — testPowershellCompatibility ignores self
+    var logger = try AuditLogger.init(allocator, .{ .enabled = false });
+    defer logger.deinit();
 
     // Run test twice - results must be identical
     const result1 = try logger.testPowershellCompatibility(allocator);

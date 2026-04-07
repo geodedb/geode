@@ -241,9 +241,8 @@ pub const FullTextIndex = struct {
     // Index a new document
     // CANARY: REQ=REQ-GQL-FTS-002; FEATURE="Document Indexing"; ASPECT=FTS; STATUS=TESTED; TEST=TestCANARY_DocumentIndexing; OWNER=index; UPDATED=2025-09-29
     pub fn indexDocument(self: *FullTextIndex, doc_id: u64, content: []const u8) !void {
-        // Tokenize content
+        // Tokenize content — document takes ownership of the tokens slice.
         const tokens = try self.tokenize(content);
-        defer self.allocator.free(tokens);
 
         // Store document
         const doc = Document{
