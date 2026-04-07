@@ -1097,10 +1097,17 @@ pub const StorageAdapter = struct {
         // Checkpoint each graph WITHOUT holding the adapter mutex.
         // The ManagedGraph pointers remain valid because graphs are only
         // removed via dropGraph which also holds self.mutex.
+        // IMPORTANT: Acquire the per-graph read lock during checkpoint to
+        // prevent data races with concurrent mutations (which hold the
+        // write lock). Without this, engine.checkpoint() iterates hash maps
+        // (label_index, edge_index) that mutations can resize concurrently,
+        // causing use-after-free and GPA size mismatch errors.
         for (graphs_buf[0..graph_count]) |mg| {
+            mg.rwlock.lockShared();
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
+            mg.rwlock.unlockShared();
         }
 
         // Re-acquire mutex briefly to sync registry counts and persist.
@@ -1108,7 +1115,9 @@ pub const StorageAdapter = struct {
             self.mutex.lock();
             defer self.mutex.unlock();
             for (graphs_buf[0..graph_count]) |mg| {
+                mg.rwlock.lockShared();
                 self.syncRegistryCountsLocked(mg);
+                mg.rwlock.unlockShared();
             }
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
