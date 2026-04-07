@@ -22,6 +22,11 @@ const log = std.log.scoped(.graph_storage_adapter);
 // Re-export edge type for callers that need EdgeEntry from scan results.
 pub const EdgeEntry = gs.edge.EdgeEntry;
 
+const LabelScanContext = struct {
+    mg: *ManagedGraph,
+    label_id: gs.LabelId,
+};
+
 // ============================================================================
 // LabelStringDict — bidirectional label string ↔ LabelId mapping view
 // ============================================================================
@@ -613,24 +618,66 @@ pub const StorageAdapter = struct {
         try mg.engine.removeEdge(from_id, to_id, edge_id);
     }
 
-    /// Get all outgoing edges from a node.
-    /// Returns a caller-owned slice from the engine.
-    pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+    /// Iterate all outgoing edges from a node without materializing them.
+    pub fn iterateOutgoingEdges(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        node_id: u64,
+        allocator: Allocator,
+    ) !gs.interface.EdgeIterator {
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.storage().expandOut(node_id, null, allocator);
+    }
 
-        const mg = try self.requireExistingGraphLocked(graph_name);
-        return mg.engine.expandOut(node_id, null, allocator);
+    /// Iterate all incoming edges to a node without materializing them.
+    pub fn iterateIncomingEdges(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        node_id: u64,
+        allocator: Allocator,
+    ) !gs.interface.EdgeIterator {
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        return mg.storage().expandIn(node_id, null, allocator);
+    }
+
+    /// Get all outgoing edges from a node.
+    /// Returns a caller-owned slice built from the engine's edge iterator.
+    pub fn getOutgoingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
+        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
+        errdefer result.deinit(allocator);
+
+        var iter = try self.iterateOutgoingEdges(graph_name, node_id, allocator);
+        defer iter.deinit();
+
+        while (try iter.next()) |entry| {
+            try result.append(allocator, entry);
+        }
+
+        return try result.toOwnedSlice(allocator);
     }
 
     /// Get all incoming edges to a node.
-    /// Returns a caller-owned slice from the engine.
+    /// Returns a caller-owned slice built from the engine's edge iterator.
     pub fn getIncomingEdges(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![]gs.edge.EdgeEntry {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        var result = std.ArrayList(gs.edge.EdgeEntry).empty;
+        errdefer result.deinit(allocator);
 
-        const mg = try self.requireExistingGraphLocked(graph_name);
-        return mg.engine.expandIn(node_id, null, allocator);
+        var iter = try self.iterateIncomingEdges(graph_name, node_id, allocator);
+        defer iter.deinit();
+
+        while (try iter.next()) |entry| {
+            try result.append(allocator, entry);
+        }
+
+        return try result.toOwnedSlice(allocator);
     }
 
     // ------------------------------------------------------------------
@@ -1044,19 +1091,41 @@ pub const StorageAdapter = struct {
 
     /// Run a checkpoint on every loaded graph engine.
     pub fn checkpointAll(self: *StorageAdapter) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        var it = self.engines.iterator();
-        while (it.next()) |entry| {
-            const mg = entry.value_ptr.*;
-            try mg.engine.checkpoint();
-            self.syncRegistryCountsLocked(mg);
+        // Collect ManagedGraph pointers under brief mutex hold.
+        var graphs_buf: [64]*ManagedGraph = undefined;
+        var graph_count: usize = 0;
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            var it = self.engines.valueIterator();
+            while (it.next()) |mg| {
+                if (graph_count < graphs_buf.len) {
+                    graphs_buf[graph_count] = mg.*;
+                    graph_count += 1;
+                }
+            }
         }
 
-        self.saveRegistryLocked() catch |err| {
-            log.warn("failed to persist graph registry: {}", .{err});
-        };
+        // Checkpoint each graph WITHOUT holding the adapter mutex.
+        // The ManagedGraph pointers remain valid because graphs are only
+        // removed via dropGraph which also holds self.mutex.
+        for (graphs_buf[0..graph_count]) |mg| {
+            mg.engine.checkpoint() catch |err| {
+                log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
+            };
+        }
+
+        // Re-acquire mutex briefly to sync registry counts and persist.
+        {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            for (graphs_buf[0..graph_count]) |mg| {
+                self.syncRegistryCountsLocked(mg);
+            }
+            self.saveRegistryLocked() catch |err| {
+                log.warn("failed to persist graph registry: {}", .{err});
+            };
+        }
     }
 
     // ------------------------------------------------------------------
