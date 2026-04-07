@@ -1130,6 +1130,34 @@ pub fn handleQuicConnection(
     // The conn_state wait loop handles waiting for additional streams.
 }
 
+/// Resolve the audit logger for the current query context.
+/// Prefers the per-graph audit logger colocated with the graph's data directory;
+/// falls back to the global audit logger when the per-graph logger is unavailable
+/// or the current graph is unknown.
+fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
+    const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        if (adapter.getAuditLogger(graph_name)) |al| return al;
+    }
+    // Fallback to global audit logger.
+    audit_mod.global_audit_logger_mutex.lock();
+    defer audit_mod.global_audit_logger_mutex.unlock();
+    return audit_mod.global_audit_logger;
+}
+
+/// Log a query execution audit event to the resolved (per-graph or global) logger.
+/// The per-thread tenant_id is already set earlier in the request flow via
+/// `audit_mod.setCurrentAuditTenantId`, so we do not pass it explicitly here.
+fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mutation: bool) void {
+    const logger = resolveAuditLogger(state) orelse return;
+    const event_type: audit_mod.AuditEventType = if (is_mutation) .data_modification else .data_access;
+    logger.logEvent(.{
+        .event_type = event_type,
+        .resource = query_text,
+        .action = if (is_mutation) "MUTATE" else "QUERY",
+    }) catch {};
+}
+
 /// Sync ServerState.current_graph from the execution session after a program
 /// that may contain USE GRAPH statements.  Without this, `state.current_graph`
 /// stays null and every downstream consumer (per-graph locking, RLS filtering,
@@ -2131,6 +2159,8 @@ fn handleClientMessage(
                                 .payload = .{ .profile = profile_msg },
                             };
                             try sendQuicMessage(gpa, stream, .{ .execute = resp });
+                            // Route audit event to per-graph logger (falls back to global).
+                            auditQueryExecution(state, query_text, is_mutation);
                             return;
                         }
                     }
@@ -2195,6 +2225,9 @@ fn handleClientMessage(
                         .payload = .{ .profile = profile_msg },
                     };
                     try sendQuicMessage(gpa, stream, .{ .execute = resp });
+
+                    // Route audit event to per-graph logger (falls back to global).
+                    auditQueryExecution(state, query_text, is_mutation);
 
                     // GAP-0260: Non-txn saves deferred to background persistence thread
                 },
@@ -2270,6 +2303,9 @@ fn handleClientMessage(
                                     } else {
                                         active_stream.deinit();
                                     }
+
+                                    // Route audit event to per-graph logger (falls back to global).
+                                    auditQueryExecution(state, query_text, is_mutation);
 
                                     syncGraphFromSession(state);
                                     updateTxnStateFromProgram(state, &parse_result.program);
@@ -2368,6 +2404,9 @@ fn handleClientMessage(
                             if (page.final) break;
                         }
                     }
+
+                    // Route audit event to per-graph logger (falls back to global).
+                    auditQueryExecution(state, query_text, is_mutation);
 
                     syncGraphFromSession(state);
                     updateTxnStateFromProgram(state, &parse_result.program);
