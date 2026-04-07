@@ -851,9 +851,12 @@ pub const StorageAdapter = struct {
         const Ctx = struct {
             entries: std.ArrayList(ScanEntry),
             alloc: Allocator,
+            had_error: bool = false,
 
             fn onNode(ctx: *@This(), node_id: u64, rec: gs.node.NodeRec) void {
-                ctx.entries.append(ctx.alloc, .{ .slot_id = node_id, .rec = rec }) catch {};
+                ctx.entries.append(ctx.alloc, .{ .slot_id = node_id, .rec = rec }) catch {
+                    ctx.had_error = true;
+                };
             }
         };
 
@@ -863,6 +866,8 @@ pub const StorageAdapter = struct {
             &ctx,
             &Ctx.onNode,
         );
+
+        if (ctx.had_error) return error.OutOfMemory;
 
         return ctx.entries.toOwnedSlice(allocator);
     }
