@@ -153,9 +153,9 @@ pub const AuditLogger = struct {
     // Signing keys
     signing_key: ?Ed25519.KeyPair,
 
-    // Ownership flag — when true, `file_path` was heap-allocated by
-    // `initForGraph` and must be freed in `deinit`.
-    owns_file_path: bool = false,
+    // Heap-allocated file path owned by this logger (set by `initForGraph`).
+    // When non-null, freed in `deinit`. Avoids @constCast on Config.file_path.
+    owned_path: ?[]u8 = null,
 
     // Config fields from original file (preserved/extended)
     retention_days: u32,
@@ -247,7 +247,7 @@ pub const AuditLogger = struct {
         } else |_| {}
 
         var logger = try init(allocator, cfg);
-        logger.owns_file_path = true;
+        logger.owned_path = file_path;
         return logger;
     }
 
@@ -256,8 +256,8 @@ pub const AuditLogger = struct {
         if (self.file) |f| {
             f.close();
         }
-        if (self.owns_file_path) {
-            self.allocator.free(@constCast(self.config.file_path));
+        if (self.owned_path) |p| {
+            self.allocator.free(p);
         }
     }
 
