@@ -372,7 +372,7 @@ pub const QuicTransport = struct {
             // drainPendingDestroy is handled by the main accept loop thread only
             // (it acquires ep.mu which would contend with poll's internal locking).
             self.poll(0) catch {};
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            std.Thread.sleep(100 * std.time.ns_per_us);
         }
         // Final poll to flush any remaining packets on shutdown
         self.poll(0) catch {};
