@@ -3582,6 +3582,344 @@ fn applyFinalOrderAndDistinct(
     }
 }
 
+/// Execute multi-hop pattern matching with GROUP BY aggregation.
+/// Handles patterns like (a)-[:R1]->(b)-[:R2]->(c) with GROUP BY.
+/// Returns null if the chain has only a single hop (falls through to single-hop handler).
+fn executeMultiHopGroupBy(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    chain: ast.Chain,
+    group_by: ast.GroupBy,
+    items: []const ast.ReturnItem,
+    columns: [][]const u8,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+    where_clause: ?ast.Expr,
+    order_by: ?ast.OrderBy,
+    distinct: bool,
+) !?ExecutionResult {
+    if (chain.hops.len <= 1) return null;
+
+    // Multi-hop pattern with GROUP BY handling
+    const MultiHopBinding = struct {
+        env_names: [][]const u8,
+        env_values: []Value,
+    };
+
+    var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(allocator);
+    // #552: Pre-size multi-hop GROUP BY map
+    try binding_groups_mh.ensureTotalCapacity(16);
+    // GAP-0220 FIX: Use try for proper error propagation
+    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    defer {
+        var giter_mh = binding_groups_mh.iterator();
+        while (giter_mh.next()) |entry| {
+            for (entry.value_ptr.items) |binding| {
+                allocator.free(binding.env_names);
+                allocator.free(binding.env_values);
+            }
+            entry.value_ptr.deinit(allocator);
+        }
+        binding_groups_mh.deinit();
+        for (group_keys_list_mh.items) |key| {
+            allocator.free(key);
+        }
+        group_keys_list_mh.deinit(allocator);
+    }
+
+    // Initialize with first hop's left nodes
+    // GAP-0220 FIX: Use try for proper error propagation
+    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+    defer {
+        for (current_bindings_mh.items) |binding| {
+            allocator.free(binding.env_names);
+            allocator.free(binding.env_values);
+        }
+        current_bindings_mh.deinit(allocator);
+    }
+
+    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
+    const first_hop = chain.hops[0];
+
+    // Collect candidate left nodes - use label_index when labels are present
+    const NodeCollector = struct {
+        fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
+            // Filter by left node properties
+            if (hop_left.props) |props| {
+                for (props) |prop| {
+                    if (node.properties.get(prop.key)) |node_prop_val| {
+                        const node_val = propertyValueToValue(node_prop_val);
+                        const prop_env = eval.Env{
+                            .names = &.{},
+                            .values = &.{},
+                            .param_names = p_names,
+                            .param_values = p_values,
+                            .allocator = alloc,
+                        };
+                        const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
+                        if (!valuesEqual(node_val, prop_val)) return;
+                    } else return;
+                }
+            }
+
+            var init_env_names_mh = try alloc.alloc([]const u8, 1);
+            var init_env_values_mh = try alloc.alloc(Value, 1);
+            if (hop_left.name) |var_name| {
+                init_env_names_mh[0] = var_name;
+                init_env_values_mh[0] = Value{ .Node = node };
+            } else {
+                init_env_names_mh[0] = "_anon_left_0";
+                init_env_values_mh[0] = Value{ .Node = node };
+            }
+            try bindings_list.append(alloc, MultiHopBinding{
+                .env_names = init_env_names_mh,
+                .env_values = init_env_values_mh,
+            });
+        }
+    };
+
+    if (first_hop.left.labels.len > 0) {
+        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, filter_tenant);
+        defer label_node_ids.deinit(allocator);
+
+        for (label_node_ids.items) |node_id| {
+            const node = store.nodes.getPtr(node_id) orelse continue;
+            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+        }
+    } else {
+        var init_iter_mh = store.nodes.iterator();
+        while (init_iter_mh.next()) |entry| {
+            const node = entry.value_ptr;
+            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            if (!passesTenantFilter(node.*, filter_tenant)) continue;
+            if (!passesRLSFilter(node.*)) continue;
+            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+        }
+    }
+
+    // Process each hop
+    for (chain.hops, 0..) |hop, hop_idx| {
+        // GAP-0220 FIX: Use try for proper error propagation
+        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+
+        for (current_bindings_mh.items) |binding| {
+            const current_node_var = if (hop_idx == 0)
+                hop.left.name orelse "_anon_left_0"
+            else
+                chain.hops[hop_idx - 1].right.name orelse "_anon_right";
+
+            var current_node: ?*const graph_store.Node = null;
+            for (binding.env_names, 0..) |name, i| {
+                if (std.mem.eql(u8, name, current_node_var)) {
+                    if (binding.env_values[i] == .Node) {
+                        current_node = binding.env_values[i].Node;
+                    }
+                    break;
+                }
+            }
+
+            if (current_node == null) continue;
+            const curr_node = current_node.?;
+
+            const hop_direction: u8 = switch (hop.rel.dir) {
+                .right => 'r',
+                .left => 'l',
+                .undirected => 'u',
+            };
+
+            const edges = if (hop_direction == 'l')
+                store.getEdgesTo(allocator, curr_node.id)
+            else
+                store.getEdgesFrom(allocator, curr_node.id);
+
+            for (edges) |edge| {
+                if (hop.rel.types.len > 0) {
+                    var matches_type = false;
+                    for (hop.rel.types) |rel_type_pattern| {
+                        if (std.mem.eql(u8, edge.label, rel_type_pattern)) {
+                            matches_type = true;
+                            break;
+                        }
+                    }
+                    if (!matches_type) continue;
+                }
+                // GAP-0509: Filter edge by tenant
+                if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
+
+                const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
+                const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
+
+                // Filter right node by labels
+                if (hop.right.labels.len > 0) {
+                    var has_all_labels = true;
+                    for (hop.right.labels) |required_label| {
+                        var found = false;
+                        for (right_node_ptr.labels) |node_label| {
+                            if (std.mem.eql(u8, required_label, node_label)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            has_all_labels = false;
+                            break;
+                        }
+                    }
+                    if (!has_all_labels) continue;
+                }
+
+                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
+                // Count new variables - ALWAYS include right node even if anonymous
+                var new_var_count: usize = 1; // Always include right node
+                if (hop.rel.name != null) new_var_count += 1;
+
+                var new_env_names_mh = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
+                var new_env_values_mh = try allocator.alloc(Value, binding.env_values.len + new_var_count);
+
+                for (binding.env_names, 0..) |name, i| {
+                    new_env_names_mh[i] = name;
+                    new_env_values_mh[i] = binding.env_values[i];
+                }
+
+                var new_idx: usize = binding.env_names.len;
+                if (hop.rel.name) |rel_name| {
+                    new_env_names_mh[new_idx] = rel_name;
+                    const edge_ptr = store.edges.getPtr(edge.id);
+                    new_env_values_mh[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
+                    new_idx += 1;
+                }
+                // Always add right node (even anonymous) with synthetic name "_anon_right" for traversal
+                new_env_names_mh[new_idx] = hop.right.name orelse "_anon_right";
+                new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
+
+                try next_bindings_mh.append(allocator, MultiHopBinding{
+                    .env_names = new_env_names_mh,
+                    .env_values = new_env_values_mh,
+                });
+            }
+        }
+
+        for (current_bindings_mh.items) |binding| {
+            allocator.free(binding.env_names);
+            allocator.free(binding.env_values);
+        }
+        current_bindings_mh.deinit(allocator);
+        current_bindings_mh = next_bindings_mh;
+    }
+
+    // Apply WHERE filter and group bindings by GROUP BY key
+    for (current_bindings_mh.items) |binding| {
+        const env = Env{
+            .names = binding.env_names,
+            .values = binding.env_values,
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+
+        // Evaluate WHERE clause
+        if (where_clause) |where_expr| {
+            const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
+            const passes_where = switch (where_result) {
+                .Bool => |b| b,
+                .Null => false,
+                .Int => |i| i != 0,
+                else => false,
+            };
+            if (!passes_where) continue;
+        }
+
+        // Compute group key from GROUP BY expressions
+        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
+        const writer = key_buf.writer(allocator);
+
+        for (group_by.keys, 0..) |key_expr, key_idx| {
+            if (key_idx > 0) try writer.writeAll("|");
+            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
+            switch (key_val) {
+                .Null => try writer.writeAll("<null>"),
+                .Int => |n| try writer.print("{}", .{n}),
+                .Str => |s| try writer.writeAll(s),
+                .Bool => |b| try writer.print("{}", .{b}),
+                else => try writer.writeAll("<val>"),
+            }
+        }
+
+        const group_key = try key_buf.toOwnedSlice(allocator);
+
+        // Copy binding for grouping
+        var copy_names = try allocator.alloc([]const u8, binding.env_names.len);
+        var copy_values = try allocator.alloc(Value, binding.env_values.len);
+        for (binding.env_names, 0..) |name, i| {
+            copy_names[i] = name;
+            copy_values[i] = binding.env_values[i];
+        }
+
+        if (binding_groups_mh.getPtr(group_key)) |grp| {
+            try grp.append(allocator, MultiHopBinding{
+                .env_names = copy_names,
+                .env_values = copy_values,
+            });
+            allocator.free(group_key);
+        } else {
+            try group_keys_list_mh.append(allocator, group_key);
+            // GAP-0220 FIX: Use try for proper error propagation
+            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+            try new_group.append(allocator, MultiHopBinding{
+                .env_names = copy_names,
+                .env_values = copy_values,
+            });
+            try binding_groups_mh.put(group_key, new_group);
+        }
+    }
+
+    // Generate result rows from groups
+    // GAP-0220 FIX: Use try for proper error propagation
+    var rows_mh = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var group_iter_mh = binding_groups_mh.iterator();
+    while (group_iter_mh.next()) |group_entry| {
+        const group_bindings = group_entry.value_ptr.*;
+
+        var row = try allocator.alloc(Value, items.len);
+        for (items, 0..) |item, i| {
+            if (isAggregationExpr(item.expr)) {
+                row[i] = computeBindingGroupAggregation(allocator, item.expr, group_bindings.items) catch Value{ .Null = {} };
+            } else {
+                if (group_bindings.items.len > 0) {
+                    const first_binding = group_bindings.items[0];
+                    const first_env = Env{
+                        .names = first_binding.env_names,
+                        .values = first_binding.env_values,
+                        .allocator = allocator,
+                    };
+                    row[i] = eval.evalExpr(allocator, item.expr, first_env) catch Value{ .Null = {} };
+                } else {
+                    row[i] = Value{ .Null = {} };
+                }
+            }
+        }
+        try rows_mh.append(allocator, row);
+    }
+
+    var result = ExecutionResult{
+        .columns = columns,
+        .rows = try rows_mh.toOwnedSlice(allocator),
+        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+    };
+
+    if (order_by) |order| {
+        try sortRows(allocator, &result, order);
+    }
+
+    if (distinct) {
+        try applyDistinct(allocator, &result);
+    }
+
+    return result;
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-006; FEATURE="MultiGraphIsolation"; ASPECT=MatchFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
@@ -3670,322 +4008,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // CANARY: REQ=REQ-GQL-MULTIHOP-GROUPBY-001; FEATURE="MultiHopGroupBy"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                 // Check for multi-hop patterns with GROUP BY (e.g., products ordered together)
                 const chain = q.match.chains[0];
-                if (chain.hops.len > 1) {
-                    // Multi-hop pattern with GROUP BY handling
-                    const MultiHopBinding = struct {
-                        env_names: [][]const u8,
-                        env_values: []Value,
-                    };
-
-                    var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(allocator);
-                    // #552: Pre-size multi-hop GROUP BY map
-                    try binding_groups_mh.ensureTotalCapacity(16);
-                    // GAP-0220 FIX: Use try for proper error propagation
-                    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 16);
-                    defer {
-                        var giter_mh = binding_groups_mh.iterator();
-                        while (giter_mh.next()) |entry| {
-                            for (entry.value_ptr.items) |binding| {
-                                allocator.free(binding.env_names);
-                                allocator.free(binding.env_values);
-                            }
-                            entry.value_ptr.deinit(allocator);
-                        }
-                        binding_groups_mh.deinit();
-                        for (group_keys_list_mh.items) |key| {
-                            allocator.free(key);
-                        }
-                        group_keys_list_mh.deinit(allocator);
-                    }
-
-                    // Initialize with first hop's left nodes
-                    // GAP-0220 FIX: Use try for proper error propagation
-                    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
-                    defer {
-                        for (current_bindings_mh.items) |binding| {
-                            allocator.free(binding.env_names);
-                            allocator.free(binding.env_values);
-                        }
-                        current_bindings_mh.deinit(allocator);
-                    }
-
-                    // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
-                    const first_hop = chain.hops[0];
-
-                    // Collect candidate left nodes - use label_index when labels are present
-                    const NodeCollector = struct {
-                        fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
-                            // Filter by left node properties
-                            if (hop_left.props) |props| {
-                                for (props) |prop| {
-                                    if (node.properties.get(prop.key)) |node_prop_val| {
-                                        const node_val = propertyValueToValue(node_prop_val);
-                                        const prop_env = eval.Env{
-                                            .names = &.{},
-                                            .values = &.{},
-                                            .param_names = p_names,
-                                            .param_values = p_values,
-                                            .allocator = alloc,
-                                        };
-                                        const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
-                                        if (!valuesEqual(node_val, prop_val)) return;
-                                    } else return;
-                                }
-                            }
-
-                            var init_env_names_mh = try alloc.alloc([]const u8, 1);
-                            var init_env_values_mh = try alloc.alloc(Value, 1);
-                            if (hop_left.name) |var_name| {
-                                init_env_names_mh[0] = var_name;
-                                init_env_values_mh[0] = Value{ .Node = node };
-                            } else {
-                                init_env_names_mh[0] = "_anon_left_0";
-                                init_env_values_mh[0] = Value{ .Node = node };
-                            }
-                            try bindings_list.append(alloc, MultiHopBinding{
-                                .env_names = init_env_names_mh,
-                                .env_values = init_env_values_mh,
-                            });
-                        }
-                    };
-
-                    if (first_hop.left.labels.len > 0) {
-                        var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, filter_tenant);
-                        defer label_node_ids.deinit(allocator);
-
-                        for (label_node_ids.items) |node_id| {
-                            const node = store.nodes.getPtr(node_id) orelse continue;
-                            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
-                        }
-                    } else {
-                        var init_iter_mh = store.nodes.iterator();
-                        while (init_iter_mh.next()) |entry| {
-                            const node = entry.value_ptr;
-                            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-                            if (!passesTenantFilter(node.*, filter_tenant)) continue;
-                            if (!passesRLSFilter(node.*)) continue;
-                            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
-                        }
-                    }
-
-                    // Process each hop
-                    for (chain.hops, 0..) |hop, hop_idx| {
-                        // GAP-0220 FIX: Use try for proper error propagation
-                        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
-
-                        for (current_bindings_mh.items) |binding| {
-                            const current_node_var = if (hop_idx == 0)
-                                hop.left.name orelse "_anon_left_0"
-                            else
-                                chain.hops[hop_idx - 1].right.name orelse "_anon_right";
-
-                            var current_node: ?*const graph_store.Node = null;
-                            for (binding.env_names, 0..) |name, i| {
-                                if (std.mem.eql(u8, name, current_node_var)) {
-                                    if (binding.env_values[i] == .Node) {
-                                        current_node = binding.env_values[i].Node;
-                                    }
-                                    break;
-                                }
-                            }
-
-                            if (current_node == null) continue;
-                            const curr_node = current_node.?;
-
-                            const hop_direction: u8 = switch (hop.rel.dir) {
-                                .right => 'r',
-                                .left => 'l',
-                                .undirected => 'u',
-                            };
-
-                            const edges = if (hop_direction == 'l')
-                                store.getEdgesTo(allocator, curr_node.id)
-                            else
-                                store.getEdgesFrom(allocator, curr_node.id);
-
-                            for (edges) |edge| {
-                                if (hop.rel.types.len > 0) {
-                                    var matches_type = false;
-                                    for (hop.rel.types) |rel_type_pattern| {
-                                        if (std.mem.eql(u8, edge.label, rel_type_pattern)) {
-                                            matches_type = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!matches_type) continue;
-                                }
-                                // GAP-0509: Filter edge by tenant
-                                if (!passesTenantFilterEdge(edge, filter_tenant)) continue;
-
-                                const right_node_id = if (hop_direction == 'l') edge.from_id else edge.to_id;
-                                const right_node_ptr = store.nodes.getPtr(right_node_id) orelse continue;
-
-                                // Filter right node by labels
-                                if (hop.right.labels.len > 0) {
-                                    var has_all_labels = true;
-                                    for (hop.right.labels) |required_label| {
-                                        var found = false;
-                                        for (right_node_ptr.labels) |node_label| {
-                                            if (std.mem.eql(u8, required_label, node_label)) {
-                                                found = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!found) {
-                                            has_all_labels = false;
-                                            break;
-                                        }
-                                    }
-                                    if (!has_all_labels) continue;
-                                }
-
-                                // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                                // Count new variables - ALWAYS include right node even if anonymous
-                                var new_var_count: usize = 1; // Always include right node
-                                if (hop.rel.name != null) new_var_count += 1;
-
-                                var new_env_names_mh = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
-                                var new_env_values_mh = try allocator.alloc(Value, binding.env_values.len + new_var_count);
-
-                                for (binding.env_names, 0..) |name, i| {
-                                    new_env_names_mh[i] = name;
-                                    new_env_values_mh[i] = binding.env_values[i];
-                                }
-
-                                var new_idx: usize = binding.env_names.len;
-                                if (hop.rel.name) |rel_name| {
-                                    new_env_names_mh[new_idx] = rel_name;
-                                    const edge_ptr = store.edges.getPtr(edge.id);
-                                    new_env_values_mh[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
-                                    new_idx += 1;
-                                }
-                                // Always add right node (even anonymous) with synthetic name "_anon_right" for traversal
-                                new_env_names_mh[new_idx] = hop.right.name orelse "_anon_right";
-                                new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
-
-                                try next_bindings_mh.append(allocator, MultiHopBinding{
-                                    .env_names = new_env_names_mh,
-                                    .env_values = new_env_values_mh,
-                                });
-                            }
-                        }
-
-                        for (current_bindings_mh.items) |binding| {
-                            allocator.free(binding.env_names);
-                            allocator.free(binding.env_values);
-                        }
-                        current_bindings_mh.deinit(allocator);
-                        current_bindings_mh = next_bindings_mh;
-                    }
-
-                    // Apply WHERE filter and group bindings by GROUP BY key
-                    for (current_bindings_mh.items) |binding| {
-                        const env = Env{
-                            .names = binding.env_names,
-                            .values = binding.env_values,
-                            .param_names = param_names,
-                            .param_values = param_values,
-                            .allocator = allocator,
-                        };
-
-                        // Evaluate WHERE clause
-                        if (q.where_clause) |where_expr| {
-                            const where_result = eval.evalExpr(allocator, where_expr, env) catch continue;
-                            const passes_where = switch (where_result) {
-                                .Bool => |b| b,
-                                .Null => false,
-                                .Int => |i| i != 0,
-                                else => false,
-                            };
-                            if (!passes_where) continue;
-                        }
-
-                        // Compute group key from GROUP BY expressions
-                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-                        const writer = key_buf.writer(allocator);
-
-                        for (group_by.keys, 0..) |key_expr, key_idx| {
-                            if (key_idx > 0) try writer.writeAll("|");
-                            const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
-                            switch (key_val) {
-                                .Null => try writer.writeAll("<null>"),
-                                .Int => |n| try writer.print("{}", .{n}),
-                                .Str => |s| try writer.writeAll(s),
-                                .Bool => |b| try writer.print("{}", .{b}),
-                                else => try writer.writeAll("<val>"),
-                            }
-                        }
-
-                        const group_key = try key_buf.toOwnedSlice(allocator);
-
-                        // Copy binding for grouping
-                        var copy_names = try allocator.alloc([]const u8, binding.env_names.len);
-                        var copy_values = try allocator.alloc(Value, binding.env_values.len);
-                        for (binding.env_names, 0..) |name, i| {
-                            copy_names[i] = name;
-                            copy_values[i] = binding.env_values[i];
-                        }
-
-                        if (binding_groups_mh.getPtr(group_key)) |grp| {
-                            try grp.append(allocator, MultiHopBinding{
-                                .env_names = copy_names,
-                                .env_values = copy_values,
-                            });
-                            allocator.free(group_key);
-                        } else {
-                            try group_keys_list_mh.append(allocator, group_key);
-                            // GAP-0220 FIX: Use try for proper error propagation
-                            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
-                            try new_group.append(allocator, MultiHopBinding{
-                                .env_names = copy_names,
-                                .env_values = copy_values,
-                            });
-                            try binding_groups_mh.put(group_key, new_group);
-                        }
-                    }
-
-                    // Generate result rows from groups
-                    // GAP-0220 FIX: Use try for proper error propagation
-                    var rows_mh = try std.ArrayList([]Value).initCapacity(allocator, 0);
-                    var group_iter_mh = binding_groups_mh.iterator();
-                    while (group_iter_mh.next()) |group_entry| {
-                        const group_bindings = group_entry.value_ptr.*;
-
-                        var row = try allocator.alloc(Value, items.len);
-                        for (items, 0..) |item, i| {
-                            if (isAggregationExpr(item.expr)) {
-                                row[i] = computeBindingGroupAggregation(allocator, item.expr, group_bindings.items) catch Value{ .Null = {} };
-                            } else {
-                                if (group_bindings.items.len > 0) {
-                                    const first_binding = group_bindings.items[0];
-                                    const first_env = Env{
-                                        .names = first_binding.env_names,
-                                        .values = first_binding.env_values,
-                                        .allocator = allocator,
-                                    };
-                                    row[i] = eval.evalExpr(allocator, item.expr, first_env) catch Value{ .Null = {} };
-                                } else {
-                                    row[i] = Value{ .Null = {} };
-                                }
-                            }
-                        }
-                        try rows_mh.append(allocator, row);
-                    }
-
-                    var result = ExecutionResult{
-                        .columns = columns,
-                        .rows = try rows_mh.toOwnedSlice(allocator),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-                    };
-
-                    if (q.order_by) |order| {
-                        try sortRows(allocator, &result, order);
-                    }
-
-                    if (q.ret.distinct) {
-                        try applyDistinct(allocator, &result);
-                    }
-
+                if (try executeMultiHopGroupBy(allocator, store, chain, group_by, items, columns, param_names, param_values, filter_graph, filter_tenant, q.where_clause, q.order_by, q.ret.distinct)) |result| {
                     return result;
                 }
 
