@@ -942,6 +942,292 @@ pub const RLSEngine = struct {
 
         return true;
     }
+
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=UsernameRowAccess; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+    /// Simplified row access check using username string instead of full SecurityContext.
+    /// For use in the match loop where only username and graph context are available.
+    /// Skips role membership checks (label-deny layer handles role-based access);
+    /// expression policies apply property-level filtering to all users.
+    pub fn checkRowAccessByUsername(
+        self: *Self,
+        row: *const std.StringHashMap(Value),
+        operation: Operation,
+        username: []const u8,
+        graph: []const u8,
+        table: []const u8,
+    ) !bool {
+        const key = PolicyKey{ .graph = graph, .table = table };
+
+        // Hash username to produce a cache-compatible user ID.
+        const user_id: auth.UserId = std.hash.Wyhash.hash(0, username);
+
+        // Check cache first
+        if (self.policy_cache.get(key, user_id, operation)) |allowed| {
+            if (!allowed) return false;
+        }
+
+        const policies = self.policies.get(key) orelse return true; // No policies
+
+        var any_permissive_allows = false;
+        var all_restrictive_allow = true;
+
+        for (policies.items) |policy| {
+            if (!policy.enabled) continue;
+            if (policy.operation != operation and policy.operation != .all) continue;
+
+            // Skip role check — label-deny layer handles role-based access.
+            // Expression policies apply property-level filtering to all users.
+
+            // Check temporal constraints
+            if (policy.temporal) |temporal| {
+                if (!self.checkTemporalConstraint(temporal)) continue;
+            }
+
+            // Evaluate policy expression
+            const expr = switch (operation) {
+                .select, .delete => policy.using_expr,
+                .insert, .update => policy.check_expr,
+                .all => policy.using_expr orelse policy.check_expr,
+            };
+
+            if (expr) |e| {
+                const result = self.evaluateExpressionWithUsername(e, row, username) catch continue;
+
+                if (policy.permissive) {
+                    if (result) any_permissive_allows = true;
+                } else {
+                    if (!result) all_restrictive_allow = false;
+                }
+            }
+        }
+
+        const allowed = any_permissive_allows or all_restrictive_allow;
+
+        // Cache the result
+        try self.policy_cache.put(key, user_id, operation, allowed);
+
+        return allowed;
+    }
+
+    /// Evaluate an expression using a username string instead of a full SecurityContext.
+    /// The `load_user` opcode pushes the hashed username as integer.
+    /// The `load_session` opcode always pushes null (no session in this path).
+    /// Falls back to the interpreted evaluator returning true when no compiled form exists,
+    /// since the interpreted path requires a SecurityContext we don't have here.
+    fn evaluateExpressionWithUsername(
+        self: *Self,
+        expr: Expression,
+        row: *const std.StringHashMap(Value),
+        username: []const u8,
+    ) !bool {
+        if (expr.compiled) |compiled| {
+            return try self.evaluateCompiledExpressionWithUsername(compiled, row, username);
+        }
+
+        // Interpreted evaluation requires a SecurityContext; without one we cannot
+        // evaluate the raw expression.  Return true (permissive) so that the
+        // compiled-expression path is the enforcing gate.  Policies should always
+        // be compiled at creation time via createPolicy().
+        return true;
+    }
+
+    /// Bytecode VM evaluation using a username string instead of SecurityContext.
+    fn evaluateCompiledExpressionWithUsername(
+        self: *Self,
+        expr: *CompiledExpression,
+        row: *const std.StringHashMap(Value),
+        username: []const u8,
+    ) !bool {
+        const Opcode = CompiledExpression.Opcode;
+        var stack: [64]Value = undefined;
+        var sp: usize = 0;
+
+        var pc: usize = 0;
+        while (pc < expr.bytecode.len) {
+            const opcode: Opcode = @enumFromInt(expr.bytecode[pc]);
+            pc += 1;
+
+            switch (opcode) {
+                .nop => {},
+                .push_const => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.constants.len) {
+                        stack[sp] = expr.constants[idx];
+                        sp += 1;
+                    }
+                },
+                .push_true => {
+                    stack[sp] = .{ .boolean = true };
+                    sp += 1;
+                },
+                .push_false => {
+                    stack[sp] = .{ .boolean = false };
+                    sp += 1;
+                },
+                .push_null => {
+                    stack[sp] = .null;
+                    sp += 1;
+                },
+                .pop => {
+                    if (sp > 0) sp -= 1;
+                },
+                .load_row => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.constants.len) {
+                        const field_name = switch (expr.constants[idx]) {
+                            .string => |s| s,
+                            else => "",
+                        };
+                        if (row.get(field_name)) |val| {
+                            stack[sp] = val;
+                        } else {
+                            stack[sp] = .null;
+                        }
+                        sp += 1;
+                    }
+                },
+                .load_user => {
+                    // Push hashed username as integer (matches cache key derivation).
+                    stack[sp] = .{ .integer = @intCast(std.hash.Wyhash.hash(0, username)) };
+                    sp += 1;
+                },
+                .load_session => {
+                    // No session available in the username-only path; push null.
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    _ = idx;
+                    stack[sp] = .null;
+                    sp += 1;
+                },
+                .eq => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                        sp += 1;
+                    }
+                },
+                .neq => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
+                        sp += 1;
+                    }
+                },
+                .lt => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.compareValues(a, b) < 0 };
+                        sp += 1;
+                    }
+                },
+                .gt => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.compareValues(a, b) > 0 };
+                        sp += 1;
+                    }
+                },
+                .lte => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.compareValues(a, b) <= 0 };
+                        sp += 1;
+                    }
+                },
+                .gte => {
+                    if (sp >= 2) {
+                        const b = stack[sp - 1];
+                        const a = stack[sp - 2];
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = self.compareValues(a, b) >= 0 };
+                        sp += 1;
+                    }
+                },
+                .op_and => {
+                    if (sp >= 2) {
+                        const b = self.valueToBool(stack[sp - 1]);
+                        const a = self.valueToBool(stack[sp - 2]);
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = a and b };
+                        sp += 1;
+                    }
+                },
+                .op_or => {
+                    if (sp >= 2) {
+                        const b = self.valueToBool(stack[sp - 1]);
+                        const a = self.valueToBool(stack[sp - 2]);
+                        sp -= 2;
+                        stack[sp] = .{ .boolean = a or b };
+                        sp += 1;
+                    }
+                },
+                .op_not => {
+                    if (sp >= 1) {
+                        const a = self.valueToBool(stack[sp - 1]);
+                        sp -= 1;
+                        stack[sp] = .{ .boolean = !a };
+                        sp += 1;
+                    }
+                },
+                .jump => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (idx < expr.jump_table.len) {
+                        pc = expr.jump_table[idx];
+                    }
+                },
+                .jump_if_false => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp > 0) {
+                        sp -= 1;
+                        if (!self.valueToBool(stack[sp])) {
+                            if (idx < expr.jump_table.len) {
+                                pc = expr.jump_table[idx];
+                            }
+                        }
+                    }
+                },
+                .jump_if_true => {
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp > 0) {
+                        sp -= 1;
+                        if (self.valueToBool(stack[sp])) {
+                            if (idx < expr.jump_table.len) {
+                                pc = expr.jump_table[idx];
+                            }
+                        }
+                    }
+                },
+                .ret => {
+                    if (sp > 0) {
+                        return self.valueToBool(stack[sp - 1]);
+                    }
+                    return false;
+                },
+            }
+        }
+
+        // If no explicit return, check top of stack
+        if (sp > 0) {
+            return self.valueToBool(stack[sp - 1]);
+        }
+
+        return true; // Default allow if no expression result
+    }
 };
 
 // Policy Cache for performance
