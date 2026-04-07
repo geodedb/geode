@@ -12,6 +12,7 @@ const gs = @import("graph_storage");
 const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
+const audit = @import("../security/audit.zig");
 
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.graph_storage_adapter);
@@ -203,6 +204,9 @@ pub const ManagedGraph = struct {
     label_dict: LabelStringDict,
     name: []const u8, // owned
     uuid: [16]u8,
+    /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
+    /// May be null if audit init failed (soft failure — graph still usable).
+    audit_logger: ?*audit.AuditLogger = null,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Thread.RwLock = .{},
@@ -214,6 +218,11 @@ pub const ManagedGraph = struct {
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
+        if (self.audit_logger) |al| {
+            al.deinit();
+            allocator.destroy(al);
+            self.audit_logger = null;
+        }
         self.engine.close() catch {};
         self.label_dict.deinit();
         allocator.free(self.name);
@@ -334,6 +343,17 @@ pub const StorageAdapter = struct {
             return entry.uuid;
         }
         return null;
+    }
+
+    /// Return the per-graph audit logger for `name`, or null if the graph
+    /// does not exist or audit was not initialised.  Holds `self.mutex`
+    /// only for the hash-map lookup.
+    pub fn getAuditLogger(self: *StorageAdapter, name: []const u8) ?*audit.AuditLogger {
+        self.mutex.lock();
+        const mg = self.engines.get(name);
+        self.mutex.unlock();
+
+        return if (mg) |m| m.audit_logger else null;
     }
 
     /// Check whether a graph with the given name exists either in memory or in
@@ -1009,6 +1029,36 @@ pub const StorageAdapter = struct {
     // Internal helpers (must be called with mutex held)
     // ------------------------------------------------------------------
 
+    /// Build the on-disk directory path for a graph: `{data_dir}/graphs/{uuid_hex}`.
+    fn graphDirPath(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ![]const u8 {
+        const hex = std.fmt.bytesToHex(graph_uuid, .lower);
+        return std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{
+            data_dir,
+            &hex,
+        });
+    }
+
+    /// Attempt to create a per-graph audit logger. Returns null on failure
+    /// (soft failure — the graph remains usable without per-graph audit).
+    fn initAuditForGraph(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ?*audit.AuditLogger {
+        const graph_dir = graphDirPath(allocator, data_dir, graph_uuid) catch |err| {
+            log.warn("failed to build graph dir path for audit: {}", .{err});
+            return null;
+        };
+        defer allocator.free(graph_dir);
+
+        const al = allocator.create(audit.AuditLogger) catch |err| {
+            log.warn("failed to allocate per-graph audit logger: {}", .{err});
+            return null;
+        };
+        al.* = audit.AuditLogger.initForGraph(allocator, graph_dir) catch |err| {
+            log.warn("failed to init per-graph audit logger: {}", .{err});
+            allocator.destroy(al);
+            return null;
+        };
+        return al;
+    }
+
     fn createGraphLocked(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
         const graph_uuid = generateUuid();
 
@@ -1037,6 +1087,7 @@ pub const StorageAdapter = struct {
             .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
+            .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         try self.engines.put(owned_name, mg);
@@ -1077,6 +1128,7 @@ pub const StorageAdapter = struct {
             .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
+            .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
         try self.engines.put(owned_name, mg);

@@ -153,6 +153,10 @@ pub const AuditLogger = struct {
     // Signing keys
     signing_key: ?Ed25519.KeyPair,
 
+    // Ownership flag — when true, `file_path` was heap-allocated by
+    // `initForGraph` and must be freed in `deinit`.
+    owns_file_path: bool = false,
+
     // Config fields from original file (preserved/extended)
     retention_days: u32,
     tamper_protected: bool,
@@ -215,10 +219,45 @@ pub const AuditLogger = struct {
         return logger;
     }
 
+    /// Create an audit logger that writes to `{graph_dir}/audit.jsonl`.
+    /// The caller-supplied `graph_dir` path is duped and owned by the
+    /// returned logger (freed on `deinit`).
+    pub fn initForGraph(allocator: Allocator, graph_dir: []const u8) !AuditLogger {
+        const file_path = try std.fmt.allocPrint(allocator, "{s}/audit.jsonl", .{graph_dir});
+        errdefer allocator.free(file_path);
+
+        // Ensure the graph directory exists so the file create succeeds.
+        std.fs.cwd().makePath(graph_dir) catch |err| {
+            log.warn("failed to create graph audit dir", &.{
+                Attr.string("path", graph_dir),
+                Attr.string("error", @errorName(err)),
+            });
+            return err;
+        };
+
+        var cfg = Config{
+            .enabled = true,
+            .file_path = file_path,
+        };
+
+        // Inherit env-based overrides for redaction / rotation.
+        if (std.process.getEnvVarOwned(allocator, "GEODE_AUDIT_REDACT_PII")) |v| {
+            cfg.redact_pii = std.mem.eql(u8, v, "1");
+            allocator.free(v);
+        } else |_| {}
+
+        var logger = try init(allocator, cfg);
+        logger.owns_file_path = true;
+        return logger;
+    }
+
     pub fn deinit(self: *AuditLogger) void {
         self.digest_buf.deinit(self.allocator);
         if (self.file) |f| {
             f.close();
+        }
+        if (self.owns_file_path) {
+            self.allocator.free(@constCast(self.config.file_path));
         }
     }
 
