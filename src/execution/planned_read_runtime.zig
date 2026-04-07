@@ -780,9 +780,9 @@ fn collectHopEdges(
 
     switch (dir) {
         .right => {
-            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
-            defer allocator.free(out);
-            for (out) |entry| {
+            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
+            defer out.deinit();
+            while (try out.next()) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = node_slot,
@@ -794,9 +794,9 @@ fn collectHopEdges(
             }
         },
         .left => {
-            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
-            defer allocator.free(incoming);
-            for (incoming) |entry| {
+            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
+            defer incoming.deinit();
+            while (try incoming.next()) |entry| {
                 try edges.append(allocator, .{
                     .edge_id = entry.edge_id,
                     .actual_from_slot = entry.neighbor,
@@ -811,9 +811,9 @@ fn collectHopEdges(
             var seen = std.AutoHashMap(u64, void).init(allocator);
             defer seen.deinit();
 
-            const out = try adapter.getOutgoingEdges(graph_name, node_slot, allocator);
-            defer allocator.free(out);
-            for (out) |entry| {
+            var out = try adapter.iterateOutgoingEdges(graph_name, node_slot, allocator);
+            defer out.deinit();
+            while (try out.next()) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{
@@ -826,9 +826,9 @@ fn collectHopEdges(
                 });
             }
 
-            const incoming = try adapter.getIncomingEdges(graph_name, node_slot, allocator);
-            defer allocator.free(incoming);
-            for (incoming) |entry| {
+            var incoming = try adapter.iterateIncomingEdges(graph_name, node_slot, allocator);
+            defer incoming.deinit();
+            while (try incoming.next()) |entry| {
                 if (seen.contains(entry.edge_id)) continue;
                 try seen.put(entry.edge_id, {});
                 try edges.append(allocator, .{

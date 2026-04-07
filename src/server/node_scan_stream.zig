@@ -264,13 +264,15 @@ fn collectMatchingSlotIds(
     errdefer result.deinit(allocator);
 
     if (pattern.labels.len > 0) {
-        const label_slots = try adapter.getNodesByLabel(graph_name, pattern.labels[0], allocator);
-        defer allocator.free(label_slots);
+        if (try adapter.iterateNodesByLabel(graph_name, pattern.labels[0], allocator)) |label_iter_init| {
+            var label_iter = label_iter_init;
+            defer label_iter.deinit();
 
-        for (label_slots) |slot_id| {
-            if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
-            try result.append(allocator, slot_id);
-            if (result.items.len >= row_cap) break;
+            while (try label_iter.next()) |slot_id| {
+                if (!try nodeMatchesPattern(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) continue;
+                try result.append(allocator, slot_id);
+                if (result.items.len >= row_cap) break;
+            }
         }
     } else {
         const entries = try adapter.scanAllNodes(graph_name, allocator);

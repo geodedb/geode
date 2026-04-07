@@ -3611,10 +3611,10 @@ pub const GraphStore = struct {
                     try self.addToLabelIndex(graph_name, label, node_uuid);
                 }
 
-                const out_edges = try adapter.getOutgoingEdges(graph_name, slot_id, self.allocator);
-                defer self.allocator.free(out_edges);
+                var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
+                defer out_edges.deinit();
 
-                for (out_edges) |edge_entry| {
+                while (try out_edges.next()) |edge_entry| {
                     // Skip edges/nodes whose slot_ids aren't mapped yet (concurrent inserts).
                     const edge_uuid = blk: {
                         if (try adapter.getEdgeProperty(

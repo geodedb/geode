@@ -768,20 +768,23 @@ pub const StorageAdapter = struct {
     /// Filters out deleted nodes whose slot IDs are still present in the
     /// label index (the engine's deleteNode sets NODE_FLAG_DELETED but does
     /// not remove the entry from the label posting list).
+    pub fn iterateNodesByLabel(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        allocator: Allocator,
+    ) !?gs.NodeIterator {
+        const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return null;
+        return try ctx.mg.storage().scanLabelIter(ctx.label_id, allocator);
+    }
+
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
-        // Brief mutex hold: look up ManagedGraph and label ID, then release.
-        // The ManagedGraph is stable while the caller holds the per-graph
-        // rwlock, so the expensive scan below does not need the adapter mutex.
-        // Holding mutex during the scan caused ABBA deadlocks with concurrent
-        // ingest (QUIC handler: rwlock → mutex; ingest: mutex → rwlock).
-        const mg, const label_id = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-            const mg = try self.requireExistingGraphLocked(graph_name);
-            const lid = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
-            break :blk .{ mg, lid };
-        };
-        const raw_ids = try mg.engine.scanLabel(label_id, allocator);
+        const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return try allocator.alloc(u64, 0);
+        const mg = ctx.mg;
+        var iter = try mg.storage().scanLabelIter(ctx.label_id, allocator);
+        defer iter.deinit();
+        var result = std.ArrayList(u64).empty;
+        errdefer result.deinit(allocator);
 
         // Filter out deleted/empty nodes whose slot IDs are still present
         // in the label index.  We read raw page bytes via the buffer pool
@@ -792,8 +795,7 @@ pub const StorageAdapter = struct {
         const NodeRec = node_mod.NodeRec;
         const npp = mg.engine.node_store.nodes_per_page;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
-        var live_count: usize = 0;
-        for (raw_ids) |nid| {
+        while (try iter.next()) |nid| {
             const page_id = nid / npp;
             // Page not allocated → node cannot be live (stale index entry)
             if (!mg.engine.node_store.free_space.isAllocated(page_id)) continue;
@@ -810,28 +812,10 @@ pub const StorageAdapter = struct {
 
             if (node_mod.isDeleted(&rec)) continue;
             if (node_mod.isEmpty(&rec)) continue;
-
-            raw_ids[live_count] = nid;
-            live_count += 1;
+            try result.append(allocator, nid);
         }
 
-        if (live_count == raw_ids.len) return raw_ids;
-
-        // Shrink the allocation to only the live IDs.
-        if (live_count == 0) {
-            allocator.free(raw_ids);
-            return try allocator.alloc(u64, 0);
-        }
-        // realloc in-place when possible; the live IDs are already packed
-        // at the front of raw_ids.
-        if (allocator.resize(raw_ids, live_count)) {
-            return raw_ids[0..live_count];
-        }
-        // Fallback: allocate a new slice and copy.
-        const result = try allocator.alloc(u64, live_count);
-        @memcpy(result, raw_ids[0..live_count]);
-        allocator.free(raw_ids);
-        return result;
+        return try result.toOwnedSlice(allocator);
     }
 
     // ------------------------------------------------------------------
@@ -1380,6 +1364,23 @@ pub const StorageAdapter = struct {
 
     fn findRegistryEntryLocked(self: *StorageAdapter, name: []const u8) ?gs.registry.GraphEntry {
         return self.registry.findByName(name);
+    }
+
+    fn resolveLabelScanContext(self: *StorageAdapter, graph_name: []const u8, label: []const u8) !?LabelScanContext {
+        // Brief mutex hold: look up ManagedGraph and label ID, then release.
+        // The ManagedGraph is stable while the caller holds the per-graph
+        // rwlock, so iterator-backed scans do not need the adapter mutex.
+        // Holding mutex during scans caused ABBA deadlocks with concurrent
+        // ingest (QUIC handler: rwlock → mutex; ingest: mutex → rwlock).
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        const mg = try self.requireExistingGraphLocked(graph_name);
+        const label_id = mg.label_dict.getId(label) orelse return null;
+        return .{
+            .mg = mg,
+            .label_id = label_id,
+        };
     }
 
     fn upsertRegistryEntryLocked(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8, node_count: u64, edge_count: u64) void {
