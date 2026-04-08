@@ -737,6 +737,8 @@ pub fn build(b: *std.Build) void {
     graph_store_mod.addImport("fle_key_manager", fle_key_manager_mod);
     graph_store_mod.addImport("fle_key_types", fle_key_types_mod);
     graph_store_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    graph_store_mod.addImport("rtree_lib", rtree_ext_mod);
+    graph_store_mod.addImport("hnsw_lib", hnsw_ext_mod);
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     graph_algo_tests.linkLibC();
@@ -758,6 +760,8 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("advanced_types_lib", advanced_types_ext_mod);
     graph_store_unit_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     graph_store_unit_tests.root_module.addImport("schema", schema_mod);
+    graph_store_unit_tests.root_module.addImport("rtree_lib", rtree_ext_mod);
+    graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
     graph_store_unit_tests.linkLibC();
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
