@@ -13,6 +13,16 @@ fn execQuery(
     return geode.execution.executeProgramWithContext(allocator, &parse_result.program, ctx);
 }
 
+fn seedNodeWithNodeId(
+    store: *geode.graph_store.GraphStore,
+    label: []const u8,
+    external_id: i64,
+) !u64 {
+    const node_id = try store.createNodeWithGraph(&[_][]const u8{label}, "default");
+    try store.setNodeProperty(node_id, "node_id", .{ .Int = external_id });
+    return node_id;
+}
+
 // CANARY: REQ=REQ-PERF-MERGE-002; FEATURE="Execution"; ASPECT=IndexRebuild; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
 test "GAP-0511: Sequential MERGE transactions do not stall on index rebuilds" {
     var allocator = testing.allocator;
@@ -115,4 +125,142 @@ test "GAP-0511: Adapter-backed MERGE avoids QueryReadSession snapshots" {
     try testing.expectEqual(@as(u64, 0), geode.graph_store.getNodesByLabelsCallCount());
     try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() >= 24);
     try testing.expectEqual(@as(usize, 24), geode.graph_store.getCurrentGlobalStore().?.getNodeCount());
+}
+
+// CANARY: REQ=REQ-PERF-DELETE-005; FEATURE="Execution"; ASPECT=AdapterDeleteSnapshotElision; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+test "GAP-0511: Adapter-backed DELETE avoids QueryReadSession snapshots" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(data_dir);
+
+    const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+
+    const catalog = try geode.execution.ensureCatalogInstance(testing.allocator);
+    defer geode.execution.cleanupCatalogInstance();
+
+    var i: usize = 0;
+    while (i < 24) : (i += 1) {
+        _ = try seedNodeWithNodeId(store, "User", @intCast(i));
+    }
+
+    const ctx = geode.execution.ExecutionContext{
+        .catalog = catalog,
+    };
+
+    geode.graph_store.resetQueryReadSessionInitCount();
+    geode.graph_store.resetGetNodesByLabelsCount();
+    graph_storage_adapter.resetLookupCounters();
+
+    i = 0;
+    while (i < 24) : (i += 1) {
+        const query = try std.fmt.allocPrint(
+            testing.allocator,
+            "MATCH (n:User {{node_id: {d}}}) DELETE n",
+            .{i},
+        );
+        defer testing.allocator.free(query);
+
+        var result = try execQuery(testing.allocator, query, ctx);
+        defer result.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getQueryReadSessionInitCount());
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getNodesByLabelsCallCount());
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() >= 24);
+    try testing.expectEqual(@as(usize, 0), geode.graph_store.getCurrentGlobalStore().?.getNodeCount());
+}
+
+// CANARY: REQ=REQ-PERF-MERGE-006; FEATURE="Execution"; ASPECT=RelationshipMergeEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+test "GAP-0511: Relationship MERGE resolves endpoints without label scans" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(data_dir);
+
+    const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+
+    const catalog = try geode.execution.ensureCatalogInstance(testing.allocator);
+    defer geode.execution.cleanupCatalogInstance();
+
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        _ = try seedNodeWithNodeId(store, "User", @intCast(i + 1));
+    }
+
+    const ctx = geode.execution.ExecutionContext{
+        .catalog = catalog,
+    };
+
+    geode.graph_store.resetQueryReadSessionInitCount();
+    geode.graph_store.resetGetNodesByLabelsCount();
+    graph_storage_adapter.resetLookupCounters();
+
+    i = 0;
+    while (i < 16) : (i += 1) {
+        var result = try execQuery(
+            testing.allocator,
+            "MERGE (a:User {node_id: 1})-[:KNOWS]->(b:User {node_id: 2})",
+            ctx,
+        );
+        defer result.deinit(testing.allocator);
+    }
+
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getQueryReadSessionInitCount());
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getNodesByLabelsCallCount());
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() >= 16);
+    try testing.expectEqual(@as(usize, 1), geode.graph_store.getCurrentGlobalStore().?.getEdgeCount());
+}
+
+// CANARY: REQ=REQ-PERF-DELETE-006; FEATURE="Execution"; ASPECT=RelationshipDeleteEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+test "GAP-0511: Relationship DELETE resolves endpoints without label scans" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    defer testing.allocator.free(data_dir);
+
+    const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+
+    const catalog = try geode.execution.ensureCatalogInstance(testing.allocator);
+    defer geode.execution.cleanupCatalogInstance();
+
+    const source_id = try seedNodeWithNodeId(store, "User", 1);
+    const target_id = try seedNodeWithNodeId(store, "User", 2);
+    _ = try store.createEdgeWithGraph(source_id, target_id, "KNOWS", "default");
+
+    var prev_noise_node: ?u64 = null;
+    var i: usize = 0;
+    while (i < 32) : (i += 1) {
+        const node_id = try seedNodeWithNodeId(store, "User", @intCast(i + 10));
+        if (prev_noise_node) |prev| {
+            _ = try store.createEdgeWithGraph(prev, node_id, "NOISE", "default");
+        }
+        prev_noise_node = node_id;
+    }
+
+    const ctx = geode.execution.ExecutionContext{
+        .catalog = catalog,
+    };
+
+    geode.graph_store.resetQueryReadSessionInitCount();
+    geode.graph_store.resetGetNodesByLabelsCount();
+    graph_storage_adapter.resetLookupCounters();
+
+    var result = try execQuery(
+        testing.allocator,
+        "MATCH (a:User {node_id: 1})-[r:KNOWS]->(b:User {node_id: 2}) DELETE r",
+        ctx,
+    );
+    defer result.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getQueryReadSessionInitCount());
+    try testing.expectEqual(@as(u64, 0), geode.graph_store.getNodesByLabelsCallCount());
+    try testing.expect(graph_storage_adapter.getExactNodePropertyLookupCount() >= 1);
+    try testing.expectEqual(@as(usize, 31), geode.graph_store.getCurrentGlobalStore().?.getEdgeCount());
 }

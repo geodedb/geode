@@ -15,6 +15,33 @@ fn execQuery(
     return geode.execution.executeProgramWithContext(allocator, &parse_result.program, ctx);
 }
 
+fn seedNodeWithNodeId(
+    store: *geode.graph_store.GraphStore,
+    label: []const u8,
+    external_id: i64,
+) !u64 {
+    const node_id = try store.createNodeWithGraph(&[_][]const u8{label}, "default");
+    try store.setNodeProperty(node_id, "node_id", .{ .Int = external_id });
+    return node_id;
+}
+
+fn seedNoiseChain(
+    store: *geode.graph_store.GraphStore,
+    label: []const u8,
+    external_id_base: i64,
+    edge_count: usize,
+) !void {
+    if (edge_count == 0) return;
+
+    var prev_node = try seedNodeWithNodeId(store, label, external_id_base);
+    var i: usize = 0;
+    while (i < edge_count) : (i += 1) {
+        const next_node = try seedNodeWithNodeId(store, label, external_id_base + @as(i64, @intCast(i)) + 1);
+        _ = try store.createEdgeWithGraph(prev_node, next_node, "NOISE", "default");
+        prev_node = next_node;
+    }
+}
+
 fn meanNs(samples: []const u64) f64 {
     var sum: f128 = 0;
     for (samples) |sample| {
@@ -98,6 +125,89 @@ test "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope" {
             snapshots,
             geode.graph_store.getNodesByLabelsCallCount(),
             graph_storage_adapter.getExactNodePropertyLookupCount(),
+        },
+    );
+}
+
+// CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="Execution"; ASPECT=RelationshipMergeAdjacencyEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope; OWNER=engine; UPDATED=2026-04-08
+test "BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(data_dir);
+
+    const store = try geode.graph_store.initGlobalStore(allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+
+    const catalog = try geode.execution.ensureCatalogInstance(allocator);
+    defer geode.execution.cleanupCatalogInstance();
+
+    _ = try seedNodeWithNodeId(store, "User", 1);
+    _ = try seedNodeWithNodeId(store, "User", 2);
+    try seedNoiseChain(store, "User", 10_000, 64);
+
+    const ctx = geode.execution.ExecutionContext{ .catalog = catalog };
+    var warm_result = try execQuery(allocator, "MERGE (a:User {node_id: 1})-[:KNOWS]->(b:User {node_id: 2})", ctx);
+    defer warm_result.deinit(allocator);
+
+    geode.graph_store.resetQueryReadSessionInitCount();
+    geode.graph_store.resetGetNodesByLabelsCount();
+    graph_storage_adapter.resetLookupCounters();
+
+    const iterations: usize = 48;
+    var low_noise = try allocator.alloc(u64, iterations);
+    defer allocator.free(low_noise);
+    var high_noise = try allocator.alloc(u64, iterations);
+    defer allocator.free(high_noise);
+
+    var i: usize = 0;
+    while (i < iterations) : (i += 1) {
+        const start = std.time.nanoTimestamp();
+        var result = try execQuery(allocator, "MERGE (a:User {node_id: 1})-[:KNOWS]->(b:User {node_id: 2})", ctx);
+        const stop = std.time.nanoTimestamp();
+        defer result.deinit(allocator);
+        low_noise[i] = @intCast(stop - start);
+    }
+
+    try seedNoiseChain(store, "User", 20_000, 4096);
+
+    i = 0;
+    while (i < iterations) : (i += 1) {
+        const start = std.time.nanoTimestamp();
+        var result = try execQuery(allocator, "MERGE (a:User {node_id: 1})-[:KNOWS]->(b:User {node_id: 2})", ctx);
+        const stop = std.time.nanoTimestamp();
+        defer result.deinit(allocator);
+        high_noise[i] = @intCast(stop - start);
+    }
+
+    const snapshots = geode.graph_store.getQueryReadSessionInitCount();
+    const label_scans = geode.graph_store.getNodesByLabelsCallCount();
+    const exact_lookups = graph_storage_adapter.getExactNodePropertyLookupCount();
+    try testing.expectEqual(@as(u64, 0), snapshots);
+    try testing.expectEqual(@as(u64, 0), label_scans);
+    try testing.expect(exact_lookups >= iterations * 2);
+
+    const low_mean = meanNs(low_noise);
+    const high_mean = meanNs(high_noise);
+    const noise_ratio = high_mean / low_mean;
+    try testing.expect(noise_ratio < 3.0);
+
+    const stderr = std.io.getStdErr().writer();
+    try stderr.print(
+        "{{\"benchmark\":\"relationship_merge_adjacency_envelope\",\"low_noise_mean_ns\":{d},\"high_noise_mean_ns\":{d},\"high_low_ratio\":{d:.3},\"snapshots\":{d},\"label_scans\":{d},\"exact_lookups\":{d},\"edge_count\":{d}}}\n",
+        .{
+            @as(u64, @intFromFloat(low_mean)),
+            @as(u64, @intFromFloat(high_mean)),
+            noise_ratio,
+            snapshots,
+            label_scans,
+            exact_lookups,
+            geode.graph_store.getCurrentGlobalStore().?.getEdgeCount(),
         },
     );
 }

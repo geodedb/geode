@@ -29,6 +29,10 @@ const generateUniqueColumnNames = match_operations.generateUniqueColumnNames;
 const Value = value_types.Value;
 const Env = value_types.Env;
 const ExecutionContext = execution.ExecutionContext;
+const EvaluatedPatternProp = struct {
+    key: []const u8,
+    value: Value,
+};
 
 /// Build an Env populated with query parameters from ExecutionContext.
 /// GAP #54: Ensures $param references resolve inside CREATE/MERGE/DELETE property maps.
@@ -40,6 +44,285 @@ fn envFromContext(allocator: std.mem.Allocator, context: ExecutionContext) Env {
         .param_names = context.query_param_names,
         .param_values = context.query_param_values,
     };
+}
+
+fn tenantFilterFromContext(context: ExecutionContext) ?[]const u8 {
+    return if (context.tenant_id) |tid|
+        (if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) null else tid)
+    else
+        null;
+}
+
+fn evaluatePatternProps(allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
+    const pattern_props = props orelse return null;
+
+    const owned = try allocator.alloc(EvaluatedPatternProp, pattern_props.len);
+    errdefer allocator.free(owned);
+    var initialized: usize = 0;
+    errdefer {
+        var idx: usize = 0;
+        while (idx < initialized) : (idx += 1) {
+            property_codec.freeValue(allocator, owned[idx].value);
+        }
+    }
+
+    const pattern_env = envFromContext(allocator, context);
+    for (pattern_props, 0..) |prop, i| {
+        owned[i] = .{
+            .key = prop.key,
+            .value = try eval.evalExpr(allocator, prop.value.*, pattern_env),
+        };
+        initialized += 1;
+    }
+    return owned;
+}
+
+fn freeEvaluatedPatternProps(allocator: std.mem.Allocator, props: ?[]EvaluatedPatternProp) void {
+    if (props) |owned| {
+        for (owned) |prop| {
+            property_codec.freeValue(allocator, prop.value);
+        }
+        allocator.free(owned);
+    }
+}
+
+fn nodeHasAllLabels(node: *const graph_store.Node, labels: []const []const u8) bool {
+    for (labels) |required_label| {
+        var found_label = false;
+        for (node.labels) |actual_label| {
+            if (std.mem.eql(u8, actual_label, required_label)) {
+                found_label = true;
+                break;
+            }
+        }
+        if (!found_label) return false;
+    }
+    return true;
+}
+
+fn nodeMatchesEvaluatedProps(node: *const graph_store.Node, props: ?[]const EvaluatedPatternProp) bool {
+    const evaluated_props = props orelse return true;
+    for (evaluated_props) |prop| {
+        if (node.properties.get(prop.key)) |actual| {
+            if (!valuesEqual(actual, prop.value)) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn nodeMatchesPattern(
+    node: *const graph_store.Node,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    labels: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
+) bool {
+    if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
+    if (tenant_id) |tid| {
+        if (!std.mem.eql(u8, node.tenant_id, tid)) return false;
+    }
+    if (labels.len > 0 and !nodeHasAllLabels(node, labels)) return false;
+    return nodeMatchesEvaluatedProps(node, props);
+}
+
+fn collectCandidateNodeIds(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    labels: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
+) ![]u64 {
+    if (labels.len > 0) {
+        if (props) |evaluated_props| {
+            if (graph_store.getGlobalAdapter()) |adapter| {
+                var best: ?[]u64 = null;
+                errdefer if (best) |ids| allocator.free(ids);
+
+                for (labels) |label| {
+                    for (evaluated_props) |prop| {
+                        const storage_prop = property_codec.valueToPropertyValue(allocator, prop.value) catch continue;
+                        defer property_codec.freePropertyValue(allocator, storage_prop);
+
+                        const candidate_ids = try adapter.getCandidateNodesByLabelAndProperty(
+                            graph_name,
+                            label,
+                            prop.key,
+                            storage_prop,
+                            allocator,
+                        );
+                        if (best) |existing| {
+                            if (candidate_ids.len < existing.len) {
+                                allocator.free(existing);
+                                best = candidate_ids;
+                            } else {
+                                allocator.free(candidate_ids);
+                            }
+                        } else {
+                            best = candidate_ids;
+                        }
+                    }
+                }
+
+                if (best) |ids| return ids;
+            }
+        }
+
+        var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_id);
+        return try candidates.toOwnedSlice(allocator);
+    }
+
+    var candidates = std.ArrayList(u64).empty;
+    errdefer candidates.deinit(allocator);
+
+    var iter = read_store.nodes.iterator();
+    while (iter.next()) |entry| {
+        const node = entry.value_ptr;
+        if (!std.mem.eql(u8, node.graph_name, graph_name)) continue;
+        if (tenant_id) |tid| {
+            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+        }
+        try candidates.append(allocator, entry.key_ptr.*);
+    }
+
+    return try candidates.toOwnedSlice(allocator);
+}
+
+fn findFirstMatchingNodeId(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    labels: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
+) !?u64 {
+    const candidate_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, labels, props);
+    defer allocator.free(candidate_ids);
+
+    for (candidate_ids) |node_id| {
+        if (read_store.nodes.getPtr(node_id)) |node| {
+            if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
+                return node_id;
+            }
+        }
+    }
+    return null;
+}
+
+fn edgeMatchesScopeAndType(
+    edge: *const graph_store.Edge,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    rel_types: []const []const u8,
+) bool {
+    if (!std.mem.eql(u8, edge.graph_name, graph_name)) return false;
+    if (tenant_id) |tid| {
+        if (!std.mem.eql(u8, edge.tenant_id, tid)) return false;
+    }
+    if (rel_types.len == 0) return true;
+    for (rel_types) |rel_type| {
+        if (std.mem.eql(u8, edge.label, rel_type)) return true;
+    }
+    return false;
+}
+
+fn nodeIdMatchesPattern(
+    read_store: *graph_store.GraphStore,
+    node_id: u64,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    labels: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
+) bool {
+    const node = read_store.nodes.getPtr(node_id) orelse return false;
+    return nodeMatchesPattern(node, graph_name, tenant_id, labels, props);
+}
+
+fn findExistingEdgeId(
+    read_store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    source_id: u64,
+    target_id: u64,
+    rel_types: []const []const u8,
+) ?u64 {
+    const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse return null;
+    for (outgoing_ids) |edge_id| {
+        const edge = read_store.edges.getPtr(edge_id) orelse continue;
+        if (edge.to_id != target_id) continue;
+        if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+        return edge_id;
+    }
+    return null;
+}
+
+fn collectMatchingEdgeIds(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    left_labels: []const []const u8,
+    left_props: ?[]const EvaluatedPatternProp,
+    rel_types: []const []const u8,
+    right_labels: []const []const u8,
+    right_props: ?[]const EvaluatedPatternProp,
+) ![]u64 {
+    const left_constrained = left_labels.len > 0 or left_props != null;
+    const right_constrained = right_labels.len > 0 or right_props != null;
+
+    var matches = std.ArrayList(u64).empty;
+    errdefer matches.deinit(allocator);
+
+    if (left_constrained) {
+        const candidate_left_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, left_labels, left_props);
+        defer allocator.free(candidate_left_ids);
+
+        for (candidate_left_ids) |source_id| {
+            if (!nodeIdMatchesPattern(read_store, source_id, graph_name, tenant_id, left_labels, left_props)) continue;
+            const outgoing_ids = read_store.getOutgoingEdgeIds(source_id) orelse continue;
+            for (outgoing_ids) |edge_id| {
+                const edge = read_store.edges.getPtr(edge_id) orelse continue;
+                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+                if (edge.from_id != source_id) continue;
+                if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
+                try matches.append(allocator, edge_id);
+            }
+        }
+
+        return try matches.toOwnedSlice(allocator);
+    }
+
+    if (right_constrained) {
+        const candidate_right_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, right_labels, right_props);
+        defer allocator.free(candidate_right_ids);
+
+        for (candidate_right_ids) |target_id| {
+            if (!nodeIdMatchesPattern(read_store, target_id, graph_name, tenant_id, right_labels, right_props)) continue;
+            const incoming_ids = read_store.getIncomingEdgeIds(target_id) orelse continue;
+            for (incoming_ids) |edge_id| {
+                const edge = read_store.edges.getPtr(edge_id) orelse continue;
+                if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+                if (edge.to_id != target_id) continue;
+                if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
+                try matches.append(allocator, edge_id);
+            }
+        }
+
+        return try matches.toOwnedSlice(allocator);
+    }
+
+    var edge_iter = read_store.edges.iterator();
+    while (edge_iter.next()) |edge_entry| {
+        const edge = edge_entry.value_ptr;
+        if (!edgeMatchesScopeAndType(edge, graph_name, tenant_id, rel_types)) continue;
+        if (!nodeIdMatchesPattern(read_store, edge.from_id, graph_name, tenant_id, left_labels, left_props)) continue;
+        if (!nodeIdMatchesPattern(read_store, edge.to_id, graph_name, tenant_id, right_labels, right_props)) continue;
+        try matches.append(allocator, edge_entry.key_ptr.*);
+    }
+
+    return try matches.toOwnedSlice(allocator);
 }
 
 // CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-02-07
@@ -199,9 +482,34 @@ fn checkUniqueViolation(
     property: []const u8,
     value: Value,
 ) bool {
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        const storage_prop = property_codec.valueToPropertyValue(store.allocator, value) catch {
+            return false;
+        };
+        defer property_codec.freePropertyValue(store.allocator, storage_prop);
+
+        const candidate_ids = adapter.getCandidateNodesByLabelAndProperty(
+            "default",
+            label,
+            property,
+            storage_prop,
+            store.allocator,
+        ) catch {
+            return false;
+        };
+        defer store.allocator.free(candidate_ids);
+
+        for (candidate_ids) |node_id| {
+            const existing_value = store.getNodePropertyValue(node_id, property) catch continue;
+            if (valuesEqual(existing_value, value)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Get all nodes with this label
-    const nodes = store.getNodesByLabel(label) catch return false;
-    defer store.allocator.free(nodes);
+    const nodes = store.getNodesByLabel("default", label) orelse return false;
 
     // Check if any node has same property value
     for (nodes) |node_id| {
@@ -1473,11 +1781,6 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
-    const EvaluatedMergeProp = struct {
-        key: []const u8,
-        value: Value,
-    };
-
     const store = graph_store.getWritableGlobalStore(allocator);
     // GAP-0511: MERGE already executes under the graph write lock, so an
     // adapter-backed QueryReadSession would clone the entire graph once per
@@ -1487,10 +1790,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     const target_graph = current_graph orelse "default";
     // GAP-0509: Extract tenant filter from context for getNodesByLabels filtering.
     // Null means no filtering (default tenant or unset).
-    const filter_tenant: ?[]const u8 = if (context.tenant_id) |tid|
-        (if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) null else tid)
-    else
-        null;
+    const filter_tenant = tenantFilterFromContext(context);
 
     // MERGE is like a CREATE but checks if the pattern already exists
     // For now, implement simplified version for single nodes
@@ -1499,161 +1799,18 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
         // Look for existing node matching the pattern (filtered by graph)
         var found_node: ?*graph_store.Node = null;
-        const merge_env = envFromContext(allocator, context);
-        const evaluated_props = if (node_pattern.props) |props| blk: {
-            const owned = try allocator.alloc(EvaluatedMergeProp, props.len);
-            errdefer allocator.free(owned);
-            var initialized: usize = 0;
-            errdefer {
-                var idx: usize = 0;
-                while (idx < initialized) : (idx += 1) {
-                    property_codec.freeValue(allocator, owned[idx].value);
-                }
-            }
+        const evaluated_props = try evaluatePatternProps(allocator, node_pattern.props, context);
+        defer freeEvaluatedPatternProps(allocator, evaluated_props);
 
-            for (props, 0..) |prop, i| {
-                owned[i] = .{
-                    .key = prop.key,
-                    .value = try eval.evalExpr(allocator, prop.value.*, merge_env),
-                };
-                initialized += 1;
-            }
-            break :blk owned;
-        } else null;
-        defer {
-            if (evaluated_props) |props| {
-                for (props) |prop| {
-                    property_codec.freeValue(allocator, prop.value);
-                }
-                allocator.free(props);
-            }
-        }
-
-        // Issue #391: Use label index for O(1) lookup instead of O(n) full table scan
-        if (node_pattern.labels.len > 0) {
-            var exact_candidate_ids: ?[]u64 = null;
-            defer {
-                if (exact_candidate_ids) |ids| allocator.free(ids);
-            }
-
-            if (evaluated_props) |props| {
-                if (graph_store.getGlobalAdapter()) |adapter| {
-                    for (node_pattern.labels) |label| {
-                        for (props) |prop| {
-                            const storage_prop = property_codec.valueToPropertyValue(allocator, prop.value) catch continue;
-                            defer property_codec.freePropertyValue(allocator, storage_prop);
-
-                            const candidate_ids = try adapter.getCandidateNodesByLabelAndProperty(
-                                target_graph,
-                                label,
-                                prop.key,
-                                storage_prop,
-                                allocator,
-                            );
-                            if (exact_candidate_ids) |existing| {
-                                if (candidate_ids.len < existing.len) {
-                                    allocator.free(existing);
-                                    exact_candidate_ids = candidate_ids;
-                                } else {
-                                    allocator.free(candidate_ids);
-                                }
-                            } else {
-                                exact_candidate_ids = candidate_ids;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (exact_candidate_ids) |candidate_ids| {
-                for (candidate_ids) |node_id| {
-                    if (read_store.nodes.getPtr(node_id)) |node| {
-                        if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
-                        if (filter_tenant) |tid| {
-                            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                        }
-
-                        var has_all_labels = true;
-                        for (node_pattern.labels) |required_label| {
-                            var found_label = false;
-                            for (node.labels) |actual_label| {
-                                if (std.mem.eql(u8, actual_label, required_label)) {
-                                    found_label = true;
-                                    break;
-                                }
-                            }
-                            if (!found_label) {
-                                has_all_labels = false;
-                                break;
-                            }
-                        }
-                        if (!has_all_labels) continue;
-
-                        var props_match = true;
-                        if (evaluated_props) |props| {
-                            for (props) |prop| {
-                                if (node.properties.get(prop.key)) |actual| {
-                                    if (!valuesEqual(actual, prop.value)) {
-                                        props_match = false;
-                                        break;
-                                    }
-                                } else {
-                                    props_match = false;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if (props_match) {
-                            found_node = node;
-                            break;
-                        }
-                    }
-                }
-            } else {
-                // No adapter-backed exact candidate path was available, so
-                // fall back to the compatibility-store label postings.
-                var candidates = try read_store.getNodesByLabels(allocator, target_graph, node_pattern.labels, filter_tenant);
-                defer candidates.deinit(allocator);
-
-                for (candidates.items) |node_id| {
-                    if (read_store.nodes.getPtr(node_id)) |node| {
-                        if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
-
-                        if (evaluated_props) |props| {
-                            var props_match = true;
-                            for (props) |prop| {
-                                if (node.properties.get(prop.key)) |actual| {
-                                    if (!valuesEqual(actual, prop.value)) {
-                                        props_match = false;
-                                        break;
-                                    }
-                                } else {
-                                    props_match = false;
-                                    break;
-                                }
-                            }
-                            if (props_match) {
-                                found_node = node;
-                                break;
-                            }
-                        } else {
-                            found_node = node;
-                            break;
-                        }
-                    }
-                }
-            }
-        } else {
-            // No labels specified - fall back to full scan (rare case)
-            var node_iter = read_store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-                if (std.mem.eql(u8, node.graph_name, target_graph)) {
-                    found_node = node;
-                    break;
-                }
-            }
+        if (try findFirstMatchingNodeId(
+            allocator,
+            read_store,
+            target_graph,
+            filter_tenant,
+            node_pattern.labels,
+            evaluated_props,
+        )) |node_id| {
+            found_node = read_store.nodes.getPtr(node_id);
         }
 
         var node_id: u64 = undefined;
@@ -1838,40 +1995,50 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
             }
         }
 
-        // Fallback: find nodes by labels
-        if (source_id == null and hop.left.labels.len > 0) {
-            var candidates = try read_store.getNodesByLabels(allocator, target_graph, hop.left.labels, filter_tenant);
-            defer candidates.deinit(allocator);
-            if (candidates.items.len > 0) source_id = candidates.items[0];
+        // Fallback: resolve endpoints from inline label/property patterns.
+        var left_props_failed = false;
+        const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch blk: {
+            left_props_failed = true;
+            break :blk null;
+        };
+        defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
+        var right_props_failed = false;
+        const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch blk: {
+            right_props_failed = true;
+            break :blk null;
+        };
+        defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
+
+        if (source_id == null and !left_props_failed and (hop.left.labels.len > 0 or evaluated_left_props != null)) {
+            source_id = try findFirstMatchingNodeId(
+                allocator,
+                read_store,
+                target_graph,
+                filter_tenant,
+                hop.left.labels,
+                evaluated_left_props,
+            );
         }
-        if (target_id == null and hop.right.labels.len > 0) {
-            var candidates = try read_store.getNodesByLabels(allocator, target_graph, hop.right.labels, filter_tenant);
-            defer candidates.deinit(allocator);
-            if (candidates.items.len > 0) target_id = candidates.items[0];
+        if (target_id == null and !right_props_failed and (hop.right.labels.len > 0 or evaluated_right_props != null)) {
+            target_id = try findFirstMatchingNodeId(
+                allocator,
+                read_store,
+                target_graph,
+                filter_tenant,
+                hop.right.labels,
+                evaluated_right_props,
+            );
         }
 
         if (source_id != null and target_id != null) {
-            // Check if edge already exists between these nodes with matching type
-            var found_edge = false;
-            var edge_iter = read_store.edges.iterator();
-            while (edge_iter.next()) |edge_entry| {
-                const edge = edge_entry.value_ptr;
-                if (edge.from_id == source_id.? and edge.to_id == target_id.? and
-                    std.mem.eql(u8, edge.graph_name, target_graph))
-                {
-                    if (rel_types.len > 0) {
-                        for (rel_types) |rt| {
-                            if (std.mem.eql(u8, edge.label, rt)) {
-                                found_edge = true;
-                                break;
-                            }
-                        }
-                    } else {
-                        found_edge = true;
-                    }
-                    if (found_edge) break;
-                }
-            }
+            const found_edge = findExistingEdgeId(
+                read_store,
+                target_graph,
+                filter_tenant,
+                source_id.?,
+                target_id.?,
+                rel_types,
+            ) != null;
 
             // If no matching edge found, create one
             if (!found_edge) {
@@ -1895,11 +2062,13 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 // CANARY: REQ=REQ-MULTI-GRAPH-DELETE-001; FEATURE="MultiGraphIsolation"; ASPECT=DeleteGraphFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-24
 pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
     const store = graph_store.getWritableGlobalStore(allocator);
-    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
-    defer if (read_session) |*session| session.deinit();
-    const read_store: *graph_store.GraphStore = if (read_session) |*session| session.store() else store;
+    // GAP-0511: DELETE stages IDs before mutating, so cloning a QueryReadSession
+    // adds O(total graph size) overhead without improving correctness under the
+    // graph write lock.
+    const read_store: *graph_store.GraphStore = store;
     // Filter by graph - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
+    const filter_tenant = tenantFilterFromContext(context);
 
     // Track deleted node count
     var deleted_count: usize = 0;
@@ -1983,60 +2152,35 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 }
             }
 
+            var evaluated_match_props_failed = false;
+            const evaluated_match_props = evaluatePatternProps(allocator, match_props, context) catch blk: {
+                evaluated_match_props_failed = true;
+                break :blk null;
+            };
+            defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
+
             // Collect nodes to delete (need to collect first to avoid iterator invalidation)
             var nodes_to_delete = try std.ArrayList(u64).initCapacity(allocator, 0);
             defer nodes_to_delete.deinit(allocator);
 
-            var iter = read_store.nodes.iterator();
-            while (iter.next()) |entry| {
-                const node = entry.value_ptr;
+            const candidate_ids = if (evaluated_match_props_failed)
+                try allocator.alloc(u64, 0)
+            else
+                try collectCandidateNodeIds(
+                    allocator,
+                    read_store,
+                    filter_graph,
+                    filter_tenant,
+                    match_labels,
+                    evaluated_match_props,
+                );
+            defer allocator.free(candidate_ids);
 
-                // CRITICAL FIX: Filter by graph_name to ensure graph isolation
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            for (candidate_ids) |node_id| {
+                const node = read_store.nodes.getPtr(node_id) orelse continue;
+                if (!nodeMatchesPattern(node, filter_graph, filter_tenant, match_labels, evaluated_match_props)) continue;
 
                 var should_delete = true;
-
-                // Filter by labels if specified
-                if (match_labels.len > 0) {
-                    var has_all_labels = true;
-                    for (match_labels) |required_label| {
-                        var found = false;
-                        for (node.labels) |node_label| {
-                            if (std.mem.eql(u8, required_label, node_label)) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found) {
-                            has_all_labels = false;
-                            break;
-                        }
-                    }
-                    if (!has_all_labels) should_delete = false;
-                }
-
-                // CANARY: REQ=REQ-DELETE-PROPS-002; FEATURE="DeletePropertyFilter"; ASPECT=PropertyEvaluation; STATUS=TESTED; TEST=geodetestlab/specs/merge_performance_january_2026.yml; OWNER=crud_operations; UPDATED=2026-02-02
-                // Filter by inline properties if specified
-                if (should_delete) {
-                    if (match_props) |props| {
-                        for (props) |prop| {
-                            if (node.properties.get(prop.key)) |node_prop_val| {
-                                const delete_env = envFromContext(allocator, context);
-                                const prop_val = eval.evalExpr(allocator, prop.value.*, delete_env) catch {
-                                    should_delete = false;
-                                    break;
-                                };
-                                if (!valuesEqual(node_prop_val, prop_val)) {
-                                    should_delete = false;
-                                    break;
-                                }
-                            } else {
-                                should_delete = false;
-                                break;
-                            }
-                        }
-                    }
-                }
 
                 // CANARY: REQ=REQ-DELETE-WHERE-001; FEATURE="DeleteWhereEvaluation"; ASPECT=WhereClause; STATUS=TESTED; TEST=geodetestlab/specs/gql_data_modification_comprehensive.yml; OWNER=crud_operations; UPDATED=2026-01-09
                 if (d.where_clause) |where_expr| {
@@ -2050,9 +2194,11 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                             }
                         }
                         const names = try allocator.alloc([]const u8, 1);
+                        defer allocator.free(names);
                         names[0] = var_name;
                         const values = try allocator.alloc(Value, 1);
-                        values[0] = Value{ .Node = entry.value_ptr };
+                        defer allocator.free(values);
+                        values[0] = Value{ .Node = node };
                         const env = Env{
                             .allocator = allocator,
                             .names = names,
@@ -2071,7 +2217,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                 }
 
                 if (should_delete) {
-                    try nodes_to_delete.append(allocator, entry.key_ptr.*);
+                    try nodes_to_delete.append(allocator, node_id);
                 }
             }
 
@@ -2134,76 +2280,38 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
                     const rel_name = hop.rel.name orelse continue;
                     if (!delete_edge_vars.contains(rel_name)) continue;
 
+                    var left_props_failed = false;
+                    const evaluated_left_props = evaluatePatternProps(allocator, hop.left.props, context) catch blk: {
+                        left_props_failed = true;
+                        break :blk null;
+                    };
+                    defer freeEvaluatedPatternProps(allocator, evaluated_left_props);
+
+                    var right_props_failed = false;
+                    const evaluated_right_props = evaluatePatternProps(allocator, hop.right.props, context) catch blk: {
+                        right_props_failed = true;
+                        break :blk null;
+                    };
+                    defer freeEvaluatedPatternProps(allocator, evaluated_right_props);
+
+                    if (left_props_failed or right_props_failed) continue;
+
                     // Find edges matching this relationship pattern
-                    var edges_to_delete = std.ArrayList(u64).empty;
-                    defer edges_to_delete.deinit(allocator);
-
-                    var edge_iter = read_store.edges.iterator();
-                    while (edge_iter.next()) |edge_entry| {
-                        const edge = edge_entry.value_ptr;
-
-                        // Filter by graph
-                        if (!std.mem.eql(u8, edge.graph_name, filter_graph)) continue;
-
-                        // Filter by relationship type if specified
-                        if (hop.rel.types.len > 0) {
-                            var type_matches = false;
-                            for (hop.rel.types) |rel_type| {
-                                if (std.mem.eql(u8, edge.label, rel_type)) {
-                                    type_matches = true;
-                                    break;
-                                }
-                            }
-                            if (!type_matches) continue;
-                        }
-
-                        // Filter by source node labels
-                        if (hop.left.labels.len > 0) {
-                            if (read_store.nodes.get(edge.from_id)) |from_node| {
-                                var has_labels = true;
-                                for (hop.left.labels) |req_label| {
-                                    var found = false;
-                                    for (from_node.labels) |node_label| {
-                                        if (std.mem.eql(u8, req_label, node_label)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!found) {
-                                        has_labels = false;
-                                        break;
-                                    }
-                                }
-                                if (!has_labels) continue;
-                            } else continue;
-                        }
-
-                        // Filter by target node labels
-                        if (hop.right.labels.len > 0) {
-                            if (read_store.nodes.get(edge.to_id)) |to_node| {
-                                var has_labels = true;
-                                for (hop.right.labels) |req_label| {
-                                    var found = false;
-                                    for (to_node.labels) |node_label| {
-                                        if (std.mem.eql(u8, req_label, node_label)) {
-                                            found = true;
-                                            break;
-                                        }
-                                    }
-                                    if (!found) {
-                                        has_labels = false;
-                                        break;
-                                    }
-                                }
-                                if (!has_labels) continue;
-                            } else continue;
-                        }
-
-                        try edges_to_delete.append(allocator, edge_entry.key_ptr.*);
-                    }
+                    const edges_to_delete = try collectMatchingEdgeIds(
+                        allocator,
+                        read_store,
+                        filter_graph,
+                        filter_tenant,
+                        hop.left.labels,
+                        evaluated_left_props,
+                        hop.rel.types,
+                        hop.right.labels,
+                        evaluated_right_props,
+                    );
+                    defer allocator.free(edges_to_delete);
 
                     // Delete the collected edges (with adjacency index cleanup)
-                    for (edges_to_delete.items) |edge_id| {
+                    for (edges_to_delete) |edge_id| {
                         if (store.getEdgePtr(edge_id) != null) {
                             store.deleteEdge(edge_id);
                         }
