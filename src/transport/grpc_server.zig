@@ -16,6 +16,7 @@ const query_traits = geode.query_traits;
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
 const txn_undo_log = geode.txn_undo_log;
+const index_manager = geode.index_manager;
 const user_mgmt = geode.user_management;
 const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
@@ -1904,7 +1905,16 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             var lock_released = false;
             defer {
                 if (!lock_released) {
-                    if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                    if (graph_lock_handle) |h| {
+                        if (pending_index_rebuilds.count() > 0) {
+                            if (index_manager.getGlobalIndexManager()) |manager| {
+                                const global_store = graph_store.getGlobalStore(allocator);
+                                var iter = pending_index_rebuilds.keyIterator();
+                                while (iter.next()) |k| manager.rebuildAdvancedIndex(global_store, k.*) catch {};
+                            }
+                        }
+                        graph_store.releaseGraphLock(h);
+                    }
                 }
             }
 
@@ -1968,8 +1978,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                             const profile_is_dirty = store_ptr.isDirty();
 
                             if (needs_store_lock) {
-                                if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
-                                lock_released = true;
+                                if (graph_lock_handle) |h| {
+                                    if (pending_index_rebuilds.count() > 0) {
+                                        if (index_manager.getGlobalIndexManager()) |manager| {
+                                            const idx_store = graph_store.getGlobalStore(allocator);
+                                            var iter = pending_index_rebuilds.keyIterator();
+                                            while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                        }
+                                    }
+                                    graph_store.releaseGraphLock(h);
+                                    lock_released = true;
+                                }
                             }
 
                             if (rls_filter.getGlobalRLSFilterEngine()) |rls_engine| {
@@ -2022,8 +2041,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
-                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
-                        lock_released = true;
+                        if (graph_lock_handle) |h| {
+                            if (pending_index_rebuilds.count() > 0) {
+                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                    const idx_store = graph_store.getGlobalStore(allocator);
+                                    var iter = pending_index_rebuilds.keyIterator();
+                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                }
+                            }
+                            graph_store.releaseGraphLock(h);
+                            lock_released = true;
+                        }
                     }
 
                     for (flags.items) |flag| {
@@ -2070,8 +2098,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     errdefer active_stream.deinit();
 
                                     if (needs_store_lock) {
-                                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
-                                        lock_released = true;
+                                        if (graph_lock_handle) |h| {
+                                            if (pending_index_rebuilds.count() > 0) {
+                                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                                    const idx_store = graph_store.getGlobalStore(allocator);
+                                                    var iter = pending_index_rebuilds.keyIterator();
+                                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                                }
+                                            }
+                                            graph_store.releaseGraphLock(h);
+                                            lock_released = true;
+                                        }
                                     }
 
                                     const status = try proto_util.buildStatus(allocator, "00000", active_stream.flags);
@@ -2118,8 +2155,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
-                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
-                        lock_released = true;
+                        if (graph_lock_handle) |h| {
+                            if (pending_index_rebuilds.count() > 0) {
+                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                    const idx_store = graph_store.getGlobalStore(allocator);
+                                    var iter = pending_index_rebuilds.keyIterator();
+                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                }
+                            }
+                            graph_store.releaseGraphLock(h);
+                            lock_released = true;
+                        }
                     }
 
                     for (flags.items) |flag| {

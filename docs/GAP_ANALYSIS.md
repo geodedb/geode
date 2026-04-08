@@ -1,12 +1,12 @@
 # Gap Analysis
 
-Last updated: 2026-04-01
+Last updated: 2026-04-07
 Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)**
 
 ## Summary
 
-- **Total open gaps:** 3
-- **Critical:** 1 (GAP-0256 blocked)
+- **Total open gaps:** 4
+- **Critical:** 2 (GAP-0256 blocked, GAP-0511)
 - **High:** 0
 - **Medium:** 0
 - **Low:** 0
@@ -1763,3 +1763,128 @@ This cascades: a single "bad connection" event triggers 200+ consecutive "transa
 - Large batch MERGE workloads (10k+ statements) are unreliable over QUIC
 - Parallel workers amplify the failure: one bad connection poisons the entire pool
 - The `updateSnapshot` re-MERGE (run at end of topology collection) acts as a recovery mechanism since MERGE is idempotent, but incremental flushes during collection are lost
+
+---
+
+### GAP-0511: Sequential MERGE transactions hang — index rebuild under global write lock causes server-wide stall
+
+- **Category:** Performance / Correctness / Transaction Engine
+- **Severity:** Critical (P0)
+- **Component:** `execution/property_mutation.zig`, `server/quic_connection_handler.zig`, `index_manager.zig`
+- **Reporter:** devnw.dev/msft seed command (bulk JSONL → Geode ingestion)
+- **Date:** 2026-04-07
+- **Server version:** v0.2.36
+- **Driver version:** `geodedb.com/geode v0.1.16`
+
+#### Symptoms
+
+When executing sequential transactions of MERGE statements on the same connection, the second transaction hangs on statement 1 or 2 and never returns. The server becomes completely unresponsive to all connections — even `RETURN 1` queries time out. The only recovery is a server restart.
+
+Server logs show `Error handling QUIC connection (async) error=WouldBlock` during sustained MERGE workloads, followed by complete unresponsiveness.
+
+#### Reproduction
+
+Minimal reproducer using the Go driver:
+
+```go
+db, _ := sql.Open("geode", "quic://localhost:3141/mydb?user=geode&pass=secret&ca=server.crt")
+db.SetMaxOpenConns(1)
+ctx := context.Background()
+
+// TX1: 10 MERGEs — succeeds (40-80ms per statement)
+tx1, _ := db.BeginTx(ctx, nil)
+for i := range 10 {
+    tx1.ExecContext(ctx, "MERGE (n:User {node_id: ?}) SET n.display_name = ?",
+        fmt.Sprintf("user_%d", i), fmt.Sprintf("User %d", i))
+}
+tx1.Commit() // OK
+
+// TX2: hangs on statement 1 — server never responds
+tx2, _ := db.BeginTx(ctx, nil)
+tx2.ExecContext(ctx, "MERGE (n:User {node_id: ?}) SET n.display_name = ?",
+    "user_10", "User 10")
+// ^ This statement works (79ms)
+tx2.ExecContext(ctx, "MERGE (n:User {node_id: ?}) SET n.display_name = ?",
+    "user_11", "User 11")
+// ^ HANGS FOREVER — server unresponsive, all connections blocked
+```
+
+**Observations from test runs:**
+
+| Run | TX1 statements | TX1 result | TX2 stmt 0 | TX2 stmt 1 | TX2 stmt 2 |
+|-----|---------------|------------|------------|------------|------------|
+| 1   | 5 MERGEs      | OK (80ms each) | OK (79ms) | OK | OK (all 5 succeed) |
+| 2   | 10 MERGEs     | OK (40-80ms each) | OK (79ms) | **HUNG 5min** | — |
+| 3   | 100 MERGEs    | stmt 3 hung (180s timeout) | — | — | — |
+
+The hang threshold appears to be around 10 MERGE statements per transaction. Below that, sequential transactions succeed. At or above that, the server stalls.
+
+#### Root Cause Analysis
+
+**Primary cause: Full index rebuild during MERGE under global write lock**
+
+1. `property_mutation.zig:211` — Every `setNodePropertyFromValue()` call triggers `rebuildAdvancedIndexesForProperty()`, which performs a **full scan and rebuild** of all matching advanced property indexes.
+
+2. `quic_connection_handler.zig:2071-2075` — MERGE acquires a **global graph write lock** before executing the statement program. The lock is held across ALL statements in the batch.
+
+3. `index_manager.zig:1187-1206` — `rebuildAdvancedIndexesForProperty()` iterates the entire advanced index collection and calls `rebuildAdvancedIndex()` for each match. `rebuildAdvancedIndex()` at line 1365-1379 iterates the entire `nodes` HashMap.
+
+4. With 10 MERGE statements, each setting ~2 properties (node_id, display_name), that's 20 full index rebuild operations all under the write lock. As the node count grows within the transaction, each rebuild takes longer.
+
+5. When the first transaction commits (at `quic_connection_handler.zig:2606-2611`), the commit does NOT acquire the write lock but transitions `state.in_txn = false` and calls `commit()`. The persistence background thread may then compete for the write lock.
+
+6. The second transaction's MERGE attempts to acquire the write lock but is blocked by either:
+   - The persistence thread holding the lock while flushing committed data
+   - A stale lock state left by the first transaction's commit path
+   - The index rebuild from the first transaction still running in a background context
+
+**Secondary cause: QUIC WouldBlock cascade**
+
+The QUIC connection handler's buffered reader (`quic_connection_handler.zig:223-238`) retries on `WouldBlock` with exponential backoff. When the backend is blocked on lock contention, the QUIC stream stalls, causing `WouldBlock` errors that cascade to all connections — making the entire server unresponsive.
+
+#### Evidence
+
+**Client-side timing (from test harness):**
+
+```
+=== TX: 10 MERGEs ===
+  tx10 stmt 0: 43ms
+  tx10 stmt 1: 41ms   ← linear scaling
+  tx10 stmt 2: 41ms
+  ...
+  tx10 stmt 8: 79ms   ← degrading as index grows
+  tx10 stmt 9: 79ms
+  committed 10 in 532ms
+
+=== TX: 10 more MERGEs ===
+  tx10b stmt 0: 79ms  ← first statement works
+  tx10b stmt 1: FAILED after 4m59s: driver: bad connection  ← HUNG
+```
+
+**Server-side logs (from previous runs with higher concurrency):**
+
+```
+ERROR geode.server Error handling QUIC connection (async) error=WouldBlock
+ERROR geode.server Error handling QUIC connection (async) error=WouldBlock
+ERROR geode.server Error handling QUIC connection (async) error=WouldBlock
+ERROR geode.server Protobuf read error error=Timeout
+```
+
+#### Impact
+
+- **Bulk data ingestion is broken:** The `msft-graph seed` command (loading 12k+ topology nodes from JSONL) cannot complete — the server stalls after the first batch of MERGE statements.
+- **Server becomes fully unresponsive:** Not just the offending connection — ALL connections are blocked, requiring a restart.
+- **No workaround at the client level:** Reducing concurrency to 1 worker, adding throttling between chunks, and increasing timeouts all fail because the server itself deadlocks.
+- **Related issues:** GAP-0272 (bulk MERGE via stdin silent failure) and GAP-0510 (stale server-side transactions after QUIC failure) are likely symptoms of the same underlying lock contention.
+
+#### Recommended Fix
+
+1. **Defer index rebuild to COMMIT time (highest impact):** Accumulate property changes during transaction execution and perform a single batch index rebuild at COMMIT, rather than rebuilding after every individual property mutation. This eliminates N*M index rebuilds (N statements × M properties) within the write lock critical section.
+
+2. **Per-index granular locking:** Replace the global graph write lock with per-index read/write locks so that index rebuilds don't block unrelated operations.
+
+3. **Incremental index update instead of full rebuild:** `rebuildAdvancedIndexesForProperty()` should update only the affected entries (insert/update the changed node) rather than scanning the entire node collection.
+
+4. **COMMIT must acquire write lock:** The commit path at `quic_connection_handler.zig:2606-2611` should hold the write lock to prevent races with the persistence thread.
+
+5. **WouldBlock resilience:** The QUIC connection handler should distinguish between "backend busy" WouldBlock (retryable) and "server deadlocked" (should abort and return error to client).

@@ -185,6 +185,9 @@ const _test_gql_conformance_rq = @import("test_gql_conformance_rq.zig");
 // Placeholder aggregate test to ensure file compiles and geode linkage is valid.
 // Additional per-feature aggregator logic can be placed here later.
 
+// GAP-0511 fix test
+const _gap_0511 = @import("test_gap_0511_regression.zig");
+
 // Existing placeholder
 const _e2e_sort_spill_placeholder = @import("e2e_protocol_sort_spill.zig");
 
