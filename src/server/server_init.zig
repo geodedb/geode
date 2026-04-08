@@ -104,6 +104,9 @@ pub const InitContext = struct {
     }
 
     pub fn deinit(self: *InitContext) void {
+        // Clean up index catalog (selectivity estimator + stats map)
+        index_catalog.deinitIndexCatalog();
+
         if (self.shared_ast_cache_storage) |*cache| {
             cache.deinit();
             self.shared_ast_cache = null;

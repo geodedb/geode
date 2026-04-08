@@ -494,7 +494,7 @@ pub const SecurityManager = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // release user map strings
+        // Release user map strings
         var it = self.users.iterator();
         while (it.next()) |e| {
             self.allocator.free(e.value_ptr.username);
@@ -505,6 +505,22 @@ pub const SecurityManager = struct {
             }
         }
         self.users.deinit();
+
+        // Release role map strings and ArrayLists
+        var role_it = self.roles.iterator();
+        while (role_it.next()) |e| {
+            self.allocator.free(e.value_ptr.name);
+            self.allocator.free(e.value_ptr.description);
+            e.value_ptr.permissions.deinit(self.allocator);
+        }
+        self.roles.deinit();
+
+        // Release RBAC user-role assignment ArrayLists
+        var rbac_it = self.rbac.user_roles.iterator();
+        while (rbac_it.next()) |e| {
+            e.value_ptr.deinit(self.allocator);
+        }
+        self.rbac.user_roles.deinit();
     }
     // ---- MFA Policies ----
 

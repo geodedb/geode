@@ -139,8 +139,9 @@ pub fn deinitIndexCatalog() void {
     if (!g_index_catalog_inited) return;
 
     if (g_selectivity_estimator) |est| {
+        const alloc = est.allocator;
         est.deinit();
-        // Note: allocator.destroy() should be called by the owning code
+        alloc.destroy(est);
     }
 
     g_index_catalog_map.deinit();
