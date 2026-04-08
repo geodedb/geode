@@ -152,7 +152,9 @@ pub const Signature = struct {
                 const pubkey_bytes = self.public_key.?[0..32].*;
 
                 // Use Zig stdlib Ed25519 verification
-                std.crypto.sign.Ed25519.verify(sig_bytes, data, pubkey_bytes) catch {
+                const sig = std.crypto.sign.Ed25519.Signature.fromBytes(sig_bytes);
+                const pk = std.crypto.sign.Ed25519.PublicKey.fromBytes(pubkey_bytes) catch return false;
+                sig.verify(data, pk) catch {
                     return false; // Verification failed
                 };
                 return true;
@@ -277,13 +279,15 @@ pub const KeyPair = struct {
                 // Generate Ed25519 key pair using stdlib's cryptographically secure implementation
                 var seed: [32]u8 = undefined;
                 std.crypto.random.bytes(&seed);
-                const key_pair = try std.crypto.sign.Ed25519.KeyPair.create(seed);
+                const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
 
                 // Allocate and copy keys
                 const private_key = try allocator.alloc(u8, 32);
                 const public_key = try allocator.alloc(u8, 32);
-                @memcpy(private_key, &key_pair.secret_key);
-                @memcpy(public_key, &key_pair.public_key);
+                const seed_bytes = key_pair.secret_key.seed();
+                @memcpy(private_key, &seed_bytes);
+                const pk_bytes = key_pair.public_key.toBytes();
+                @memcpy(public_key, &pk_bytes);
 
                 return KeyPair{
                     .alg = alg,
