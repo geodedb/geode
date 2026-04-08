@@ -143,10 +143,12 @@ fn rebuildAdvancedIndexesForProperty(
     manager.rebuildAdvancedIndexesForProperty(store, label, property) catch {};
 }
 
+/// GAP-0511: Same optimization as rebuildAdvancedIndexesForProperty — only
+/// rebuild when an advanced index is registered for this label.
 fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
-    if (index_manager.getGlobalIndexManager()) |manager| {
-        manager.rebuildAdvancedIndexesForLabel(store, label) catch {};
-    }
+    const manager = index_manager.getGlobalIndexManager() orelse return;
+    if (!manager.hasAdvancedIndexForLabel(label)) return;
+    manager.rebuildAdvancedIndexesForLabel(store, label) catch {};
 }
 
 pub fn coercePropertyValue(allocator: std.mem.Allocator, value: Value) !graph_store.PropertyValue {

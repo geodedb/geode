@@ -1197,6 +1197,15 @@ pub const IndexManager = struct {
         return false;
     }
 
+    /// O(1) check whether any advanced index is registered for a label.
+    pub fn hasAdvancedIndexForLabel(self: *IndexManager, label: []const u8) bool {
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.*.label, label)) return true;
+        }
+        return false;
+    }
+
     pub fn rebuildAdvancedIndexesForProperty(
         self: *IndexManager,
         store: *graph_store.GraphStore,
