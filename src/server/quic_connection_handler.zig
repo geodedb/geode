@@ -463,6 +463,10 @@ pub const SharedConnState = struct {
     /// Handler threads signal on stream close; main thread waits instead of spinning.
     streams_mu: std.Thread.Mutex = .{},
     streams_cv: std.Thread.Condition = .{},
+    /// Active QUIC stream IDs currently owned by handlers. The QUIC library may
+    /// re-queue a stream ID whenever more data arrives, so the acceptor must not
+    /// treat every accept notification as a new handler-worthy stream.
+    active_stream_ids: std.ArrayList(u64) = .empty,
 
     /// Pending result transferred from a stream handler that exited before the
     /// client's PULL arrived.  The QUIC library can report a spurious stream
@@ -497,7 +501,32 @@ pub const SharedConnState = struct {
         if (self.pending_node_scan_stream) |*s| s.deinit();
         for (self.pending_result_order_keys) |k| self.allocator.free(k);
         if (self.pending_result_order_keys.len > 0) self.allocator.free(self.pending_result_order_keys);
+        self.active_stream_ids.deinit(self.allocator);
         // peer_ip freed by the connection handler's defer
+    }
+
+    pub fn registerActiveStream(self: *SharedConnState, stream_id: u64) !bool {
+        self.streams_mu.lock();
+        defer self.streams_mu.unlock();
+
+        for (self.active_stream_ids.items) |active_stream_id| {
+            if (active_stream_id == stream_id) return false;
+        }
+
+        try self.active_stream_ids.append(self.allocator, stream_id);
+        return true;
+    }
+
+    pub fn unregisterActiveStream(self: *SharedConnState, stream_id: u64) void {
+        self.streams_mu.lock();
+        defer self.streams_mu.unlock();
+
+        for (self.active_stream_ids.items, 0..) |active_stream_id, index| {
+            if (active_stream_id == stream_id) {
+                _ = self.active_stream_ids.swapRemove(index);
+                return;
+            }
+        }
     }
 
     pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
@@ -552,6 +581,10 @@ const SessionAuthStatus = enum {
     invalidated,
 };
 
+fn isIdleStreamReadError(err: anyerror) bool {
+    return err == error.EndOfStream or err == error.Timeout;
+}
+
 /// Entry point for additional (non-first) stream handler threads.
 /// Each stream gets its own ServerState with per-stream transaction/result
 /// state, but inherits the connection's authenticated identity.
@@ -564,6 +597,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     const transport = ctx.transport;
     defer {
         stream.close();
+        cs.unregisterActiveStream(stream.stream_id);
         _ = cs.active_streams.fetchSub(1, .release);
         // GAP-0274: Signal the drain waiter that a stream closed
         cs.streams_cv.broadcast();
@@ -660,7 +694,6 @@ fn streamAcceptorLoop(
     conn: *quic_transport.QuicConnection,
     conn_state: *SharedConnState,
     shutdown: *std.atomic.Value(bool),
-    first_stream_id: u64,
 ) void {
     const max_additional_streams: u32 = 64; // Limit to prevent resource exhaustion
     while (!shutdown.load(.acquire)) {
@@ -678,19 +711,24 @@ fn streamAcceptorLoop(
 
         // Non-blocking attempt to accept a new stream
         if (conn.tryAcceptStream()) |new_stream| {
-            // GAP-0278: Skip the first stream — it is already handled by the Phase 3
-            // loop. The QUIC library re-queues the same stream ID in incoming_stream_queue
-            // every time new data arrives (PHASE 57 PART 6 in the QUIC library), so
-            // acceptStream() may return the same stream ID repeatedly. We must not
-            // spawn a second handler for a stream already owned by another goroutine.
-            if (new_stream.stream_id == first_stream_id) {
-                // Discard the wrapper without touching the underlying QUIC stream.
-                // destroyStream removes the wrapper from the tracking list and frees
-                // the struct, but does NOT send a FIN/RESET to the peer — the data
-                // is still being consumed by the Phase 3 handler on this thread.
+            const is_new_stream = conn_state.registerActiveStream(new_stream.stream_id) catch |err| {
+                log.warn("Failed to register multiplexed stream", &.{
+                    Attr.int("stream_id", @intCast(new_stream.stream_id)),
+                    Attr.string("error", @errorName(err)),
+                });
+                new_stream.close();
+                conn.destroyStream(new_stream);
+                continue;
+            };
+
+            // The QUIC library re-queues active stream IDs when more data arrives.
+            // Accept notifications are therefore readiness signals, not proof of a
+            // brand-new stream. Only spawn a handler once per active stream ID.
+            if (!is_new_stream) {
                 conn.destroyStream(new_stream);
                 continue;
             }
+
             log.debug("Accepted additional multiplexed stream", &.{});
             _ = conn_state.active_streams.fetchAdd(1, .release);
 
@@ -698,6 +736,7 @@ fn streamAcceptorLoop(
             const ctx = gpa.create(StreamHandlerContext) catch {
                 log.warn("Failed to allocate stream handler context", &.{});
                 new_stream.close();
+                conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
                 conn_state.streams_cv.broadcast();
                 continue;
@@ -709,9 +748,15 @@ fn streamAcceptorLoop(
                 .conn_state = conn_state,
             };
 
+            // Use a dedicated OS thread per active stream here, not Spice.
+            // Spice is Geode's fork/join engine for bounded CPU work; these
+            // handlers are long-lived, blocking I/O loops whose lifetime is not
+            // naturally expressed as fork/join. Reusing Spice workers for them
+            // would tie heartbeat-scheduled tasks to socket waits.
             _ = std.Thread.spawn(.{}, handleAdditionalStream, .{@as(*anyopaque, @ptrCast(ctx))}) catch {
                 log.warn("Failed to spawn stream handler thread", &.{});
                 new_stream.close();
+                conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
                 conn_state.streams_cv.broadcast();
                 gpa.destroy(ctx);
@@ -744,7 +789,7 @@ fn runStreamQueryLoop(
 
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
-            if (err == error.EndOfStream) return;
+            if (isIdleStreamReadError(err)) return;
             if (err == error.WouldBlock) {
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(2 * std.time.ns_per_ms);
@@ -1053,9 +1098,11 @@ pub fn handleQuicConnection(
         return;
     };
     state.shared_conn = &conn_state;
+    _ = try conn_state.registerActiveStream(stream.stream_id);
     // First stream counts as active.
     _ = conn_state.active_streams.fetchAdd(1, .release);
     defer {
+        conn_state.unregisterActiveStream(stream.stream_id);
         _ = conn_state.active_streams.fetchSub(1, .release);
         // GAP-0274: Wait for ALL additional stream handlers to finish before
         // freeing conn_state. Uses condition variable instead of busy-wait.
@@ -1069,7 +1116,7 @@ pub fn handleQuicConnection(
 
     var acceptor_shutdown = std.atomic.Value(bool).init(false);
     const acceptor_thread = std.Thread.spawn(.{}, streamAcceptorLoop, .{
-        gpa, transport, conn, &conn_state, &acceptor_shutdown, stream.stream_id,
+        gpa, transport, conn, &conn_state, &acceptor_shutdown,
     }) catch |err| {
         // If we can't spawn the acceptor, fall back to single-stream mode.
         // The first stream still works fine — just no multiplexing.
@@ -1089,7 +1136,7 @@ pub fn handleQuicConnection(
     // This reuses the existing line_reader that already consumed the HELLO.
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
-            if (err == error.EndOfStream or err == error.Timeout) {
+            if (isIdleStreamReadError(err)) {
                 break;
             }
             if (err == error.WouldBlock) {
@@ -3030,4 +3077,25 @@ test "SharedConnState syncGraphFromState clears inherited graph on reset" {
     state.exec_session.?.graph = null;
     try shared.syncGraphFromState(&state);
     try std.testing.expect(shared.current_graph == null);
+}
+
+test "SharedConnState registerActiveStream deduplicates requeued stream ids" {
+    const allocator = std.testing.allocator;
+
+    var shared = SharedConnState{ .allocator = allocator };
+    defer shared.deinit();
+
+    try std.testing.expect(try shared.registerActiveStream(4));
+    try std.testing.expect(!try shared.registerActiveStream(4));
+    try std.testing.expectEqual(@as(usize, 1), shared.active_stream_ids.items.len);
+
+    shared.unregisterActiveStream(4);
+    try std.testing.expectEqual(@as(usize, 0), shared.active_stream_ids.items.len);
+    try std.testing.expect(try shared.registerActiveStream(4));
+}
+
+test "isIdleStreamReadError treats timeout as idle shutdown" {
+    try std.testing.expect(isIdleStreamReadError(error.EndOfStream));
+    try std.testing.expect(isIdleStreamReadError(error.Timeout));
+    try std.testing.expect(!isIdleStreamReadError(error.WouldBlock));
 }
