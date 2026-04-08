@@ -1473,10 +1473,17 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
 // CANARY: REQ=REQ-PERF-LABEL-INDEX-004; FEATURE="LabelBasedIndex"; ASPECT=MergeOptimization; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
 // Issue #391: Optimized MERGE using label index instead of O(n) full table scan
 pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    const EvaluatedMergeProp = struct {
+        key: []const u8,
+        value: Value,
+    };
+
     const store = graph_store.getWritableGlobalStore(allocator);
-    var read_session = try graph_store.QueryReadSession.initIfAvailable(allocator, store);
-    defer if (read_session) |*session| session.deinit();
-    const read_store: *graph_store.GraphStore = if (read_session) |*session| session.store() else store;
+    // GAP-0511: MERGE already executes under the graph write lock, so an
+    // adapter-backed QueryReadSession would clone the entire graph once per
+    // statement. During bulk ingest that turns MERGE into O(total graph size)
+    // before any pattern matching happens and triggers connection timeouts.
+    const read_store: *graph_store.GraphStore = store;
     const target_graph = current_graph orelse "default";
     // GAP-0509: Extract tenant filter from context for getNodesByLabels filtering.
     // Null means no filtering (default tenant or unset).
@@ -1492,48 +1499,148 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
         // Look for existing node matching the pattern (filtered by graph)
         var found_node: ?*graph_store.Node = null;
+        const merge_env = envFromContext(allocator, context);
+        const evaluated_props = if (node_pattern.props) |props| blk: {
+            const owned = try allocator.alloc(EvaluatedMergeProp, props.len);
+            errdefer allocator.free(owned);
+            var initialized: usize = 0;
+            errdefer {
+                var idx: usize = 0;
+                while (idx < initialized) : (idx += 1) {
+                    property_codec.freeValue(allocator, owned[idx].value);
+                }
+            }
+
+            for (props, 0..) |prop, i| {
+                owned[i] = .{
+                    .key = prop.key,
+                    .value = try eval.evalExpr(allocator, prop.value.*, merge_env),
+                };
+                initialized += 1;
+            }
+            break :blk owned;
+        } else null;
+        defer {
+            if (evaluated_props) |props| {
+                for (props) |prop| {
+                    property_codec.freeValue(allocator, prop.value);
+                }
+                allocator.free(props);
+            }
+        }
 
         // Issue #391: Use label index for O(1) lookup instead of O(n) full table scan
         if (node_pattern.labels.len > 0) {
-            // Get candidate nodes from label index
-            var candidates = try read_store.getNodesByLabels(allocator, target_graph, node_pattern.labels, filter_tenant);
-            defer candidates.deinit(allocator);
+            var exact_candidate_ids: ?[]u64 = null;
+            defer {
+                if (exact_candidate_ids) |ids| allocator.free(ids);
+            }
 
-            // Check candidates for property match
-            for (candidates.items) |node_id| {
-                if (read_store.nodes.getPtr(node_id)) |node| {
-                    // Verify graph match (should always match if index is correct)
-                    if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
+            if (evaluated_props) |props| {
+                if (graph_store.getGlobalAdapter()) |adapter| {
+                    for (node_pattern.labels) |label| {
+                        for (props) |prop| {
+                            const storage_prop = property_codec.valueToPropertyValue(allocator, prop.value) catch continue;
+                            defer property_codec.freePropertyValue(allocator, storage_prop);
 
-                    // Check if properties match (if properties are specified)
-                    // GAP #55: Use evalExpr + valuesEqual to handle all expression types
-                    // including parameter references ($param), not just literal String/Int/Bool.
-                    if (node_pattern.props != null and node_pattern.props.?.len > 0) {
-                        var props_match = true;
-                        const env = envFromContext(allocator, context);
-                        for (node_pattern.props.?) |prop| {
-                            const expected = eval.evalExpr(allocator, prop.value.*, env) catch {
-                                props_match = false;
-                                break;
-                            };
-                            if (node.properties.get(prop.key)) |actual| {
-                                if (!valuesEqual(actual, expected)) {
-                                    props_match = false;
-                                    break;
+                            const candidate_ids = try adapter.getCandidateNodesByLabelAndProperty(
+                                target_graph,
+                                label,
+                                prop.key,
+                                storage_prop,
+                                allocator,
+                            );
+                            if (exact_candidate_ids) |existing| {
+                                if (candidate_ids.len < existing.len) {
+                                    allocator.free(existing);
+                                    exact_candidate_ids = candidate_ids;
+                                } else {
+                                    allocator.free(candidate_ids);
                                 }
                             } else {
-                                props_match = false;
+                                exact_candidate_ids = candidate_ids;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (exact_candidate_ids) |candidate_ids| {
+                for (candidate_ids) |node_id| {
+                    if (read_store.nodes.getPtr(node_id)) |node| {
+                        if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
+                        if (filter_tenant) |tid| {
+                            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+                        }
+
+                        var has_all_labels = true;
+                        for (node_pattern.labels) |required_label| {
+                            var found_label = false;
+                            for (node.labels) |actual_label| {
+                                if (std.mem.eql(u8, actual_label, required_label)) {
+                                    found_label = true;
+                                    break;
+                                }
+                            }
+                            if (!found_label) {
+                                has_all_labels = false;
                                 break;
                             }
                         }
+                        if (!has_all_labels) continue;
+
+                        var props_match = true;
+                        if (evaluated_props) |props| {
+                            for (props) |prop| {
+                                if (node.properties.get(prop.key)) |actual| {
+                                    if (!valuesEqual(actual, prop.value)) {
+                                        props_match = false;
+                                        break;
+                                    }
+                                } else {
+                                    props_match = false;
+                                    break;
+                                }
+                            }
+                        }
+
                         if (props_match) {
                             found_node = node;
                             break;
                         }
-                    } else {
-                        // If no properties specified, match on labels alone
-                        found_node = node;
-                        break;
+                    }
+                }
+            } else {
+                // No adapter-backed exact candidate path was available, so
+                // fall back to the compatibility-store label postings.
+                var candidates = try read_store.getNodesByLabels(allocator, target_graph, node_pattern.labels, filter_tenant);
+                defer candidates.deinit(allocator);
+
+                for (candidates.items) |node_id| {
+                    if (read_store.nodes.getPtr(node_id)) |node| {
+                        if (!std.mem.eql(u8, node.graph_name, target_graph)) continue;
+
+                        if (evaluated_props) |props| {
+                            var props_match = true;
+                            for (props) |prop| {
+                                if (node.properties.get(prop.key)) |actual| {
+                                    if (!valuesEqual(actual, prop.value)) {
+                                        props_match = false;
+                                        break;
+                                    }
+                                } else {
+                                    props_match = false;
+                                    break;
+                                }
+                            }
+                            if (props_match) {
+                                found_node = node;
+                                break;
+                            }
+                        } else {
+                            found_node = node;
+                            break;
+                        }
                     }
                 }
             }

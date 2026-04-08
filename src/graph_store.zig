@@ -1177,6 +1177,7 @@ pub const GraphStore = struct {
     // Accepts a caller-provided allocator for the result list to avoid
     // concurrent threads contending on self.allocator (GAP-0425 fix).
     pub fn getNodesByLabels(self: *const GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, labels: []const []const u8, tenant_id: ?[]const u8) !std.ArrayList(u64) {
+        _ = g_get_nodes_by_labels_count.fetchAdd(1, .monotonic);
         var result = std.ArrayList(u64).empty;
 
         if (labels.len == 0) {
@@ -4468,10 +4469,28 @@ fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
 var global_store: ?GraphStore = null;
 var global_arena: ?std.heap.ArenaAllocator = null;
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
+var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 // Atomic flag: readers use .acquire to see all writes that happened before
 // the store was published; the writer uses .release after full initialization.
 var initialized: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
 var last_data_dir: ?[]u8 = null;
+
+pub fn resetQueryReadSessionInitCount() void {
+    g_query_read_session_init_count.store(0, .release);
+}
+
+pub fn getQueryReadSessionInitCount() u64 {
+    return g_query_read_session_init_count.load(.acquire);
+}
+
+pub fn resetGetNodesByLabelsCount() void {
+    g_get_nodes_by_labels_count.store(0, .release);
+}
+
+pub fn getNodesByLabelsCallCount() u64 {
+    return g_get_nodes_by_labels_count.load(.acquire);
+}
 
 /// Mutex protecting the re-initialization path in getGlobalStore.
 /// Without this, concurrent callers can race: one thread tears down the store
@@ -4786,6 +4805,7 @@ pub const QueryReadSession = struct {
         try session.snapshot.cloneIdMapsFrom(source_store);
         try session.snapshot.cloneNodesFrom(source_store);
         session.snapshot.data_dir = source_store.data_dir;
+        _ = g_query_read_session_init_count.fetchAdd(1, .acq_rel);
 
         return session;
     }
@@ -5263,6 +5283,7 @@ test "QueryReadSession clones nodes from global store" {
     defer testing.allocator.free(dir_path);
 
     const store = try initGlobalStore(testing.allocator, dir_path);
+    resetQueryReadSessionInitCount();
 
     var labels = [_][]const u8{"Person"};
     const node_id = try store.createNodeWithGraph(&labels, "default");
@@ -5272,6 +5293,7 @@ test "QueryReadSession clones nodes from global store" {
         return error.AdapterNotInitialized;
     };
     defer read_session.deinit();
+    try testing.expectEqual(@as(u64, 1), getQueryReadSessionInitCount());
 
     // Snapshot should have the node
     const snapshot_node = read_session.store().getNodePtr(node_id) orelse return error.NodeNotFound;

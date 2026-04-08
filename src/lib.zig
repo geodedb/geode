@@ -117,6 +117,7 @@ pub const temporal = @import("temporal.zig");
 // Query analysis helpers (EXPLAIN/PROFILE traits)
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
+pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");

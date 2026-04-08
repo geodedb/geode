@@ -27,6 +27,118 @@ const LabelScanContext = struct {
     label_id: gs.LabelId,
 };
 
+var g_exact_node_property_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var g_label_scan_lookup_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+pub fn resetLookupCounters() void {
+    g_exact_node_property_lookup_count.store(0, .release);
+    g_label_scan_lookup_count.store(0, .release);
+}
+
+pub fn getExactNodePropertyLookupCount() u64 {
+    return g_exact_node_property_lookup_count.load(.acquire);
+}
+
+pub fn getLabelScanLookupCount() u64 {
+    return g_label_scan_lookup_count.load(.acquire);
+}
+
+const NodePropertyExactIndex = struct {
+    allocator: Allocator,
+    postings: std.StringHashMap(std.ArrayList(u64)),
+
+    fn init(allocator: Allocator) NodePropertyExactIndex {
+        return .{
+            .allocator = allocator,
+            .postings = std.StringHashMap(std.ArrayList(u64)).init(allocator),
+        };
+    }
+
+    fn deinit(self: *NodePropertyExactIndex) void {
+        var it = self.postings.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.postings.deinit();
+    }
+
+    fn clear(self: *NodePropertyExactIndex) void {
+        var it = self.postings.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.postings.clearAndFree();
+    }
+
+    fn add(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) !void {
+        const probe_key = try self.encodeKey(label_id, property_key, value_hash);
+        defer self.allocator.free(probe_key);
+
+        if (self.postings.getPtr(probe_key)) |list| {
+            for (list.items) |existing_id| {
+                if (existing_id == node_id) return;
+            }
+            try list.append(self.allocator, node_id);
+            return;
+        }
+
+        const owned_key = try self.encodeKey(label_id, property_key, value_hash);
+        errdefer self.allocator.free(owned_key);
+
+        const gop = try self.postings.getOrPut(owned_key);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = std.ArrayList(u64).empty;
+        } else {
+            self.allocator.free(owned_key);
+        }
+        try gop.value_ptr.append(self.allocator, node_id);
+    }
+
+    fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
+        const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return;
+        defer self.allocator.free(probe_key);
+
+        if (self.postings.getPtr(probe_key)) |list| {
+            var i: usize = 0;
+            while (i < list.items.len) : (i += 1) {
+                if (list.items[i] == node_id) {
+                    _ = list.orderedRemove(i);
+                    break;
+                }
+            }
+            if (list.items.len == 0) {
+                if (self.postings.fetchRemove(probe_key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list_copy = kv.value;
+                    list_copy.deinit(self.allocator);
+                }
+            }
+        }
+    }
+
+    fn get(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u64 {
+        const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return null;
+        defer self.allocator.free(probe_key);
+
+        if (self.postings.get(probe_key)) |list| {
+            return list.items;
+        }
+        return null;
+    }
+
+    fn encodeKey(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ![]u8 {
+        const total_len = 4 + 4 + property_key.len + 8;
+        const key = try self.allocator.alloc(u8, total_len);
+        std.mem.writeInt(u32, key[0..4], label_id, .little);
+        std.mem.writeInt(u32, key[4..8], @intCast(property_key.len), .little);
+        @memcpy(key[8 .. 8 + property_key.len], property_key);
+        std.mem.writeInt(u64, key[8 + property_key.len ..][0..8], value_hash, .little);
+        return key;
+    }
+};
+
 // ============================================================================
 // LabelStringDict — bidirectional label string ↔ LabelId mapping view
 // ============================================================================
@@ -195,6 +307,19 @@ pub fn freeOwnedStorageProperty(allocator: Allocator, val: gs.PropertyValue) voi
     }
 }
 
+fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
+    var stack_buf: [64]u8 = undefined;
+    const encoded_len = gs.property.encodedSize(value);
+    if (encoded_len <= stack_buf.len) {
+        const used = try gs.property.encodeInto(stack_buf[0..encoded_len], value);
+        return std.hash.Wyhash.hash(0, stack_buf[0..used]);
+    }
+
+    const encoded = try gs.property.encode(allocator, value);
+    defer allocator.free(encoded);
+    return std.hash.Wyhash.hash(0, encoded);
+}
+
 fn shouldExposePropertyKey(key: []const u8) bool {
     return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
         !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY);
@@ -209,6 +334,7 @@ fn shouldExposePropertyKey(key: []const u8) bool {
 pub const ManagedGraph = struct {
     engine: *gs.GraphEngine,
     label_dict: LabelStringDict,
+    exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
     uuid: [16]u8,
     /// Per-graph audit logger writing to `{graph_dir}/audit.jsonl`.
@@ -258,11 +384,80 @@ pub const ManagedGraph = struct {
             self.audit_logger = null;
         }
         self.engine.close() catch {};
+        self.exact_node_property_index.deinit();
         self.label_dict.deinit();
         allocator.free(self.name);
         allocator.destroy(self);
     }
 };
+
+fn addIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) !void {
+    const value_hash = try hashStorageProperty(mg.engine.allocator, value);
+    try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
+}
+
+fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) void {
+    const value_hash = hashStorageProperty(mg.engine.allocator, value) catch return;
+    mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
+}
+
+fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) !void {
+    if (prop_head == 0 or label_ids.len == 0) return;
+
+    var iter = try mg.engine.getAllProperties(prop_head);
+    defer iter.deinit();
+    while (try iter.next()) |entry| {
+        const value = try mg.engine.getProperty(prop_head, entry.key, mg.engine.allocator) orelse continue;
+        defer freeOwnedStorageProperty(mg.engine.allocator, value);
+
+        for (label_ids) |label_id| {
+            try addIndexedNodeProperty(mg, label_id, node_id, entry.key, value);
+        }
+    }
+}
+
+fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) void {
+    if (prop_head == 0 or label_ids.len == 0) return;
+
+    var iter = mg.engine.getAllProperties(prop_head) catch return;
+    defer iter.deinit();
+    while (iter.next() catch return) |entry| {
+        const value = mg.engine.getProperty(prop_head, entry.key, mg.engine.allocator) catch null orelse continue;
+        defer freeOwnedStorageProperty(mg.engine.allocator, value);
+
+        for (label_ids) |label_id| {
+            removeIndexedNodeProperty(mg, label_id, node_id, entry.key, value);
+        }
+    }
+}
+
+fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
+    mg.exact_node_property_index.clear();
+
+    const Ctx = struct {
+        mg: *ManagedGraph,
+        err: ?anyerror = null,
+
+        fn callback(self: *@This(), node_id: gs.NodeId, rec: gs.node.NodeRec) void {
+            if (self.err != null) return;
+            if (rec.label_head == 0 or rec.prop_head == 0) return;
+
+            const label_ids = self.mg.engine.label_store.getLabels(rec.label_head, self.mg.engine.allocator) catch |err| {
+                self.err = err;
+                return;
+            };
+            defer self.mg.engine.allocator.free(label_ids);
+
+            addNodePropertiesForLabels(self.mg, node_id, label_ids, rec.prop_head) catch |err| {
+                self.err = err;
+            };
+        }
+    };
+
+    var ctx = Ctx{ .mg = mg };
+    try mg.engine.node_store.scanNodes(mg.engine.manifest.next_node_id, &ctx, Ctx.callback);
+    if (ctx.err) |err| return err;
+}
 
 // ============================================================================
 // StorageAdapter — top-level adapter managing multiple named graphs
@@ -567,6 +762,12 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock();
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        defer self.allocator.free(label_ids);
+        removeNodePropertiesForLabels(mg, node_id, label_ids, rec.prop_head);
+
         try mg.engine.deleteNode(node_id);
     }
 
@@ -699,14 +900,31 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        defer self.allocator.free(label_ids);
+
+        const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
+        defer {
+            if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
+        }
 
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
+
+        if (old_value) |existing| {
+            for (label_ids) |label_id| {
+                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
+            }
+        }
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, storage_val);
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
         try mg.engine.putNode(node_id, rec);
+
+        for (label_ids) |label_id| {
+            try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
+        }
     }
 
     /// Batch property entry: a key with either a value to set or null to remove.
@@ -727,16 +945,39 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        defer self.allocator.free(label_ids);
 
         for (entries) |entry| {
+            const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, entry.key, self.allocator) else null;
+            defer {
+                if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
+            }
+
             if (entry.value) |val| {
                 const storage_val = try toStorageProperty(self.allocator, val);
                 defer freeTemporaryStorageProperty(self.allocator, storage_val);
+                if (old_value) |existing| {
+                    for (label_ids) |label_id| {
+                        removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
+                    }
+                }
                 const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, storage_val);
                 rec.prop_head = new_prop_head;
+                for (label_ids) |label_id| {
+                    try addIndexedNodeProperty(mg, label_id, node_id, entry.key, storage_val);
+                }
             } else {
+                if (old_value) |existing| {
+                    for (label_ids) |label_id| {
+                        removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
+                    }
+                }
                 const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, .null);
                 rec.prop_head = new_prop_head;
+                for (label_ids) |label_id| {
+                    try addIndexedNodeProperty(mg, label_id, node_id, entry.key, .null);
+                }
             }
         }
 
@@ -752,10 +993,26 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
+        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        defer self.allocator.free(label_ids);
+        const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
+        defer {
+            if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
+        }
+
+        if (old_value) |existing| {
+            for (label_ids) |label_id| {
+                removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
+            }
+        }
 
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, .null);
         rec.prop_head = new_prop_head;
         try mg.engine.putNode(node_id, rec);
+
+        for (label_ids) |label_id| {
+            try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
+        }
     }
 
     /// Get a property from a node, returned in graph-storage representation.
@@ -786,6 +1043,7 @@ pub const StorageAdapter = struct {
     }
 
     pub fn getNodesByLabel(self: *StorageAdapter, graph_name: []const u8, label: []const u8, allocator: Allocator) ![]u64 {
+        _ = g_label_scan_lookup_count.fetchAdd(1, .monotonic);
         const ctx = try self.resolveLabelScanContext(graph_name, label) orelse return try allocator.alloc(u64, 0);
         const mg = ctx.mg;
         var iter = try mg.storage().scanLabelIter(ctx.label_id, allocator);
@@ -820,6 +1078,42 @@ pub const StorageAdapter = struct {
             if (node_mod.isDeleted(&rec)) continue;
             if (node_mod.isEmpty(&rec)) continue;
             try result.append(allocator, nid);
+        }
+
+        return try result.toOwnedSlice(allocator);
+    }
+
+    /// Return node candidates for an exact `(label, property = value)` probe.
+    /// Hash collisions are tolerated because higher layers still verify the
+    /// full property map before treating a candidate as a MERGE match.
+    pub fn getCandidateNodesByLabelAndProperty(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        property_key: []const u8,
+        value: graph_store.PropertyValue,
+        allocator: Allocator,
+    ) ![]u64 {
+        _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
+
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+        const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
+
+        const storage_value = try toStorageProperty(allocator, value);
+        defer freeTemporaryStorageProperty(allocator, storage_value);
+        const value_hash = try hashStorageProperty(allocator, storage_value);
+        const indexed = mg.exact_node_property_index.get(label_id, property_key, value_hash) orelse return try allocator.alloc(u64, 0);
+
+        var result = std.ArrayList(u64).empty;
+        errdefer result.deinit(allocator);
+
+        for (indexed) |node_id| {
+            if (try mg.engine.getNode(node_id) == null) continue;
+            try result.append(allocator, node_id);
         }
 
         return try result.toOwnedSlice(allocator);
@@ -1328,6 +1622,7 @@ pub const StorageAdapter = struct {
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.label_dict),
+            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
@@ -1377,6 +1672,7 @@ pub const StorageAdapter = struct {
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.label_dict),
+            .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
             .name = owned_name,
             .uuid = graph_uuid,
             .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
@@ -1388,6 +1684,8 @@ pub const StorageAdapter = struct {
             mg.fts_index = fts_result.index;
             mg.fts_dir = fts_result.dir;
         }
+
+        try rebuildExactNodePropertyIndex(mg);
 
         try self.engines.put(owned_name, mg);
         self.upsertRegistryEntryLocked(name, graph_uuid, mg.engine.manifest.node_count, mg.engine.manifest.edge_count);
@@ -1520,8 +1818,10 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock();
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = try mg.label_dict.getOrCreate(label);
         try mg.engine.addLabel(node_id, label_id);
+        try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
 
     /// Remove a label from a node. If the label string is not in the
@@ -1532,7 +1832,9 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock();
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
+        removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
         try mg.engine.removeLabel(node_id, label_id);
     }
 
@@ -1811,6 +2113,55 @@ test "fromStorageProperty round-trip for scalars" {
     const geode_dec = try fromStorageProperty(allocator, .{ .decimal = .{ .coeff = 99, .scale = 3 } });
     try std.testing.expectEqual(@as(i128, 99), geode_dec.Decimal.coeff);
     try std.testing.expectEqual(@as(u8, 3), geode_dec.Decimal.scale);
+}
+
+test "StorageAdapter: exact node-property lookup follows property and label mutations" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer allocator.free(path);
+
+    const adapter = try StorageAdapter.init(allocator, path, testConfig());
+    defer adapter.deinit();
+
+    const graph = "lookup_graph";
+    const node_id = try adapter.createNode(graph, &[_][]const u8{"User"});
+    try adapter.setNodeProperty(graph, node_id, "node_id", .{ .Int = 7 });
+
+    const initial = try adapter.getCandidateNodesByLabelAndProperty(graph, "User", "node_id", .{ .Int = 7 }, allocator);
+    defer allocator.free(initial);
+    try std.testing.expectEqual(@as(usize, 1), initial.len);
+    try std.testing.expectEqual(node_id, initial[0]);
+
+    try adapter.setNodeProperty(graph, node_id, "node_id", .{ .Int = 8 });
+
+    const stale = try adapter.getCandidateNodesByLabelAndProperty(graph, "User", "node_id", .{ .Int = 7 }, allocator);
+    defer allocator.free(stale);
+    try std.testing.expectEqual(@as(usize, 0), stale.len);
+
+    const updated = try adapter.getCandidateNodesByLabelAndProperty(graph, "User", "node_id", .{ .Int = 8 }, allocator);
+    defer allocator.free(updated);
+    try std.testing.expectEqual(@as(usize, 1), updated.len);
+    try std.testing.expectEqual(node_id, updated[0]);
+
+    try adapter.addNodeLabel(graph, node_id, "Admin");
+    const added_label = try adapter.getCandidateNodesByLabelAndProperty(graph, "Admin", "node_id", .{ .Int = 8 }, allocator);
+    defer allocator.free(added_label);
+    try std.testing.expectEqual(@as(usize, 1), added_label.len);
+    try std.testing.expectEqual(node_id, added_label[0]);
+
+    try adapter.removeNodeLabel(graph, node_id, "Admin");
+    const removed_label = try adapter.getCandidateNodesByLabelAndProperty(graph, "Admin", "node_id", .{ .Int = 8 }, allocator);
+    defer allocator.free(removed_label);
+    try std.testing.expectEqual(@as(usize, 0), removed_label.len);
+
+    try adapter.deleteNode(graph, node_id);
+    const deleted = try adapter.getCandidateNodesByLabelAndProperty(graph, "User", "node_id", .{ .Int = 8 }, allocator);
+    defer allocator.free(deleted);
+    try std.testing.expectEqual(@as(usize, 0), deleted.len);
 }
 
 test {
