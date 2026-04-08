@@ -64,7 +64,7 @@ pub const Validation = struct {
     pub fn validateVector(vec: vector.VectorF32) AdvancedIndexError!void {
         if (vec.dim == 0) return AdvancedIndexError.EmptyVectorData;
         if (vec.dim > 8192) return AdvancedIndexError.DimensionMismatch; // Reasonable limit
-        if (vec.data == null) return AdvancedIndexError.InvalidVectorType;
+        if (vec.data.len == 0) return AdvancedIndexError.InvalidVectorType;
 
         // Check for invalid values (NaN, infinity)
         for (0..vec.dim) |i| {
@@ -350,7 +350,11 @@ pub const AdvancedIndexManager = struct {
         try Validation.validateVector(vec);
 
         if (self.vector_indexes.get(index_name)) |index| {
-            try index.insert(node_id, vec);
+            index.insert(node_id, vec) catch |err| switch (err) {
+                error.DimensionMismatch => return AdvancedIndexError.DimensionMismatch,
+                error.OutOfMemory => return AdvancedIndexError.OutOfMemory,
+                else => return AdvancedIndexError.IndexOperationFailed,
+            };
         } else {
             return AdvancedIndexError.IndexNotFound;
         }
@@ -380,7 +384,10 @@ pub const AdvancedIndexManager = struct {
         try Validation.validateLatLon(point);
 
         if (self.spatial_indexes.get(index_name)) |index| {
-            try index.insert(node_id, point);
+            index.insert(node_id, point) catch |err| switch (err) {
+                error.OutOfMemory => return AdvancedIndexError.OutOfMemory,
+                else => return AdvancedIndexError.IndexOperationFailed,
+            };
         } else {
             return AdvancedIndexError.IndexNotFound;
         }

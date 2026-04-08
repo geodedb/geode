@@ -347,17 +347,17 @@ pub const KeyPair = struct {
                 if (self.public_key.len != 32) return error.InvalidPublicKeySize;
 
                 const secret_bytes = self.private_key[0..32].*;
-                const public_bytes = self.public_key[0..32].*;
 
                 // Create Ed25519 key pair from existing keys
-                const key_pair = try std.crypto.sign.Ed25519.KeyPair.fromSecretKey(secret_bytes, public_bytes);
+                const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(secret_bytes);
 
                 // Sign the data
-                const sig_bytes = try key_pair.sign(data, null); // null for deterministic signing
+                const sig_bytes = try std.crypto.sign.Ed25519.sign(data, key_pair, null);
 
                 // Allocate and copy signature
                 const signature_bytes = try allocator.alloc(u8, 64);
-                @memcpy(signature_bytes, &sig_bytes);
+                const sig_bytes_array = sig_bytes.toBytes();
+                @memcpy(signature_bytes, &sig_bytes_array);
 
                 const public_key_copy = try allocator.dupe(u8, self.public_key);
 
