@@ -390,7 +390,14 @@ pub const AuditLogger = struct {
     pub fn appendAuditEvent(self: *AuditLogger, ev: *AuditEvent) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
+        try self.appendEventLocked(ev);
+    }
 
+    /// Core event append logic — MUST be called with self.mutex already held.
+    /// GAP-0512: Extracted from appendAuditEvent to break the recursive mutex
+    /// deadlock where appendAuditEvent → emitDigest → appendAuditEvent caused
+    /// SIGABRT from Zig's deadlock detector.
+    fn appendEventLocked(self: *AuditLogger, ev: *AuditEvent) !void {
         // GAP-0282: Enrich event with per-thread tenant_id if not already set
         if (ev.tenant_id == null) {
             ev.tenant_id = getCurrentAuditTenantId();
@@ -409,7 +416,6 @@ pub const AuditLogger = struct {
         hasher.update(@tagName(ev.event_type));
         hasher.update(ev.resource.id);
         hasher.update(ev.action);
-        // Simple hash of key fields for alpha; robust requires full canonical stream
         var eh: [32]u8 = undefined;
         hasher.final(&eh);
         ev.event_hash = eh;
@@ -445,20 +451,24 @@ pub const AuditLogger = struct {
             try bw.writeAll("\n");
         }
 
-        if (std.mem.eql(u8, @tagName(ev.severity), "debug")) {
-            // Guarded debug print
-            // std.debug.print("AUDIT: {s}\n", .{@tagName(ev.event_type)});
-        }
-
+        // Trigger digest after N events (but not for DIGEST events themselves)
         if (ev.event_type != .DIGEST) {
             try self.digest_buf.append(self.allocator, ev.event_hash);
             if (self.digest_buf.items.len >= self.digest_interval_events) {
-                try self.emitDigest();
+                // Call emitDigestLocked directly — no re-locking needed
+                self.emitDigestLocked() catch |err| {
+                    log.warn("Failed to emit audit digest", &.{
+                        Attr.string("error", @errorName(err)),
+                    });
+                };
             }
         }
     }
 
-    fn emitDigest(self: *AuditLogger) anyerror!void {
+    /// Emit a Merkle digest event — MUST be called with self.mutex already held.
+    /// GAP-0512: Renamed from emitDigest and calls appendEventLocked instead of
+    /// appendAuditEvent to avoid recursive mutex acquisition.
+    fn emitDigestLocked(self: *AuditLogger) anyerror!void {
         var hasher = crypto.hash.sha2.Sha256.init(.{});
         for (self.digest_buf.items) |h| {
             hasher.update(&h);
@@ -490,8 +500,8 @@ pub const AuditLogger = struct {
             .details = details,
         };
 
-        // appendAuditEvent will sign it since it's DIGEST
-        try self.appendAuditEvent(&ev);
+        // Directly call the locked version — mutex is already held by caller
+        try self.appendEventLocked(&ev);
     }
 
     pub fn logEvent(self: *AuditLogger, ev_in: anytype) !void {

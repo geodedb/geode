@@ -1321,12 +1321,16 @@ pub const StorageAdapter = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
+        // GAP-0512: Only create per-graph audit for the security graph.
+        // Other graphs use the global audit logger. Per-graph audit on every
+        // graph caused recursive mutex deadlocks and unnecessary I/O.
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
+            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
@@ -1369,12 +1373,13 @@ pub const StorageAdapter = struct {
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
 
+        const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
             .label_dict = LabelStringDict.initView(&engine.label_dict),
             .name = owned_name,
             .uuid = graph_uuid,
-            .audit_logger = initAuditForGraph(self.allocator, self.data_dir, graph_uuid),
+            .audit_logger = if (is_security_graph) initAuditForGraph(self.allocator, self.data_dir, graph_uuid) else null,
             .ts_store = initTimeseriesForGraph(self.allocator, self.data_dir, graph_uuid),
         };
 
