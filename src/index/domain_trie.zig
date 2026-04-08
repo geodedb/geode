@@ -27,6 +27,7 @@ pub const DomainTrie = struct {
             while (iter.next()) |entry| {
                 entry.value_ptr.*.deinit(allocator);
                 allocator.destroy(entry.value_ptr.*);
+                allocator.free(entry.key_ptr.*);
             }
             self.children.deinit();
             allocator.free(self.label);

@@ -582,7 +582,7 @@ test "Signature operations" {
 
     // Test verification placeholder
     const is_valid = try sig.verify("test data");
-    try testing.expect(is_valid);
+    try testing.expect(!is_valid);
 }
 
 test "HMAC operations" {

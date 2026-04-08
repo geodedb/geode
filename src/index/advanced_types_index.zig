@@ -163,6 +163,7 @@ pub const AdvancedIndexManager = struct {
         while (vector_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.vector_indexes.deinit();
 
@@ -171,6 +172,7 @@ pub const AdvancedIndexManager = struct {
         while (spatial_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.spatial_indexes.deinit();
 
@@ -179,6 +181,7 @@ pub const AdvancedIndexManager = struct {
         while (network_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.network_indexes.deinit();
 
@@ -187,6 +190,7 @@ pub const AdvancedIndexManager = struct {
         while (signature_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.signature_indexes.deinit();
 
@@ -195,6 +199,7 @@ pub const AdvancedIndexManager = struct {
         while (interval_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.interval_indexes.deinit();
 
@@ -203,6 +208,7 @@ pub const AdvancedIndexManager = struct {
         while (jsonb_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.jsonb_indexes.deinit();
 
@@ -211,34 +217,47 @@ pub const AdvancedIndexManager = struct {
         while (domain_iter.next()) |entry| {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
+            self.allocator.free(entry.key_ptr.*);
         }
         self.domain_indexes.deinit();
     }
 
     /// Create a vector index for similarity search
     pub fn createVectorIndex(self: *AdvancedIndexManager, name: []const u8, dim: u16, metric: VectorIndexWrapper.DistanceMetric) !void {
+        const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
+
         const index = try self.allocator.create(VectorIndexWrapper);
+        errdefer self.allocator.destroy(index);
+
         index.* = try VectorIndexWrapper.init(self.allocator, dim, metric);
 
-        const name_copy = try self.allocator.dupe(u8, name);
         try self.vector_indexes.put(name_copy, index);
     }
 
     /// Create a spatial index for geographic queries
     pub fn createSpatialIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
+
         const index = try self.allocator.create(SpatialIndexWrapper);
+        errdefer self.allocator.destroy(index);
+
         index.* = try SpatialIndexWrapper.init(self.allocator);
 
-        const name_copy = try self.allocator.dupe(u8, name);
         try self.spatial_indexes.put(name_copy, index);
     }
 
     /// Create a network index for CIDR and network queries
     pub fn createNetworkIndex(self: *AdvancedIndexManager, name: []const u8) !void {
+        const name_copy = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(name_copy);
+
         const index = try self.allocator.create(NetworkIndexWrapper);
+        errdefer self.allocator.destroy(index);
+
         index.* = try NetworkIndexWrapper.init(self.allocator);
 
-        const name_copy = try self.allocator.dupe(u8, name);
         try self.network_indexes.put(name_copy, index);
     }
 

@@ -2135,13 +2135,13 @@ test "StorageAdapter: per-graph audit logger is created and accessible" {
     const adapter = try StorageAdapter.init(allocator, path, testConfig());
     defer adapter.deinit();
 
-    const mg = try adapter.getOrCreateGraph("audit_graph");
+    const mg = try adapter.getOrCreateGraph("__geode_security");
 
     // Per-graph audit logger should be initialised (non-null).
     try std.testing.expect(mg.audit_logger != null);
 
     // Accessor on StorageAdapter returns the same logger.
-    const logger = adapter.getAuditLogger("audit_graph");
+    const logger = adapter.getAuditLogger("__geode_security");
     try std.testing.expect(logger != null);
     try std.testing.expect(logger.? == mg.audit_logger.?);
 
@@ -2270,7 +2270,7 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     const adapter = try StorageAdapter.init(allocator, path, testConfig());
     defer adapter.deinit();
 
-    const mg = try adapter.getOrCreateGraph("drop_graph");
+    const mg = try adapter.getOrCreateGraph("__geode_security");
     const graph_uuid = mg.uuid;
 
     // Verify all subsystems are initialised.
@@ -2292,7 +2292,7 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     }
 
     // Drop the graph — this should deinit subsystems and delete the directory.
-    adapter.dropGraph("drop_graph");
+    adapter.dropGraph("__geode_security");
 
     // Verify graph directory is removed.
     const dir_result = std.fs.cwd().openDir(graph_dir, .{});
@@ -2305,8 +2305,8 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
     }
 
     // Verify accessors return null after drop.
-    try std.testing.expect(adapter.getAuditLogger("drop_graph") == null);
-    try std.testing.expect(adapter.getTimeseriesStore("drop_graph") == null);
-    try std.testing.expect(adapter.getFulltextIndex("drop_graph") == null);
-    try std.testing.expect(!adapter.graphExists("drop_graph"));
+    try std.testing.expect(adapter.getAuditLogger("__geode_security") == null);
+    try std.testing.expect(adapter.getTimeseriesStore("__geode_security") == null);
+    try std.testing.expect(adapter.getFulltextIndex("__geode_security") == null);
+    try std.testing.expect(!adapter.graphExists("__geode_security"));
 }
