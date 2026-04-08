@@ -2057,6 +2057,7 @@ fn handleClientMessage(
                 pending_index_rebuilds.deinit();
             }
             exec_context.pending_index_rebuilds = &pending_index_rebuilds;
+            exec_context.pending_index_rebuilds_allocator = gpa;
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
             defer flags.deinit(gpa);

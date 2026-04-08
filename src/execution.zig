@@ -422,6 +422,10 @@ pub const ExecutionContext = struct {
     tenant_id: ?[]const u8 = null,
     // GAP-0511: Queued advanced index rebuilds to be flushed at the end of statement execution
     pending_index_rebuilds: ?*std.StringHashMap(void) = null,
+    // Allocator used for pending_index_rebuilds keys — must match the allocator
+    // that frees the keys (gpa in the QUIC handler). Without this, property_mutation
+    // would dupe keys with store.allocator causing Invalid free when gpa frees them.
+    pending_index_rebuilds_allocator: ?std.mem.Allocator = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;

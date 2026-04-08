@@ -1845,6 +1845,29 @@ pub fn evalAdvancedTypeFunction(
         return heapValueToEvalValue(result);
     }
 
+    // IntRange(lower, upper, include_lower, include_upper) constructor
+    if (std.mem.eql(u8, function_name, "intrange")) {
+        if (args.len != 4) return Value{ .Null = {} };
+        const lower_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const upper_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const inc_lower_arg = try eval.evalExpr(allocator, args[2].*, env);
+        const inc_upper_arg = try eval.evalExpr(allocator, args[3].*, env);
+
+        const inc_lower = if (inc_lower_arg == .Bool) inc_lower_arg.Bool else true;
+        const inc_upper = if (inc_upper_arg == .Bool) inc_upper_arg.Bool else false;
+
+        const bounds_str: []const u8 = if (inc_lower and inc_upper) "[]" else if (inc_lower and !inc_upper) "[)" else if (!inc_lower and inc_upper) "(]" else "()";
+
+        const result = evaluator_functions.RangeValue(
+            allocator,
+            "int4",
+            if (lower_arg == .Null) null else evalValueToHeapValue(lower_arg),
+            if (upper_arg == .Null) null else evalValueToHeapValue(upper_arg),
+            bounds_str,
+        ) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
     if (std.mem.eql(u8, function_name, "jsonb_get")) {
         if (args.len != 2) return Value{ .Null = {} };
         const doc = try eval.evalExpr(allocator, args[0].*, env);
@@ -2014,6 +2037,15 @@ pub fn evalAdvancedTypeFunction(
         const lhs = try eval.evalExpr(allocator, args[0].*, env);
         const rhs = try eval.evalExpr(allocator, args[1].*, env);
         const result = evaluator_functions.range_overlaps(evalValueToHeapValue(lhs), evalValueToHeapValue(rhs)) catch |err| return mapEvaluatorError(err);
+        return heapValueToEvalValue(result);
+    }
+
+    if (std.mem.eql(u8, function_name, "domain_suffix_match")) {
+        if (args.len != 2) return Value{ .Null = {} };
+        const domain_arg = try eval.evalExpr(allocator, args[0].*, env);
+        const suffix_arg = try eval.evalExpr(allocator, args[1].*, env);
+        const suffix_text = textLike(suffix_arg) orelse return Value{ .Null = {} };
+        const result = evaluator_functions.domain_suffix_match(evalValueToHeapValue(domain_arg), suffix_text) catch |err| return mapEvaluatorError(err);
         return heapValueToEvalValue(result);
     }
 

@@ -1849,6 +1849,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 pending_index_rebuilds.deinit();
             }
             exec_context.pending_index_rebuilds = &pending_index_rebuilds;
+            exec_context.pending_index_rebuilds_allocator = allocator;
 
             var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
             defer flags.deinit(allocator);

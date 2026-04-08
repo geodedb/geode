@@ -58,13 +58,6 @@ fn evaluatePatternProps(allocator: std.mem.Allocator, props: ?[]ast.Property, co
 
     const owned = try allocator.alloc(EvaluatedPatternProp, pattern_props.len);
     errdefer allocator.free(owned);
-    var initialized: usize = 0;
-    errdefer {
-        var idx: usize = 0;
-        while (idx < initialized) : (idx += 1) {
-            property_codec.freeValue(allocator, owned[idx].value);
-        }
-    }
 
     const pattern_env = envFromContext(allocator, context);
     for (pattern_props, 0..) |prop, i| {
@@ -72,16 +65,14 @@ fn evaluatePatternProps(allocator: std.mem.Allocator, props: ?[]ast.Property, co
             .key = prop.key,
             .value = try eval.evalExpr(allocator, prop.value.*, pattern_env),
         };
-        initialized += 1;
     }
     return owned;
 }
 
 fn freeEvaluatedPatternProps(allocator: std.mem.Allocator, props: ?[]EvaluatedPatternProp) void {
     if (props) |owned| {
-        for (owned) |prop| {
-            property_codec.freeValue(allocator, prop.value);
-        }
+        // Values are borrowed from the AST (evalExpr returns references to parser-owned
+        // strings) — freeing them would cause Invalid free. Only free the slice itself.
         allocator.free(owned);
     }
 }

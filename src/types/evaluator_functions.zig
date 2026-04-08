@@ -830,6 +830,45 @@ pub fn range_overlaps(a: Value, b: Value) EvaluatorError!Value {
     return Value{ .Bool = range_a.overlaps(range_b) };
 }
 
+pub fn domain_suffix_match(domain_val: Value, suffix_str: []const u8) EvaluatorError!Value {
+    const domain = switch (domain_val) {
+        .Domain => |d| d,
+        else => return EvaluatorError.TypeMismatch,
+    };
+
+    // Parse the suffix string into labels for comparison
+    // suffix "google.com" → ["google", "com"]
+    var suffix_count: usize = 0;
+    var suffix_labels: [64][]const u8 = undefined;
+    var start: usize = 0;
+    for (suffix_str, 0..) |c, i| {
+        if (c == '.') {
+            if (i > start and suffix_count < 64) {
+                suffix_labels[suffix_count] = suffix_str[start..i];
+                suffix_count += 1;
+            }
+            start = i + 1;
+        }
+    }
+    if (start < suffix_str.len and suffix_count < 64) {
+        suffix_labels[suffix_count] = suffix_str[start..];
+        suffix_count += 1;
+    }
+
+    if (suffix_count == 0) return Value{ .Bool = false };
+    if (domain.labels.len < suffix_count) return Value{ .Bool = false };
+
+    // Compare from the end (TLD first)
+    const labels = domain.labels;
+    var i: usize = 0;
+    while (i < suffix_count) : (i += 1) {
+        if (!std.ascii.eqlIgnoreCase(labels[labels.len - suffix_count + i], suffix_labels[i])) {
+            return Value{ .Bool = false };
+        }
+    }
+    return Value{ .Bool = true };
+}
+
 // String functions
 pub fn substring(allocator: std.mem.Allocator, text: Value, start: Value, length: ?Value) EvaluatorError!Value {
     const text_str = switch (text) {

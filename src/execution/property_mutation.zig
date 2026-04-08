@@ -192,10 +192,13 @@ fn queueAdvancedIndexRebuild(
     const execution = @import("../execution.zig");
     if (execution.getActiveContext()) |ctx| {
         if (ctx.pending_index_rebuilds) |rebuilds| {
+            // Use the same allocator that will free the keys (gpa in QUIC handler).
+            // Using store.allocator here would cause Invalid free when gpa frees them.
+            const alloc = ctx.pending_index_rebuilds_allocator orelse store.allocator;
             for (names.items) |name| {
-                const name_copy = store.allocator.dupe(u8, name) catch continue;
+                const name_copy = alloc.dupe(u8, name) catch continue;
                 rebuilds.put(name_copy, {}) catch {
-                    store.allocator.free(name_copy);
+                    alloc.free(name_copy);
                 };
             }
             return;
