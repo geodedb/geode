@@ -402,8 +402,7 @@ pub const AdvancedIndexManager = struct {
 
         if (self.spatial_indexes.get(index_name)) |index| {
             return index.searchWithinRadius(center, radius_km, allocator) catch |err| switch (err) {
-                error.OutOfMemory => AdvancedIndexError.OutOfMemory,
-                else => AdvancedIndexError.IndexOperationFailed,
+                error.OutOfMemory => return AdvancedIndexError.OutOfMemory,
             };
         } else {
             return AdvancedIndexError.IndexNotFound;

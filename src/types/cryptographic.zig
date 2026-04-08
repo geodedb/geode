@@ -68,7 +68,11 @@ pub const Signature = struct {
     pub fn fromHex(alg: SignatureAlg, hex_sig: []const u8, hex_pubkey: ?[]const u8, allocator: std.mem.Allocator) !Signature {
         // Decode hex signature
         const sig_bytes = try allocator.alloc(u8, hex_sig.len / 2);
-        _ = try std.fmt.hexToBytes(sig_bytes, hex_sig);
+        errdefer allocator.free(sig_bytes);
+
+        _ = std.fmt.hexToBytes(sig_bytes, hex_sig) catch {
+            return error.InvalidSignatureLength;
+        };
 
         // Validate signature length
         if (sig_bytes.len != alg.expectedSignatureSize()) {
@@ -80,10 +84,13 @@ pub const Signature = struct {
         var pubkey_bytes: ?[]const u8 = null;
         if (hex_pubkey) |hex_pk| {
             const pk_bytes = try allocator.alloc(u8, hex_pk.len / 2);
-            _ = try std.fmt.hexToBytes(pk_bytes, hex_pk);
+            errdefer allocator.free(pk_bytes);
+
+            _ = std.fmt.hexToBytes(pk_bytes, hex_pk) catch {
+                return error.InvalidPublicKeyLength;
+            };
 
             if (pk_bytes.len != alg.expectedPublicKeySize()) {
-                allocator.free(sig_bytes);
                 allocator.free(pk_bytes);
                 return error.InvalidPublicKeyLength;
             }
@@ -352,7 +359,7 @@ pub const KeyPair = struct {
                 const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(secret_bytes);
 
                 // Sign the data
-                const sig_bytes = try std.crypto.sign.Ed25519.sign(data, key_pair, null);
+                const sig_bytes = try key_pair.sign(data, null);
 
                 // Allocate and copy signature
                 const signature_bytes = try allocator.alloc(u8, 64);
@@ -520,7 +527,7 @@ pub const Hmac = struct {
         const expected = try compute(self.alg, self.key, data, allocator);
         defer expected.deinit(allocator);
 
-        return std.crypto.utils.timingSafeEql([32]u8, self.digest[0..32].*, expected.digest[0..32].*);
+        return std.crypto.timing_safe.eql([32]u8, self.digest[0..32].*, expected.digest[0..32].*);
     }
 
     pub fn toString(self: Hmac, allocator: std.mem.Allocator) ![]u8 {
@@ -611,7 +618,7 @@ test "KeyPair generation" {
     defer keypair.deinit(allocator);
 
     try testing.expectEqual(Signature.SignatureAlg.Ed25519, keypair.alg);
-    try testing.expectEqual(@as(usize, 64), keypair.private_key.len);
+    try testing.expectEqual(@as(usize, 32), keypair.private_key.len);
     try testing.expectEqual(@as(usize, 32), keypair.public_key.len);
 
     // Test signing

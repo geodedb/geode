@@ -1562,6 +1562,14 @@ pub fn build(b: *std.Build) void {
     // Also add to main test step
     test_step.dependOn(&spice_integration_tests.step);
 
+    // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
+    quic_stream_registry_tests.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = optimize }));
+    const run_quic_stream_registry_tests = b.addRunArtifact(quic_stream_registry_tests);
+    const quic_stream_registry_test_step = b.step("test-quic-streams", "Run QUIC stream dedupe and churn regression tests");
+    quic_stream_registry_test_step.dependOn(&run_quic_stream_registry_tests.step);
+    test_step.dependOn(&quic_stream_registry_tests.step);
+
     // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="SpiceBenchmarkBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     // Spice parallelism benchmarks
     const spice_bench = b.addExecutable(.{ .name = "bench_spice_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_spice_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
@@ -1580,6 +1588,14 @@ pub fn build(b: *std.Build) void {
     const transport_bench_step = b.step("bench-transport", "Run transport layer throughput benchmarks");
     const run_transport_bench = b.addRunArtifact(transport_throughput_bench);
     transport_bench_step.dependOn(&run_transport_bench.step);
+
+    // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
+    const quic_stream_registry_bench = b.addExecutable(.{ .name = "bench_quic_stream_registry", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_quic_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }) });
+    quic_stream_registry_bench.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }));
+    const run_quic_stream_registry_bench = b.addRunArtifact(quic_stream_registry_bench);
+    const quic_stream_registry_bench_step = b.step("bench-quic-streams", "Run QUIC stream registry parallel contention benchmarks");
+    quic_stream_registry_bench_step.dependOn(&run_quic_stream_registry_bench.step);
+    bench_step.dependOn(&run_quic_stream_registry_bench.step);
 
     // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });

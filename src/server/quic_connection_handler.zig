@@ -39,6 +39,7 @@ const audit_mod = geode.security.audit;
 const multi_graph_security = geode.multi_graph_security;
 // GAP-0289: Import tenant quota manager for per-tenant resource limits
 const tenant_quota = geode.tenant_quota;
+const stream_registry = @import("active_stream_registry.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -466,7 +467,7 @@ pub const SharedConnState = struct {
     /// Active QUIC stream IDs currently owned by handlers. The QUIC library may
     /// re-queue a stream ID whenever more data arrives, so the acceptor must not
     /// treat every accept notification as a new handler-worthy stream.
-    active_stream_ids: std.ArrayList(u64) = .empty,
+    active_stream_registry: stream_registry.ActiveStreamRegistry = .{},
 
     /// Pending result transferred from a stream handler that exited before the
     /// client's PULL arrived.  The QUIC library can report a spurious stream
@@ -501,32 +502,15 @@ pub const SharedConnState = struct {
         if (self.pending_node_scan_stream) |*s| s.deinit();
         for (self.pending_result_order_keys) |k| self.allocator.free(k);
         if (self.pending_result_order_keys.len > 0) self.allocator.free(self.pending_result_order_keys);
-        self.active_stream_ids.deinit(self.allocator);
         // peer_ip freed by the connection handler's defer
     }
 
     pub fn registerActiveStream(self: *SharedConnState, stream_id: u64) !bool {
-        self.streams_mu.lock();
-        defer self.streams_mu.unlock();
-
-        for (self.active_stream_ids.items) |active_stream_id| {
-            if (active_stream_id == stream_id) return false;
-        }
-
-        try self.active_stream_ids.append(self.allocator, stream_id);
-        return true;
+        return self.active_stream_registry.register(stream_id);
     }
 
     pub fn unregisterActiveStream(self: *SharedConnState, stream_id: u64) void {
-        self.streams_mu.lock();
-        defer self.streams_mu.unlock();
-
-        for (self.active_stream_ids.items, 0..) |active_stream_id, index| {
-            if (active_stream_id == stream_id) {
-                _ = self.active_stream_ids.swapRemove(index);
-                return;
-            }
-        }
+        _ = self.active_stream_registry.unregister(stream_id);
     }
 
     pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
@@ -695,13 +679,13 @@ fn streamAcceptorLoop(
     conn_state: *SharedConnState,
     shutdown: *std.atomic.Value(bool),
 ) void {
-    const max_additional_streams: u32 = 64; // Limit to prevent resource exhaustion
     while (!shutdown.load(.acquire)) {
         // Check if connection is still alive
         if (conn.isDrained()) break;
 
-        // Check stream limit
-        if (conn_state.active_streams.load(.acquire) >= max_additional_streams) {
+        // Check the total per-connection stream limit, including the first
+        // stream that bootstraps the session before the acceptor starts.
+        if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
             // GAP-0274: Wait for a stream to close instead of blind-sleeping
             conn_state.streams_mu.lock();
             conn_state.streams_cv.timedWait(&conn_state.streams_mu, 5 * std.time.ns_per_ms) catch {};
@@ -3087,10 +3071,10 @@ test "SharedConnState registerActiveStream deduplicates requeued stream ids" {
 
     try std.testing.expect(try shared.registerActiveStream(4));
     try std.testing.expect(!try shared.registerActiveStream(4));
-    try std.testing.expectEqual(@as(usize, 1), shared.active_stream_ids.items.len);
+    try std.testing.expectEqual(@as(usize, 1), shared.active_stream_registry.count());
 
     shared.unregisterActiveStream(4);
-    try std.testing.expectEqual(@as(usize, 0), shared.active_stream_ids.items.len);
+    try std.testing.expectEqual(@as(usize, 0), shared.active_stream_registry.count());
     try std.testing.expect(try shared.registerActiveStream(4));
 }
 
