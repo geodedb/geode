@@ -1184,6 +1184,19 @@ pub const IndexManager = struct {
         return null;
     }
 
+    /// O(1) check whether any advanced index is registered for a label+property pair.
+    /// Used by property_mutation to skip expensive rebuilds when no index exists.
+    pub fn hasAdvancedIndexForProperty(self: *IndexManager, label: []const u8, property: []const u8) bool {
+        var iter = self.advanced_property_indexes.iterator();
+        while (iter.next()) |entry| {
+            const meta = entry.value_ptr.*;
+            if (std.mem.eql(u8, meta.label, label) and std.mem.eql(u8, meta.property, property)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn rebuildAdvancedIndexesForProperty(
         self: *IndexManager,
         store: *graph_store.GraphStore,

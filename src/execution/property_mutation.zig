@@ -126,14 +126,21 @@ fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) !
     return try allocator.dupe(u8, buf.items);
 }
 
+/// Update advanced indexes for a single property mutation.
+/// Only triggers a rebuild when an advanced index (vector, spatial, CIDR, etc.)
+/// is actually registered for this label+property combination.
+/// GAP-0511: Previously called on every setNodeProperty, causing a full O(N)
+/// index drop+rebuild under the graph write lock per property set. Now checks
+/// hasAdvancedIndexForProperty first — O(1) hash map probe that short-circuits
+/// for the common case (no advanced index on the mutated property).
 fn rebuildAdvancedIndexesForProperty(
     store: *graph_store.GraphStore,
     label: []const u8,
     property: []const u8,
 ) void {
-    if (index_manager.getGlobalIndexManager()) |manager| {
-        manager.rebuildAdvancedIndexesForProperty(store, label, property) catch {};
-    }
+    const manager = index_manager.getGlobalIndexManager() orelse return;
+    if (!manager.hasAdvancedIndexForProperty(label, property)) return;
+    manager.rebuildAdvancedIndexesForProperty(store, label, property) catch {};
 }
 
 fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
