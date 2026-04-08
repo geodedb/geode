@@ -140,15 +140,71 @@ fn rebuildAdvancedIndexesForProperty(
 ) void {
     const manager = index_manager.getGlobalIndexManager() orelse return;
     if (!manager.hasAdvancedIndexForProperty(label, property)) return;
-    manager.rebuildAdvancedIndexesForProperty(store, label, property) catch {};
+
+    var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(store.allocator);
+
+    var iter = manager.advanced_property_indexes.iterator();
+    while (iter.next()) |entry| {
+        const meta = entry.value_ptr.*;
+        if (std.mem.eql(u8, meta.label, label) and std.mem.eql(u8, meta.property, property)) {
+            names.append(store.allocator, meta.name) catch continue;
+        }
+    }
+
+    queueAdvancedIndexRebuild(store, manager, &names);
 }
 
-/// GAP-0511: Same optimization as rebuildAdvancedIndexesForProperty — only
-/// rebuild when an advanced index is registered for this label.
 fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
     const manager = index_manager.getGlobalIndexManager() orelse return;
     if (!manager.hasAdvancedIndexForLabel(label)) return;
-    manager.rebuildAdvancedIndexesForLabel(store, label) catch {};
+
+    var names = std.ArrayList([]const u8).empty;
+    defer names.deinit(store.allocator);
+
+    var iter = manager.advanced_property_indexes.iterator();
+    while (iter.next()) |entry| {
+        const meta = entry.value_ptr.*;
+        if (std.mem.eql(u8, meta.label, label)) {
+            names.append(store.allocator, meta.name) catch continue;
+        }
+    }
+
+    queueAdvancedIndexRebuild(store, manager, &names);
+}
+
+fn queueAdvancedIndexRebuild(
+    store: *graph_store.GraphStore,
+    manager: *@import("../index/index_manager.zig").IndexManager,
+    names: *std.ArrayList([]const u8),
+) void {
+    if (names.items.len == 0) return;
+
+    const txn_undo_log = @import("../txn_undo_log.zig");
+    const undo_log = txn_undo_log.getGlobalUndoLog(store.allocator);
+    if (undo_log.active) {
+        for (names.items) |name| {
+            undo_log.queueAdvancedIndexRebuild(name) catch {};
+        }
+        return;
+    }
+
+    const execution = @import("../execution.zig");
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.pending_index_rebuilds) |rebuilds| {
+            for (names.items) |name| {
+                const name_copy = store.allocator.dupe(u8, name) catch continue;
+                rebuilds.put(name_copy, {}) catch {
+                    store.allocator.free(name_copy);
+                };
+            }
+            return;
+        }
+    }
+
+    for (names.items) |name| {
+        manager.rebuildAdvancedIndex(store, name) catch {};
+    }
 }
 
 pub fn coercePropertyValue(allocator: std.mem.Allocator, value: Value) !graph_store.PropertyValue {

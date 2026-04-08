@@ -160,6 +160,7 @@ pub const UndoLog = struct {
     entries: std.ArrayListUnmanaged(UndoEntry),
     active: bool,
     savepoints: std.ArrayListUnmanaged(Savepoint) = .{},
+    pending_advanced_index_rebuilds: std.StringHashMapUnmanaged(void) = .{},
 
     pub fn init(allocator: std.mem.Allocator) UndoLog {
         return .{
@@ -167,7 +168,31 @@ pub const UndoLog = struct {
             .entries = .{},
             .active = false,
             .savepoints = .{},
+            .pending_advanced_index_rebuilds = .{},
         };
+    }
+
+    pub fn queueAdvancedIndexRebuild(self: *UndoLog, index_name: []const u8) !void {
+        if (!self.active) return;
+        const name_copy = try self.allocator.dupe(u8, index_name);
+        try self.pending_advanced_index_rebuilds.put(self.allocator, name_copy, {});
+    }
+
+    pub fn flushPendingRebuilds(self: *UndoLog, store: *graph_store.GraphStore) void {
+        const index_manager = @import("index/index_manager.zig").getGlobalIndexManager() orelse return;
+        var iter = self.pending_advanced_index_rebuilds.keyIterator();
+        while (iter.next()) |key_ptr| {
+            index_manager.rebuildAdvancedIndex(store, key_ptr.*) catch {};
+        }
+        self.clearPendingRebuilds();
+    }
+
+    pub fn clearPendingRebuilds(self: *UndoLog) void {
+        var iter = self.pending_advanced_index_rebuilds.keyIterator();
+        while (iter.next()) |key_ptr| {
+            self.allocator.free(key_ptr.*);
+        }
+        self.pending_advanced_index_rebuilds.clearRetainingCapacity();
     }
 
     pub fn deinit(self: *UndoLog) void {
@@ -175,6 +200,8 @@ pub const UndoLog = struct {
         self.entries.deinit(self.allocator);
         self.clearSavepoints();
         self.savepoints.deinit(self.allocator);
+        self.clearPendingRebuilds();
+        self.pending_advanced_index_rebuilds.deinit(self.allocator);
     }
 
     pub fn clear(self: *UndoLog) void {
@@ -239,10 +266,16 @@ pub const UndoLog = struct {
     pub fn begin(self: *UndoLog) void {
         self.clear();
         self.clearSavepoints();
+        self.clearPendingRebuilds();
         self.active = true;
     }
 
-    pub fn commit(self: *UndoLog) void {
+    pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) void {
+        if (store) |s| {
+            self.flushPendingRebuilds(s);
+        } else {
+            self.clearPendingRebuilds();
+        }
         self.clear();
         self.clearSavepoints();
         self.active = false;
@@ -1018,7 +1051,7 @@ test "basic undo log operations" {
     try std.testing.expectEqual(@as(usize, 3), log.entries.items.len);
 
     // Commit clears the log
-    log.commit();
+    log.commit(null);
     try std.testing.expectEqual(@as(usize, 0), log.entries.items.len);
     try std.testing.expect(!log.active);
 }
@@ -1162,7 +1195,7 @@ test "savepoint create and rollback to savepoint" {
     try std.testing.expectEqual(@as(usize, 5), undo.savepoints.items[1].entry_index);
 
     // Commit clears savepoints
-    undo.commit();
+    undo.commit(null);
     try std.testing.expectEqual(@as(usize, 0), undo.entries.items.len);
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
     try std.testing.expect(!undo.active);
@@ -1183,7 +1216,7 @@ test "savepoint not found error" {
     // easily construct in a unit test without initializing the full engine.
     // Instead we test that the error is returned for a missing name.
     try std.testing.expectError(error.SavepointNotFound, undo.rollbackToSavepoint("nonexistent", dummy_store_ptr));
-    undo.commit();
+    undo.commit(null);
 }
 
 const dummy_store_ptr = @as(*graph_store.GraphStore, @ptrFromInt(std.mem.alignForward(usize, 0xdeadbeef, @alignOf(graph_store.GraphStore))));
@@ -1200,7 +1233,7 @@ test "begin clears savepoints from previous transaction" {
     // Begin a new transaction — should clear previous savepoints
     undo.begin();
     try std.testing.expectEqual(@as(usize, 0), undo.savepoints.items.len);
-    undo.commit();
+    undo.commit(null);
 }
 
 test "SerializedProperty round-trips decimal and ext values" {

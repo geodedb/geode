@@ -65,6 +65,7 @@ var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 // S1: Post-execution RLS filter — removes result rows containing denied labels.
 // CANARY: REQ=REQ-SEC-RLS-WIRE-002; FEATURE="RLS Query Enforcement"; ASPECT=QUICImport; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
 const rls_filter = @import("rls_filter.zig");
+const index_manager = geode.index_manager;
 
 /// Set the global mTLS provider (called from server/main.zig during startup)
 pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
@@ -1998,7 +1999,7 @@ fn handleClientMessage(
                 }
             }
 
-            const exec_context = execution.ExecutionContext{
+            var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
                 .user = state.authenticated_user,
                 .role = role,
@@ -2012,10 +2013,19 @@ fn handleClientMessage(
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                // GAP-0510 Task 3b: Wire expression RLS engine pointer into execution context.
+                // GAP-0511 Task 3b: Wire expression RLS engine pointer into execution context.
                 // CANARY: REQ=REQ-SEC-RLS-WIRE-013; FEATURE="RLS Expression Wiring"; ASPECT=ExecContextWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
                 .rls_engine = @import("rls_types").getGlobalExprRLSEngine(),
+                .pending_index_rebuilds = null,
             };
+
+            var pending_index_rebuilds = std.StringHashMap(void).init(gpa);
+            defer {
+                var iter = pending_index_rebuilds.keyIterator();
+                while (iter.next()) |k| gpa.free(k.*);
+                pending_index_rebuilds.deinit();
+            }
+            exec_context.pending_index_rebuilds = &pending_index_rebuilds;
 
             var flags = std.ArrayList([]const u8).initCapacity(gpa, 8) catch return error.OutOfMemory;
             defer flags.deinit(gpa);
@@ -2077,7 +2087,16 @@ fn handleClientMessage(
             var lock_released = false;
             defer {
                 if (!lock_released) {
-                    if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                    if (graph_lock_handle) |h| {
+                        if (pending_index_rebuilds.count() > 0) {
+                            if (index_manager.getGlobalIndexManager()) |manager| {
+                                const store = graph_store.getGlobalStore(gpa);
+                                var iter = pending_index_rebuilds.keyIterator();
+                                while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
+                            }
+                        }
+                        graph_store.releaseGraphLock(h);
+                    }
                 }
             }
 
@@ -2139,7 +2158,16 @@ fn handleClientMessage(
                             const profile_is_dirty = store.isDirty();
 
                             if (needs_store_lock) {
-                                if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                                if (graph_lock_handle) |h| {
+                                    if (pending_index_rebuilds.count() > 0) {
+                                        if (index_manager.getGlobalIndexManager()) |manager| {
+                                            const idx_store = graph_store.getGlobalStore(gpa);
+                                            var iter = pending_index_rebuilds.keyIterator();
+                                            while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                        }
+                                    }
+                                    graph_store.releaseGraphLock(h);
+                                }
                                 lock_released = true;
                             }
 
@@ -2204,7 +2232,16 @@ fn handleClientMessage(
                     // #52: Release lock before serialization and network send.
                     // exec_result is a thread-local copy; store stats are captured above.
                     if (needs_store_lock) {
-                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                        if (graph_lock_handle) |h| {
+                            if (pending_index_rebuilds.count() > 0) {
+                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                    const idx_store = graph_store.getGlobalStore(gpa);
+                                    var iter = pending_index_rebuilds.keyIterator();
+                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                }
+                            }
+                            graph_store.releaseGraphLock(h);
+                        }
                         lock_released = true;
                     }
 
@@ -2252,7 +2289,16 @@ fn handleClientMessage(
                                     errdefer active_stream.deinit();
 
                                     if (needs_store_lock) {
-                                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                                        if (graph_lock_handle) |h| {
+                                            if (pending_index_rebuilds.count() > 0) {
+                                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                                    const idx_store = graph_store.getGlobalStore(gpa);
+                                                    var iter = pending_index_rebuilds.keyIterator();
+                                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                                }
+                                            }
+                                            graph_store.releaseGraphLock(h);
+                                        }
                                         lock_released = true;
                                     }
 
@@ -2349,7 +2395,16 @@ fn handleClientMessage(
                     // Everything below (flags, ordering, serialization, send, txn state update)
                     // does not access the store and does not need the lock.
                     if (needs_store_lock) {
-                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                        if (graph_lock_handle) |h| {
+                            if (pending_index_rebuilds.count() > 0) {
+                                if (index_manager.getGlobalIndexManager()) |manager| {
+                                    const idx_store = graph_store.getGlobalStore(gpa);
+                                    var iter = pending_index_rebuilds.keyIterator();
+                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
+                                }
+                            }
+                            graph_store.releaseGraphLock(h);
+                        }
                         lock_released = true;
                     }
 
@@ -2604,7 +2659,14 @@ fn handleClientMessage(
                 },
             }
             if (state.in_txn) {
-                txn_undo_log.getGlobalUndoLog(gpa).commit();
+                // GAP-0511: COMMIT must acquire the write lock to safely rebuild indexes and sync state
+                const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
+                defer graph_store.releaseGraphLock(commit_lock);
+
+                const store = graph_store.getGlobalStore(gpa);
+                txn_undo_log.getGlobalUndoLog(gpa).commit(store);
+
                 state.global_commit_ts += 1;
                 state.in_txn = false;
                 state.txn_id = 0;

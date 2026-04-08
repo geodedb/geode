@@ -562,20 +562,22 @@ pub const StorageAdapter = struct {
 
     /// Delete a node by ID in the named graph.
     pub fn deleteNode(self: *StorageAdapter, graph_name: []const u8, node_id: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         try mg.engine.deleteNode(node_id);
     }
 
     /// Retrieve the string labels for a node. Caller owns the returned
     /// slice and must free both the slice and each string inside it.
     pub fn getNodeLabels(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![][]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         // Retrieve label IDs from the engine's LabelStore (variable-length
@@ -611,10 +613,11 @@ pub const StorageAdapter = struct {
 
     /// Delete an edge by its endpoints and edge ID.
     pub fn deleteEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         try mg.engine.removeEdge(from_id, to_id, edge_id);
     }
 
@@ -690,10 +693,11 @@ pub const StorageAdapter = struct {
     /// The engine's `putProperty` returns a (potentially new) `prop_head`
     /// that must be written back to the node record.
     pub fn setNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, value: graph_store.PropertyValue) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         const storage_val = try toStorageProperty(self.allocator, value);
@@ -717,10 +721,11 @@ pub const StorageAdapter = struct {
     /// can cause severe mutex contention when the server is concurrently
     /// servicing queries against the same StorageAdapter.
     pub fn setNodePropertiesBatch(self: *StorageAdapter, graph_name: []const u8, node_id: u64, entries: []const BatchPropertyEntry) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         for (entries) |entry| {
@@ -741,10 +746,11 @@ pub const StorageAdapter = struct {
 
     /// Remove a property from a node by writing a null tombstone.
     pub fn removeNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, .null);
@@ -754,10 +760,11 @@ pub const StorageAdapter = struct {
 
     /// Get a property from a node, returned in graph-storage representation.
     pub fn getNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         if (rec.prop_head == 0) return null;
@@ -834,10 +841,11 @@ pub const StorageAdapter = struct {
         key: []const u8,
         value: graph_store.PropertyValue,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
@@ -853,10 +861,11 @@ pub const StorageAdapter = struct {
         key: []const u8,
         allocator: Allocator,
     ) !?gs.PropertyValue {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.getEdgeProperty(from_id, edge_id, key, allocator);
     }
 
@@ -923,10 +932,11 @@ pub const StorageAdapter = struct {
     /// Return manifest-level statistics for the named graph, or null if
     /// the graph is not loaded.
     pub fn getGraphStats(self: *StorageAdapter, graph_name: []const u8) ?GraphStats {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = self.requireExistingGraphLocked(graph_name) catch return null;
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk self.requireExistingGraphLocked(graph_name) catch return null;
+        };
         const m = &mg.engine.manifest;
 
         return .{
@@ -956,10 +966,11 @@ pub const StorageAdapter = struct {
         node_id: u64,
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
@@ -1008,10 +1019,11 @@ pub const StorageAdapter = struct {
         prop_head: u32,
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
 
         var result = std.StringHashMap(gs.PropertyValue).init(allocator);
         errdefer result.deinit();
@@ -1052,28 +1064,31 @@ pub const StorageAdapter = struct {
 
     /// Begin a new transaction in the named graph.
     pub fn beginTransaction(self: *StorageAdapter, graph_name: []const u8) !u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.beginTxn();
     }
 
     /// Commit a transaction.
     pub fn commitTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         try mg.engine.commitTxn(txn_id);
     }
 
     /// Abort (rollback) a transaction.
     pub fn abortTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         try mg.engine.abortTxn(txn_id);
     }
 
@@ -1110,14 +1125,27 @@ pub const StorageAdapter = struct {
             mg.rwlock.unlockShared();
         }
 
-        // Re-acquire mutex briefly to sync registry counts and persist.
+        // Collect manifest counts under per-graph read lock (no mutex),
+        // then sync the registry under the adapter mutex (no rwlock).
+        // Holding mutex while acquiring rwlock caused ABBA deadlocks:
+        //   Thread A (MERGE): holds rwlock → wants mutex (adapter methods)
+        //   Thread B (checkpoint): holds mutex → wants rwlock (here)
+        var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
+        for (graphs_buf[0..graph_count], 0..) |mg, i| {
+            mg.rwlock.lockShared();
+            counts_buf[i] = .{
+                .name = mg.name,
+                .uuid = mg.uuid,
+                .node_count = mg.engine.manifest.node_count,
+                .edge_count = mg.engine.manifest.edge_count,
+            };
+            mg.rwlock.unlockShared();
+        }
         {
             self.mutex.lock();
             defer self.mutex.unlock();
-            for (graphs_buf[0..graph_count]) |mg| {
-                mg.rwlock.lockShared();
-                self.syncRegistryCountsLocked(mg);
-                mg.rwlock.unlockShared();
+            for (counts_buf[0..graph_count]) |c| {
+                self.upsertRegistryEntryLocked(c.name, c.uuid, c.node_count, c.edge_count);
             }
             self.saveRegistryLocked() catch |err| {
                 log.warn("failed to persist graph registry: {}", .{err});
@@ -1131,19 +1159,21 @@ pub const StorageAdapter = struct {
 
     /// Return the number of nodes in the named graph.
     pub fn nodeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.nodeCount();
     }
 
     /// Return the number of edges in the named graph.
     pub fn edgeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.edgeCount();
     }
 
@@ -1480,10 +1510,11 @@ pub const StorageAdapter = struct {
     /// LabelId via the per-graph dictionary, creating a new mapping if
     /// this is the first time the label has been seen.
     pub fn addNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const label_id = try mg.label_dict.getOrCreate(label);
         try mg.engine.addLabel(node_id, label_id);
     }
@@ -1491,10 +1522,11 @@ pub const StorageAdapter = struct {
     /// Remove a label from a node. If the label string is not in the
     /// per-graph dictionary then there is nothing to remove.
     pub fn removeNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         try mg.engine.removeLabel(node_id, label_id);
     }
@@ -1513,10 +1545,11 @@ pub const StorageAdapter = struct {
         edge_id: u64,
         key: []const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
     }
 
@@ -1526,19 +1559,21 @@ pub const StorageAdapter = struct {
 
     /// Return storage-level statistics for the named graph.
     pub fn getStorageStats(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.StorageStats {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.getStorageStats();
     }
 
     /// Run an integrity check on the named graph and return the report.
     pub fn checkIntegrity(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.IntegrityReport {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        const mg = try self.requireExistingGraphLocked(graph_name);
+        const mg = blk: {
+            self.mutex.lock();
+            defer self.mutex.unlock();
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
         return mg.engine.checkIntegrity();
     }
 

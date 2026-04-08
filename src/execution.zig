@@ -420,6 +420,8 @@ pub const ExecutionContext = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
     // GAP-0281: Session tenant_id threaded through to FLE encryption hooks
     tenant_id: ?[]const u8 = null,
+    // GAP-0511: Queued advanced index rebuilds to be flushed at the end of statement execution
+    pending_index_rebuilds: ?*std.StringHashMap(void) = null,
 };
 
 threadlocal var g_active_context: ?*const ExecutionContext = null;
@@ -1014,7 +1016,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 // CANARY: REQ=REQ-TXN-UNDO-006; FEATURE="TransactionUndoLog"; ASPECT=CommitTransaction; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
                 // Commit the undo log - clears the log and keeps changes
                 const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
-                undo_log.commit();
+                const commit_store = graph_store.getWritableGlobalStore(allocator);
+                undo_log.commit(commit_store);
 
                 break :blk "transaction committed";
             } else "no transaction active";

@@ -1825,7 +1825,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     }
                 }
             }
-            const exec_context = execution.ExecutionContext{
+            var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
                 .user = state.authenticated_user,
                 .role = role,
@@ -1838,7 +1838,16 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                .pending_index_rebuilds = null,
             };
+
+            var pending_index_rebuilds = std.StringHashMap(void).init(allocator);
+            defer {
+                var iter = pending_index_rebuilds.keyIterator();
+                while (iter.next()) |k| allocator.free(k.*);
+                pending_index_rebuilds.deinit();
+            }
+            exec_context.pending_index_rebuilds = &pending_index_rebuilds;
 
             var flags = std.ArrayList([]const u8).initCapacity(allocator, 8) catch return error.OutOfMemory;
             defer flags.deinit(allocator);
@@ -2362,7 +2371,13 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     }
 
     if (state.in_txn) {
-        txn_undo_log.getGlobalUndoLog(allocator).commit();
+        const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+        const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
+        defer graph_store.releaseGraphLock(commit_lock);
+
+        const store_ptr = graph_store.getGlobalStore(allocator);
+        txn_undo_log.getGlobalUndoLog(allocator).commit(store_ptr);
+
         state.global_commit_ts += 1;
         state.in_txn = false;
         state.txn_id = 0;
