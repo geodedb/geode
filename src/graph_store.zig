@@ -688,6 +688,7 @@ pub const GraphStore = struct {
     fn ensureGraph(self: *GraphStore, graph_name: []const u8) !void {
         try self.ensureGraphNoDirty(graph_name);
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
     }
 
     fn ensureGraphNoDirty(self: *GraphStore, graph_name: []const u8) !void {
@@ -928,6 +929,7 @@ pub const GraphStore = struct {
         _ = try self.getOrCreateIdMap(graph_name);
 
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
     }
 
     /// Open a graph using a known UUID (for catalog recovery).
@@ -942,6 +944,7 @@ pub const GraphStore = struct {
         try self.graphs.put(name_copy, {});
         _ = try self.getOrCreateIdMap(graph_name);
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
     }
 
     /// Return the UUID for a named graph from the storage adapter, or null
@@ -976,6 +979,7 @@ pub const GraphStore = struct {
             im.deinit();
         }
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
     }
 
     // CANARY: REQ=REQ-MULTI-GRAPH-004; FEATURE="MultiGraphIsolation"; ASPECT=CreateNode; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
@@ -1040,6 +1044,7 @@ pub const GraphStore = struct {
 
         // Mark store as dirty - persistence happens at query completion, not per-node
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
         log.debug("Node created, dirty=true", &.{
             Attr.int("node_id", @intCast(id)),
             Attr.int("total_nodes", @intCast(self.nodes.count())),
@@ -1110,6 +1115,7 @@ pub const GraphStore = struct {
 
         if (mark_dirty) {
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
         }
     }
 
@@ -1576,6 +1582,7 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
 
             // WAL notification: SetNodeProperty
             notifyMutation(.set_node_property, node_id, 0, 0, null, key, effective_value, null);
@@ -1663,6 +1670,7 @@ pub const GraphStore = struct {
                 }
             }
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
         }
     }
 
@@ -1792,6 +1800,7 @@ pub const GraphStore = struct {
             }
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
 
             // WAL notification: RemoveNodeProperty
             notifyMutation(.remove_node_property, node_id, 0, 0, null, key, null, null);
@@ -1853,6 +1862,7 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
 
             // WAL notification: AddNodeLabel
             notifyMutation(.add_node_label, node_id, 0, 0, label, null, null, null);
@@ -1902,6 +1912,7 @@ pub const GraphStore = struct {
 
                 // Mark as dirty - persistence happens at query completion
                 self.dirty.store(true, .release);
+                incrementMutationEpoch();
 
                 // WAL notification: RemoveNodeLabel
                 notifyMutation(.remove_node_label, node_id, 0, 0, label, null, null, null);
@@ -2508,6 +2519,7 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-edge
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
 
         // WAL notification: CreateEdge
         notifyMutation(.create_edge, id, from_id, to_id, edge_type, null, null, graph_name);
@@ -2590,6 +2602,7 @@ pub const GraphStore = struct {
 
         if (mark_dirty) {
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
         }
     }
 
@@ -2786,6 +2799,7 @@ pub const GraphStore = struct {
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
 
             // WAL notification: SetEdgeProperty
             notifyMutation(.set_edge_property, edge_id, 0, 0, null, key, effective_value, null);
@@ -2838,6 +2852,7 @@ pub const GraphStore = struct {
                 freePropertyValue(self, kv.value);
             }
             self.dirty.store(true, .release);
+            incrementMutationEpoch();
 
             // WAL notification: RemoveEdgeProperty
             notifyMutation(.remove_edge_property, edge_id, 0, 0, null, key, null, null);
@@ -4297,6 +4312,7 @@ pub const GraphStore = struct {
 
         self.deleteNodeNoSave(node_id);
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
         // WAL notification: DeleteNode
         notifyMutation(.delete_node, node_id, 0, 0, null, null, null, gn);
     }
@@ -4349,6 +4365,7 @@ pub const GraphStore = struct {
 
         self.deleteEdgeNoSave(edge_id);
         self.dirty.store(true, .release);
+        incrementMutationEpoch();
         // WAL notification: DeleteEdge
         notifyMutation(.delete_edge, edge_id, 0, 0, null, null, null, gn);
     }
@@ -4760,6 +4777,20 @@ var g_init_mutex: std.Thread.Mutex = .{};
 /// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
 var g_store_rwlock: std.Thread.RwLock = .{};
 
+/// Mutation epoch counter for ReadView invalidation.
+/// Incremented on every data mutation (node/edge create, delete, property set/remove).
+/// ReadView captures this at creation; if the epoch changes during a read, the view
+/// lazily falls back to a deep-clone snapshot.
+var g_mutation_epoch: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+pub fn getMutationEpoch() u64 {
+    return g_mutation_epoch.load(.acquire);
+}
+
+pub fn incrementMutationEpoch() void {
+    _ = g_mutation_epoch.fetchAdd(1, .release);
+}
+
 // CANARY: REQ=REQ-PERF-PLAN-LIFECYCLE-006; FEATURE="PlanCacheLifecycle"; ASPECT=SchemaEpoch; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
 /// Issue #452: Schema epoch counter for plan cache invalidation.
 /// Incremented on DDL operations (CREATE/DROP INDEX, schema changes).
@@ -5076,6 +5107,51 @@ pub const QueryReadSession = struct {
 
     pub fn store(self: *QueryReadSession) *GraphStore {
         return &self.snapshot;
+    }
+};
+
+/// Lightweight read view with epoch-based invalidation.
+/// Captures a mutation epoch counter at creation time. If no concurrent mutations
+/// occur (epoch unchanged), reads go directly to the base store (zero overhead).
+/// If mutations are detected (epoch changed), lazily falls back to a deep-clone snapshot.
+pub const ReadView = struct {
+    base: *GraphStore,
+    captured_epoch: u64,
+    fallback_snapshot: ?QueryReadSession,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator, store_ptr: *GraphStore) ReadView {
+        return .{
+            .base = store_ptr,
+            .captured_epoch = getMutationEpoch(),
+            .fallback_snapshot = null,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *ReadView) void {
+        if (self.fallback_snapshot) |*snap| {
+            snap.deinit();
+        }
+    }
+
+    /// Returns the store to read from. Zero overhead when no concurrent
+    /// mutations (epoch unchanged). Falls back to deep-clone snapshot
+    /// when mutations are detected.
+    pub fn getReadStore(self: *ReadView) *GraphStore {
+        if (getMutationEpoch() == self.captured_epoch) {
+            return self.base;
+        }
+        // Epoch changed — concurrent mutation detected
+        if (self.fallback_snapshot == null) {
+            acquireStoreLock();
+            defer releaseStoreLock();
+            self.fallback_snapshot = QueryReadSession.initIfAvailable(self.allocator, self.base) catch null;
+        }
+        if (self.fallback_snapshot) |*snap| {
+            return snap.store();
+        }
+        return self.base; // fallback if snapshot creation failed
     }
 };
 
