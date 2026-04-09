@@ -126,41 +126,12 @@ fn collectCandidateNodeIds(
     labels: []const []const u8,
     props: ?[]const EvaluatedPatternProp,
 ) ![]u64 {
+    _ = props;
+    // Use the in-memory label index for O(1) lookup. The storage adapter's
+    // property index is not reliable for recently-created nodes (the write
+    // may not have been flushed yet), so we always scan in-memory here and
+    // let nodeMatchesPattern handle property filtering.
     if (labels.len > 0) {
-        if (props) |evaluated_props| {
-            if (graph_store.getGlobalAdapter()) |adapter| {
-                var best: ?[]u64 = null;
-                errdefer if (best) |ids| allocator.free(ids);
-
-                for (labels) |label| {
-                    for (evaluated_props) |prop| {
-                        const storage_prop = property_codec.valueToPropertyValue(allocator, prop.value) catch continue;
-                        defer property_codec.freePropertyValue(allocator, storage_prop);
-
-                        const candidate_ids = try adapter.getCandidateNodesByLabelAndProperty(
-                            graph_name,
-                            label,
-                            prop.key,
-                            storage_prop,
-                            allocator,
-                        );
-                        if (best) |existing| {
-                            if (candidate_ids.len < existing.len) {
-                                allocator.free(existing);
-                                best = candidate_ids;
-                            } else {
-                                allocator.free(candidate_ids);
-                            }
-                        } else {
-                            best = candidate_ids;
-                        }
-                    }
-                }
-
-                if (best) |ids| return ids;
-            }
-        }
-
         var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_id);
         return try candidates.toOwnedSlice(allocator);
     }
