@@ -3720,28 +3720,22 @@ fn executeVariableLengthPathTraversal(
         // B07 Fix: For 0-length paths (single node, no edges), edge list is empty but path is still valid
 
         // Create environment with all matched elements (including path variable if present)
-        var env_count: usize = 0;
-        if (left_node_var != null) env_count += 1;
-        if (right_node_var != null) env_count += 1;
-        if (rel_var != null) env_count += 1;
-        if (chain_path_var != null) env_count += 1;
-
-        const env_names = try allocator.alloc([]const u8, env_count);
-        const env_values = try allocator.alloc(Value, env_count);
-
+        // Stack-based: env size is always <=4 (left_node_var, right_node_var, rel_var, chain_path_var)
+        var stack_env_names: [4][]const u8 = undefined;
+        var stack_env_values: [4]Value = undefined;
         var env_idx: usize = 0;
         if (left_node_var) |var_name| {
-            env_names[env_idx] = var_name;
-            env_values[env_idx] = Value{ .Node = left_node };
+            stack_env_names[env_idx] = var_name;
+            stack_env_values[env_idx] = Value{ .Node = left_node };
             env_idx += 1;
         }
         if (right_node_var) |var_name| {
-            env_names[env_idx] = var_name;
-            env_values[env_idx] = Value{ .Node = right_node_ptr };
+            stack_env_names[env_idx] = var_name;
+            stack_env_values[env_idx] = Value{ .Node = right_node_ptr };
             env_idx += 1;
         }
         if (rel_var) |var_name| {
-            env_names[env_idx] = var_name;
+            stack_env_names[env_idx] = var_name;
             // CANARY: REQ=REQ-GQL-VARLEN-RELVAR-LIST; FEATURE="VariableLengthPathRelList"; ASPECT=EdgeListBinding; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-15
             // For variable-length paths, bind rel_var to the list of all edges
             // This enables all(rel IN r WHERE ...) to iterate over all relationships in the path
@@ -3753,7 +3747,7 @@ fn executeVariableLengthPathTraversal(
                     edge_values[i] = Value{ .Null = {} };
                 }
             }
-            env_values[env_idx] = Value{ .List = edge_values };
+            stack_env_values[env_idx] = Value{ .List = edge_values };
             env_idx += 1;
         }
         if (chain_path_var) |var_name| {
@@ -3775,8 +3769,8 @@ fn executeVariableLengthPathTraversal(
                 }
             }
 
-            env_names[env_idx] = var_name;
-            env_values[env_idx] = Value{ .Path = .{
+            stack_env_names[env_idx] = var_name;
+            stack_env_values[env_idx] = Value{ .Path = .{
                 .nodes = path_nodes_list.toOwnedSlice(allocator) catch &.{},
                 .edges = path_edges_list.toOwnedSlice(allocator) catch &.{},
             } };
@@ -3784,12 +3778,12 @@ fn executeVariableLengthPathTraversal(
         }
 
         const env = Env{
-            .names = env_names,
-            .values = env_values,
+            .names = stack_env_names[0..env_idx],
+            .values = stack_env_values[0..env_idx],
             .param_names = param_names,
             .param_values = param_values,
             .allocator = allocator,
-            .owned = true, // Owns allocated arrays
+            .owned = false, // Stack buffers, no free needed
         };
 
         // Evaluate WHERE clause if present
@@ -3803,8 +3797,18 @@ fn executeVariableLengthPathTraversal(
             };
 
             if (!passes_where) {
-                allocator.free(env_names);
-                allocator.free(env_values);
+                // Free heap-allocated inner values (edge_values slice, path node/edge arrays)
+                // but NOT the stack env arrays themselves
+                for (stack_env_values[0..env_idx]) |v| {
+                    switch (v) {
+                        .List => |list| allocator.free(list),
+                        .Path => |p| {
+                            allocator.free(p.nodes);
+                            allocator.free(p.edges);
+                        },
+                        else => {},
+                    }
+                }
                 continue;
             }
         }
@@ -3820,18 +3824,29 @@ fn executeVariableLengthPathTraversal(
             };
 
             if (!passes_filter) {
-                allocator.free(env_names);
-                allocator.free(env_values);
+                // Free heap-allocated inner values (edge_values slice, path node/edge arrays)
+                // but NOT the stack env arrays themselves
+                for (stack_env_values[0..env_idx]) |v| {
+                    switch (v) {
+                        .List => |list| allocator.free(list),
+                        .Path => |p| {
+                            allocator.free(p.nodes);
+                            allocator.free(p.edges);
+                        },
+                        else => {},
+                    }
+                }
                 continue;
             }
         }
 
         // CANARY: REQ=REQ-GQL-WITH-GROUPBY-005; FEATURE="WithGroupByAggregation"; ASPECT=VarLenRowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
         // When WITH clause is present, build rows containing matched node values
+        // Values are copied into heap-allocated row since stack buffers are reused each iteration
         var row: []Value = undefined;
         if (has_with) {
-            row = try allocator.alloc(Value, env_values.len);
-            for (env_values, 0..) |val, i| {
+            row = try allocator.alloc(Value, env_idx);
+            for (stack_env_values[0..env_idx], 0..) |val, i| {
                 row[i] = val;
             }
         } else {
@@ -3840,9 +3855,6 @@ fn executeVariableLengthPathTraversal(
                 row[i] = try eval.evalExpr(allocator, item.expr, env);
             }
         }
-
-        allocator.free(env_names);
-        allocator.free(env_values);
 
         try rows.append(allocator, row);
     }
