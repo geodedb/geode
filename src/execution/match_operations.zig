@@ -3949,41 +3949,36 @@ fn executeSingleHopEdgeTraversal(
                 if (!passes_props) continue;
             }
 
-            // Create environment with all matched elements
+            // Create environment with all matched elements using stack buffers
             // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
             // Order must match column order: left, rel, right
-            var env_count: usize = 0;
-            if (left_node_var != null) env_count += 1;
-            if (rel_var != null) env_count += 1;
-            if (right_node_var != null) env_count += 1;
-
-            const env_names = try allocator.alloc([]const u8, env_count);
-            const env_values = try allocator.alloc(Value, env_count);
-
+            // Stack-based: env size is always <=3 (left_node_var, rel_var, right_node_var)
+            var stack_env_names: [3][]const u8 = undefined;
+            var stack_env_values: [3]Value = undefined;
             var env_idx: usize = 0;
             if (left_node_var) |var_name| {
-                env_names[env_idx] = var_name;
-                env_values[env_idx] = Value{ .Node = left_node };
+                stack_env_names[env_idx] = var_name;
+                stack_env_values[env_idx] = Value{ .Node = left_node };
                 env_idx += 1;
             }
             if (rel_var) |var_name| {
-                env_names[env_idx] = var_name;
-                env_values[env_idx] = Value{ .Edge = edge };
+                stack_env_names[env_idx] = var_name;
+                stack_env_values[env_idx] = Value{ .Edge = edge };
                 env_idx += 1;
             }
             if (right_node_var) |var_name| {
-                env_names[env_idx] = var_name;
-                env_values[env_idx] = Value{ .Node = right_node_ptr };
+                stack_env_names[env_idx] = var_name;
+                stack_env_values[env_idx] = Value{ .Node = right_node_ptr };
                 env_idx += 1;
             }
 
             const env = Env{
-                .names = env_names,
-                .values = env_values,
+                .names = stack_env_names[0..env_idx],
+                .values = stack_env_values[0..env_idx],
                 .param_names = param_names,
                 .param_values = param_values,
                 .allocator = allocator,
-                .owned = true, // Owns allocated arrays
+                .owned = false, // Stack buffers, no free needed
             };
 
             // Evaluate WHERE clause if present
@@ -3997,8 +3992,6 @@ fn executeSingleHopEdgeTraversal(
                 };
 
                 if (!passes_where) {
-                    allocator.free(env_names);
-                    allocator.free(env_values);
                     continue;
                 }
             }
@@ -4014,8 +4007,6 @@ fn executeSingleHopEdgeTraversal(
                 };
 
                 if (!passes_filter) {
-                    allocator.free(env_names);
-                    allocator.free(env_values);
                     continue;
                 }
             }
@@ -4072,11 +4063,12 @@ fn executeSingleHopEdgeTraversal(
             // CANARY: REQ=REQ-GQL-WITH-GROUPBY-004; FEATURE="WithGroupByAggregation"; ASPECT=RowBuilding; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
             // When WITH clause is present, build rows containing matched node values
             // When no WITH clause, evaluate RETURN expressions directly
+            // Values are copied into heap-allocated row since stack buffers are reused each iteration
             var row: []Value = undefined;
             if (has_with) {
-                // Build row from matched variables (env contains them)
-                row = try allocator.alloc(Value, env_values.len);
-                for (env_values, 0..) |val, i| {
+                // Build row from matched variables (copy from stack env)
+                row = try allocator.alloc(Value, env_idx);
+                for (stack_env_values[0..env_idx], 0..) |val, i| {
                     row[i] = val;
                 }
             } else {
@@ -4086,9 +4078,6 @@ fn executeSingleHopEdgeTraversal(
                     row[i] = try eval.evalExpr(allocator, item.expr, env);
                 }
             }
-
-            allocator.free(env_names);
-            allocator.free(env_values);
 
             try rows.append(allocator, row);
         }
