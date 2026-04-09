@@ -1461,6 +1461,17 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         bindings.deinit(allocator);
     }
 
+    // LIMIT pushdown for no-label full scans (only when no ORDER BY requires all rows)
+    const scan_limit: ?usize = if (q.order_by == null)
+        resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
+    else
+        null;
+    const scan_offset = if (q.order_by == null)
+        resolveLimitParam(q.offset, q.offset_param, param_names, param_values)
+    else
+        null;
+    const scan_cap: ?usize = if (scan_limit) |lim| lim + (scan_offset orelse 0) else null;
+
     // Process first chain
     if (q.match.chains.len == 0) {
         return ExecutionResult{
@@ -1670,6 +1681,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         try bindings.append(allocator, binding);
                     }
                 }
+
+                // LIMIT pushdown: stop full scan once we have enough bindings
+                if (scan_cap) |cap| {
+                    if (q.match.chains.len == 1 and bindings.items.len >= cap) break;
+                }
             }
         }
     } else if (first_chain.head) |node_pattern| {
@@ -1694,6 +1710,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 var binding = MatchBinding.init(allocator);
                 if (node_pattern.name) |v| try binding.vars.put(v, node);
                 try bindings.append(allocator, binding);
+                // LIMIT pushdown: stop full scan once we have enough bindings
+                if (scan_cap) |cap| {
+                    if (q.match.chains.len == 1 and bindings.items.len >= cap) break;
+                }
             }
         }
     }
@@ -6029,6 +6049,17 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     }
                 };
 
+                // LIMIT pushdown for no-label full scan (only when no ORDER BY)
+                const mh_scan_limit: ?usize = if (q.order_by == null)
+                    resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
+                else
+                    null;
+                const mh_scan_offset = if (q.order_by == null)
+                    resolveLimitParam(q.offset, q.offset_param, param_names, param_values)
+                else
+                    null;
+                const mh_scan_cap: ?usize = if (mh_scan_limit) |lim| lim + (mh_scan_offset orelse 0) else null;
+
                 if (first_hop.left.labels.len > 0) {
                     var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, first_hop.left.labels, filter_tenant);
                     defer label_node_ids.deinit(allocator);
@@ -6045,6 +6076,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (!passesTenantFilter(node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(allocator, node.*)) continue;
                         try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
+                        // LIMIT pushdown: stop full scan once we have enough initial bindings
+                        if (mh_scan_cap) |cap| {
+                            if (current_bindings.items.len >= cap) break;
+                        }
                     }
                 }
 
