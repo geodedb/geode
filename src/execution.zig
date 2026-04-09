@@ -1769,7 +1769,11 @@ pub const PathIterator = struct {
         rel_direction: u8,
         path_mode: ast.PathMode,
     ) !PathIterator {
-        var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 0);
+        var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 16);
+        errdefer {
+            for (queue.items) |*item| item.path.deinit(allocator);
+            queue.deinit(allocator);
+        }
 
         // Seed the BFS queue with the start node
         var initial_path = VariableLengthPath.init(allocator);
