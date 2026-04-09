@@ -1933,27 +1933,33 @@ pub const PathIterator = struct {
             }
             try self.visited_states.put(state_key, depth);
 
-            // Get edges based on direction
-            const outgoing_edges = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getEdgesFrom(self.allocator, last_node_id) else &[_]graph_store.Edge{};
-            const incoming_edges = if (self.rel_direction == 'l' or self.rel_direction == 'u') self.store.getEdgesTo(self.allocator, last_node_id) else &[_]graph_store.Edge{};
+            // Get edges based on direction (zero-copy: no allocation needed)
+            const outgoing_edge_ids = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getOutgoingEdgeIds(last_node_id) else null;
+            const incoming_edge_ids = if (self.rel_direction == 'l' or self.rel_direction == 'u') self.store.getIncomingEdgeIds(last_node_id) else null;
 
             // Process outgoing edges (forward direction)
-            for (outgoing_edges) |edge| {
-                if (self.rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+            if (outgoing_edge_ids) |ids| {
+                for (ids) |edge_id| {
+                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    if (self.rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
+                    }
+                    if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, edge_ptr.to_id)) continue;
+                    try self.expandEdge(&current_path, edge_ptr.id, edge_ptr.to_id, depth);
                 }
-                if (self.shouldSkipByPathMode(&current_path, edge.id, edge.to_id)) continue;
-                try self.expandEdge(&current_path, edge.id, edge.to_id, depth);
             }
 
             // Process incoming edges (reverse direction)
-            for (incoming_edges) |edge| {
-                if (self.rel_type) |rt| {
-                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+            if (incoming_edge_ids) |ids| {
+                for (ids) |edge_id| {
+                    const edge_ptr = self.store.getEdgePtr(edge_id) orelse continue;
+                    if (self.rel_type) |rt| {
+                        if (!std.mem.eql(u8, edge_ptr.label, rt)) continue;
+                    }
+                    const next_node_id = edge_ptr.from_id;
+                    if (self.shouldSkipByPathMode(&current_path, edge_ptr.id, next_node_id)) continue;
+                    try self.expandEdge(&current_path, edge_ptr.id, next_node_id, depth);
                 }
-                const next_node_id = edge.from_id;
-                if (self.shouldSkipByPathMode(&current_path, edge.id, next_node_id)) continue;
-                try self.expandEdge(&current_path, edge.id, next_node_id, depth);
             }
 
             // Clean up the current path (we've cloned it for any expansions)
