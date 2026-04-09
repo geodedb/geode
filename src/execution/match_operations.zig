@@ -25,7 +25,6 @@ const evaluateNodeExpression = execution.evaluateNodeExpression;
 const evaluateGroupAggregation = execution.evaluateGroupAggregation;
 const computeBindingGroupAggregation = execution.computeBindingGroupAggregation;
 const executeWithClause = execution.executeWithClause;
-const expandVariableLengthPaths = execution.expandVariableLengthPaths;
 
 // Import pattern matching helpers (extracted for modularity)
 // CANARY: REQ=REQ-REFACTOR-MATCH-008; FEATURE="MatchOperationsRefactor"; ASPECT=PatternHelpersImport; STATUS=TESTED; OWNER=refactor; UPDATED=2026-01-30
@@ -5543,21 +5542,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         if (!passes_props) continue;
                     }
 
-                    // Expand variable-length paths from this starting node
-                    var paths = try expandVariableLengthPaths(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction);
-                    defer {
-                        for (paths.items) |*path| {
-                            path.deinit(allocator);
-                        }
-                        paths.deinit(allocator);
-                    }
+                    // Stream variable-length paths from this starting node via PathIterator
+                    var path_iter = try execution.PathIterator.init(allocator, store, start_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+                    defer path_iter.deinit();
 
                     // Collect all target nodes from paths (deduplicated by node ID)
                     // CANARY: REQ=REQ-GQL-VARLEN-ENDNODE-001; FEATURE="VariableLengthPathEndNodeFilter"; ASPECT=AggregationFiltering; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
                     // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-002; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
                     // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
                     // A path with N nodes has N-1 edges. min_len specifies minimum edges.
-                    for (paths.items) |path| {
+                    while (try path_iter.next()) |raw_path| {
+                        var path = raw_path;
+                        defer path.deinit(allocator);
                         if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
                         const target_node_id = path.nodes.items[path.nodes.items.len - 1];
