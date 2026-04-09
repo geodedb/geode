@@ -1307,6 +1307,7 @@ pub const GraphStore = struct {
     // Issue #391: Get nodes that have ALL specified labels in a graph
     // Accepts a caller-provided allocator for the result list to avoid
     // concurrent threads contending on self.allocator (GAP-0425 fix).
+    // Perf: uses smallest-posting-list-first strategy to minimize candidate scans.
     pub fn getNodesByLabels(self: *const GraphStore, allocator: std.mem.Allocator, graph_name: []const u8, labels: []const []const u8, tenant_id: ?[]const u8) !std.ArrayList(u64) {
         _ = g_get_nodes_by_labels_count.fetchAdd(1, .monotonic);
         var result = std.ArrayList(u64).empty;
@@ -1315,18 +1316,45 @@ pub const GraphStore = struct {
             return result;
         }
 
-        // Start with nodes that have the first label
-        const first_nodes = self.getNodesByLabel(graph_name, labels[0]) orelse return result;
+        // Single-label fast path: no intersection needed
+        if (labels.len == 1) {
+            const nodes = self.getNodesByLabel(graph_name, labels[0]) orelse return result;
+            for (nodes) |node_id| {
+                if (tenant_id) |tid| {
+                    if (self.nodes.get(node_id)) |node| {
+                        if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+                        try result.append(allocator, node_id);
+                    }
+                } else {
+                    try result.append(allocator, node_id);
+                }
+            }
+            return result;
+        }
 
-        // For each candidate node, check if it has all other labels
-        for (first_nodes) |node_id| {
+        // Multi-label path: find smallest posting list to use as seed
+        var smallest_idx: usize = 0;
+        var smallest_len: usize = std.math.maxInt(usize);
+        for (labels, 0..) |label, i| {
+            const posting = self.getNodesByLabel(graph_name, label) orelse return result; // empty intersection
+            if (posting.len < smallest_len) {
+                smallest_len = posting.len;
+                smallest_idx = i;
+            }
+        }
+
+        const seed_nodes = self.getNodesByLabel(graph_name, labels[smallest_idx]).?;
+
+        // For each candidate in the smallest list, verify it has ALL other labels
+        for (seed_nodes) |node_id| {
             if (self.nodes.get(node_id)) |node| {
                 // GAP-0509: Filter by tenant_id when specified
                 if (tenant_id) |tid| {
                     if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
                 }
                 var has_all = true;
-                for (labels[1..]) |required_label| {
+                for (labels, 0..) |required_label, i| {
+                    if (i == smallest_idx) continue; // skip the seed label
                     var found = false;
                     for (node.labels) |node_label| {
                         if (std.mem.eql(u8, required_label, node_label)) {
