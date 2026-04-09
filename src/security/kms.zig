@@ -70,13 +70,14 @@ pub const KMSProvider = struct {
 
     /// Initialize KMS provider with production safety check
     /// CANARY: REQ=REQ-GQL-KMS-PRODSAFE-002; FEATURE="KMS Provider Init Safety"; ASPECT=SECURITY; STATUS=TESTED; TEST=geodetestlab/specs/external_kms_integration.yml; OWNER=security; UPDATED=2026-01-12
-    pub fn init(allocator: std.mem.Allocator, config: KMSConfig) KMSProvider {
+    pub fn init(allocator: std.mem.Allocator, config: KMSConfig) !KMSProvider {
         // Production safety: block non-production-safe providers in release builds
         if (is_production_build and !config.provider_type.isProductionSafe()) {
             log.err("BLOCKED: Non-production-safe KMS provider in production build. " ++
                 "Configure vault_transit, aws_kms, azure_kv, or remote_kms.", &.{
                 Attr.string("provider_type", @tagName(config.provider_type)),
             });
+            return error.UnsafeKMSProvider;
         }
 
         return KMSProvider{
@@ -376,19 +377,19 @@ pub const KMSProvider = struct {
 };
 
 // Factory functions for different provider types
-pub fn localDevProvider(allocator: std.mem.Allocator) KMSProvider {
+pub fn localDevProvider(allocator: std.mem.Allocator) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .local_dev });
 }
 
-pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) KMSProvider {
+pub fn externalKMSProvider(allocator: std.mem.Allocator, seed: u64) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .external_kms, .seed = seed });
 }
 
-pub fn remoteKMSProvider(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) KMSProvider {
+pub fn remoteKMSProvider(allocator: std.mem.Allocator, endpoint: []const u8, port: u16, auth_token: ?[]const u8) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .remote_kms, .endpoint = endpoint, .port = port, .auth_token = auth_token });
 }
 
-pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) KMSProvider {
+pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !KMSProvider {
     return KMSProvider.init(allocator, KMSConfig{ .provider_type = .vault_transit, .vault_addr = vault_addr, .auth_token = vault_token, .vault_key_path = key_path });
 }
 
@@ -397,7 +398,7 @@ pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, va
 var default_provider_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
 var default_provider_init = false;
 
-pub fn defaultProvider() KMSProvider {
+pub fn defaultProvider() !KMSProvider {
     if (!default_provider_init) {
         default_provider_init = true;
     }
@@ -406,7 +407,7 @@ pub fn defaultProvider() KMSProvider {
 
 test "local dev provider wrap/unwrap roundtrip" {
     const allocator = std.testing.allocator;
-    var provider = localDevProvider(allocator);
+    var provider = try localDevProvider(allocator);
     defer provider.deinit();
 
     const plaintext = "0123456789abcdef0123456789abcdef"; // 32 bytes
@@ -421,7 +422,7 @@ test "local dev provider wrap/unwrap roundtrip" {
 
 test "external KMS provider wrap/unwrap roundtrip" {
     const allocator = std.testing.allocator;
-    var provider = externalKMSProvider(allocator, 0xDEADBEEF);
+    var provider = try externalKMSProvider(allocator, 0xDEADBEEF);
     defer provider.deinit();
 
     const plaintext = "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"; // 32 bytes
@@ -449,7 +450,7 @@ test "KMS provider types" {
     };
 
     for (configs) |config| {
-        var provider = KMSProvider.init(allocator, config);
+        var provider = try KMSProvider.init(allocator, config);
         defer provider.deinit();
 
         const info = provider.getProviderInfo();
@@ -462,20 +463,20 @@ test "master key ID generation" {
     const allocator = std.testing.allocator;
 
     // Test local dev provider
-    var local_provider = localDevProvider(allocator);
+    var local_provider = try localDevProvider(allocator);
     defer local_provider.deinit();
     const local_key = try local_provider.fetchActiveMasterKey();
     try std.testing.expectEqualStrings("local-dev-master-key-v1", local_key);
 
     // Test external KMS provider
-    var external_provider = externalKMSProvider(allocator, 0xCAFEBABE);
+    var external_provider = try externalKMSProvider(allocator, 0xCAFEBABE);
     defer external_provider.deinit();
     const external_key = try external_provider.fetchActiveMasterKey();
     defer allocator.free(external_key);
     try std.testing.expect(std.mem.startsWith(u8, external_key, "external-kms-"));
 
     // Test custom master key ID
-    var custom_provider = KMSProvider.init(allocator, KMSConfig{
+    var custom_provider = try KMSProvider.init(allocator, KMSConfig{
         .provider_type = .local_dev,
         .master_key_id = "custom-master-key-123",
     });
@@ -517,7 +518,7 @@ test "GAP-0066: default config is external_kms not local_dev" {
 
 test "GAP-0100: local dev wrap produces non-XOR ciphertext" {
     const allocator = std.testing.allocator;
-    var provider = localDevProvider(allocator);
+    var provider = try localDevProvider(allocator);
     defer provider.deinit();
 
     // All zeros plaintext - XOR would produce all same bytes
@@ -538,7 +539,7 @@ test "GAP-0100: local dev wrap produces non-XOR ciphertext" {
 
 test "GAP-0100: local dev wrap/unwrap preserves data correctly" {
     const allocator = std.testing.allocator;
-    var provider = localDevProvider(allocator);
+    var provider = try localDevProvider(allocator);
     defer provider.deinit();
 
     const plaintext = [_]u8{
@@ -559,7 +560,7 @@ test "GAP-0100: local dev wrap/unwrap preserves data correctly" {
 
 test "GAP-0100: local dev ciphertext differs from plaintext" {
     const allocator = std.testing.allocator;
-    var provider = localDevProvider(allocator);
+    var provider = try localDevProvider(allocator);
     defer provider.deinit();
 
     const plaintext = [_]u8{0xAB} ** 32;
