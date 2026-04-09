@@ -4116,42 +4116,38 @@ fn executeMultiHopGroupBy(
 ) !?ExecutionResult {
     if (chain.hops.len <= 1) return null;
 
+    // Arena allocator for all intermediate binding arrays (env_names, env_values,
+    // group keys, copy arrays). These are bulk-freed when the arena is torn down
+    // at function exit, eliminating O(B^H) individual alloc/free calls.
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
     // Multi-hop pattern with GROUP BY handling
     const MultiHopBinding = struct {
         env_names: [][]const u8,
         env_values: []Value,
     };
 
-    var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(allocator);
+    var binding_groups_mh = std.StringHashMap(std.ArrayList(MultiHopBinding)).init(arena);
     // #552: Pre-size multi-hop GROUP BY map
     try binding_groups_mh.ensureTotalCapacity(16);
     // GAP-0220 FIX: Use try for proper error propagation
-    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(allocator, 16);
+    var group_keys_list_mh = try std.ArrayList([]const u8).initCapacity(arena, 16);
     defer {
         var giter_mh = binding_groups_mh.iterator();
         while (giter_mh.next()) |entry| {
-            for (entry.value_ptr.items) |binding| {
-                allocator.free(binding.env_names);
-                allocator.free(binding.env_values);
-            }
-            entry.value_ptr.deinit(allocator);
+            entry.value_ptr.deinit(arena);
         }
         binding_groups_mh.deinit();
-        for (group_keys_list_mh.items) |key| {
-            allocator.free(key);
-        }
-        group_keys_list_mh.deinit(allocator);
+        group_keys_list_mh.deinit(arena);
     }
 
     // Initialize with first hop's left nodes
     // GAP-0220 FIX: Use try for proper error propagation
-    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+    var current_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
     defer {
-        for (current_bindings_mh.items) |binding| {
-            allocator.free(binding.env_names);
-            allocator.free(binding.env_values);
-        }
-        current_bindings_mh.deinit(allocator);
+        current_bindings_mh.deinit(arena);
     }
 
     // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
@@ -4159,7 +4155,7 @@ fn executeMultiHopGroupBy(
 
     // Collect candidate left nodes - use label_index when labels are present
     const NodeCollector = struct {
-        fn addBinding(alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
+        fn addBinding(arena_alloc: std.mem.Allocator, eval_alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
             // Filter by left node properties
             if (hop_left.props) |props| {
                 for (props) |prop| {
@@ -4170,16 +4166,16 @@ fn executeMultiHopGroupBy(
                             .values = &.{},
                             .param_names = p_names,
                             .param_values = p_values,
-                            .allocator = alloc,
+                            .allocator = eval_alloc,
                         };
-                        const prop_val = eval.evalExpr(alloc, prop.value.*, prop_env) catch return;
+                        const prop_val = eval.evalExpr(eval_alloc, prop.value.*, prop_env) catch return;
                         if (!valuesEqual(node_val, prop_val)) return;
                     } else return;
                 }
             }
 
-            var init_env_names_mh = try alloc.alloc([]const u8, 1);
-            var init_env_values_mh = try alloc.alloc(Value, 1);
+            var init_env_names_mh = try arena_alloc.alloc([]const u8, 1);
+            var init_env_values_mh = try arena_alloc.alloc(Value, 1);
             if (hop_left.name) |var_name| {
                 init_env_names_mh[0] = var_name;
                 init_env_values_mh[0] = Value{ .Node = node };
@@ -4187,7 +4183,7 @@ fn executeMultiHopGroupBy(
                 init_env_names_mh[0] = "_anon_left_0";
                 init_env_values_mh[0] = Value{ .Node = node };
             }
-            try bindings_list.append(alloc, MultiHopBinding{
+            try bindings_list.append(arena_alloc, MultiHopBinding{
                 .env_names = init_env_names_mh,
                 .env_values = init_env_values_mh,
             });
@@ -4200,7 +4196,7 @@ fn executeMultiHopGroupBy(
 
         for (label_node_ids.items) |node_id| {
             const node = store.nodes.getPtr(node_id) orelse continue;
-            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
         }
     } else {
         var init_iter_mh = store.nodes.iterator();
@@ -4209,14 +4205,14 @@ fn executeMultiHopGroupBy(
             if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
             if (!passesTenantFilter(node.*, filter_tenant)) continue;
             if (!passesRLSFilter(allocator, node.*)) continue;
-            try NodeCollector.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
         }
     }
 
     // Process each hop
     for (chain.hops, 0..) |hop, hop_idx| {
         // GAP-0220 FIX: Use try for proper error propagation
-        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+        var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
 
         for (current_bindings_mh.items) |binding| {
             const current_node_var = if (hop_idx == 0)
@@ -4290,8 +4286,8 @@ fn executeMultiHopGroupBy(
                 var new_var_count: usize = 1; // Always include right node
                 if (hop.rel.name != null) new_var_count += 1;
 
-                var new_env_names_mh = try allocator.alloc([]const u8, binding.env_names.len + new_var_count);
-                var new_env_values_mh = try allocator.alloc(Value, binding.env_values.len + new_var_count);
+                var new_env_names_mh = try arena.alloc([]const u8, binding.env_names.len + new_var_count);
+                var new_env_values_mh = try arena.alloc(Value, binding.env_values.len + new_var_count);
 
                 for (binding.env_names, 0..) |name, i| {
                     new_env_names_mh[i] = name;
@@ -4309,18 +4305,15 @@ fn executeMultiHopGroupBy(
                 new_env_names_mh[new_idx] = hop.right.name orelse "_anon_right";
                 new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
 
-                try next_bindings_mh.append(allocator, MultiHopBinding{
+                try next_bindings_mh.append(arena, MultiHopBinding{
                     .env_names = new_env_names_mh,
                     .env_values = new_env_values_mh,
                 });
             }
         }
 
-        for (current_bindings_mh.items) |binding| {
-            allocator.free(binding.env_names);
-            allocator.free(binding.env_values);
-        }
-        current_bindings_mh.deinit(allocator);
+        // Arena free is a no-op; old binding arrays are bulk-freed at function exit.
+        current_bindings_mh.deinit(arena);
         current_bindings_mh = next_bindings_mh;
     }
 
@@ -4347,8 +4340,8 @@ fn executeMultiHopGroupBy(
         }
 
         // Compute group key from GROUP BY expressions
-        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-        const writer = key_buf.writer(allocator);
+        var key_buf = try std.ArrayList(u8).initCapacity(arena, 64);
+        const writer = key_buf.writer(arena);
 
         for (group_by.keys, 0..) |key_expr, key_idx| {
             if (key_idx > 0) try writer.writeAll("|");
@@ -4362,27 +4355,27 @@ fn executeMultiHopGroupBy(
             }
         }
 
-        const group_key = try key_buf.toOwnedSlice(allocator);
+        const group_key = try key_buf.toOwnedSlice(arena);
 
         // Copy binding for grouping
-        var copy_names = try allocator.alloc([]const u8, binding.env_names.len);
-        var copy_values = try allocator.alloc(Value, binding.env_values.len);
+        var copy_names = try arena.alloc([]const u8, binding.env_names.len);
+        var copy_values = try arena.alloc(Value, binding.env_values.len);
         for (binding.env_names, 0..) |name, i| {
             copy_names[i] = name;
             copy_values[i] = binding.env_values[i];
         }
 
         if (binding_groups_mh.getPtr(group_key)) |grp| {
-            try grp.append(allocator, MultiHopBinding{
+            try grp.append(arena, MultiHopBinding{
                 .env_names = copy_names,
                 .env_values = copy_values,
             });
-            allocator.free(group_key);
+            // Arena free is a no-op; duplicate key freed at function exit.
         } else {
-            try group_keys_list_mh.append(allocator, group_key);
+            try group_keys_list_mh.append(arena, group_key);
             // GAP-0220 FIX: Use try for proper error propagation
-            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
-            try new_group.append(allocator, MultiHopBinding{
+            var new_group = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
+            try new_group.append(arena, MultiHopBinding{
                 .env_names = copy_names,
                 .env_values = copy_values,
             });
