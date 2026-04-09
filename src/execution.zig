@@ -1732,6 +1732,240 @@ pub const VariableLengthPath = struct {
     }
 };
 
+// CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PathIterator; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+// Iterator-based BFS path expansion for streaming consumption of variable-length paths.
+// Encapsulates BFS state and yields qualifying paths one at a time via next().
+pub const PathIterator = struct {
+    const QueueItem = struct { path: VariableLengthPath, depth: u32 };
+
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    queue: std.ArrayList(QueueItem),
+    visited_states: std.AutoHashMap(u64, u32),
+    iteration_count: u64,
+    min_len: u32,
+    max_len: ?u32,
+    rel_type: ?[]const u8,
+    rel_direction: u8,
+    path_mode: ast.PathMode,
+    start_node_id: u64,
+    pending_zero_path: bool,
+    done: bool,
+    // Buffer for qualifying paths discovered during a single BFS expansion step.
+    // Multiple edges from one node can each produce a qualifying path; we yield
+    // them one at a time across successive next() calls.
+    pending_results: std.ArrayList(VariableLengthPath),
+
+    const max_iterations: u64 = 10_000;
+    const max_queue_size: usize = 5000;
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        store: *graph_store.GraphStore,
+        start_node_id: u64,
+        min_len: u32,
+        max_len: ?u32,
+        rel_type: ?[]const u8,
+        rel_direction: u8,
+        path_mode: ast.PathMode,
+    ) !PathIterator {
+        var queue = try std.ArrayList(QueueItem).initCapacity(allocator, 0);
+
+        // Seed the BFS queue with the start node
+        var initial_path = VariableLengthPath.init(allocator);
+        try initial_path.nodes.append(allocator, start_node_id);
+        try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
+
+        return .{
+            .allocator = allocator,
+            .store = store,
+            .queue = queue,
+            .visited_states = std.AutoHashMap(u64, u32).init(allocator),
+            .iteration_count = 0,
+            .min_len = min_len,
+            .max_len = max_len,
+            .rel_type = rel_type,
+            .rel_direction = rel_direction,
+            .path_mode = path_mode,
+            .start_node_id = start_node_id,
+            .pending_zero_path = (min_len == 0),
+            .done = false,
+            .pending_results = std.ArrayList(VariableLengthPath).empty,
+        };
+    }
+
+    pub fn deinit(self: *PathIterator) void {
+        for (self.pending_results.items) |*p| p.deinit(self.allocator);
+        self.pending_results.deinit(self.allocator);
+        for (self.queue.items) |*item| {
+            item.path.deinit(self.allocator);
+        }
+        self.queue.deinit(self.allocator);
+        self.visited_states.deinit();
+    }
+
+    // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathModeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    fn shouldSkipByPathMode(self: *const PathIterator, current_path: *const VariableLengthPath, edge_id: u64, next_node_id: u64) bool {
+        switch (self.path_mode) {
+            .walk => {
+                // WALK: No restrictions - can revisit nodes and edges
+                return false;
+            },
+            .trail => {
+                // TRAIL: Cannot revisit edges (edges must be unique)
+                for (current_path.edges.items) |visited_edge| {
+                    if (visited_edge == edge_id) return true;
+                }
+                return false;
+            },
+            .acyclic => {
+                // ACYCLIC: Cannot revisit any node (no cycles at all)
+                for (current_path.nodes.items) |visited_node| {
+                    if (visited_node == next_node_id) return true;
+                }
+                return false;
+            },
+            .simple => {
+                // SIMPLE: Cannot revisit nodes except start can equal end
+                if (next_node_id == self.start_node_id) return false;
+                for (current_path.nodes.items) |visited_node| {
+                    if (visited_node == next_node_id) return true;
+                }
+                return false;
+            },
+        }
+    }
+
+    /// Process a single edge expansion, appending qualifying paths to pending_results
+    /// and non-qualifying paths to the BFS queue for further expansion.
+    fn expandEdge(
+        self: *PathIterator,
+        current_path: *const VariableLengthPath,
+        edge_id: u64,
+        next_node_id: u64,
+        depth: u32,
+    ) !void {
+        var new_path = try current_path.clone(self.allocator);
+        try new_path.edges.append(self.allocator, edge_id);
+        try new_path.nodes.append(self.allocator, next_node_id);
+
+        const new_depth = depth + 1;
+        const meets_min = new_depth >= self.min_len;
+        const reached_max = self.max_len != null and new_depth >= self.max_len.?;
+
+        if (meets_min) {
+            // Path qualifies - add a clone to pending results
+            const result_path = try new_path.clone(self.allocator);
+            try self.pending_results.append(self.allocator, result_path);
+        }
+
+        // Continue expanding if we haven't reached max length
+        if (!reached_max) {
+            try self.queue.append(self.allocator, .{ .path = new_path, .depth = new_depth });
+        } else {
+            new_path.deinit(self.allocator);
+        }
+    }
+
+    /// Advance BFS until a qualifying path is found, return it.
+    /// Caller owns the returned VariableLengthPath. Returns null when exhausted.
+    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    pub fn next(self: *PathIterator) !?VariableLengthPath {
+        if (self.done) return null;
+
+        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+        // B07 Fix: When min_len=0, the start node itself is a valid 0-length path (self-match)
+        if (self.pending_zero_path) {
+            self.pending_zero_path = false;
+            var zero_path = VariableLengthPath.init(self.allocator);
+            try zero_path.nodes.append(self.allocator, self.start_node_id);
+            return zero_path;
+        }
+
+        // Drain any buffered results from a previous expansion step
+        if (self.pending_results.items.len > 0) {
+            return self.pending_results.orderedRemove(0);
+        }
+
+        while (self.queue.items.len > 0) {
+            // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+            self.iteration_count += 1;
+            if (self.iteration_count > max_iterations or self.queue.items.len > max_queue_size) {
+                // Clean up remaining paths in queue when hitting limits
+                for (self.queue.items) |*item| {
+                    item.path.deinit(self.allocator);
+                }
+                self.queue.items.len = 0;
+                self.done = true;
+                return null;
+            }
+
+            // Dequeue first item (BFS order)
+            const current = self.queue.orderedRemove(0);
+            var current_path = current.path;
+            const depth = current.depth;
+
+            // If we've reached max_len, don't expand further
+            if (self.max_len) |max| {
+                if (depth >= max) {
+                    if (depth >= self.min_len) {
+                        return current_path;
+                    } else {
+                        current_path.deinit(self.allocator);
+                        continue;
+                    }
+                }
+            }
+
+            // Get the last node in the current path
+            const last_node_id = current_path.nodes.items[current_path.nodes.items.len - 1];
+
+            // Check if we've visited this node at this depth before
+            const state_key = last_node_id + (@as(u64, depth) << 32);
+            if (self.visited_states.get(state_key)) |_| {
+                current_path.deinit(self.allocator);
+                continue;
+            }
+            try self.visited_states.put(state_key, depth);
+
+            // Get edges based on direction
+            const outgoing_edges = if (self.rel_direction == 'r' or self.rel_direction == 'u') self.store.getEdgesFrom(self.allocator, last_node_id) else &[_]graph_store.Edge{};
+            const incoming_edges = if (self.rel_direction == 'l' or self.rel_direction == 'u') self.store.getEdgesTo(self.allocator, last_node_id) else &[_]graph_store.Edge{};
+
+            // Process outgoing edges (forward direction)
+            for (outgoing_edges) |edge| {
+                if (self.rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+                if (self.shouldSkipByPathMode(&current_path, edge.id, edge.to_id)) continue;
+                try self.expandEdge(&current_path, edge.id, edge.to_id, depth);
+            }
+
+            // Process incoming edges (reverse direction)
+            for (incoming_edges) |edge| {
+                if (self.rel_type) |rt| {
+                    if (!std.mem.eql(u8, edge.label, rt)) continue;
+                }
+                const next_node_id = edge.from_id;
+                if (self.shouldSkipByPathMode(&current_path, edge.id, next_node_id)) continue;
+                try self.expandEdge(&current_path, edge.id, next_node_id, depth);
+            }
+
+            // Clean up the current path (we've cloned it for any expansions)
+            current_path.deinit(self.allocator);
+
+            // If we found qualifying paths this expansion, yield the first one
+            if (self.pending_results.items.len > 0) {
+                return self.pending_results.orderedRemove(0);
+            }
+        }
+
+        self.done = true;
+        return null;
+    }
+};
+
 // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
 // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
 // Expands variable-length paths using BFS
