@@ -111,26 +111,28 @@ fn passesRLSFilter(allocator: std.mem.Allocator, node: graph_store.Node) bool {
 
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
 // Returns true (allow) when no expression engine is configured, or when the
-// expression engine grants access. Fails open on evaluation errors (documented choice).
-// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+// expression engine grants access. Fails closed on evaluation errors (GAP-0524).
+// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-09
 fn passesRLSExprFilter(allocator: std.mem.Allocator, node: graph_store.Node, username: []const u8) bool {
     const expr_engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return true;
     const expr_engine: *rls.RLSEngine = @ptrCast(@alignCast(expr_engine_ptr));
 
     // Convert node properties to RLS row format
-    var rls_row = rls_value_bridge.nodePropertiesToRLSRow(allocator, &node.properties) catch return true;
+    // GAP-0524: Fail closed on conversion errors — deny access rather than allow bypass
+    var rls_row = rls_value_bridge.nodePropertiesToRLSRow(allocator, &node.properties) catch return false;
     defer rls_row.deinit();
 
     // Use first label as the table name for policy lookup
     const table = if (node.labels.len > 0) node.labels[0] else "default";
 
+    // GAP-0524: Fail closed on evaluation errors — deny access rather than allow bypass
     return expr_engine.checkRowAccessByUsername(
         &rls_row,
         .select,
         username,
         node.graph_name,
         table,
-    ) catch true; // Fail-open on evaluation error
+    ) catch false;
 }
 
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
