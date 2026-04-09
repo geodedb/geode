@@ -1071,20 +1071,34 @@ pub const StorageAdapter = struct {
         const NodeRec = node_mod.NodeRec;
         const npp = mg.engine.node_store.nodes_per_page;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
+        const bp = &mg.engine.node_store.buffer_pool;
+
+        // Cache the pinned page frame across iterations.  Node IDs from
+        // the label index are sorted, so consecutive IDs usually share the
+        // same page — caching avoids redundant pin/unpin round-trips.
+        var cached_page_id: ?u64 = null;
+        var cached_frame: *gs.page_frame.PageFrame = undefined;
+        defer if (cached_page_id != null) bp.unpin(bp.frameIndex(cached_frame), false);
+
         while (try iter.next()) |nid| {
             const page_id = nid / npp;
             // Page not allocated → node cannot be live (stale index entry)
             if (!mg.engine.node_store.free_space.isAllocated(page_id)) continue;
 
+            // Re-pin only when we transition to a different page.
+            if (cached_page_id == null or cached_page_id.? != page_id) {
+                if (cached_page_id != null) {
+                    bp.unpin(bp.frameIndex(cached_frame), false);
+                    cached_page_id = null;
+                }
+                cached_frame = try bp.pin(.nodes, page_id);
+                cached_page_id = page_id;
+            }
+
             const slot: u32 = @intCast(nid % npp);
             const slot_offset = hdr_size + slot * @sizeOf(NodeRec);
-            const frame = try mg.engine.node_store.buffer_pool.pin(.nodes, page_id);
-            const data = frame.dataSlice();
+            const data = cached_frame.dataSlice();
             const rec = std.mem.bytesToValue(NodeRec, data[slot_offset..][0..@sizeOf(NodeRec)]);
-            mg.engine.node_store.buffer_pool.unpin(
-                mg.engine.node_store.buffer_pool.frameIndex(frame),
-                false,
-            );
 
             if (node_mod.isDeleted(&rec)) continue;
             if (node_mod.isEmpty(&rec)) continue;
