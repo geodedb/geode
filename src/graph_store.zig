@@ -5867,3 +5867,123 @@ test "getOutgoingEdgeIds and getIncomingEdgeIds return edge list without allocat
 
     // No allocations occurred — std.testing.allocator enforces this
 }
+
+// GAP-0525: Benchmark test fixtures for performance validation
+
+// CANARY: REQ=REQ-PERF-BENCH-001; FEATURE="MultiLabelIntersection"; ASPECT=BenchmarkFixture; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=engine; UPDATED=2026-04-09
+test "GAP-0525: multi-label posting-list intersection correctness" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create 1000 nodes with label "Big"
+    var big_label = [_][]const u8{"Big"};
+    for (0..1000) |_| {
+        _ = try store.createNodeWithGraph(&big_label, "default");
+    }
+
+    // Create 10 nodes with label "Small" only
+    var small_label = [_][]const u8{"Small"};
+    for (0..10) |_| {
+        _ = try store.createNodeWithGraph(&small_label, "default");
+    }
+
+    // Create 5 nodes with BOTH labels
+    var both_labels = [_][]const u8{ "Big", "Small" };
+    var dual_ids: [5]u64 = undefined;
+    for (0..5) |i| {
+        dual_ids[i] = try store.createNodeWithGraph(&both_labels, "default");
+    }
+
+    // Intersection ["Big", "Small"] must return exactly the 5 dual-label nodes
+    {
+        var query_labels = [_][]const u8{ "Big", "Small" };
+        var result = try store.getNodesByLabels(testing.allocator, "default", &query_labels, null);
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 5), result.items.len);
+
+        // Verify each returned ID is one of the dual-label nodes
+        for (result.items) |id| {
+            var found = false;
+            for (dual_ids) |expected| {
+                if (id == expected) {
+                    found = true;
+                    break;
+                }
+            }
+            try testing.expect(found);
+        }
+    }
+
+    // Order-independent: ["Small", "Big"] must yield the same 5 results
+    {
+        var query_labels = [_][]const u8{ "Small", "Big" };
+        var result = try store.getNodesByLabels(testing.allocator, "default", &query_labels, null);
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 5), result.items.len);
+    }
+
+    // Adding a non-existent label must return 0 results
+    {
+        var query_labels = [_][]const u8{ "Big", "Small", "NonExistent" };
+        var result = try store.getNodesByLabels(testing.allocator, "default", &query_labels, null);
+        defer result.deinit(testing.allocator);
+        try testing.expectEqual(@as(usize, 0), result.items.len);
+    }
+}
+
+// CANARY: REQ=REQ-PERF-BENCH-002; FEATURE="HighDegreeExpansion"; ASPECT=BenchmarkFixture; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=engine; UPDATED=2026-04-09
+test "GAP-0525: high-degree single-hop expansion returns all edges" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var hub_labels = [_][]const u8{"Hub"};
+    const hub = try store.createNodeWithGraph(&hub_labels, "default");
+
+    var target_labels = [_][]const u8{"Target"};
+    var edge_ids: [100]u64 = undefined;
+    for (0..100) |i| {
+        const target = try store.createNodeWithGraph(&target_labels, "default");
+        edge_ids[i] = try store.createEdgeWithGraph(hub, target, "CONNECTS", "default");
+    }
+
+    // getOutgoingEdgeIds returns the allocation-free slice from the adjacency list
+    const out_ids = store.getOutgoingEdgeIds(hub);
+    try testing.expect(out_ids != null);
+    try testing.expectEqual(@as(usize, 100), out_ids.?.len);
+
+    // Verify every created edge is present
+    for (edge_ids) |expected| {
+        var found = false;
+        for (out_ids.?) |actual| {
+            if (actual == expected) {
+                found = true;
+                break;
+            }
+        }
+        try testing.expect(found);
+    }
+}
+
+// CANARY: REQ=REQ-PERF-BENCH-003; FEATURE="SortedPostingList"; ASPECT=BenchmarkFixture; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=engine; UPDATED=2026-04-09
+test "GAP-0525: sorted posting-list ordering is ascending" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create nodes in several batches to exercise different insertion times.
+    // Interleave labels so IDs are not naturally sequential per label.
+    var alpha_label = [_][]const u8{"Alpha"};
+    var beta_label = [_][]const u8{"Beta"};
+    for (0..50) |_| {
+        _ = try store.createNodeWithGraph(&alpha_label, "default");
+        _ = try store.createNodeWithGraph(&beta_label, "default"); // interleave
+    }
+
+    const list = store.getNodesByLabel("default", "Alpha");
+    try testing.expect(list != null);
+    try testing.expectEqual(@as(usize, 50), list.?.len);
+
+    // Verify strictly ascending order (required for two-pointer intersection)
+    for (1..list.?.len) |i| {
+        try testing.expect(list.?[i] > list.?[i - 1]);
+    }
+}
