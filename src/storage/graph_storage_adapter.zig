@@ -148,6 +148,104 @@ const NodePropertyExactIndex = struct {
         std.mem.writeInt(u64, key[8 + property_key.len ..][0..8], value_hash, .little);
         return key;
     }
+
+    /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
+    /// Non-fatal: callers should catch and log warnings.
+    fn saveToFile(self: *const NodePropertyExactIndex, graph_dir_path: []const u8) !void {
+        const idx_path = try self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len);
+        defer self.allocator.free(idx_path);
+        @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
+        @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
+
+        const file = try std.fs.cwd().createFile(idx_path, .{ .truncate = true });
+        defer file.close();
+
+        const writer = file.deprecatedWriter();
+
+        // 8-byte magic header
+        try writer.writeAll("GENPIDX1");
+
+        // Entry count
+        var count: u64 = 0;
+        {
+            var count_iter = self.postings.iterator();
+            while (count_iter.next()) |_| count += 1;
+        }
+        try writer.writeInt(u64, count, .little);
+
+        // Each entry: [key_len: u32][key bytes][posting_count: u64][node_ids: u64...]
+        var iter = self.postings.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const posting = entry.value_ptr.items;
+            try writer.writeInt(u32, @intCast(key.len), .little);
+            try writer.writeAll(key);
+            try writer.writeInt(u64, @intCast(posting.len), .little);
+            for (posting) |nid| {
+                try writer.writeInt(u64, nid, .little);
+            }
+        }
+    }
+
+    /// Load the index from `prop_exact.idx` inside `graph_dir_path`.
+    /// Returns true on success, false if file is missing, corrupt, or unreadable
+    /// (caller should fall back to full rebuild).
+    fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) bool {
+        const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return false;
+        defer self.allocator.free(idx_path);
+        @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
+        @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
+
+        const file = std.fs.cwd().openFile(idx_path, .{}) catch return false;
+        defer file.close();
+
+        const reader = file.deprecatedReader();
+
+        // Validate magic header
+        var magic: [8]u8 = undefined;
+        reader.readNoEof(&magic) catch return false;
+        if (!std.mem.eql(u8, &magic, "GENPIDX1")) return false;
+
+        const entry_count = reader.readInt(u64, .little) catch return false;
+
+        self.clear();
+
+        var i: u64 = 0;
+        while (i < entry_count) : (i += 1) {
+            const key_len = reader.readInt(u32, .little) catch return false;
+            const key = self.allocator.alloc(u8, key_len) catch return false;
+            reader.readNoEof(key) catch {
+                self.allocator.free(key);
+                return false;
+            };
+
+            const posting_count = reader.readInt(u64, .little) catch {
+                self.allocator.free(key);
+                return false;
+            };
+            var posting = std.ArrayList(u64).initCapacity(self.allocator, @intCast(posting_count)) catch {
+                self.allocator.free(key);
+                return false;
+            };
+            var j: u64 = 0;
+            while (j < posting_count) : (j += 1) {
+                const nid = reader.readInt(u64, .little) catch {
+                    posting.deinit(self.allocator);
+                    self.allocator.free(key);
+                    return false;
+                };
+                posting.appendAssumeCapacity(nid);
+            }
+
+            self.postings.put(key, posting) catch {
+                posting.deinit(self.allocator);
+                self.allocator.free(key);
+                return false;
+            };
+        }
+
+        return true;
+    }
 };
 
 // ============================================================================
@@ -1434,6 +1532,15 @@ pub const StorageAdapter = struct {
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
+            // Persist the exact property index alongside the engine checkpoint.
+            if (graphDirPath(self.allocator, self.data_dir, mg.uuid)) |dir_path| {
+                mg.exact_node_property_index.saveToFile(dir_path) catch |err| {
+                    log.warn("failed to persist property index for graph '{s}': {}", .{ mg.name, err });
+                };
+                self.allocator.free(dir_path);
+            } else |err| {
+                log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
+            }
             mg.rwlock.unlockShared();
         }
 
@@ -1794,7 +1901,15 @@ pub const StorageAdapter = struct {
             mg.fts_dir = fts_result.dir;
         }
 
-        try rebuildExactNodePropertyIndex(mg);
+        // Try loading the persisted property index; fall back to full rebuild.
+        const loaded_from_disk = blk: {
+            const dir_path = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch break :blk false;
+            defer self.allocator.free(dir_path);
+            break :blk mg.exact_node_property_index.loadFromFile(dir_path);
+        };
+        if (!loaded_from_disk) {
+            try rebuildExactNodePropertyIndex(mg);
+        }
 
         try self.engines.put(owned_name, mg);
         self.upsertRegistryEntryLocked(name, graph_uuid, mg.engine.manifest.node_count, mg.engine.manifest.edge_count);
@@ -1802,7 +1917,11 @@ pub const StorageAdapter = struct {
             log.warn("failed to persist graph registry after open of '{s}': {}", .{ name, err });
         };
 
-        log.info("opened existing graph '{s}'", .{name});
+        if (loaded_from_disk) {
+            log.info("opened existing graph '{s}' (property index loaded from disk)", .{name});
+        } else {
+            log.info("opened existing graph '{s}' (property index rebuilt from scan)", .{name});
+        }
 
         return mg;
     }
