@@ -542,65 +542,94 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         }
 
         // Find matching node
-        var node_iter = read_store.nodes.iterator();
         var found = false;
-        while (node_iter.next()) |entry| {
-            const node_id = entry.key_ptr.*;
-            const node = entry.value_ptr.*;
 
-            // Filter by graph - only include nodes from the current graph
-            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
-            // GAP-0279: Filter by tenant
-            if (!passesTenantFilter(node, filter_tenant)) continue;
-            // GAP-0510: Filter by RLS denied labels
-            if (!passesRLSFilter(allocator, node)) continue;
+        if (labels.len > 0) {
+            // Fast path: use label index for O(1) lookup instead of full node scan
+            var candidates = try read_store.getNodesByLabels(allocator, filter_graph, labels, filter_tenant);
+            defer candidates.deinit(allocator);
 
-            // Check labels
-            var matches_labels = true;
-            if (labels.len > 0) {
-                const required_label = labels[0];
-                var has_label = false;
-                for (node.labels) |label| {
-                    if (std.mem.eql(u8, label, required_label)) {
-                        has_label = true;
-                        break;
-                    }
-                }
-                if (!has_label) matches_labels = false;
-            }
+            for (candidates.items) |node_id| {
+                const node = read_store.nodes.get(node_id) orelse continue;
 
-            if (!matches_labels) continue;
+                // GAP-0510: Filter by RLS denied labels
+                if (!passesRLSFilter(allocator, node)) continue;
 
-            // Check properties
-            var matches_props = true;
-            if (props) |properties| {
-                const empty_env = Env{
-                    .names = &.{},
-                    .values = &.{},
-                    .allocator = allocator,
-                };
-                for (properties) |prop| {
-                    if (node.properties.get(prop.key)) |node_prop_val| {
-                        const node_val = propertyValueToValue(node_prop_val);
-                        const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
-                        if (!valuesEqual(node_val, prop_val)) {
+                // Check properties
+                var matches_props = true;
+                if (props) |properties| {
+                    const empty_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .allocator = allocator,
+                    };
+                    for (properties) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = propertyValueToValue(node_prop_val);
+                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            if (!valuesEqual(node_val, prop_val)) {
+                                matches_props = false;
+                                break;
+                            }
+                        } else {
                             matches_props = false;
                             break;
                         }
-                    } else {
-                        matches_props = false;
-                        break;
                     }
                 }
-            }
 
-            if (matches_props) {
-                // Found a matching node
-                if (node_var) |var_name| {
-                    try chain_match.put(var_name, node_id);
+                if (matches_props) {
+                    if (node_var) |var_name| {
+                        try chain_match.put(var_name, node_id);
+                    }
+                    found = true;
+                    break;
                 }
-                found = true;
-                break; // Use first match for this chain
+            }
+        } else {
+            // Fallback: no labels available, full node scan required
+            var node_iter = read_store.nodes.iterator();
+            while (node_iter.next()) |entry| {
+                const node_id = entry.key_ptr.*;
+                const node = entry.value_ptr.*;
+
+                // Filter by graph - only include nodes from the current graph
+                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                // GAP-0279: Filter by tenant
+                if (!passesTenantFilter(node, filter_tenant)) continue;
+                // GAP-0510: Filter by RLS denied labels
+                if (!passesRLSFilter(allocator, node)) continue;
+
+                // Check properties
+                var matches_props = true;
+                if (props) |properties| {
+                    const empty_env = Env{
+                        .names = &.{},
+                        .values = &.{},
+                        .allocator = allocator,
+                    };
+                    for (properties) |prop| {
+                        if (node.properties.get(prop.key)) |node_prop_val| {
+                            const node_val = propertyValueToValue(node_prop_val);
+                            const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
+                            if (!valuesEqual(node_val, prop_val)) {
+                                matches_props = false;
+                                break;
+                            }
+                        } else {
+                            matches_props = false;
+                            break;
+                        }
+                    }
+                }
+
+                if (matches_props) {
+                    if (node_var) |var_name| {
+                        try chain_match.put(var_name, node_id);
+                    }
+                    found = true;
+                    break;
+                }
             }
         }
 
