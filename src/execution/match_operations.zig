@@ -6532,7 +6532,12 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Check if we have a variable-length path pattern
                 if (var_len_min != null or var_len_max != null) {
                     // Variable-length path traversal — delegated to helper
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, null);
+                    // LIMIT hint for early termination (only when no ORDER BY will reorder)
+                    const limit_hint: ?usize = if (q.order_by == null)
+                        resolveLimitParam(q.limit, q.limit_param, param_names, param_values)
+                    else
+                        null;
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint);
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
