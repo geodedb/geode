@@ -2274,6 +2274,7 @@ REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Truncate,IMPL,,,distributed,2026-0
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,RoundTripTest,TESTED,,,distributed,2026-04-05,tests/test_raft_persistent_storage.zig
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,TermVotedFor,TESTED,,,distributed,2026-04-05,src/distributed/raft_consensus.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,IMPL,,,distributed,2026-04-09,src/distributed/raft_persistent.zig
+REQ-GQL-RAFT-PERSIST,Raft Persistence,LifecycleIntegration,TESTED,,,distributed,2026-04-09,tests/test_raft_integration.zig
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,CreateSnapshot,TESTED,,,distributed,2026-04-09,src/distributed/raft_persistent.zig
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,IntegrationTest,TESTED,,,distributed,2026-04-09,tests/test_raft_snapshot_manager.zig
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,SnapshotCreation,TESTED,,,distributed,2026-04-09,src/distributed/raft_snapshot_manager.zig
