@@ -220,6 +220,93 @@ test "LogStorage: write command round-trip preserves payload" {
     }
 }
 
+test "LogStorage: multi-entry ordering preserved across 10 entries with increasing term/index" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer allocator.free(dir_path);
+
+    const file_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/raft_log_order.bin",
+        .{dir_path},
+    );
+    defer allocator.free(file_path);
+
+    // Write 10 entries with monotonically increasing term and index
+    {
+        var storage = try LogStorage.init(allocator, file_path);
+        defer storage.deinit();
+
+        for (1..11) |i| {
+            try storage.appendEntry(.{
+                .term = @intCast(i),
+                .index = @intCast(i * 10),
+                .command = .noop,
+                .timestamp = @intCast(i * 1000),
+                .client_id = @intCast(i + 100),
+                .serial_number = @intCast(i + 200),
+            });
+        }
+    }
+
+    // Reopen and verify ordering + field values
+    {
+        var storage = try LogStorage.init(allocator, file_path);
+        defer storage.deinit();
+
+        const entries = try storage.readAllEntries(allocator);
+        defer allocator.free(entries);
+
+        try std.testing.expectEqual(@as(usize, 10), entries.len);
+
+        for (entries, 1..) |e, i| {
+            try std.testing.expectEqual(@as(u64, @intCast(i)), e.term);
+            try std.testing.expectEqual(@as(u64, @intCast(i * 10)), e.index);
+            try std.testing.expectEqual(@as(i64, @intCast(i * 1000)), e.timestamp);
+            try std.testing.expectEqual(@as(?u64, @intCast(i + 100)), e.client_id);
+            try std.testing.expectEqual(@as(?u64, @intCast(i + 200)), e.serial_number);
+            try std.testing.expectEqual(Command.noop, e.command);
+        }
+    }
+}
+
+test "LogStorage: readAllEntries on fresh empty log returns empty slice" {
+    const allocator = std.testing.allocator;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir_path = try std.fmt.allocPrint(
+        allocator,
+        ".zig-cache/tmp/{s}",
+        .{&tmp.sub_path},
+    );
+    defer allocator.free(dir_path);
+
+    const file_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/raft_log_empty.bin",
+        .{dir_path},
+    );
+    defer allocator.free(file_path);
+
+    var storage = try LogStorage.init(allocator, file_path);
+    defer storage.deinit();
+
+    const entries = try storage.readAllEntries(allocator);
+    defer allocator.free(entries);
+
+    try std.testing.expectEqual(@as(usize, 0), entries.len);
+}
+
 test "LogStorage: CRC corruption detected on read" {
     const allocator = std.testing.allocator;
 

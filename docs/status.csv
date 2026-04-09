@@ -2265,6 +2265,7 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2026-0
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Append,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,FileFormat,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,LastIndex,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,PersistentStorageWiring,TESTED,,,distributed,2026-04-09,tests/test_raft_persistent_log_wiring.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,ReadAll,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,RoundTripTest,TESTED,,,distributed,2026-04-09,tests/test_raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Truncate,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
