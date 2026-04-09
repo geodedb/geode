@@ -71,7 +71,7 @@ test "Raft persistence: create snapshot" {
     try std.testing.expect(node.snapshot == null);
 
     // Create snapshot
-    try node.createSnapshot();
+    try node.createSnapshot(null, 0);
 
     // Verify snapshot captures current state
     try std.testing.expect(node.snapshot != null);

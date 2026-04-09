@@ -1,7 +1,7 @@
 const std = @import("std");
 const raft_lib = @import("raft");
 
-// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
+// CANARY: REQ=REQ-GQL-RAFT-PERSIST; FEATURE="Raft Persistence"; ASPECT=CorePersistence; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
 // CANARY: REQ=REQ-TDE-FILELEVEL-001; FEATURE="TDEFileLevelEncryption"; ASPECT=RaftState; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 //
 // Persistent Raft node — compatibility wrapper around the external raft library's
@@ -90,6 +90,12 @@ pub const RaftNode = struct {
 
     pub fn deinit(self: *RaftNode) void {
         self.savePersistentState() catch {};
+        // Free snapshot data if it was allocated by createSnapshot
+        if (self.snapshot) |snap| {
+            if (snap.data.len > 0) {
+                self.allocator.free(snap.data);
+            }
+        }
         self.cluster.members.deinit(self.allocator);
         self.allocator.destroy(self);
     }
@@ -112,13 +118,34 @@ pub const RaftNode = struct {
         }
     }
 
-    pub fn createSnapshot(self: *RaftNode) !void {
-        self.snapshot = Snapshot{
-            .last_included_index = self.commit_index,
-            .last_included_term = self.current_term,
-            .data = "",
-            .checksum = 0,
-        };
+    /// Create a snapshot from pre-serialized graph store data.
+    /// Pass `snapshot_data` and `checksum` from `raft_snapshot_manager.createSnapshotData`.
+    /// Pass `null` for `snapshot_data` to create an empty snapshot (backward-compatible).
+    // CANARY: REQ=REQ-GQL-RAFT-SNAPSHOT; FEATURE="Raft Snapshot Persistence"; ASPECT=CreateSnapshot; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
+    pub fn createSnapshot(self: *RaftNode, snapshot_data: ?[]const u8, checksum: u32) !void {
+        // Free any previous snapshot data owned by this node
+        if (self.snapshot) |prev| {
+            if (prev.data.len > 0) {
+                self.allocator.free(prev.data);
+            }
+        }
+
+        if (snapshot_data) |data| {
+            const owned = try self.allocator.dupe(u8, data);
+            self.snapshot = Snapshot{
+                .last_included_index = self.commit_index,
+                .last_included_term = self.current_term,
+                .data = owned,
+                .checksum = checksum,
+            };
+        } else {
+            self.snapshot = Snapshot{
+                .last_included_index = self.commit_index,
+                .last_included_term = self.current_term,
+                .data = "",
+                .checksum = 0,
+            };
+        }
     }
 
     fn loadPersistentState(self: *RaftNode) !void {
@@ -250,4 +277,62 @@ test "raft_persistent: savePersistentState writes current_term atomically" {
     // Cleanup: destroy the node.
     node.cluster.members.deinit(std.testing.allocator);
     std.testing.allocator.destroy(node);
+}
+
+test "raft_persistent: createSnapshot with null creates empty snapshot" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/snap",
+        .{&tmp.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    var node = try RaftNode.raftOpen(std.testing.allocator, path);
+    node.current_term = 3;
+    node.commit_index = 7;
+
+    try std.testing.expect(node.snapshot == null);
+    try node.createSnapshot(null, 0);
+
+    try std.testing.expect(node.snapshot != null);
+    const snap = node.snapshot.?;
+    try std.testing.expectEqual(@as(u64, 7), snap.last_included_index);
+    try std.testing.expectEqual(@as(u64, 3), snap.last_included_term);
+    try std.testing.expectEqualStrings("", snap.data);
+    try std.testing.expectEqual(@as(u32, 0), snap.checksum);
+
+    node.cluster.members.deinit(std.testing.allocator);
+    std.testing.allocator.destroy(node);
+}
+
+test "raft_persistent: createSnapshot with data stores owned copy" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const path = try std.fmt.allocPrint(
+        std.testing.allocator,
+        ".zig-cache/tmp/{s}/snap2",
+        .{&tmp.sub_path},
+    );
+    defer std.testing.allocator.free(path);
+
+    var node = try RaftNode.raftOpen(std.testing.allocator, path);
+    node.current_term = 5;
+    node.commit_index = 10;
+
+    const test_data = "{\"type\":\"node\",\"id\":1}\n";
+    try node.createSnapshot(test_data, 0xCAFE);
+
+    try std.testing.expect(node.snapshot != null);
+    const snap = node.snapshot.?;
+    try std.testing.expectEqual(@as(u64, 10), snap.last_included_index);
+    try std.testing.expectEqual(@as(u64, 5), snap.last_included_term);
+    try std.testing.expectEqualStrings(test_data, snap.data);
+    try std.testing.expectEqual(@as(u32, 0xCAFE), snap.checksum);
+
+    // deinit frees the snapshot data
+    node.deinit();
 }
