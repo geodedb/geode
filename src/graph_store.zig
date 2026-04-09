@@ -1319,15 +1319,14 @@ pub const GraphStore = struct {
         // Single-label fast path: no intersection needed
         if (labels.len == 1) {
             const nodes = self.getNodesByLabel(graph_name, labels[0]) orelse return result;
+            try result.ensureTotalCapacity(allocator, nodes.len);
             for (nodes) |node_id| {
+                // Verify node exists (label index may contain stale entries)
+                const node = self.nodes.get(node_id) orelse continue;
                 if (tenant_id) |tid| {
-                    if (self.nodes.get(node_id)) |node| {
-                        if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-                        try result.append(allocator, node_id);
-                    }
-                } else {
-                    try result.append(allocator, node_id);
+                    if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
                 }
+                result.appendAssumeCapacity(node_id);
             }
             return result;
         }
@@ -1344,6 +1343,7 @@ pub const GraphStore = struct {
         }
 
         const seed_nodes = self.getNodesByLabel(graph_name, labels[smallest_idx]).?;
+        try result.ensureTotalCapacity(allocator, seed_nodes.len);
 
         // For each candidate in the smallest list, verify it has ALL other labels
         for (seed_nodes) |node_id| {
@@ -1368,7 +1368,7 @@ pub const GraphStore = struct {
                     }
                 }
                 if (has_all) {
-                    try result.append(allocator, node_id);
+                    result.appendAssumeCapacity(node_id);
                 }
             }
         }
