@@ -1597,6 +1597,30 @@ pub fn build(b: *std.Build) void {
     quic_stream_registry_bench_step.dependOn(&run_quic_stream_registry_bench.step);
     bench_step.dependOn(&run_quic_stream_registry_bench.step);
 
+    // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="MergeThroughputBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=BENCHED; OWNER=build; UPDATED=2026-04-09
+    const merge_bench_gs_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = .ReleaseFast });
+    merge_bench_gs_mod.addImport("logging", logging_mod);
+    merge_bench_gs_mod.addImport("json", json_mod);
+    merge_bench_gs_mod.addImport("graph_storage", graph_storage_mod);
+    merge_bench_gs_mod.addImport("fle_aead", fle_aead_mod);
+    merge_bench_gs_mod.addImport("fle_key_manager", fle_key_manager_mod);
+    merge_bench_gs_mod.addImport("fle_key_types", fle_key_types_mod);
+    merge_bench_gs_mod.addImport("fle_blind_index", fle_blind_index_mod);
+    merge_bench_gs_mod.addImport("uuid", uuid_ext_mod);
+    merge_bench_gs_mod.addImport("wal", wal_ext_mod);
+    merge_bench_gs_mod.addImport("advanced_types_lib", advanced_types_ext_mod);
+    merge_bench_gs_mod.addImport("timeseries_lib", timeseries_ext_mod);
+    merge_bench_gs_mod.addImport("schema", schema_mod);
+    merge_bench_gs_mod.addImport("rtree_lib", rtree_ext_mod);
+    merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
+    merge_throughput_bench.root_module.addImport("graph_store", merge_bench_gs_mod);
+    merge_throughput_bench.linkLibC();
+    const run_merge_throughput_bench = b.addRunArtifact(merge_throughput_bench);
+    const merge_throughput_bench_step = b.step("bench-merge", "Run bulk MERGE throughput benchmarks");
+    merge_throughput_bench_step.dependOn(&run_merge_throughput_bench.step);
+    bench_step.dependOn(&run_merge_throughput_bench.step);
+
     // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
     mfa_stepup_latency_bench.root_module.addImport("security/mfa_risk.zig", mfa_risk_mod);

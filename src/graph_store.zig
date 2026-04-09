@@ -1261,17 +1261,34 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Result of a merge candidate lookup.
+    pub const MergeLookupResult = enum {
+        /// Key could not be built (buffer overflow or non-indexable type).
+        /// Caller must fall back to a label scan.
+        not_indexable,
+        /// Key was valid and the index is authoritative: no matching node exists.
+        /// Caller can safely skip the fallback scan.
+        not_found,
+        /// Key was valid and a matching, verified node was found.
+        found,
+    };
+
     /// Look up a node by graph, label, property key, and property value.
-    /// Returns the node_id if found and the node still exists, null otherwise.
-    pub fn lookupMergeCandidate(self: *const GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue) ?u64 {
+    /// Returns `.found` with the node_id when a verified match exists,
+    /// `.not_found` when the index is authoritative and no match exists,
+    /// or `.not_indexable` when the key could not be built (caller must scan).
+    pub fn lookupMergeCandidate(self: *const GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         var buf: [1024]u8 = undefined;
-        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return null;
-        const node_id = self.merge_prop_index.get(probe) orelse return null;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
         // Verify node still exists (index could be stale after a failed delete)
         if (self.nodes.get(node_id)) |node| {
-            if (std.mem.eql(u8, node.graph_name, graph_name)) return node_id;
+            if (std.mem.eql(u8, node.graph_name, graph_name)) {
+                out_node_id.* = node_id;
+                return .found;
+            }
         }
-        return null;
+        return .not_found;
     }
 
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28

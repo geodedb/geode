@@ -187,7 +187,7 @@ const BufferedProtoReader = struct {
     // Length is 4 bytes Big Endian.
     pub fn nextMessage(self: *BufferedProtoReader) !?schema.ClientPacket {
         var would_block_attempts: usize = 0;
-        const max_would_block_attempts: usize = 30000; // 30s at 1ms sleep
+        const max_would_block_attempts: usize = 300000; // 300s at 1ms sleep — matches QUIC idle timeout
 
         while (true) {
             // Check if we have enough data for length header

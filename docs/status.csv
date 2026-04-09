@@ -3270,6 +3270,8 @@ REQ-PERF-LOG-GATE-001,HotPathLogGating,DebugLogControl,IMPL,,,perf,2026-01-27,sr
 REQ-PERF-LRU-O1-001,O1LRUEviction,CacheEviction,TESTED,,,engine,2026-02-17,src/server/query_ast_cache.zig
 REQ-PERF-LRU-O1-002,O1LRUEviction,PlanCacheEviction,TESTED,,,engine,2026-02-17,src/server/query_plan_cache.zig
 REQ-PERF-MEMORY-OPT-001,Performance,MemoryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
+REQ-PERF-MERGE-001,MergeThroughput,BulkInsert,BENCHED,,,perf,2026-04-09,benchmarks/benchmark_merge_throughput.zig
+REQ-PERF-MERGE-001,MergeThroughputBenchmarkBuild,PerformanceValidation,BENCHED,,,build,2026-04-09,build.zig
 REQ-PERF-MERGE-002,Execution,IndexRebuild,TESTED,,,engine,2026-04-08,tests/test_gap_0511_regression.zig
 REQ-PERF-MERGE-003,Execution,AdapterMergeSnapshotElision,TESTED,,,engine,2026-04-08,tests/test_gap_0511_regression.zig
 REQ-PERF-MERGE-004,Execution,AdapterMergeVarianceEnvelope,BENCHED,,,engine,2026-04-08,tests/benchmark_merge_adapter_variance.zig

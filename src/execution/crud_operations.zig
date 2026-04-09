@@ -146,22 +146,36 @@ fn findFirstMatchingNodeId(
             if (evaluated_props.len > 0) {
                 // Try each label × first property combination in the index
                 if (valueToPropertyValueForIndex(evaluated_props[0].value)) |pv| {
+                    var index_authoritative = true;
                     for (labels) |label| {
-                        if (read_store.lookupMergeCandidate(graph_name, label, evaluated_props[0].key, pv)) |node_id| {
-                            // Verify the candidate matches ALL labels, ALL properties, and tenant
-                            if (read_store.nodes.getPtr(node_id)) |node| {
-                                if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
-                                    return node_id;
+                        var out_id: u64 = undefined;
+                        switch (read_store.lookupMergeCandidate(graph_name, label, evaluated_props[0].key, pv, &out_id)) {
+                            .found => {
+                                // Verify the candidate matches ALL labels, ALL properties, and tenant
+                                if (read_store.nodes.getPtr(out_id)) |node| {
+                                    if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
+                                        return out_id;
+                                    }
                                 }
-                            }
+                            },
+                            .not_found => {},
+                            .not_indexable => {
+                                index_authoritative = false;
+                            },
                         }
                     }
+                    // If the index was authoritative for ALL labels and none
+                    // matched, the node definitively does not exist — skip the
+                    // expensive O(n) label scan.
+                    if (index_authoritative) return null;
                 }
             }
         }
 
         // Fallback: stream through the label index directly (no ArrayList materialization).
         // Uses the first label for O(1) index lookup, then checks remaining labels + props inline.
+        // Only reached when the merge property index could not be consulted
+        // (non-indexable value type or key too long for the 1024-byte buffer).
         const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse return null;
         for (first_label_nodes) |node_id| {
             if (read_store.nodes.getPtr(node_id)) |node| {
