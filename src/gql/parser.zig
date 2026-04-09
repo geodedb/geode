@@ -36,6 +36,19 @@ pub const Parser = struct {
     collect_chain_aliases: bool = false,
     // Track nesting depth in pattern comprehensions to handle ambiguous | tokens
     pattern_comp_depth: u32 = 0,
+    // Track expression recursion depth to prevent stack overflow from deeply nested input
+    recursion_depth: u16 = 0,
+
+    fn enterRecursion(self: *Parser) ParserError!void {
+        self.recursion_depth += 1;
+        if (self.recursion_depth > 128) {
+            return self.unexpected("expression nesting depth exceeds maximum (128)");
+        }
+    }
+
+    fn leaveRecursion(self: *Parser) void {
+        self.recursion_depth -= 1;
+    }
 
     fn advance(self: *Parser) void {
         self.cur = self.lx.next();
@@ -2894,6 +2907,8 @@ pub const Parser = struct {
     }
 
     fn parseOrExpr(self: *Parser) ParserError!ast.Expr {
+        try self.enterRecursion();
+        defer self.leaveRecursion();
         var left = try self.parseAndExpr();
         while (self.cur.kind == .OR or self.cur.kind == .XOR) {
             const op_kind = self.cur.kind;
