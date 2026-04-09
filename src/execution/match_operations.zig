@@ -3673,24 +3673,27 @@ fn executeVariableLengthPathTraversal(
     filter_clause: ?ast.Expr,
     has_with: bool,
     items: []const ast.ReturnItem,
+    limit: ?usize,
 ) !void {
     // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=Execution; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-    // Use BFS path expansion for variable-length patterns
+    // Stream paths via PathIterator instead of materializing all paths upfront
     const min_len = var_len_min orelse 0;
     const max_len = var_len_max;
 
-    var paths = try expandVariableLengthPaths(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction);
-    defer {
-        for (paths.items) |*path| {
-            path.deinit(allocator);
-        }
-        paths.deinit(allocator);
-    }
+    var path_iter = try execution.PathIterator.init(allocator, store, left_node.id, min_len, max_len, rel_type, rel_direction, .acyclic);
+    defer path_iter.deinit();
 
     // Process each path found
     // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-003; FEATURE="ZeroLengthPaths"; ASPECT=FilterFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-28
     // B07 Fix: Allow single-node paths when min_len=0 (self-match / 0-length path)
-    for (paths.items) |path| {
+    while (try path_iter.next()) |raw_path| {
+        var path = raw_path;
+        defer path.deinit(allocator);
+
+        // LIMIT pushdown: stop early when enough rows collected
+        if (limit) |lim| {
+            if (rows.items.len >= lim) break;
+        }
         if (path.nodes.items.len == 0) continue; // Empty path is never valid
 
         // Get the last node in the path as the right node
@@ -6529,7 +6532,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Check if we have a variable-length path pattern
                 if (var_len_min != null or var_len_max != null) {
                     // Variable-length path traversal — delegated to helper
-                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items);
+                    try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, null);
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
                     try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
