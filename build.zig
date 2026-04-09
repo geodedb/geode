@@ -1204,6 +1204,17 @@ pub fn build(b: *std.Build) void {
     const run_raft_persistent_tests = b.addRunArtifact(raft_persistent_tests);
     test_step.dependOn(&run_raft_persistent_tests.step);
 
+    // Raft log storage append-only binary log round-trip tests
+    const raft_log_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_log_storage.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_log_test_mod.addImport("geode", root_mod);
+    const raft_log_tests = b.addTest(.{ .root_module = raft_log_test_mod });
+    const run_raft_log_tests = b.addRunArtifact(raft_log_tests);
+    test_step.dependOn(&run_raft_log_tests.step);
+
     // GAP-0513: federation_latency_aggregate unit tests (Welford stats, reservoir, archive ring)
     const fed_latency_agg_test_mod = b.createModule(.{
         .root_source_file = b.path("src/distributed/federation_latency_aggregate.zig"),
