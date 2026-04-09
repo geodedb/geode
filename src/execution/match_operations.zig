@@ -4482,36 +4482,13 @@ fn executeMultiHopGroupBy(
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const writable_store = graph_store.getWritableGlobalStore(allocator);
 
-    // Acquire shared read lock for MATCH execution duration.
-    // Multiple MATCH queries hold this concurrently (shared lock).
-    // CREATE/DELETE/SET acquire exclusive write lock and wait for readers.
-    graph_store.acquireStoreLock();
-    defer graph_store.releaseStoreLock();
+    // Lightweight read view with epoch-based invalidation.
+    // Zero overhead when no concurrent writes (common case).
+    // Lazy deep-clone fallback when mutations detected (rare case).
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
 
-    // Always use the primary writable store directly instead of creating a
-    // QueryReadSession snapshot.  The snapshot's arena-backed GraphStore
-    // shallow-copies PropertyValue.String slices from the writable store.
-    // When the snapshot's arena is freed on function return, the arena
-    // allocator bookkeeping corrupts the shared string memory, producing
-    // use-after-free (0xAA fill pattern) in the result's Str values.
-    // Shared read lock is held for MATCH execution, preventing concurrent
-    // mutations from corrupting HashMap iteration. Snapshot cloning is still
-    // skipped because the clone cost is O(graph_size); the read lock provides
-    // correctness while the writable store provides zero-cost reads.
-    const skip_snapshot = true;
-    var read_session = if (skip_snapshot) @as(?graph_store.QueryReadSession, null) else try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
-    var previous_read_store: ?*graph_store.GraphStore = null;
-    if (read_session) |*session| {
-        previous_read_store = graph_store.pushActiveQueryReadStore(session.store());
-    }
-    defer {
-        if (read_session) |*session| {
-            graph_store.popActiveQueryReadStore(previous_read_store);
-            session.deinit();
-        }
-    }
-
-    const store = graph_store.getGlobalStore(allocator);
+    const store = read_view.getReadStore();
     // Graph to filter by - use "default" if no graph specified
     const filter_graph = current_graph orelse "default";
     // GAP-0279: Get tenant filter from session context
