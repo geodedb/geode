@@ -545,7 +545,8 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
         var found = false;
 
         if (labels.len > 0) {
-            // Fast path: use label index for O(1) lookup instead of full node scan
+            // Fast path: use label index to narrow candidates instead of full node scan
+            // Also checks ALL labels (original code only checked labels[0])
             var candidates = try read_store.getNodesByLabels(allocator, filter_graph, labels, filter_tenant);
             defer candidates.deinit(allocator);
 
