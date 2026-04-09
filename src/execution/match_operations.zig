@@ -4485,15 +4485,23 @@ fn executeMultiHopGroupBy(
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     const writable_store = graph_store.getWritableGlobalStore(allocator);
+
+    // Acquire shared read lock for MATCH execution duration.
+    // Multiple MATCH queries hold this concurrently (shared lock).
+    // CREATE/DELETE/SET acquire exclusive write lock and wait for readers.
+    graph_store.acquireStoreLock();
+    defer graph_store.releaseStoreLock();
+
     // Always use the primary writable store directly instead of creating a
     // QueryReadSession snapshot.  The snapshot's arena-backed GraphStore
     // shallow-copies PropertyValue.String slices from the writable store.
     // When the snapshot's arena is freed on function return, the arena
     // allocator bookkeeping corrupts the shared string memory, producing
     // use-after-free (0xAA fill pattern) in the result's Str values.
-    // Since MATCH queries hold the store lock for the duration of execution,
-    // snapshot isolation is not needed for correctness — the writable store
-    // is stable while the lock is held.
+    // Shared read lock is held for MATCH execution, preventing concurrent
+    // mutations from corrupting HashMap iteration. Snapshot cloning is still
+    // skipped because the clone cost is O(graph_size); the read lock provides
+    // correctness while the writable store provides zero-cost reads.
     const skip_snapshot = true;
     var read_session = if (skip_snapshot) @as(?graph_store.QueryReadSession, null) else try graph_store.QueryReadSession.initIfAvailable(allocator, writable_store);
     var previous_read_store: ?*graph_store.GraphStore = null;
