@@ -1,20 +1,28 @@
 # Performance Gap Analysis
 
-Last updated: 2026-04-01
+Last updated: 2026-04-09
 
 ## Summary
 
-- Total findings: 30
-- Open: 0
-- Closed / Implemented: 23
+- Total findings: 43
+- Open: 12
+- Closed / Implemented: 24
 - Closed (Won't Do / Sufficient): 7 (1 transport + 6 migration engine)
 - Blocked: 0
 
-Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts). April 2026 re-audit confirmed all 6 Won't Do dispositions correct; zero new actionable findings.
+Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts). April 9, 2026 core engine perf review added 13 new findings (2x P0, 5x P1, 6x P2) covering execution engine, graph store, transport, and CLI hot paths.
 
 ### Top 5 Open Risks (by PerfScore)
 
-No open performance risks. All migration engine findings closed as Won't Do (unmeasurable benefit at realistic migration counts). Re-audit 2026-04-01 confirmed all dispositions correct; zero new actionable findings.
+| Rank | Sev | Score | Finding | Expected Impact |
+|------|-----|------:|---------|-----------------|
+| 1 | P0 | 60 | getEdgesByType O(E) full scan -- no edge-type index | Two full passes over all edges per type lookup; linear in total edge count |
+| 2 | P1 | 48 | O(n^2) BFS dequeue via orderedRemove(0) | Quadratic memmove cost on large BFS traversals |
+| 3 | P1 | 48 | c=4 throughput regression -- PollSync contention | 727 QPS at c=2 drops to 646 QPS at c=4 (11% regression) |
+| 4 | P1 | 45 | No CLI connection reuse | Full QUIC+TLS handshake per `geode query` (1.3-1.9s overhead per invocation) |
+| 5 | P1 | 32 | Unbounded OS thread spawning per QUIC stream | Up to 65 threads per connection; 100 connections = 6,500 threads |
+
+> PathIterator BFS memory leak (previously #1, PerfScore 100) -- **Closed 2026-04-09** (commit `9f5e587f`)
 
 ## Stack-Ranked Findings
 
@@ -63,14 +71,61 @@ Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per mi
 | 29 | P3 | 4 | O(M*R) quadratic scan in `checksumValidate` -- ledger scan per manifest line | Migration | `src/migration/mod.zig:531-538` | [#584](https://gitlab.com/devnw/codepros/geode/geode/-/issues/584) | Not recommended: HashMap overhead exceeds scan cost at realistic counts | Closed (Won't Do) |
 | 30 | P3 | 4 | `planDryRun` sort calls `parseVersion` per comparison instead of using pre-parsed `.version` field | Migration | `src/migration/mod.zig:587-592` | [#589](https://gitlab.com/devnw/codepros/geode/geode/-/issues/589) | Unmeasurable improvement | Closed (Won't Do) |
 
+### April 9 2026 Audit -- Core Engine Performance Review
+
+Context: Full perf-scan + perf-review of execution engine, graph store, transport, and CLI hot paths. Identified 2x P0, 5x P1, and 6x P2 findings. All findings are evidence-based with verified source locations.
+
+| Rank | Sev | Score | Finding | Component | Evidence | Fix Summary | Status |
+|---|---|---:|---|---|---|---|---|
+| 31 | P0 | 100 | PathIterator BFS memory leak -- `getEdgesFrom`/`getEdgesTo` allocations never freed during var-len path traversal | Execution | `src/execution.zig:1937-1938`: allocates `[]Edge` slices via `getEdgesFrom(allocator, last_node_id)` and `getEdgesTo(allocator, last_node_id)` in BFS loop; neither slice is freed before next iteration or on path completion | Fixed: added `defer allocator.free()` for all `getEdgesFrom`/`getEdgesTo` allocations in BFS loop; also freed edge slices in streaming PathIterator. Commit `9f5e587f`. | Closed / Implemented |
+| 32 | P0 | 60 | `getEdgesByType` O(E) full scan -- no edge-type index | Graph store | `src/graph_store.zig:2850-2875`: two full passes over `self.edges.valueIterator()` (count pass + copy pass); nodes have `label_index` but edges have no type index | Add `edge_type_index: StringHashMap(ArrayList(u64))` keyed by `"graph:type"`; maintain on `addEdge`/`removeEdge`; convert `getEdgesByType` to index lookup | Open |
+| 33 | P1 | 48 | O(n^2) BFS dequeue via `orderedRemove(0)` | Execution | `src/execution.zig:1909` (main BFS queue), `:1964` (pending_results queue): `orderedRemove(0)` triggers `memmove` of remaining items on every dequeue; BFS on large graphs becomes quadratic | Replace with ring buffer (circular index into existing ArrayList backing) or two-stack queue; `pending_results.orderedRemove(0)` at `:1964` has same issue | Open |
+| 34 | P1 | 48 | c=4 throughput regression -- PollSync contention + broadcast wakeup storms | Transport | Load test baseline: 727 QPS at c=2 drops to 646 QPS at c=4 (11% regression); root cause: `PollSync` mutex contention in `src/transport/quic.zig`, persistence thread lock contention, and `streams_cv.broadcast()` waking all waiters in `src/server/quic_connection_handler.zig:746` | Instrument contention points; increase poll sleep gap; replace `broadcast()` with `signal()` for single-waiter wakeup; consider per-connection poll locks | Open |
+| 35 | P1 | 45 | No CLI connection reuse -- full QUIC+TLS handshake per `geode query` invocation | CLI | `src/cli/main.zig:1992-2037`: each `geode query` call creates new `QuicClient.init`, connects, handshakes (1.3-1.9s overhead), executes one query, then deinits | Add `--batch` mode that accepts multiple queries on stdin over a single QUIC connection; alternatively, implement Unix domain socket for local server communication | Open |
+| 36 | P1 | 32 | Unbounded OS thread spawning per QUIC stream -- up to 65 threads per connection | Transport | `src/server/quic_connection_handler.zig:740`: `std.Thread.spawn(.{}, handleAdditionalStream, ...)` for each additional multiplexed stream; QUIC allows up to 65 concurrent streams per connection; comment at `:735-739` explains why Spice pool was not used | Reuse existing Spice thread pool for stream handlers; add stream handler work items with proper lifecycle management; alternatively cap concurrent stream threads per connection | Open |
+| 37 | P1 | 32 | Cartesian product no LIMIT pushdown -- full N*M cross product before truncation | Execution | `src/execution/match_operations.zig:1903`: Cartesian product path generates all N*M bindings before any LIMIT is applied; `scan_cap` hint exists in other paths but not here | Add early break when `new_bindings.items.len >= scan_cap` in the Cartesian product nested loop (after `:1895` append); propagate `scan_cap` from LIMIT clause | Open |
+| 38 | P2 | 27 | Linear visited-check in PathIterator `shouldSkipByPathMode` | Execution | `src/execution.zig:1818-1838`: `.trail` mode scans `current_path.edges.items` linearly per edge expansion; `.acyclic` and `.simple` modes scan `current_path.nodes.items` linearly; O(d) per expansion where d = path depth | Replace linear scans with `AutoHashMap(u64, void)` for O(1) membership tests; maintain per-path visited sets alongside the node/edge lists | Open |
+| 39 | P2 | 20 | 341x `initCapacity(allocator, 0)` -- no-op allocations on hot paths | Execution | 341 occurrences across 43 files; top offenders: `match_operations.zig` (55), `execution.zig` (33), `centrality_algorithms.zig` (53), `statement_handlers.zig` (22), `crud_operations.zig` (20) | Replace with `.empty` (zero-cost, no allocator call) for lazy-init paths, or `initCapacity(allocator, 8)` for hot paths that always grow; batch fix via project-wide search-replace | Open |
+| 40 | P2 | 18 | Full Edge struct copy in `getEdgesByType` -- ~96+ bytes per edge including shallow StringHashMap | Graph store | `src/graph_store.zig:2870`: `result[i] = edge.*` copies full `Edge` struct including label, properties HashMap, tenant_id, graph_name; callers only need edge IDs or read-only access | Return `[]const *Edge` (pointer slice) or `[]u64` (edge ID slice) to avoid copying; callers use `edges.getPtr(id)` for read-only access | Open |
+| 41 | P2 | 10 | Plan cache stub -- `generateOptimizedPlan` produces hardcoded operators not wired to execution | Planner | `src/server/query_plan_cache.zig:261-278`: `optimizeMatchClause`, `optimizeFilterConditions`, `optimizeProjection`, `optimizeOrdering` ignore AST and produce stub operators with fixed selectivity/cost estimates | Low priority: AST cache already handles parse cost; real plan cache requires operator-to-execution bridge which is a larger architectural effort | Open |
+| 42 | P2 | 10 | No wire-level compression -- protobuf query results sent uncompressed | Transport | Backup system uses zstd compression (`src/storage/backup.zig`) but query result protobuf messages are sent raw; large result sets (100K+ rows) transfer more data than necessary | Add optional zstd frame compression for protobuf payloads above a size threshold (e.g., 64KB); negotiate compression capability during QUIC handshake | Open |
+| 43 | P2 | 10 | No latency histogram / allocation tracking in production | Observability | No per-query-type p50/p99 latency metrics; no per-request allocation byte tracking; load test baselines exist but runtime observability is absent | Add lightweight HdrHistogram-style latency recorder per query type; expose via `CALL geode.metrics()` procedure; add optional `--track-allocations` mode for debugging | Open |
+
 ## Findings by Area
 
-- Query execution: `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed), `#557` (Closed), `#558` (Closed), `#560` (Closed), `#561` (Closed), `#563` (Closed)
-- Storage/graph: `#445` (Closed), `#449` (Closed), `#450` (Closed), `#451` (Closed), `#559` (Closed), `#562` (Closed)
-- Serialization: `#446` (Closed), `#448` (Closed)
-- Transport/concurrency: `#447` (Closed), `#453` (Closed), `#454` (Closed), `#457` (Closed), `#458` (Closed/Won't Do)
-- Planner/index: `#455` (Closed), `#459` (Closed)
-- Migration: `#577` (Won't Do), `#579` (Won't Do), `#582` (Won't Do), `#584` (Won't Do), `#589` (Won't Do), `#594` (Won't Do)
+### App (Query Execution)
+
+- `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed), `#557` (Closed), `#558` (Closed), `#560` (Closed), `#561` (Closed), `#563` (Closed)
+- **Closed (2026-04-09)**: #31 PathIterator memory leak (P0/100, commit `9f5e587f`)
+- **Open**: #33 BFS orderedRemove (P1/48), #37 Cartesian LIMIT pushdown (P1/32), #38 linear visited-check (P2/27), #39 initCapacity(0) (P2/20)
+
+### DB (Storage / Graph Store)
+
+- `#445` (Closed), `#449` (Closed), `#450` (Closed), `#451` (Closed), `#559` (Closed), `#562` (Closed)
+- **Open**: #32 getEdgesByType full scan (P0/60), #40 Edge struct copy (P2/18)
+
+### Infra (Transport / Concurrency)
+
+- `#447` (Closed), `#453` (Closed), `#454` (Closed), `#457` (Closed), `#458` (Closed/Won't Do)
+- **Open**: #34 c=4 throughput regression (P1/48), #36 unbounded thread spawn (P1/32), #42 no wire compression (P2/10), #43 no latency histograms (P2/10)
+
+### CI
+
+- `#545` (Closed -- fixed via GAP-0252)
+- No new CI findings.
+
+### CLI
+
+- **Open**: #35 no connection reuse (P1/45)
+
+### Planner / Index
+
+- `#455` (Closed), `#459` (Closed)
+- **Open**: #41 plan cache stub (P2/10)
+
+### Migration
+
+- `#577` (Won't Do), `#579` (Won't Do), `#582` (Won't Do), `#584` (Won't Do), `#589` (Won't Do), `#594` (Won't Do)
 
 ## Related Open Performance Bugs (tracked separately)
 
@@ -84,15 +139,55 @@ Context: Admin-time CLI tool. Dominant cost is QUIC round-trip (~1.3-1.9s per mi
 
 ## Roadmap
 
-No open performance items. All migration engine perf findings closed as Won't Do (2026-04-01). Re-audit 2026-04-01 confirmed all dispositions; no new items.
+### Quick Wins (< 1 day each)
+
+| Item | Finding | Effort | Expected Impact |
+|------|---------|--------|-----------------|
+| ~~#31~~ | ~~PathIterator memory leak~~ | ~~2-4h~~ | **Closed 2026-04-09** (commit `9f5e587f`) |
+| #33 | BFS orderedRemove(0) | 2-4h | O(1) dequeue vs O(n) memmove; linear BFS instead of quadratic |
+| #39 | initCapacity(0) batch fix | 2-4h | Removes 341 no-op allocator calls; marginal per-call but cumulative on hot paths |
+
+### Medium (1-5 days each)
+
+| Item | Finding | Effort | Expected Impact |
+|------|---------|--------|-----------------|
+| #32 | Edge-type index | 2-3d | O(1) type lookup vs O(E) full scan; critical for MATCH with typed relationships |
+| #34 | c=4 throughput regression | 2-3d | Requires instrumentation first; expect 15-30% QPS recovery at c=4 |
+| #35 | CLI batch mode | 1-2d | Amortize 1.3-1.9s handshake across multiple queries; 10-100x throughput for scripted use |
+| #37 | Cartesian LIMIT pushdown | 1d | Early termination avoids full N*M expansion; orders of magnitude for small LIMIT on large graphs |
+| #38 | HashSet visited check | 1d | O(1) vs O(d) per edge expansion; significant for deep path traversals |
+| #40 | Edge struct copy elimination | 1d | Avoid ~96+ byte copy per edge; pointer-based access is zero-copy |
+
+### Strategic (> 5 days)
+
+| Item | Finding | Effort | Expected Impact |
+|------|---------|--------|-----------------|
+| #36 | Thread pool for QUIC streams | 3-5d | Caps OS thread count; prevents resource exhaustion under high connection multiplexing |
+| #41 | Plan cache wiring | 5-10d | Requires operator-to-execution bridge; low priority while AST cache covers parse cost |
+| #42 | Wire-level compression | 3-5d | Reduces network bandwidth for large result sets; requires protocol negotiation |
+| #43 | Latency histograms | 3-5d | Runtime observability for production debugging; no correctness impact |
+
+### Sprint Plan
+
+**Sprint 1 (1 week)**: Fix #31 (PathIterator memory leak), #33 (BFS dequeue), diagnose #34 (c=4 regression via instrumentation)
+
+**Sprint 2 (1 week)**: Fix #32 (edge-type index), #35 (CLI batch mode), #37 (Cartesian LIMIT pushdown), fix #34 based on diagnosis
+
+**Sprint 3 (follow-up)**: #36 (thread pool), #38 (HashSet visited), #39 (initCapacity batch fix), #42 (compression), #43 (histograms)
 
 ## Blockers and Unblock Steps
 
-All blockers resolved (2026-02-17):
+### Resolved (2026-02-17)
 
 1. `#445` — **Resolved**: WAL with mutation callback architecture, checkpoint thresholds, CRC32 integrity, crash recovery replay.
 2. `#452` — **Resolved**: Real plan generation from AST, OptimizerHints in ExecutionContext, schema epoch cache invalidation.
 3. `#460` — **Resolved**: SharedQueryOptimizer with thread-safe cross-connection plan reuse, ref-counting, O(1) LRU eviction.
+
+### Current Unknowns (2026-04-09)
+
+1. **#34 c=4 regression**: Root cause is suspected (PollSync contention + broadcast storms) but not confirmed via profiling. Unblock: instrument mutex contention times in `quic.zig` PollSync; run load test at c=4 with `--track-allocations` to isolate bottleneck.
+2. **#36 thread pool for streams**: Comment at `quic_connection_handler.zig:735-739` explains current design rationale (long-lived blocking I/O vs fork/join). Unblock: prototype Spice-based stream handler with proper lifecycle to validate that approach works without starving heartbeat tasks.
+3. **#41 plan cache wiring**: Requires operator-to-execution bridge design. Unblock: define `PhysicalOperator` execution interface that maps to existing execution paths in `match_operations.zig` and `query_execution.zig`.
 
 ## Verification Executed for Closed Items
 

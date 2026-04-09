@@ -2,11 +2,11 @@
 
 This document contains gaps that have been verified as resolved from previous gap analysis reviews.
 
-**Last Updated**: April 5, 2026
-**Last Verified**: April 5, 2026
+**Last Updated**: April 9, 2026
+**Last Verified**: April 9, 2026
 **GitLab Issues**: Closed gap issues are tracked in GitLab; open gaps are listed in docs/GAP_ANALYSIS.md.
 
-**Current Status**: 3 blocked gaps remain. See docs/GAP_ANALYSIS.md.
+**Current Status**: 7 open gaps (3 Critical, 1 High, 3 Medium, 3 blocked). See docs/GAP_ANALYSIS.md.
 
 ## March 13, 2026 Gap Resolution — Security & Cryptographic Gaps (6 items)
 
@@ -4426,3 +4426,65 @@ See docs/GAP_ANALYSIS.md for current open gaps.
 - **GitLab issue:** [#696](https://gitlab.com/devnw/codepros/geode/geode/-/issues/696)
 - **Resolution Date:** April 5, 2026
 - **Resolution:** Removed dead imports (backup_types, fle_annotations) and fixed bare except in Python scripts.
+
+---
+
+## April 9, 2026 Gap Resolution -- Security Audit (1 item)
+
+### GAP-0294: Fail-open RLS expression evaluation [RESOLVED]
+
+- **Category:** Security / RLS
+- **Severity:** Medium (P2)
+- **CWE:** CWE-285
+- **Resolution:** The `rls_enhanced.zig:513-514` fail-open path now returns `false` (fail-closed). The fail-open pattern has shifted to the `match_operations.zig` integration point and is tracked as GAP-0524 (new, High severity).
+- **Evidence:** `src/security/rls_enhanced.zig:513-514` now returns `false` instead of `true`.
+- **Resolved date:** 2026-04-09
+
+---
+
+## April 9, 2026 Gap Resolution -- Gap Closure Session (5 items)
+
+**Summary**: Resolved GAP-0518, GAP-0522, GAP-0523, GAP-0524, GAP-0526 from the same-session security/performance audit. All 871 tests pass (866 existing + 5 new). 9 total commits covering 6 Gap-IDs + 3 additional fixes.
+
+### GAP-0518: Hardcoded "secret-key" in gRPC server initialization [RESOLVED]
+
+- **Category:** Security / Credentials
+- **Severity:** Critical
+- **CWE:** CWE-798 (Use of Hard-coded Credentials)
+- **Resolution:** Replaced hardcoded `"secret-key"` string with crypto-random 32-byte key generated at server startup using `std.crypto.random.bytes()`. The gRPC server now generates a unique secret key per instance.
+- **Evidence:** `src/transport/grpc_server.zig` -- no hardcoded secret strings remain; key generated via `std.crypto.random`. Commit `2a83f598`.
+- **Resolved date:** 2026-04-09
+
+### GAP-0522: Query parameters dropped in 4 match_operations paths [RESOLVED]
+
+- **Category:** Correctness / Query Engine
+- **Severity:** High
+- **Resolution:** Added `.param_names` and `.param_values` fields to all 4 `Env` construction sites in `match_operations.zig`. Parameters now propagate correctly through variable-length path traversal and relationship matching paths. 1 new regression test added.
+- **Evidence:** `src/execution/match_operations.zig` -- all Env construction sites now include param_names/param_values. Commit `397595f3`.
+- **Resolved date:** 2026-04-09
+
+### GAP-0523: KMS non-production provider not blocked in release builds [RESOLVED]
+
+- **Category:** Security / Key Management
+- **Severity:** High
+- **Resolution:** Added `return error.UnsafeKMSProvider` after the error log in release builds. Non-production KMS providers (file-based, in-memory) are now blocked in release mode. Debug builds retain the warning-only behavior. Also propagated KMS auth header errors in `external_kms_client.zig:334,654`.
+- **Evidence:** `src/security/kms.zig` -- release builds return `error.UnsafeKMSProvider`; `src/security/external_kms_client.zig` -- auth header errors propagated. Commits `da29bba1` + `6891f461`.
+- **Resolved date:** 2026-04-09
+
+### GAP-0524: RLS expression evaluation fails open on errors [RESOLVED]
+
+- **Category:** Security / RLS / Authorization
+- **Severity:** High
+- **CWE:** CWE-285 (Improper Authorization)
+- **Resolution:** Changed `catch return true` to `catch return false` and `catch true` to `catch false` at both RLS evaluation sites in `match_operations.zig`. RLS now fails closed on all evaluation errors. Combined with the GAP-0294 fix in `rls_enhanced.zig`, all RLS error paths now deny access by default.
+- **Evidence:** `src/execution/match_operations.zig:121,133` -- catch handlers return `false` (deny). Commit `88fee6f1`.
+- **Resolved date:** 2026-04-09
+
+### GAP-0526: No write-permission enforcement on query execution [RESOLVED]
+
+- **Category:** Security / Authorization
+- **Severity:** Critical
+- **CWE:** CWE-862 (Missing Authorization)
+- **Resolution:** Added write-permission check in `geode_auth_lib.zig` that verifies the user's role permits mutation operations before query execution. ReadOnly and basic User roles are blocked from executing CREATE, DELETE, MERGE, SET, REMOVE, and DROP statements with `42000: Insufficient privileges` error. Write and Admin roles proceed normally. Check occurs before lock acquisition. 4 new regression tests added.
+- **Evidence:** `src/security/geode_auth_lib.zig` -- `checkWritePermission()` function; `src/server/quic_connection_handler.zig` -- permission check called before mutation execution; 4 unit tests. Commit `bbef876d`.
+- **Resolved date:** 2026-04-09
