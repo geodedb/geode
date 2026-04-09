@@ -1137,13 +1137,13 @@ pub const GraphStore = struct {
             } else {
                 self.allocator.free(key);
             }
-            try result.value_ptr.append(self.allocator, node_id);
+            try sortedInsert(result.value_ptr, self.allocator, node_id);
             return;
         };
 
         if (self.label_index.getPtr(probe_key)) |list| {
             // Key already exists — no heap allocation needed
-            try list.append(self.allocator, node_id);
+            try sortedInsert(list, self.allocator, node_id);
         } else {
             // New key — heap-allocate for map ownership
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
@@ -1153,8 +1153,27 @@ pub const GraphStore = struct {
             } else {
                 self.allocator.free(key);
             }
-            try result.value_ptr.append(self.allocator, node_id);
+            try sortedInsert(result.value_ptr, self.allocator, node_id);
         }
+    }
+
+    /// Binary-search insert into a sorted ArrayList(u64), maintaining ascending order.
+    /// Deduplicates: if node_id is already present, this is a no-op.
+    fn sortedInsert(list: *std.ArrayList(u64), allocator: std.mem.Allocator, node_id: u64) !void {
+        const items = list.items;
+        var lo: usize = 0;
+        var hi: usize = items.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (items[mid] < node_id) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        // Deduplicate: skip if already present
+        if (lo < items.len and items[lo] == node_id) return;
+        try list.insert(allocator, lo, node_id);
     }
 
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
@@ -1162,13 +1181,20 @@ pub const GraphStore = struct {
         defer self.allocator.free(key);
 
         if (self.label_index.getPtr(key)) |list| {
-            var i: usize = 0;
-            while (i < list.items.len) {
-                if (list.items[i] == node_id) {
-                    _ = list.orderedRemove(i);
-                    break;
+            // Binary search for node_id in sorted posting list
+            const items = list.items;
+            var lo: usize = 0;
+            var hi: usize = items.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (items[mid] < node_id) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
                 }
-                i += 1;
+            }
+            if (lo < items.len and items[lo] == node_id) {
+                _ = list.orderedRemove(lo);
             }
             if (list.items.len == 0) {
                 if (self.label_index.fetchRemove(key)) |kv| {
@@ -1331,46 +1357,91 @@ pub const GraphStore = struct {
             return result;
         }
 
-        // Multi-label path: find smallest posting list to use as seed
-        var smallest_idx: usize = 0;
-        var smallest_len: usize = std.math.maxInt(usize);
+        // Multi-label path: two-pointer merge intersection on sorted posting lists.
+        // Gather posting lists and sort by ascending length for optimal intersection.
+
+        // Stack-allocated array for up to 8 labels; heap fallback for more.
+        const MaxStack = 8;
+        var stack_lists: [MaxStack][]const u64 = undefined;
+        var heap_lists: ?[][]const u64 = null;
+        defer if (heap_lists) |h| allocator.free(h);
+
+        const lists: [][]const u64 = if (labels.len <= MaxStack)
+            stack_lists[0..labels.len]
+        else blk: {
+            heap_lists = try allocator.alloc([]const u64, labels.len);
+            break :blk heap_lists.?;
+        };
+
         for (labels, 0..) |label, i| {
-            const posting = self.getNodesByLabel(graph_name, label) orelse return result; // empty intersection
-            if (posting.len < smallest_len) {
-                smallest_len = posting.len;
-                smallest_idx = i;
-            }
+            const posting = self.getNodesByLabel(graph_name, label) orelse return result;
+            if (posting.len == 0) return result;
+            lists[i] = posting;
         }
 
-        const seed_nodes = self.getNodesByLabel(graph_name, labels[smallest_idx]).?;
-        try result.ensureTotalCapacity(allocator, seed_nodes.len);
+        // Sort posting lists by ascending length (insertion sort — n is tiny)
+        for (1..lists.len) |i| {
+            const key = lists[i];
+            var j: usize = i;
+            while (j > 0 and lists[j - 1].len > key.len) {
+                lists[j] = lists[j - 1];
+                j -= 1;
+            }
+            lists[j] = key;
+        }
 
-        // For each candidate in the smallest list, verify it has ALL other labels
-        for (seed_nodes) |node_id| {
-            if (self.nodes.get(node_id)) |node| {
-                // GAP-0509: Filter by tenant_id when specified
+        // Two-pointer intersection: intersect lists[0] with lists[1], then result with lists[2], etc.
+        // Use `result` as the current intersection buffer and a temp buffer for alternation.
+        var temp = std.ArrayList(u64).empty;
+        defer temp.deinit(allocator);
+
+        // Seed with shortest posting list
+        try result.ensureTotalCapacity(allocator, lists[0].len);
+        for (lists[0]) |id| {
+            result.appendAssumeCapacity(id);
+        }
+
+        for (lists[1..]) |other| {
+            temp.clearRetainingCapacity();
+            try temp.ensureTotalCapacity(allocator, result.items.len);
+
+            var ai: usize = 0;
+            var bi: usize = 0;
+            const a_items = result.items;
+            while (ai < a_items.len and bi < other.len) {
+                if (a_items[ai] < other[bi]) {
+                    ai += 1;
+                } else if (a_items[ai] > other[bi]) {
+                    bi += 1;
+                } else {
+                    temp.appendAssumeCapacity(a_items[ai]);
+                    ai += 1;
+                    bi += 1;
+                }
+            }
+
+            // Swap: move temp into result for next round
+            const swap_items = result.items;
+            const swap_cap = result.capacity;
+            result.items = temp.items;
+            result.capacity = temp.capacity;
+            temp.items = swap_items;
+            temp.capacity = swap_cap;
+        }
+
+        // Verify nodes still exist (label index may have stale entries)
+        // and apply tenant filter (GAP-0509).
+        {
+            var write: usize = 0;
+            for (result.items) |node_id| {
+                const node = self.nodes.get(node_id) orelse continue;
                 if (tenant_id) |tid| {
                     if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
                 }
-                var has_all = true;
-                for (labels, 0..) |required_label, i| {
-                    if (i == smallest_idx) continue; // skip the seed label
-                    var found = false;
-                    for (node.labels) |node_label| {
-                        if (std.mem.eql(u8, required_label, node_label)) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (!found) {
-                        has_all = false;
-                        break;
-                    }
-                }
-                if (has_all) {
-                    result.appendAssumeCapacity(node_id);
-                }
+                result.items[write] = node_id;
+                write += 1;
             }
+            result.items.len = write;
         }
 
         return result;
