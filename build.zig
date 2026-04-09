@@ -1305,6 +1305,17 @@ pub fn build(b: *std.Build) void {
     const run_raft_snap_tests = b.addRunArtifact(raft_snap_tests);
     test_step.dependOn(&run_raft_snap_tests.step);
 
+    // GAP-0520: Raft apply callback — routes committed commands to GraphStore
+    const raft_apply_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_apply.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    raft_apply_test_mod.addImport("geode", root_mod);
+    const raft_apply_tests = b.addTest(.{ .root_module = raft_apply_test_mod });
+    const run_raft_apply_tests = b.addRunArtifact(raft_apply_tests);
+    test_step.dependOn(&run_raft_apply_tests.step);
+
     // E2E tests (slower, require more setup - not run in pre-push hooks)
     // Run with: zig build test-e2e
     const test_e2e_step = b.step("test-e2e", "Run end-to-end tests (slower)");

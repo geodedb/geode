@@ -245,6 +245,7 @@ pub const distributed = struct {
     pub const raft_log_storage = @import("distributed/raft_log_storage.zig");
     pub const raft_persistent = @import("distributed/raft_persistent.zig");
     pub const raft_snapshot_manager = @import("distributed/raft_snapshot_manager.zig");
+    pub const raft_apply = @import("distributed/raft_apply.zig");
     pub const txn_coordinator = @import("distributed/txn_coordinator.zig");
     pub const cluster = @import("distributed/cluster.zig");
     pub const raft = @import("raft");
