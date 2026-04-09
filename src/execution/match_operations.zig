@@ -4176,8 +4176,11 @@ fn executeMultiHopGroupBy(
     const arena = arena_state.allocator();
 
     // Multi-hop pattern with GROUP BY handling
+    // env_names points to a shared name schema per hop depth (all bindings at
+    // the same depth share the same names array).  Only env_values is unique
+    // per binding.
     const MultiHopBinding = struct {
-        env_names: [][]const u8,
+        env_names: []const []const u8, // shared schema – one alloc per hop depth
         env_values: []Value,
     };
 
@@ -4205,9 +4208,16 @@ fn executeMultiHopGroupBy(
     // CANARY: REQ=REQ-AUTO-INDEX-SCAN-003; FEATURE="AutoIdIndex"; ASPECT=MultiHopGroupByLabelIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-02-07
     const first_hop = chain.hops[0];
 
+    // Build the shared name schema for hop depth 0 (just the left node variable).
+    var current_schema: []const []const u8 = blk: {
+        var s = try arena.alloc([]const u8, 1);
+        s[0] = first_hop.left.name orelse "_anon_left_0";
+        break :blk s;
+    };
+
     // Collect candidate left nodes - use label_index when labels are present
     const NodeCollector = struct {
-        fn addBinding(arena_alloc: std.mem.Allocator, eval_alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding)) !void {
+        fn addBinding(arena_alloc: std.mem.Allocator, eval_alloc: std.mem.Allocator, node: *graph_store.Node, hop_left: ast.NodePattern, p_names: []const []const u8, p_values: []const Value, bindings_list: *std.ArrayList(MultiHopBinding), schema: []const []const u8) !void {
             // Filter by left node properties
             if (hop_left.props) |props| {
                 for (props) |prop| {
@@ -4226,17 +4236,11 @@ fn executeMultiHopGroupBy(
                 }
             }
 
-            var init_env_names_mh = try arena_alloc.alloc([]const u8, 1);
+            // Only allocate env_values per binding; env_names is the shared schema.
             var init_env_values_mh = try arena_alloc.alloc(Value, 1);
-            if (hop_left.name) |var_name| {
-                init_env_names_mh[0] = var_name;
-                init_env_values_mh[0] = Value{ .Node = node };
-            } else {
-                init_env_names_mh[0] = "_anon_left_0";
-                init_env_values_mh[0] = Value{ .Node = node };
-            }
+            init_env_values_mh[0] = Value{ .Node = node };
             try bindings_list.append(arena_alloc, MultiHopBinding{
-                .env_names = init_env_names_mh,
+                .env_names = schema,
                 .env_values = init_env_values_mh,
             });
         }
@@ -4248,7 +4252,7 @@ fn executeMultiHopGroupBy(
 
         for (label_node_ids.items) |node_id| {
             const node = store.nodes.getPtr(node_id) orelse continue;
-            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
         }
     } else {
         var init_iter_mh = store.nodes.iterator();
@@ -4257,12 +4261,27 @@ fn executeMultiHopGroupBy(
             if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
             if (!passesTenantFilter(node.*, filter_tenant)) continue;
             if (!passesRLSFilter(allocator, node.*)) continue;
-            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh);
+            try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
         }
     }
 
     // Process each hop
     for (chain.hops, 0..) |hop, hop_idx| {
+        // Build the shared name schema for this hop depth ONCE (not per binding).
+        {
+            var new_var_count: usize = 1; // right node always
+            if (hop.rel.name != null) new_var_count += 1;
+            var new_schema = try arena.alloc([]const u8, current_schema.len + new_var_count);
+            @memcpy(new_schema[0..current_schema.len], current_schema);
+            var schema_idx = current_schema.len;
+            if (hop.rel.name) |rel_name| {
+                new_schema[schema_idx] = rel_name;
+                schema_idx += 1;
+            }
+            new_schema[schema_idx] = hop.right.name orelse "_anon_right";
+            current_schema = new_schema;
+        }
+
         // GAP-0220 FIX: Use try for proper error propagation
         var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
 
@@ -4334,31 +4353,21 @@ fn executeMultiHopGroupBy(
                 }
 
                 // CANARY: REQ=REQ-GQL-MULTIHOP-ANON-002; FEATURE="MultiHopAnonymous"; ASPECT=GroupByPatterns; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-                // Count new variables - ALWAYS include right node even if anonymous
-                var new_var_count: usize = 1; // Always include right node
-                if (hop.rel.name != null) new_var_count += 1;
+                // Only allocate env_values per binding; env_names uses shared current_schema.
+                var new_env_values_mh = try arena.alloc(Value, current_schema.len);
+                @memcpy(new_env_values_mh[0..binding.env_values.len], binding.env_values);
 
-                var new_env_names_mh = try arena.alloc([]const u8, binding.env_names.len + new_var_count);
-                var new_env_values_mh = try arena.alloc(Value, binding.env_values.len + new_var_count);
-
-                for (binding.env_names, 0..) |name, i| {
-                    new_env_names_mh[i] = name;
-                    new_env_values_mh[i] = binding.env_values[i];
-                }
-
-                var new_idx: usize = binding.env_names.len;
-                if (hop.rel.name) |rel_name| {
-                    new_env_names_mh[new_idx] = rel_name;
+                var new_idx: usize = binding.env_values.len;
+                if (hop.rel.name != null) {
                     const edge_ptr = store.edges.getPtr(edge.id);
                     new_env_values_mh[new_idx] = if (edge_ptr) |ep| Value{ .Edge = ep } else Value{ .Null = {} };
                     new_idx += 1;
                 }
                 // Always add right node (even anonymous) with synthetic name "_anon_right" for traversal
-                new_env_names_mh[new_idx] = hop.right.name orelse "_anon_right";
                 new_env_values_mh[new_idx] = Value{ .Node = right_node_ptr };
 
                 try next_bindings_mh.append(arena, MultiHopBinding{
-                    .env_names = new_env_names_mh,
+                    .env_names = current_schema,
                     .env_values = new_env_values_mh,
                 });
             }
@@ -4409,28 +4418,15 @@ fn executeMultiHopGroupBy(
 
         const group_key = try key_buf.toOwnedSlice(arena);
 
-        // Copy binding for grouping
-        var copy_names = try arena.alloc([]const u8, binding.env_names.len);
-        var copy_values = try arena.alloc(Value, binding.env_values.len);
-        for (binding.env_names, 0..) |name, i| {
-            copy_names[i] = name;
-            copy_values[i] = binding.env_values[i];
-        }
-
+        // No copy needed: env_names is a shared schema pointer and env_values
+        // is arena-allocated and stable until function exit.
         if (binding_groups_mh.getPtr(group_key)) |grp| {
-            try grp.append(arena, MultiHopBinding{
-                .env_names = copy_names,
-                .env_values = copy_values,
-            });
-            // Arena free is a no-op; duplicate key freed at function exit.
+            try grp.append(arena, binding);
         } else {
             try group_keys_list_mh.append(arena, group_key);
             // GAP-0220 FIX: Use try for proper error propagation
             var new_group = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
-            try new_group.append(arena, MultiHopBinding{
-                .env_names = copy_names,
-                .env_values = copy_values,
-            });
+            try new_group.append(arena, binding);
             try binding_groups_mh.put(group_key, new_group);
         }
     }
