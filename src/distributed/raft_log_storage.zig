@@ -12,7 +12,7 @@
 //
 // Fixed header = 40 bytes (5 x 8-byte fields).
 //
-// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=FileFormat; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
+// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=FileFormat; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -66,7 +66,7 @@ pub const LogStorage = struct {
     }
 
     /// Append a single entry to the log with fsync.
-    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=Append; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
+    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=Append; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn appendEntry(self: *LogStorage, entry: LogEntry) !void {
         // Serialize the command
         const cmd_bytes = try serializeCommand(self.allocator, entry.command);
@@ -116,7 +116,7 @@ pub const LogStorage = struct {
     /// Read all entries from the log, verifying CRC for each record.
     /// Caller owns the returned slice and must free each entry's command data
     /// (for .write variants) and the slice itself.
-    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=ReadAll; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
+    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=ReadAll; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn readAllEntries(self: *LogStorage, allocator: Allocator) ![]LogEntry {
         try self.file.seekTo(0);
 
@@ -194,7 +194,7 @@ pub const LogStorage = struct {
     /// Remove all entries with index > last_index.
     /// Re-reads the log to find the byte offset of the first entry past last_index,
     /// then truncates the file.
-    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=Truncate; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
+    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=Truncate; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn truncateAfter(self: *LogStorage, last_index: u64, allocator: Allocator) !void {
         try self.file.seekTo(0);
 
@@ -243,7 +243,7 @@ pub const LogStorage = struct {
     }
 
     /// Return the index of the last entry, or 0 if the log is empty.
-    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=LastIndex; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-09
+    /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=LastIndex; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn lastIndex(self: *LogStorage, allocator: Allocator) !u64 {
         try self.file.seekTo(0);
 

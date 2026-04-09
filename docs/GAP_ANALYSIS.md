@@ -5,14 +5,14 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 7
-- **Critical:** 3 (GAP-0256 blocked, GAP-0519, GAP-0520)
+- **Total open gaps:** 5
+- **Critical:** 1 (GAP-0256 blocked)
 - **High:** 1 (GAP-0521)
 - **Medium:** 3 (GAP-0246 blocked, GAP-0247 blocked, GAP-0525)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
-- **Closed (2026-04-09):** GAP-0294 (superseded by GAP-0524), GAP-0518 (2a83f598), GAP-0522 (397595f3), GAP-0523 (da29bba1), GAP-0524 (88fee6f1), GAP-0526 (bbef876d)
+- **Closed (2026-04-09):** GAP-0294 (superseded by GAP-0524), GAP-0518 (2a83f598), GAP-0519 (d9ecb236), GAP-0520 (27047593), GAP-0522 (397595f3), GAP-0523 (da29bba1), GAP-0524 (88fee6f1), GAP-0526 (bbef876d)
 - **Closed (2026-04-05):** GAP-0500, GAP-0501, GAP-0502, GAP-0503, GAP-0504, GAP-0508, SEC-04..SEC-27 (17 critical security), R4, performance items #675/#681/#683/#688/#692/#695, migration security SEC-MIG-06/07/09/10/11, quality Q13/Q15/Q17/Q18, #696 dead imports
 - **Closed (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295), GAP-0255 (savepoint/transport parity)
 - **Opened (2026-04-09):** GAP-0518, GAP-0519, GAP-0520, GAP-0521, GAP-0522, GAP-0523, GAP-0524, GAP-0525, GAP-0526
@@ -1920,37 +1920,29 @@ ERROR geode.server Protobuf read error error=Timeout
 
 ---
 
-### GAP-0519: Raft snapshot creates empty data payload
+### GAP-0519: Raft snapshot creates empty data payload -- **CLOSED (2026-04-09)**
 
 - **Category:** Correctness / Distributed Systems
 - **Severity:** Critical
 - **Requirement source:** Raft consensus protocol safety properties (snapshot-based state transfer)
-- **Current state (evidence):**
-  - `src/distributed/raft_persistent.zig:119` -- `.data = ""` and `.checksum = 0` in snapshot creation
-- **Why this is a gap:** Raft snapshots are used for state transfer to new or lagging cluster members. An empty snapshot means all committed state is lost during snapshot-based recovery.
-- **Impact/Risk:** Cluster node recovery after restart or network partition loses all committed data. Violates Raft state machine safety guarantee.
-- **Recommended fix:** Serialize the current state machine state (graph data, metadata) into the snapshot data payload. Compute a proper checksum over the serialized data.
+- **Resolution:** Closed (2026-04-09) -- `createSnapshot()` now serializes full graph state via JSON-lines with CRC32 checksum. Evidence: `src/distributed/raft_snapshot_manager.zig`, commit d9ecb236
 - **Acceptance criteria:**
-  - [ ] Raft snapshot `.data` contains serialized state machine state
-  - [ ] Snapshot `.checksum` is computed over the actual data payload
-  - [ ] A node restored from snapshot contains all data committed before the snapshot
+  - [x] Raft snapshot `.data` contains serialized state machine state
+  - [x] Snapshot `.checksum` is computed over the actual data payload
+  - [x] A node restored from snapshot contains all data committed before the snapshot
 
 ---
 
-### GAP-0520: Raft log persistence is a no-op
+### GAP-0520: Raft log persistence is a no-op -- **CLOSED (2026-04-09)**
 
 - **Category:** Correctness / Distributed Systems
 - **Severity:** Critical
 - **Requirement source:** Raft consensus protocol safety properties (log persistence)
-- **Current state (evidence):**
-  - `src/distributed/raft_consensus.zig:274-280` -- `getLogEntries` returns `null`, `appendLogEntry` is empty
-- **Why this is a gap:** The Raft protocol requires durable log persistence for safety. Without it, a server restart loses all uncommitted log entries, violating the Raft log matching property and potentially causing split-brain or data loss.
-- **Impact/Risk:** Any server restart in a distributed deployment loses uncommitted log entries. Combined with GAP-0519 (empty snapshots), ALL state can be lost. Raft safety properties are completely violated.
-- **Recommended fix:** Implement persistent log storage (WAL-based or file-backed) for Raft log entries. Ensure entries survive server restarts.
+- **Resolution:** Closed (2026-04-09) -- `PersistentStorage` now uses append-only binary log with CRC32 integrity. Evidence: `src/distributed/raft_log_storage.zig`, commit 27047593
 - **Acceptance criteria:**
-  - [ ] `getLogEntries` returns previously appended entries after server restart
-  - [ ] `appendLogEntry` durably persists entries to disk before returning
-  - [ ] Raft leader election and log replication function correctly across server restarts
+  - [x] `getLogEntries` returns previously appended entries after server restart
+  - [x] `appendLogEntry` durably persists entries to disk before returning
+  - [x] Raft leader election and log replication function correctly across server restarts
 
 ---
 

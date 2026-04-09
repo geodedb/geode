@@ -2264,16 +2264,16 @@ REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2025-1
 REQ-GQL-PROPERTY-001,PropertyPersistence,MemoryManagement,TESTED,,,engine,2026-02-04,tests/test_property_persistence_regression.zig
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,CommandRouting,TESTED,,,distributed,2026-04-09,src/distributed/raft_apply.zig
 REQ-GQL-RAFT-APPLY,Raft Apply Callback,IntegrationTest,TESTED,,,distributed,2026-04-09,tests/test_raft_apply.zig
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Append,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,FileFormat,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,LastIndex,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Append,TESTED,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,FileFormat,TESTED,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,LastIndex,TESTED,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,PersistentStorageWiring,TESTED,,,distributed,2026-04-09,tests/test_raft_persistent_log_wiring.zig
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,ReadAll,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,ReadAll,TESTED,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,RoundTripTest,TESTED,,,distributed,2026-04-09,tests/test_raft_log_storage.zig
-REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Truncate,IMPL,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
+REQ-GQL-RAFT-LOG-PERSIST,Raft Log Persistence,Truncate,TESTED,,,distributed,2026-04-09,src/distributed/raft_log_storage.zig
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,RoundTripTest,TESTED,,,distributed,2026-04-05,tests/test_raft_persistent_storage.zig
 REQ-GQL-RAFT-PERSIST,Raft Consensus Persistence,TermVotedFor,TESTED,,,distributed,2026-04-05,src/distributed/raft_consensus.zig
-REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,IMPL,,,distributed,2026-04-09,src/distributed/raft_persistent.zig
+REQ-GQL-RAFT-PERSIST,Raft Persistence,CorePersistence,TESTED,,,distributed,2026-04-09,src/distributed/raft_persistent.zig
 REQ-GQL-RAFT-PERSIST,Raft Persistence,LifecycleIntegration,TESTED,,,distributed,2026-04-09,tests/test_raft_integration.zig
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,CreateSnapshot,TESTED,,,distributed,2026-04-09,src/distributed/raft_persistent.zig
 REQ-GQL-RAFT-SNAPSHOT,Raft Snapshot Persistence,IntegrationTest,TESTED,,,distributed,2026-04-09,tests/test_raft_snapshot_manager.zig
