@@ -513,6 +513,10 @@ pub fn main() !void {
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
         grpc_server.* = try grpc_transport.GeodeGrpcServer.init(gpa, grpc_port, cert_path, key_path, grpc_config);
+        defer {
+            grpc_server.deinit();
+            gpa.destroy(grpc_server);
+        }
 
         if (listen_quic == null) {
             log.info("gRPC server started", &.{
@@ -681,7 +685,13 @@ pub fn main() !void {
 
         // GAP-0260: Start background persistence thread for write coalescing
         graph_store.startPersistenceThread(config.persist_interval_ms);
-        defer graph_store.stopPersistenceThread(gpa);
+        defer {
+            // Stop persistence thread first (final flush), then free the global store.
+            // Without deinitGlobalStore(), all in-memory graph data (nodes, edges, indexes,
+            // properties) leaks and the GPA reports errors on SIGTERM exit.
+            graph_store.stopPersistenceThread(gpa);
+            graph_store.deinitGlobalStore();
+        }
 
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
         // GAP-0202: Initialize thread pool for async connection handling
