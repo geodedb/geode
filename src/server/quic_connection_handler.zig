@@ -2107,6 +2107,19 @@ fn handleClientMessage(
             // P1: Per-graph locking — queries against different graphs no longer serialize.
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
+
+            // GAP-0526: Enforce write-permission check before mutation execution.
+            // ReadOnly and User roles lack Write permission and must be denied.
+            if (is_mutation) {
+                if (state.authenticated_role) |role_u8| {
+                    const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
+                    if (!user_mgmt.hasPermission(auth_role, .Write)) {
+                        try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                        return;
+                    }
+                }
+            }
+
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
