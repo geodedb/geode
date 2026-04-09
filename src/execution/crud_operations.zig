@@ -118,6 +118,73 @@ fn nodeMatchesPattern(
     return nodeMatchesEvaluatedProps(node, props);
 }
 
+/// Convert an eval Value to a GraphStore PropertyValue for merge index lookup.
+/// Only handles simple scalar types that the index supports.
+fn valueToPropertyValueForIndex(val: Value) ?graph_store.PropertyValue {
+    return switch (val) {
+        .Str => |s| graph_store.PropertyValue{ .String = s },
+        .Int => |i| graph_store.PropertyValue{ .Int = i },
+        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+        else => null,
+    };
+}
+
+fn findFirstMatchingNodeId(
+    allocator: std.mem.Allocator,
+    read_store: *graph_store.GraphStore,
+    graph_name: []const u8,
+    tenant_id: ?[]const u8,
+    labels: []const []const u8,
+    props: ?[]const EvaluatedPatternProp,
+) !?u64 {
+    _ = allocator;
+
+    // Fast path: use the merge property index for O(1) lookup when we have
+    // at least one label and at least one property.
+    if (labels.len > 0) {
+        if (props) |evaluated_props| {
+            if (evaluated_props.len > 0) {
+                // Try each label × first property combination in the index
+                if (valueToPropertyValueForIndex(evaluated_props[0].value)) |pv| {
+                    for (labels) |label| {
+                        if (read_store.lookupMergeCandidate(graph_name, label, evaluated_props[0].key, pv)) |node_id| {
+                            // Verify the candidate matches ALL labels, ALL properties, and tenant
+                            if (read_store.nodes.getPtr(node_id)) |node| {
+                                if (nodeMatchesPattern(node, graph_name, tenant_id, labels, evaluated_props)) {
+                                    return node_id;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: stream through the label index directly (no ArrayList materialization).
+        // Uses the first label for O(1) index lookup, then checks remaining labels + props inline.
+        const first_label_nodes = read_store.getNodesByLabel(graph_name, labels[0]) orelse return null;
+        for (first_label_nodes) |node_id| {
+            if (read_store.nodes.getPtr(node_id)) |node| {
+                if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
+                    return node_id;
+                }
+            }
+        }
+        return null;
+    }
+
+    // No labels — must scan all nodes (unchanged behavior, but streaming)
+    var iter = read_store.nodes.iterator();
+    while (iter.next()) |entry| {
+        if (nodeMatchesPattern(entry.value_ptr, graph_name, tenant_id, &.{}, props)) {
+            return entry.key_ptr.*;
+        }
+    }
+    return null;
+}
+
+/// Collect ALL candidate node IDs matching labels (used by relationship MERGE and DELETE).
+/// For single-node MERGE, prefer findFirstMatchingNodeId which uses the merge property index.
 fn collectCandidateNodeIds(
     allocator: std.mem.Allocator,
     read_store: *graph_store.GraphStore,
@@ -127,10 +194,6 @@ fn collectCandidateNodeIds(
     props: ?[]const EvaluatedPatternProp,
 ) ![]u64 {
     _ = props;
-    // Use the in-memory label index for O(1) lookup. The storage adapter's
-    // property index is not reliable for recently-created nodes (the write
-    // may not have been flushed yet), so we always scan in-memory here and
-    // let nodeMatchesPattern handle property filtering.
     if (labels.len > 0) {
         var candidates = try read_store.getNodesByLabels(allocator, graph_name, labels, tenant_id);
         return try candidates.toOwnedSlice(allocator);
@@ -150,27 +213,6 @@ fn collectCandidateNodeIds(
     }
 
     return try candidates.toOwnedSlice(allocator);
-}
-
-fn findFirstMatchingNodeId(
-    allocator: std.mem.Allocator,
-    read_store: *graph_store.GraphStore,
-    graph_name: []const u8,
-    tenant_id: ?[]const u8,
-    labels: []const []const u8,
-    props: ?[]const EvaluatedPatternProp,
-) !?u64 {
-    const candidate_ids = try collectCandidateNodeIds(allocator, read_store, graph_name, tenant_id, labels, props);
-    defer allocator.free(candidate_ids);
-
-    for (candidate_ids) |node_id| {
-        if (read_store.nodes.getPtr(node_id)) |node| {
-            if (nodeMatchesPattern(node, graph_name, tenant_id, labels, props)) {
-                return node_id;
-            }
-        }
-    }
-    return null;
 }
 
 fn edgeMatchesScopeAndType(

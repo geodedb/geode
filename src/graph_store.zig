@@ -404,6 +404,10 @@ pub const GraphStore = struct {
     // Issue #391: Label-based index for O(1) node lookups instead of O(n) full table scans
     // Maps "graph_name:label" composite key to list of node IDs
     label_index: std.StringHashMap(std.ArrayList(u64)),
+    // MERGE property index: enables O(1) candidate lookup by (graph, label, property_key, property_value).
+    // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
+    // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
+    merge_prop_index: std.StringHashMap(u64),
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
     outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
@@ -437,6 +441,7 @@ pub const GraphStore = struct {
             .graphs = std.StringHashMap(void).init(allocator),
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
+            .merge_prop_index = std.StringHashMap(u64).init(allocator),
             .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .id_maps = std.StringHashMap(id_map_mod.IdMap).init(allocator),
@@ -494,6 +499,13 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.label_index.deinit();
+
+        // Clean up merge property index
+        var mpi_iter = self.merge_prop_index.iterator();
+        while (mpi_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.merge_prop_index.deinit();
 
         // Issue #392: Clean up adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
@@ -593,6 +605,14 @@ pub const GraphStore = struct {
         }
         self.label_index.deinit();
         self.label_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+
+        // Reset merge property index
+        var mpi_iter = self.merge_prop_index.iterator();
+        while (mpi_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.merge_prop_index.deinit();
+        self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
 
         // Reset adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
@@ -1160,6 +1180,100 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Serialize a PropertyValue to bytes for merge property index keys.
+    /// Returns the number of bytes written, or null if the type is not indexable.
+    fn serializePropValueForIndex(buf: []u8, value: PropertyValue) ?usize {
+        var stream = std.io.fixedBufferStream(buf);
+        const writer = stream.writer().any();
+        switch (value) {
+            .String => |s| writer.writeAll(s) catch return null,
+            .Int => |i| std.fmt.format(writer, "{d}", .{i}) catch return null,
+            .Bool => |b| writer.writeAll(if (b) "true" else "false") catch return null,
+            else => return null,
+        }
+        return stream.pos;
+    }
+
+    /// Build a merge property index key into a stack buffer.
+    /// Format: "graph\x00label\x00prop_key\x00prop_value_bytes"
+    /// Returns the slice, or null if the key is too long or value is not indexable.
+    fn buildMergeIndexKey(buf: []u8, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue) ?[]const u8 {
+        // Calculate required length: graph + 1 + label + 1 + key + 1 + value
+        const header_len = graph_name.len + 1 + label.len + 1 + prop_key.len + 1;
+        if (header_len >= buf.len) return null;
+
+        var pos: usize = 0;
+        @memcpy(buf[pos..][0..graph_name.len], graph_name);
+        pos += graph_name.len;
+        buf[pos] = 0;
+        pos += 1;
+        @memcpy(buf[pos..][0..label.len], label);
+        pos += label.len;
+        buf[pos] = 0;
+        pos += 1;
+        @memcpy(buf[pos..][0..prop_key.len], prop_key);
+        pos += prop_key.len;
+        buf[pos] = 0;
+        pos += 1;
+
+        const val_len = serializePropValueForIndex(buf[pos..], prop_value) orelse return null;
+        return buf[0 .. pos + val_len];
+    }
+
+    /// Insert an entry into the merge property index for each label on the node.
+    fn addToMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64) !void {
+        var buf: [1024]u8 = undefined;
+        for (labels) |label| {
+            const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
+            if (self.merge_prop_index.getPtr(probe)) |existing| {
+                // Overwrite with latest node_id (same label+key+value → same logical entity)
+                existing.* = node_id;
+            } else {
+                const key_copy = try self.allocator.dupe(u8, probe);
+                errdefer self.allocator.free(key_copy);
+                try self.merge_prop_index.put(key_copy, node_id);
+            }
+        }
+    }
+
+    /// Remove entries from the merge property index for each label on the node.
+    fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue) void {
+        var buf: [1024]u8 = undefined;
+        for (labels) |label| {
+            const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
+            if (self.merge_prop_index.fetchRemove(probe)) |kv| {
+                self.allocator.free(kv.key);
+            }
+        }
+    }
+
+    /// Remove ALL merge property index entries for a node (used during node deletion).
+    fn removeAllMergePropertyIndexEntries(self: *GraphStore, node: *const Node) void {
+        var buf: [1024]u8 = undefined;
+        var prop_iter = node.properties.iterator();
+        while (prop_iter.next()) |prop_entry| {
+            for (node.labels) |label| {
+                const probe = buildMergeIndexKey(&buf, node.graph_name, label, prop_entry.key_ptr.*, prop_entry.value_ptr.*) orelse continue;
+                if (self.merge_prop_index.fetchRemove(probe)) |kv| {
+                    self.allocator.free(kv.key);
+                }
+            }
+        }
+    }
+
+    /// Look up a node by graph, label, property key, and property value.
+    /// Returns the node_id if found and the node still exists, null otherwise.
+    pub fn lookupMergeCandidate(self: *const GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue) ?u64 {
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return null;
+        const node_id = self.merge_prop_index.get(probe) orelse return null;
+        // Verify node still exists (index could be stale after a failed delete)
+        if (self.nodes.get(node_id)) |node| {
+            if (std.mem.eql(u8, node.graph_name, graph_name)) return node_id;
+        }
+        return null;
+    }
+
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
     // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
     pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
@@ -1227,6 +1341,14 @@ pub const GraphStore = struct {
         self.label_index.deinit();
         self.label_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
+        // Reset merge property index
+        var mpi_iter = self.merge_prop_index.iterator();
+        while (mpi_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+        }
+        self.merge_prop_index.deinit();
+        self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+
         // Reset adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
         while (out_iter.next()) |entry| {
@@ -1242,13 +1364,18 @@ pub const GraphStore = struct {
         self.incoming_edges.deinit();
         self.incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
 
-        // Rebuild label index and ensure graph registry entries for nodes
+        // Rebuild label index, merge property index, and ensure graph registry entries for nodes
         var node_iter = self.nodes.iterator();
         while (node_iter.next()) |entry| {
             const node = entry.value_ptr;
             try self.ensureGraphNoDirty(node.graph_name);
             for (node.labels) |label| {
                 try self.addToLabelIndex(node.graph_name, label, node.id);
+            }
+            // Rebuild merge property index entries for this node
+            var prop_iter = node.properties.iterator();
+            while (prop_iter.next()) |prop_entry| {
+                self.addToMergePropertyIndex(node.graph_name, node.labels, prop_entry.key_ptr.*, prop_entry.value_ptr.*, node.id) catch {};
             }
         }
 
@@ -1322,10 +1449,14 @@ pub const GraphStore = struct {
                 // Key doesn't exist, allocate a copy
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
             } else {
-                // Key exists, free old value
+                // Key exists — remove old merge property index entry before overwriting
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
                 freePropertyValue(self, result.value_ptr.*);
             }
             result.value_ptr.* = value_copy;
+
+            // Update merge property index with new value
+            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -1399,14 +1530,17 @@ pub const GraphStore = struct {
                     if (!result.found_existing) {
                         result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
                     } else {
+                        self.removeFromMergePropertyIndex(node.graph_name, node.labels, entry.key, result.value_ptr.*);
                         freePropertyValue(self, result.value_ptr.*);
                     }
                     result.value_ptr.* = value_copy;
+                    self.addToMergePropertyIndex(node.graph_name, node.labels, entry.key, value_copy, node_id) catch {};
 
                     notifyMutation(.set_node_property, node_id, 0, 0, null, entry.key, effective, null);
                 } else {
                     // Remove
                     if (node.properties.fetchRemove(entry.key)) |kv| {
+                        self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
                         self.allocator.free(kv.key);
                         freePropertyValue(self, kv.value);
                     }
@@ -1535,6 +1669,8 @@ pub const GraphStore = struct {
         }
         if (self.nodes.getPtr(node_id)) |node| {
             if (node.properties.fetchRemove(key)) |kv| {
+                // Remove from merge property index before freeing
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
@@ -3951,6 +4087,9 @@ pub const GraphStore = struct {
             self.removeFromLabelIndex(node_ptr.graph_name, label, node_id);
         }
 
+        // Remove all merge property index entries for this node
+        self.removeAllMergePropertyIndexEntries(node_ptr);
+
         // Free labels
         for (node_ptr.labels) |label| {
             self.allocator.free(label);
@@ -4108,9 +4247,11 @@ pub const GraphStore = struct {
             if (!result.found_existing) {
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
             } else {
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
                 freePropertyValue(self, result.value_ptr.*);
             }
             result.value_ptr.* = value_copy;
+            self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
         }
     }
 
@@ -4118,6 +4259,7 @@ pub const GraphStore = struct {
     pub fn removeNodePropertyNoSave(self: *GraphStore, node_id: u64, key: []const u8) void {
         if (self.nodes.getPtr(node_id)) |node| {
             if (node.properties.fetchRemove(key)) |kv| {
+                self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
