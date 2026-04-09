@@ -331,6 +331,12 @@ fn hashStorageProperty(allocator: Allocator, value: gs.PropertyValue) !u64 {
     return std.hash.Wyhash.hash(0, encoded);
 }
 
+/// Hash pre-encoded property bytes directly — zero-copy, no allocation.
+/// The encoded bytes must be in the canonical format produced by `gs.property.encode`.
+fn hashEncodedPropertyBytes(encoded_value: []const u8) u64 {
+    return std.hash.Wyhash.hash(0, encoded_value);
+}
+
 fn shouldExposePropertyKey(key: []const u8) bool {
     return !std.mem.eql(u8, key, graph_store.INTERNAL_NODE_ID_PROPERTY_KEY) and
         !std.mem.eql(u8, key, graph_store.INTERNAL_EDGE_ID_PROPERTY_KEY);
@@ -412,17 +418,30 @@ fn removeIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u
     mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
 }
 
+/// Zero-copy variant: index a property using pre-encoded bytes from the iterator.
+/// Avoids the decode-then-re-encode round-trip that `addIndexedNodeProperty` performs.
+fn addIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, encoded_value: []const u8) !void {
+    const value_hash = hashEncodedPropertyBytes(encoded_value);
+    try mg.exact_node_property_index.add(label_id, property_key, value_hash, node_id);
+}
+
+/// Zero-copy variant: remove a property from the index using pre-encoded bytes.
+fn removeIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, encoded_value: []const u8) void {
+    const value_hash = hashEncodedPropertyBytes(encoded_value);
+    mg.exact_node_property_index.remove(label_id, property_key, value_hash, node_id);
+}
+
 fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) !void {
     if (prop_head == 0 or label_ids.len == 0) return;
 
     var iter = try mg.engine.getAllProperties(prop_head);
     defer iter.deinit();
     while (try iter.next()) |entry| {
-        const value = try mg.engine.getProperty(prop_head, entry.key, mg.engine.allocator) orelse continue;
-        defer freeOwnedStorageProperty(mg.engine.allocator, value);
-
+        // Zero-copy path: hash the pre-encoded value bytes directly from the
+        // iterator instead of re-fetching, decoding (which heap-allocates for
+        // strings/ext), and re-encoding.
         for (label_ids) |label_id| {
-            try addIndexedNodeProperty(mg, label_id, node_id, entry.key, value);
+            try addIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value);
         }
     }
 }
@@ -433,11 +452,9 @@ fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []c
     var iter = mg.engine.getAllProperties(prop_head) catch return;
     defer iter.deinit();
     while (iter.next() catch return) |entry| {
-        const value = mg.engine.getProperty(prop_head, entry.key, mg.engine.allocator) catch null orelse continue;
-        defer freeOwnedStorageProperty(mg.engine.allocator, value);
-
+        // Zero-copy path: hash the pre-encoded value bytes directly.
         for (label_ids) |label_id| {
-            removeIndexedNodeProperty(mg, label_id, node_id, entry.key, value);
+            removeIndexedNodePropertyFromEncoded(mg, label_id, node_id, entry.key, entry.encoded_value);
         }
     }
 }
@@ -1071,7 +1088,7 @@ pub const StorageAdapter = struct {
         const NodeRec = node_mod.NodeRec;
         const npp = mg.engine.node_store.nodes_per_page;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
-        const bp = &mg.engine.node_store.buffer_pool;
+        const bp = mg.engine.node_store.buffer_pool;
 
         // Cache the pinned page frame across iterations.  Node IDs from
         // the label index are sorted, so consecutive IDs usually share the
@@ -1297,31 +1314,19 @@ pub const StorageAdapter = struct {
 
         if (rec.prop_head == 0) return result;
 
-        // Use the engine's property iterator to walk all key-value pairs.
-        // The iterator yields raw PropertyEntrySlice (encoded bytes). We
-        // re-fetch each property by key through getProperty, which
-        // returns a decoded PropertyValue.
+        // Single-pass zero-copy iteration: the PropIterator yields each
+        // property's key and pre-encoded value bytes directly from pinned
+        // page frames.  We decode the value inline (allocating only for
+        // string/ext payloads that must outlive the iterator) instead of
+        // the previous two-pass pattern (collect keys → re-fetch each).
         var iter = try mg.engine.getAllProperties(rec.prop_head);
         defer iter.deinit();
 
-        // Collect keys first (iterator borrows page buffers).
-        var keys: std.ArrayList([]const u8) = .{};
-        defer {
-            for (keys.items) |k| allocator.free(k);
-            keys.deinit(allocator);
-        }
         while (try iter.next()) |entry| {
-            try keys.append(allocator, try allocator.dupe(u8, entry.key));
-        }
-
-        // Now fetch each property by key.
-        for (keys.items) |key| {
-            if (!shouldExposePropertyKey(key)) continue;
-            if (try mg.engine.getProperty(rec.prop_head, key, allocator)) |val| {
-                // Transfer key ownership into the map.
-                const owned_key = try allocator.dupe(u8, key);
-                try result.put(owned_key, val);
-            }
+            if (!shouldExposePropertyKey(entry.key)) continue;
+            const decoded = try gs.property.decode(allocator, entry.encoded_value);
+            const owned_key = try allocator.dupe(u8, entry.key);
+            try result.put(owned_key, decoded.value);
         }
 
         return result;
@@ -1351,27 +1356,15 @@ pub const StorageAdapter = struct {
 
         const prop_head_u64: u64 = @intCast(prop_head);
 
-        // Use the engine's property iterator to walk all key-value pairs.
+        // Single-pass zero-copy iteration (see getAllNodeProperties).
         var iter = try mg.engine.getAllProperties(prop_head_u64);
         defer iter.deinit();
 
-        // Collect keys first (iterator borrows page buffers).
-        var keys: std.ArrayList([]const u8) = .{};
-        defer {
-            for (keys.items) |k| allocator.free(k);
-            keys.deinit(allocator);
-        }
         while (try iter.next()) |entry| {
-            try keys.append(allocator, try allocator.dupe(u8, entry.key));
-        }
-
-        // Now fetch each property by key.
-        for (keys.items) |key| {
-            if (!shouldExposePropertyKey(key)) continue;
-            if (try mg.engine.getProperty(prop_head_u64, key, allocator)) |val| {
-                const owned_key = try allocator.dupe(u8, key);
-                try result.put(owned_key, val);
-            }
+            if (!shouldExposePropertyKey(entry.key)) continue;
+            const decoded = try gs.property.decode(allocator, entry.encoded_value);
+            const owned_key = try allocator.dupe(u8, entry.key);
+            try result.put(owned_key, decoded.value);
         }
 
         return result;
