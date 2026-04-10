@@ -1673,7 +1673,7 @@ test "findFunction works" {
 
 test "findFunction is case-insensitive" {
     // ISO/IEC 39075:2024 compliance: built-in function names are case-insensitive.
-    // CANARY: TESTED RQ=0022 type=regression pri=P0 notes="findFunction case-insensitive lookup"
+    // CANARY: REQ=GQL-39075-RQ-0022; FEATURE="CaseInsensitivity/FindFunction"; ASPECT=Regression; STATUS=TESTED; TEST=test_findFunction_is_case_insensitive; OWNER=gql; UPDATED=2026-04-10
     const count_upper = findFunction("COUNT");
     try std.testing.expect(count_upper != null);
     try std.testing.expectEqualStrings("count", count_upper.?.name);
@@ -1708,7 +1708,7 @@ test "findProcedure works with alias" {
 
 test "findProcedure is case-insensitive" {
     // ISO/IEC 39075:2024 compliance: stored procedure names are case-insensitive.
-    // CANARY: TESTED RQ=0022 type=regression pri=P0 notes="findProcedure case-insensitive lookup"
+    // CANARY: REQ=GQL-39075-RQ-0022; FEATURE="CaseInsensitivity/FindProcedure"; ASPECT=Regression; STATUS=TESTED; TEST=test_findProcedure_is_case_insensitive; OWNER=gql; UPDATED=2026-04-10
     const pagerank_upper = findProcedure("ALGO.PAGERANK.STREAM");
     try std.testing.expect(pagerank_upper != null);
     try std.testing.expectEqualStrings("algo.pagerank.stream", pagerank_upper.?.name);
