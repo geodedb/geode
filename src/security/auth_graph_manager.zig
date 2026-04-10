@@ -138,7 +138,7 @@ pub const AuthGraphManager = struct {
                 log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
                 continue;
             };
-            log.info("Periodic HMAC chain verification passed", &.{});
+            log.debug("Periodic HMAC chain verification passed", &.{});
         }
     }
 
