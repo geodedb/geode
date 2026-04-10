@@ -2662,10 +2662,12 @@ fn parseFLEConfigMap(allocator: std.mem.Allocator, map_props: []const ast.Proper
 // ---------------------------------------------------------------------------
 const FleHandler = *const fn (std.mem.Allocator, ast.CallProcedure) anyerror!ExecutionResult;
 
+// NOTE: procedure names are normalized to lowercase by extractNormalizedProcName
+// (ISO/IEC 39075:2024 RQ-0022), so all keys here MUST be lowercase.
 const fle_table = std.StaticStringMap(FleHandler).initComptime(.{
-    .{ "geode.fle.configureField", handleGeodeFleConfigurefield },
-    .{ "geode.fle.getFieldConfig", handleGeodeFleGetfieldconfig },
-    .{ "geode.fle.listEncryptedFields", handleGeodeFleListencryptedfields },
+    .{ "geode.fle.configurefield", handleGeodeFleConfigurefield },
+    .{ "geode.fle.getfieldconfig", handleGeodeFleGetfieldconfig },
+    .{ "geode.fle.listencryptedfields", handleGeodeFleListencryptedfields },
 });
 
 /// Execute a FLE procedure. Returns null if not recognized.

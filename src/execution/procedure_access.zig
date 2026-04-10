@@ -110,7 +110,7 @@ pub fn classifyCallProcedure(call_stmt: ast.CallProcedure) ProcedureAccess {
 
 pub fn classifyProcedureName(proc_name: []const u8) ProcedureAccess {
     for (read_only_procedure_names) |name| {
-        if (std.mem.eql(u8, proc_name, name)) return .read_only;
+        if (std.ascii.eqlIgnoreCase(proc_name, name)) return .read_only;
     }
     return .mutating;
 }
@@ -141,10 +141,10 @@ fn callProcedureMatchesName(call_stmt: ast.CallProcedure, expected_name: []const
 
 fn calleeMatchesName(callee: *const ast.Expr, expected_name: []const u8) bool {
     return switch (callee.*) {
-        .Ident => |ident| std.mem.eql(u8, ident.orig, expected_name),
+        .Ident => |ident| std.ascii.eqlIgnoreCase(ident.orig, expected_name),
         .Member => |member| blk: {
             const dot_index = std.mem.lastIndexOfScalar(u8, expected_name, '.') orelse break :blk false;
-            if (!std.mem.eql(u8, member.field, expected_name[dot_index + 1 ..])) break :blk false;
+            if (!std.ascii.eqlIgnoreCase(member.field, expected_name[dot_index + 1 ..])) break :blk false;
             break :blk calleeMatchesName(member.target, expected_name[0..dot_index]);
         },
         else => false,

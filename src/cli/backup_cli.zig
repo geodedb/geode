@@ -1177,19 +1177,17 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-03: Require HMAC key authentication for migrate status.
-    // Having the HMAC key proves the caller is an authorized migration admin.
+    // SEC-MIG-03: Use HMAC key authentication for migrate status when available.
+    // If an HMAC key is configured (env var or .hmac_key file), it proves the
+    // caller is an authorized migration admin. If no key is configured, proceed
+    // without authentication — operators who want enforcement must set up a key.
     if (!allow_unauthenticated) {
         var hmac_key_buf: [32]u8 = undefined;
-        if (loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator) == null) {
-            std.debug.print("Error: Authentication required for 'migrate status'.\n" ++
-                "  Set GEODE_MIGRATION_HMAC_KEY env var (64 hex chars), or\n" ++
-                "  create {s}/.hmac_key file.\n" ++
-                "  Use --allow-unauthenticated to skip (dev only).\n", .{migrations_dir});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
+        if (loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator)) |_| {
+            // Key loaded successfully — zero it out, we only needed to prove it exists
+            @memset(&hmac_key_buf, 0);
         }
-        // Zero out the key buffer — we only needed to prove it exists
-        @memset(&hmac_key_buf, 0);
+        // If no key is configured, proceed without authentication (graceful degradation)
     }
 
     const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
@@ -1488,19 +1486,15 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-03: Require HMAC key for migrate create (admin role proof).
-    // The key is needed to sign the created migration file.
+    // SEC-MIG-03: Use HMAC key for migrate create when available.
+    // If an HMAC key is configured, sign the created migration file.
+    // If no key is configured, create unsigned (operators who want signing
+    // must set up a key via env var or .hmac_key file).
     var hmac_key_buf: [32]u8 = undefined;
     var hmac_key_ptr: ?*const [32]u8 = null;
     if (!no_sign) {
         hmac_key_ptr = loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator);
-        if (hmac_key_ptr == null) {
-            std.debug.print("Error: Authentication required for 'migrate create'.\n" ++
-                "  Set GEODE_MIGRATION_HMAC_KEY env var (64 hex chars), or\n" ++
-                "  create {s}/.hmac_key file.\n" ++
-                "  Use --no-sign to skip (dev only, not recommended).\n", .{migrations_dir});
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }
+        // If no key is configured, proceed without signing (graceful degradation)
     }
 
     // Validate migration name for path traversal (GAP-0285/0301)

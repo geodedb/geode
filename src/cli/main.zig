@@ -1362,10 +1362,14 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
         // Issue #424: Scale deadline watchdog for chunked execution.
-        // Each chunk needs its own timeout, so total deadline = timeout_secs * num_chunks.
-        // Use generous estimate: 1 chunk per ~250 statements minimum, capped at 10 minutes.
-        const estimated_chunks = @max(1, statements.items.len / 250);
-        const chunked_deadline = @min(600, timeout_secs * @as(u32, @intCast(estimated_chunks + 1)));
+        // Each chunk needs its own timeout (including TLS handshake), so compute
+        // total deadline from actual byte total and chunk size.  Add generous
+        // per-chunk headroom for TLS setup (~2s) plus execution time.
+        const per_chunk_secs: u32 = timeout_secs + 3; // query timeout + TLS/connect overhead
+        var stmt_bytes: usize = 0;
+        for (statements.items) |s| stmt_bytes += s.len + 1;
+        const estimated_chunks = @max(1, stmt_bytes / (8 * 1024)) + 1; // match executeChunkedQueries chunk size
+        const chunked_deadline = @min(600, per_chunk_secs * @as(u32, @intCast(estimated_chunks)));
         var chunked_deadline_state = QueryDeadlineState.init();
         active_query_deadline_state = &chunked_deadline_state;
         defer {
@@ -1897,10 +1901,6 @@ const ChunkedQueryOptions = struct {
 /// Context-aware: carries USE GRAPH forward to subsequent chunks on new connections.
 fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions) !void {
     const max_chunk_size: usize = 32 * 1024; // 32KB per chunk
-    // Cap for transaction-aware chunks: if a transaction exceeds this, split it anyway.
-    // Large transactions can't truly span connections, so splitting preserves the same
-    // behavior as non-transaction-aware chunking (auto-commit per statement).
-    const max_txn_chunk_size: usize = 32 * 1024; // Same as regular max — don't grow past 32KB
     const statements = opts.statements;
 
     var executed: usize = 0;
@@ -1909,9 +1909,70 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
     // Track USE GRAPH context to prepend to subsequent chunks (each chunk is a new connection)
     var use_graph_stmt: ?[]const u8 = null;
 
+    // Pre-scan: strip transaction wrappers from statements that will be split across
+    // multiple chunks.  Each chunk opens a new QUIC connection, so START TRANSACTION
+    // in chunk 1 has no effect in chunk 2; a COMMIT in chunk 3 would hang because
+    // no transaction is active on that connection.  Stripping the wrappers lets every
+    // statement auto-commit, which is the only correct behaviour when we can't keep
+    // the transaction on a single connection.
+    //
+    // We do this by scanning for transaction blocks whose byte total exceeds
+    // max_chunk_size.  Small transactions that fit in one chunk are left intact.
+    var txn_strip = try std.ArrayList(bool).initCapacity(allocator, statements.len);
+    defer txn_strip.deinit(allocator);
+    {
+        var i: usize = 0;
+        while (i < statements.len) {
+            const trimmed = std.mem.trim(u8, statements[i], " \t\r\n");
+            if (isTransactionBegin(trimmed)) {
+                // Measure the transaction block: BEGIN ... COMMIT/ROLLBACK
+                const txn_start = i;
+                var txn_bytes: usize = 0;
+                var j: usize = i;
+                while (j < statements.len) {
+                    txn_bytes += statements[j].len + 1;
+                    const t = std.mem.trim(u8, statements[j], " \t\r\n");
+                    if (j > txn_start and isTransactionEnd(t)) {
+                        break;
+                    }
+                    j += 1;
+                }
+                const txn_end = if (j < statements.len) j + 1 else j;
+                if (txn_bytes > max_chunk_size) {
+                    // Transaction is too large for one chunk — mark BEGIN and
+                    // COMMIT/ROLLBACK for stripping so statements auto-commit.
+                    while (txn_strip.items.len < txn_end)
+                        txn_strip.append(allocator, false) catch unreachable;
+                    txn_strip.items[txn_start] = true; // strip BEGIN
+                    if (txn_end > 0 and txn_end - 1 < txn_strip.items.len) {
+                        txn_strip.items[txn_end - 1] = true; // strip COMMIT/ROLLBACK
+                    }
+                    i = txn_end;
+                } else {
+                    // Small transaction — keep intact
+                    while (txn_strip.items.len <= j)
+                        txn_strip.append(allocator, false) catch unreachable;
+                    i = txn_end;
+                }
+            } else {
+                txn_strip.append(allocator, false) catch unreachable;
+                i += 1;
+            }
+        }
+        // Pad if needed
+        while (txn_strip.items.len < statements.len)
+            txn_strip.append(allocator, false) catch unreachable;
+    }
+
     // Process statements in chunks
     var chunk_start: usize = 0;
     while (chunk_start < statements.len) {
+        // Skip stripped statements at chunk boundary
+        while (chunk_start < statements.len and txn_strip.items[chunk_start]) {
+            chunk_start += 1;
+        }
+        if (chunk_start >= statements.len) break;
+
         // Build a chunk of statements that fits within the size limit
         var chunk_size: usize = 0;
         var chunk_end: usize = chunk_start;
@@ -1925,21 +1986,20 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
         }
 
         while (chunk_end < statements.len) {
+            // Skip stripped statements
+            if (txn_strip.items[chunk_end]) {
+                chunk_end += 1;
+                continue;
+            }
             const stmt_len = statements[chunk_end].len + 1; // +1 for separator
-            // Transaction-aware: prefer not to break within a transaction, but
-            // if the transaction is too large, split it anyway (each chunk is a
-            // separate connection so large transactions can't truly be atomic).
+            // Transaction-aware: don't break within a (small) transaction
             const at_limit = chunk_size + stmt_len > max_chunk_size and chunk_end > chunk_start;
             if (at_limit and !in_transaction) {
                 break;
             }
-            if (at_limit and in_transaction and chunk_size + stmt_len > max_txn_chunk_size) {
-                // Transaction too large for a single chunk — split it
-                break;
-            }
             chunk_size += stmt_len;
 
-            // Track transaction boundaries
+            // Track transaction boundaries (only for small transactions that weren't stripped)
             const trimmed = std.mem.trim(u8, statements[chunk_end], " \t\r\n");
             if (isTransactionBegin(trimmed)) {
                 in_transaction = true;
@@ -1972,8 +2032,9 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
             }
         }
 
-        for (statements[chunk_start..chunk_end]) |stmt| {
-            chunk_query.appendSlice(allocator, stmt) catch {};
+        for (chunk_start..chunk_end) |idx| {
+            if (txn_strip.items[idx]) continue; // Skip stripped BEGIN/COMMIT
+            chunk_query.appendSlice(allocator, statements[idx]) catch {};
             chunk_query.append(allocator, ' ') catch {};
         }
 

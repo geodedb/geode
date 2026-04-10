@@ -5,6 +5,7 @@
 *.tar.xz
 
 .observer.lock
+.remember/
 
 # Root-level generated directories and files
 /core
