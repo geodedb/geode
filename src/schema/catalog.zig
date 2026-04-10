@@ -805,15 +805,15 @@ pub const Catalog = struct {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
 
-        var result = std.ArrayList(IndexInfo).init(allocator);
-        errdefer result.deinit();
+        var result = std.ArrayList(IndexInfo).empty;
+        errdefer result.deinit(allocator);
 
         var iter = self.indexes.iterator();
         while (iter.next()) |entry| {
-            try result.append(entry.value_ptr.*);
+            try result.append(allocator, entry.value_ptr.*);
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     // GAP-0139: SHOW CONSTRAINTS implementation
@@ -824,15 +824,15 @@ pub const Catalog = struct {
         self.rwlock.lockShared();
         defer self.rwlock.unlockShared();
 
-        var result = std.ArrayList(ConstraintInfo).init(allocator);
-        errdefer result.deinit();
+        var result = std.ArrayList(ConstraintInfo).empty;
+        errdefer result.deinit(allocator);
 
         var iter = self.constraints.iterator();
         while (iter.next()) |entry| {
-            try result.append(entry.value_ptr.*);
+            try result.append(allocator, entry.value_ptr.*);
         }
 
-        return result.toOwnedSlice();
+        return result.toOwnedSlice(allocator);
     }
 
     // GAP-0139: SHOW SCHEMAS implementation

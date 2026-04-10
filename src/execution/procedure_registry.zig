@@ -32,6 +32,7 @@ const algo_dispatch = @import("algo_dispatch.zig");
 const audit_dispatch = @import("audit_dispatch.zig");
 const storage_dispatch = @import("storage_dispatch.zig");
 const auth_dispatch = @import("auth_dispatch.zig");
+const meta_dispatch = @import("meta_dispatch.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -100,6 +101,15 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
 
     // Get the graph store
     const store = graph_store.getGlobalStore(allocator);
+
+    // ---- db.* and dbms.* introspection procedures (GAP-0531) ----
+    // db.labels(), db.relationshipTypes(), db.propertyKeys(), db.indexes(),
+    // db.constraints(), dbms.procedures(), dbms.functions()
+    if (std.mem.startsWith(u8, proc_name, "db.") or std.mem.startsWith(u8, proc_name, "dbms.")) {
+        if (try meta_dispatch.execute(allocator, proc_name, store, call_stmt, context)) |result| {
+            return result;
+        }
+    }
 
     // ---- algo.* procedures (centrality, community, traversals, graph stats) ----
     if (try algo_dispatch.execute(allocator, proc_name, store, call_stmt, context)) |result| {

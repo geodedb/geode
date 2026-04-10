@@ -803,6 +803,12 @@ pub fn build(b: *std.Build) void {
     confusable_tests.root_module.addImport("json", json_mod);
     const run_confusable_tests = b.addRunArtifact(confusable_tests);
 
+    // GAP-0531: db.* / dbms.* introspection procedures
+    const meta_proc_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_meta_procedures.zig"), .target = target, .optimize = optimize }) });
+    meta_proc_tests.root_module.addImport("geode", root_mod);
+    meta_proc_tests.root_module.addImport("json", json_mod);
+    const run_meta_proc_tests = b.addRunArtifact(meta_proc_tests);
+
     const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
     decimal_tests.root_module.addImport("json", json_mod);
@@ -1134,6 +1140,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_init_ctx_tests.step);
     test_step.dependOn(&run_proc_case_tests.step);
     test_step.dependOn(&run_confusable_tests.step);
+    test_step.dependOn(&run_meta_proc_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
