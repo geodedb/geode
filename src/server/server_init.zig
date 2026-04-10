@@ -429,7 +429,7 @@ fn hydrateSecurityManagerFromGraph(
             .id = record.id,
             .name = try allocator.dupe(u8, record.getName()),
             .description = try allocator.dupe(u8, record.getDescription()),
-            .permissions = try std.ArrayList(geode_auth.PermissionId).initCapacity(allocator, 0),
+            .permissions = std.ArrayList(geode_auth.PermissionId).empty,
             .created_at = record.created_at,
             .is_system = record.is_system,
             .priority = record.priority,

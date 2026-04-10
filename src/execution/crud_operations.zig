@@ -1062,8 +1062,8 @@ pub fn executeCreateQuery(
                 }
             } else {
                 // Create environment with created nodes
-                var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                var values = try std.ArrayList(Value).initCapacity(allocator, 0);
+                var names = std.ArrayList([]const u8).empty;
+                var values = std.ArrayList(Value).empty;
 
                 var iter = created_nodes.iterator();
                 while (iter.next()) |entry| {
@@ -1097,14 +1097,14 @@ pub fn executeCreateQuery(
         result = ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     } else {
         // No WITH clause - created nodes are ready for SET/RETURN
         result = ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -1115,8 +1115,8 @@ pub fn executeCreateQuery(
             .Property => |prop| {
                 if (created_nodes.get(prop.target.object)) |node_id| {
                     // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
+                    var names = std.ArrayList([]const u8).empty;
+                    var values = std.ArrayList(Value).empty;
 
                     if (q.with_clause != null) {
                         // Use WITH result columns and first row as environment
@@ -1158,8 +1158,8 @@ pub fn executeCreateQuery(
             .AllProperties => |all_props| {
                 if (created_nodes.get(all_props.node)) |node_id| {
                     // Create environment - if WITH is present, use WITH result; otherwise use created_nodes
-                    var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-                    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
+                    var names = std.ArrayList([]const u8).empty;
+                    var values = std.ArrayList(Value).empty;
 
                     if (q.with_clause != null) {
                         // Use WITH result columns and first row as environment
@@ -1304,7 +1304,7 @@ pub fn executeCreateQuery(
                 return ExecutionResult{
                     .columns = columns,
                     .rows = rows,
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                     .variable_bindings = bindings_ptr,
                 };
             }
@@ -1338,8 +1338,8 @@ pub fn executeReturnClauseWithNodes(
     var row = try allocator.alloc(Value, items.len);
 
     // Create environment with the nodes and relationships
-    var names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    var values = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var names = std.ArrayList([]const u8).empty;
+    var values = std.ArrayList(Value).empty;
 
     // Add nodes to environment
     var node_iter = nodes.iterator();
@@ -1379,7 +1379,7 @@ pub fn executeReturnClauseWithNodes(
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1557,7 +1557,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 return ExecutionResult{
                     .columns = columns,
                     .rows = rows,
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
             }
         }
@@ -1604,7 +1604,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -1789,7 +1789,7 @@ pub fn executeInsert(allocator: std.mem.Allocator, ins: ast.InsertStatement, cur
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -1977,7 +1977,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                 .columns = columns,
                 .rows = rows,
                 .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    const list = std.ArrayList([]const u8).empty;
                     break :blk list;
                 },
             };
@@ -2071,7 +2071,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -2178,7 +2178,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             defer freeEvaluatedPatternProps(allocator, evaluated_match_props);
 
             // Collect nodes to delete (need to collect first to avoid iterator invalidation)
-            var nodes_to_delete = try std.ArrayList(u64).initCapacity(allocator, 0);
+            var nodes_to_delete = std.ArrayList(u64).empty;
             defer nodes_to_delete.deinit(allocator);
 
             const candidate_ids = if (evaluated_match_props_failed)
@@ -2448,7 +2448,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
             .columns = columns,
             .rows = rows,
             .flags = blk: {
-                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
         };
@@ -2459,7 +2459,7 @@ pub fn executeDelete(allocator: std.mem.Allocator, d: ast.DeleteStatement, curre
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };

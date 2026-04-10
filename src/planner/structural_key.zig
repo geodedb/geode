@@ -51,7 +51,7 @@ pub fn deriveStructuralKey(allocator: std.mem.Allocator, q: planner_root.ast.Que
         }
     }
 
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     const writer = buf.writer(allocator);
     try writer.print("c{d}|", .{q.match.chains.len});

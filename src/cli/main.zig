@@ -1156,8 +1156,8 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
         // Strip comments and collect individual statements
         // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-002; FEATURE="ChunkedExecution"; ASPECT=StatementParsing; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-        var statements = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-        var current_stmt = try std.ArrayList(u8).initCapacity(allocator, 0);
+        var statements = std.ArrayList([]const u8).empty;
+        var current_stmt = std.ArrayList(u8).empty;
         defer current_stmt.deinit(allocator);
 
         var line_iter = std.mem.splitSequence(u8, contents, "\n");

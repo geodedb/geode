@@ -21,7 +21,7 @@ pub fn main() !void {
         } }
     else
         std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     defer buf.deinit(allocator);
     var tmp: [4096]u8 = undefined;
     while (true) {
@@ -95,7 +95,7 @@ fn parseKV(kind: []const u8, line: []const u8, w: anytype) !void {
 }
 
 fn parseLineAlloc(allocator: std.mem.Allocator, line: []const u8) !?[]u8 {
-    var list = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var list = std.ArrayList(u8).empty;
     errdefer list.deinit(allocator);
     const w = list.writer(allocator);
     parseLine(line, w) catch |err| switch (err) {

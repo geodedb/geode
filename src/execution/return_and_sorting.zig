@@ -494,7 +494,7 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
             .columns = columns,
             .rows = rows,
             .flags = blk: {
-                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
         };
@@ -516,7 +516,7 @@ pub fn executeReturnClauseWithEnv(allocator: std.mem.Allocator, ret: ast.ReturnC
         .columns = columns,
         .rows = rows,
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -561,7 +561,7 @@ fn executeSessionSet(allocator: std.mem.Allocator, ss: ast.SessionSetStatement) 
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 

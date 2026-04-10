@@ -10,7 +10,7 @@ pub const seed = @import("cost_seed.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONRecursive; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONRecursive; OWNER=planner; UPDATED=2025-09-26
 
 fn buildOpsJson(allocator: std.mem.Allocator, schema_name: []const u8, ops: []const seed.OpDescriptor) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     var w = buf.writer(allocator);
     try w.writeAll("{\"schema\":\"");
@@ -117,7 +117,7 @@ pub fn explainChainWithCalibration(allocator: std.mem.Allocator, ops: []const se
         est_rows[i] = est_card.rows;
         prev_est = est_card;
     }
-    var entries_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var entries_buf = std.ArrayList(u8).empty;
     defer entries_buf.deinit(allocator);
     var ew = entries_buf.writer(allocator);
     try ew.writeByte('[');
@@ -172,7 +172,7 @@ pub fn explainChainWithCalibration(allocator: std.mem.Allocator, ops: []const se
 }
 
 pub fn explainChainWithBias(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor, bias_reg: *seed.AdaptiveBiasRegistry) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     var w = buf.writer(allocator);
     try w.writeAll("{\"schema\":\"cost_explain.v3\",\"ops\":[");
@@ -237,7 +237,7 @@ pub fn explainChainWithBias(allocator: std.mem.Allocator, ops: []const seed.OpDe
 ///   "cv_class_snapshot":["stable"|"moderate"|"volatile"...]
 /// }
 pub fn explainChainUnifiedV4(allocator: std.mem.Allocator, ops: []const seed.OpDescriptor, bias_reg: *seed.AdaptiveBiasRegistry) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     var w = buf.writer(allocator);
     try w.writeAll("{\"schema\":\"cost_explain.v4\",\"ops\":[");

@@ -74,11 +74,7 @@ pub const SimpleAsyncIOManager = struct {
     pub fn init(allocator: Allocator) Self {
         return Self{
             .allocator = allocator,
-            .pending_operations = std.ArrayList(AsyncOperation).initCapacity(allocator, 0) catch std.ArrayList(AsyncOperation){
-                .items = &[_]AsyncOperation{},
-                .capacity = 0,
-                .allocator = allocator,
-            },
+            .pending_operations = std.ArrayList(AsyncOperation).empty,
             .next_operation_id = 1,
             .mutex = .{},
         };

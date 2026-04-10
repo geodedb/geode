@@ -661,11 +661,11 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     var visited = std.AutoHashMap(u64, bool).init(allocator);
     defer visited.deinit();
 
-    var queue = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    var queue = std.ArrayList(*PathNode).empty;
     defer queue.deinit(allocator);
 
     // Track all path nodes for cleanup
-    var all_nodes = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    var all_nodes = std.ArrayList(*PathNode).empty;
     defer {
         for (all_nodes.items) |node| {
             allocator.destroy(node);
@@ -680,7 +680,7 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
     try queue.append(allocator, start_path_node);
     try visited.put(start_id.?, true);
 
-    var found_paths = try std.ArrayList(*PathNode).initCapacity(allocator, 0);
+    var found_paths = std.ArrayList(*PathNode).empty;
     defer found_paths.deinit(allocator);
 
     var shortest_depth: ?u32 = null;
@@ -746,12 +746,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         var paths_list = try allocator.alloc(Value, found_paths.items.len);
 
         for (found_paths.items, 0..) |end_node, i| {
-            var path_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
-            var path_edges = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, 0);
+            var path_nodes = std.ArrayList(*const graph_store.Node).empty;
+            var path_edges = std.ArrayList(*const graph_store.Edge).empty;
 
             // Reconstruct path by following parent pointers
             var current_node: ?*PathNode = end_node;
-            var node_ids = try std.ArrayList(u64).initCapacity(allocator, 0);
+            var node_ids = std.ArrayList(u64).empty;
             defer node_ids.deinit(allocator);
 
             while (current_node != null) {
@@ -785,12 +785,12 @@ pub fn findShortestPath(allocator: std.mem.Allocator, pattern: ast.GraphPattern,
         return Value{ .List = paths_list };
     } else {
         // Return single path
-        var path_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
-        var path_edges = try std.ArrayList(*const graph_store.Edge).initCapacity(allocator, 0);
+        var path_nodes = std.ArrayList(*const graph_store.Node).empty;
+        var path_edges = std.ArrayList(*const graph_store.Edge).empty;
 
         // Reconstruct path by following parent pointers
         var current_node: ?*PathNode = found_paths.items[0];
-        var node_ids = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var node_ids = std.ArrayList(u64).empty;
         defer node_ids.deinit(allocator);
 
         while (current_node != null) {
@@ -829,7 +829,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
     const store = graph_store.getGlobalStore(allocator);
 
     // Collect all results in a list
-    var results = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var results = std.ArrayList(Value).empty;
 
     // Handle simple patterns like (a)--() or (a)-[r]->(b)
     if (pattern.chains.len == 0) {
@@ -873,7 +873,7 @@ pub fn executePatternComprehension(allocator: std.mem.Allocator, pattern: ast.Gr
         const hop = chain.hops[0];
 
         // Get source node from environment or find all matching nodes
-        var source_nodes = try std.ArrayList(*const graph_store.Node).initCapacity(allocator, 0);
+        var source_nodes = std.ArrayList(*const graph_store.Node).empty;
         defer source_nodes.deinit(allocator);
 
         // If left node has a name that's bound in env, use that node

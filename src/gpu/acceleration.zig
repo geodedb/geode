@@ -57,10 +57,10 @@ pub const GPUAccelerator = struct {
         var accel = Self{
             .allocator = allocator,
             .backend = backend,
-            .devices = try std.ArrayList(GPUDevice).initCapacity(allocator, 0),
+            .devices = std.ArrayList(GPUDevice).empty,
             .active_device = null,
             .kernels = std.StringHashMap(*GPUKernel).init(allocator),
-            .buffers = try std.ArrayList(*GPUBuffer).initCapacity(allocator, 0),
+            .buffers = std.ArrayList(*GPUBuffer).empty,
             .is_initialized = false,
         };
 

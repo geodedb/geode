@@ -288,7 +288,7 @@ pub fn multisetIntersect(allocator: std.mem.Allocator, a: []const i64, b: []cons
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList(i64).empty;
     defer out.deinit(allocator);
     for (b) |v| if (map.get(v)) |cnt| if (cnt > 0) {
         try out.append(allocator, v);
@@ -326,9 +326,9 @@ pub fn runGroupedQuery(
     if (q.group_by == null) return error.Invalid; // requires GROUP BY
     const gb = q.group_by.?;
     // 1) Collect aggregates from RETURN and HAVING
-    var aggs = std.ArrayList(Agg).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var aggs = std.ArrayList(Agg).empty;
     defer aggs.deinit(allocator);
-    var arg_exprs = std.ArrayList(?ast.Expr).initCapacity(allocator, 0) catch return error.OutOfMemory; // one per agg; null for COUNT(*)
+    var arg_exprs = std.ArrayList(?ast.Expr).empty; // one per agg; null for COUNT(*)
     defer arg_exprs.deinit(allocator);
 
     const addAggFromExpr = struct {
@@ -436,7 +436,7 @@ pub fn runGroupedQuery(
 
     // 2) Build input binding rows: evaluate group keys and aggregate arguments per input row
     const key_len = gb.keys.len;
-    var rows = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var rows = std.ArrayList([]const BindingValue).empty;
     defer rows.deinit(allocator);
     // Build a map to memoize argument expression stringified forms to index
     var arg_sig_to_idx = std.StringHashMap(usize).init(allocator);
@@ -517,7 +517,7 @@ pub fn runGroupedQuery(
     var key_map = std.StringHashMap(usize).init(allocator);
     defer key_map.deinit();
     // Map each key's stringified expr to its index
-    var tmp_allocd = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var tmp_allocd = std.ArrayList([]const u8).empty;
     defer {
         for (tmp_allocd.items) |s| allocator.free(s);
         tmp_allocd.deinit(allocator);
@@ -535,7 +535,7 @@ pub fn runGroupedQuery(
     // Build normalized signatures for collected aggregates
     var ai2: usize = 0;
     while (ai2 < aggs.items.len) : (ai2 += 1) {
-        var sig = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        var sig = std.ArrayList(u8).empty;
         defer sig.deinit(allocator);
         switch (aggs.items[ai2]) {
             .CountStar => try sig.appendSlice(allocator, "count(*)"),
@@ -587,7 +587,7 @@ pub fn runGroupedQuery(
     }
 
     // Filtered aggregated rows
-    var kept = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var kept = std.ArrayList([]const BindingValue).empty;
     defer kept.deinit(allocator);
     if (q.having) |hv| {
         for (grouped) |gr| {
@@ -604,7 +604,7 @@ pub fn runGroupedQuery(
     // Build maps for projection reuse (as above): key_map and agg_map already exist.
     if (timings) |tp| tp.build_ns = std.time.nanoTimestamp() - t_build_start;
     const t_emit_start = if (timings) |_| std.time.nanoTimestamp() else 0;
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (kept.items) |gr| {
         var prow = try allocator.alloc(BindingValue, q.ret.items.len);
@@ -619,7 +619,7 @@ pub fn runGroupedQuery(
                         .Ident => |id| id.orig,
                         else => break :blk_c,
                     };
-                    var sig = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+                    var sig = std.ArrayList(u8).empty;
                     defer sig.deinit(allocator);
                     // lowercase name
                     var ii: usize = 0;
@@ -728,7 +728,7 @@ pub fn runGroupedQuery(
                 }
             }.less);
             // Apply permutation
-            var sorted = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            var sorted = std.ArrayList([]const BindingValue).empty;
             defer sorted.deinit(allocator);
             for (idxs) |ix| try sorted.append(allocator, out.items[ix]);
             out.deinit(allocator);
@@ -1136,7 +1136,7 @@ pub fn multisetExcept(allocator: std.mem.Allocator, a: []const i64, b: []const i
         const cur = map.get(v) orelse 0;
         _ = try map.put(v, cur + 1);
     }
-    var out = std.ArrayList(i64).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList(i64).empty;
     defer out.deinit(allocator);
     for (a) |v| {
         const cnt = map.get(v) orelse 0;
@@ -2070,7 +2070,7 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
 }
 
 fn rowKeyAlloc(allocator: std.mem.Allocator, row: []const BindingValue) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     for (row, 0..) |v, i| {
         if (i > 0) try buf.append(allocator, '|');
@@ -2081,7 +2081,7 @@ fn rowKeyAlloc(allocator: std.mem.Allocator, row: []const BindingValue) ![]u8 {
 
 // Allocate a canonical byte key for a single BindingValue used in COUNT DISTINCT.
 fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     switch (v) {
         .Null => try buf.appendSlice(allocator, "n"),
         .Int => |n| try buf.writer(allocator).print("i{d}", .{n}),
@@ -2120,7 +2120,7 @@ fn sortUniqueRows(allocator: std.mem.Allocator, rows: []const []const BindingVal
         }
     }.less);
     if (tmp.len == 0) return tmp;
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     var i: usize = 0;
     while (i < tmp.len) : (i += 1) {
@@ -2132,7 +2132,7 @@ fn sortUniqueRows(allocator: std.mem.Allocator, rows: []const []const BindingVal
 }
 
 pub fn unionDistinctRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var all = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var all = std.ArrayList([]const BindingValue).empty;
     defer all.deinit(allocator);
     try all.appendSlice(allocator, a);
     try all.appendSlice(allocator, b);
@@ -2145,7 +2145,7 @@ pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []con
     if (total < threshold) return try unionDistinctRows(allocator, a, b);
     var set = std.StringHashMap(void).init(allocator);
     defer set.deinit();
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var uniq = std.ArrayList([]const BindingValue).empty;
     defer uniq.deinit(allocator);
     // Insert all rows from a, then b
     var i: usize = 0;
@@ -2171,7 +2171,7 @@ pub fn unionDistinctRowsOptimized(allocator: std.mem.Allocator, a: []const []con
 }
 
 pub fn unionAllRows(allocator: std.mem.Allocator, a: []const []const BindingValue, b: []const []const BindingValue) ![]const []const BindingValue {
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     try out.appendSlice(allocator, a);
     try out.appendSlice(allocator, b);
@@ -2188,7 +2188,7 @@ pub fn intersectAllRows(allocator: std.mem.Allocator, a: []const []const Binding
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (a) |row| {
         const key = try rowKeyAlloc(allocator, row);
@@ -2211,7 +2211,7 @@ pub fn intersectDistinctRows(allocator: std.mem.Allocator, a: []const []const Bi
         defer allocator.free(key);
         _ = try setA.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var uniq = std.ArrayList([]const BindingValue).empty;
     defer uniq.deinit(allocator);
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
@@ -2237,7 +2237,7 @@ pub fn exceptAllRows(allocator: std.mem.Allocator, a: []const []const BindingVal
         const cur = counts.get(key) orelse 0;
         try counts.put(key, cur + 1);
     }
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     for (a) |row| {
         const key = try rowKeyAlloc(allocator, row);
@@ -2478,7 +2478,7 @@ pub fn groupAndAggregate(allocator: std.mem.Allocator, rows: []const []const Bin
         }
     }
     // Materialize output rows: key columns first, then aggregate outputs as Int or Null
-    var out = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var out = std.ArrayList([]const BindingValue).empty;
     defer out.deinit(allocator);
     var it = map.valueIterator();
     while (it.next()) |p| {
@@ -2554,7 +2554,7 @@ pub fn rewriteExprWithAggregates(
                 .Ident => |id| id.orig,
                 else => break :blk_call .{ .Null = {} },
             };
-            var sig_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            var sig_buf = std.ArrayList(u8).empty;
             defer sig_buf.deinit(allocator);
             // append lowercase function name
             var i_nm: usize = 0;
@@ -2635,7 +2635,7 @@ pub fn exceptDistinctRows(allocator: std.mem.Allocator, a: []const []const Bindi
         defer allocator.free(key);
         _ = try setB.put(key, {});
     }
-    var uniq = std.ArrayList([]const BindingValue).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var uniq = std.ArrayList([]const BindingValue).empty;
     defer uniq.deinit(allocator);
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();

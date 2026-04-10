@@ -1741,7 +1741,7 @@ test "SecurityManager.deinit releases hydrated runtime state" {
     perm.conditions = try allocator.dupe(u8, "tenant_id = 7");
     try sm.grantPermission(role.id, perm.id);
 
-    var parents = try std.ArrayList(RoleId).initCapacity(allocator, 0);
+    var parents = std.ArrayList(RoleId).empty;
     try parents.append(allocator, role.id);
     try sm.rbac.role_hierarchy.put(role.id, parents);
 
@@ -1762,7 +1762,7 @@ test "SecurityManager.deinit releases hydrated runtime state" {
     try sm.assignRole(42, role.id);
 
     if (sm.users.getPtr(42)) |user| {
-        user.recovery_codes = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        user.recovery_codes = std.ArrayList([]const u8).empty;
         try user.recovery_codes.?.append(allocator, try allocator.dupe(u8, "recover-1"));
         try user.recovery_codes.?.append(allocator, try allocator.dupe(u8, "recover-2"));
     } else {

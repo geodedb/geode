@@ -478,8 +478,8 @@ pub const OwnedGraphEntities = struct {
     pub fn init(allocator: std.mem.Allocator) !*OwnedGraphEntities {
         const self = try allocator.create(OwnedGraphEntities);
         self.* = OwnedGraphEntities{
-            .nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0),
-            .edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0),
+            .nodes = std.ArrayList(*graph_store.Node).empty,
+            .edges = std.ArrayList(*graph_store.Edge).empty,
             .allocator = allocator,
         };
         return self;
@@ -777,7 +777,7 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             .columns = try allocator.alloc([]const u8, 0),
             .rows = try allocator.alloc([]Value, 0),
             .flags = blk: {
-                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
         };
@@ -887,7 +887,7 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -1006,7 +1006,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .Commit => {
@@ -1037,7 +1037,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .Rollback => {
@@ -1072,7 +1072,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .SessionSet => |ss| {
@@ -1157,7 +1157,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .Show => |s| {
@@ -1188,7 +1188,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
             }
@@ -1236,7 +1236,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return err;
@@ -1247,7 +1247,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .CreateConstraint => |cc| {
@@ -1283,7 +1283,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
                         .flags = blk: {
-                            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                            const list = std.ArrayList([]const u8).empty;
                             break :blk list;
                         },
                     };
@@ -1310,7 +1310,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    const list = std.ArrayList([]const u8).empty;
                     break :blk list;
                 },
             };
@@ -1351,7 +1351,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .DropConstraint => |dc| {
@@ -1361,7 +1361,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
                 .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    const list = std.ArrayList([]const u8).empty;
                     break :blk list;
                 },
             };
@@ -1429,7 +1429,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return error.DuplicateGraph;
@@ -1443,7 +1443,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .CreateGraphType => |cgt| {
@@ -1452,7 +1452,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .DropGraph => |dg| {
@@ -1484,7 +1484,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .DropGraphType => |dgt| {
@@ -1493,7 +1493,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .CreateSchema => |cs| {
@@ -1506,7 +1506,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return error.DuplicateSchema;
@@ -1517,7 +1517,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     return ExecutionResult{
                         .columns = try allocator.alloc([]const u8, 0),
                         .rows = try allocator.alloc([]Value, 0),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
                 return err;
@@ -1526,7 +1526,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .DropSchema => |ds| {
@@ -1541,7 +1541,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 return ExecutionResult{
                     .columns = try allocator.alloc([]const u8, 0),
                     .rows = try allocator.alloc([]Value, 0),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
             }
 
@@ -1552,7 +1552,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .UseGraph => |ug| {
@@ -1603,7 +1603,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .SessionReset => |sr| {
@@ -1672,7 +1672,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .SessionClose => {
@@ -1693,7 +1693,7 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         },
         .For => |f| {
@@ -2096,7 +2096,7 @@ pub fn expandVariableLengthPathsWithMode(
     var iter = try PathIterator.init(allocator, store, start_node_id, min_len, max_len, rel_type, rel_direction, path_mode);
     defer iter.deinit();
 
-    var result_paths = try std.ArrayList(VariableLengthPath).initCapacity(allocator, 0);
+    var result_paths = std.ArrayList(VariableLengthPath).empty;
     errdefer {
         for (result_paths.items) |*p| p.deinit(allocator);
         result_paths.deinit(allocator);
@@ -2421,7 +2421,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
     // Calculate new column count - allocate new strings for column names
     // GAP-0220 FIX: Use try for proper error propagation
-    var new_columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var new_columns = std.ArrayList([]const u8).empty;
     defer new_columns.deinit(allocator);
 
     for (with_items) |item| {
@@ -2433,7 +2433,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
     // Transform each row according to WITH items
     // GAP-0220 FIX: Use try for proper error propagation
-    var new_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var new_rows = std.ArrayList([]Value).empty;
 
     // CANARY: REQ=REQ-GQL-WITH-GROUPBY-001; FEATURE="WithGroupByAggregation"; ASPECT=GroupingLogic; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-22
     // Handle GROUP BY if present - group rows and compute aggregations per group
@@ -2442,7 +2442,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
         // Use a string key for grouping (serialize key values)
         var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
         // GAP-0220 FIX: Use try for proper error propagation
-        var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var group_keys_list = std.ArrayList([]const u8).empty;
         defer {
             var iter = groups.iterator();
             while (iter.next()) |entry| {
@@ -2583,7 +2583,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                 // Implicit GROUP BY: group rows by non-aggregated expressions
                 var groups = std.StringHashMap(std.ArrayList([]const Value)).init(allocator);
                 // GAP-0220 FIX: Use try for proper error propagation
-                var group_keys_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                var group_keys_list = std.ArrayList([]const u8).empty;
                 defer {
                     var iter = groups.iterator();
                     while (iter.next()) |entry| {

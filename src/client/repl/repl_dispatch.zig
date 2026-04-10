@@ -3900,7 +3900,7 @@ const ScriptedTransportConnection = struct {
         ctx.* = .{
             .allocator = allocator,
             .responses = owned_responses,
-            .writes = try std.ArrayList([]u8).initCapacity(allocator, 0),
+            .writes = std.ArrayList([]u8).empty,
         };
         errdefer ctx.writes.deinit(allocator);
 
@@ -3946,8 +3946,8 @@ const ScriptedTransportConnection = struct {
     }
 };
 
-fn emptyStatusStrings(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
-    return std.ArrayList([]const u8).initCapacity(allocator, 0);
+fn emptyStatusStrings(_: std.mem.Allocator) !std.ArrayList([]const u8) {
+    return std.ArrayList([]const u8).empty;
 }
 
 fn buildStatusForTest(allocator: std.mem.Allocator) !proto_schema.Status {

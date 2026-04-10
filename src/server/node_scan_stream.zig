@@ -64,7 +64,7 @@ pub const NodeScanStream = struct {
                 .result = .{
                     .columns = columns,
                     .rows = try allocator.alloc([]Value, 0),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 },
                 .final = true,
             };
@@ -100,7 +100,7 @@ pub const NodeScanStream = struct {
         const result = ExecutionResult{
             .columns = columns,
             .rows = try rows.toOwnedSlice(allocator),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
             .owned_graph_entities = if (owned_entities.nodes.items.len > 0) owned_entities else null,
         };
         if (result.owned_graph_entities == null) {

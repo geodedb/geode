@@ -49,10 +49,10 @@ pub const ResultAccumulator = struct {
             .wants_json = wants_json,
             .wants_dot = wants_dot,
             .columns = try std.ArrayList(ColumnInfo).initCapacity(allocator, 16),
-            .order_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .order_keys = std.ArrayList([]const u8).empty,
             .status_class = try allocator.dupe(u8, "00000"),
-            .additional_statuses = try std.ArrayList([]const u8).initCapacity(allocator, 0),
-            .flagger_findings = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .additional_statuses = std.ArrayList([]const u8).empty,
+            .flagger_findings = std.ArrayList([]const u8).empty,
         };
         if (wants_json) {
             result.rows_json = try std.ArrayList(std.ArrayList(std.json.Value)).initCapacity(allocator, 64);

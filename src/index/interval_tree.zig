@@ -35,13 +35,13 @@ pub fn IntervalTree(comptime T: type) type {
         }
 
         pub fn queryContains(self: Self, value: T, allocator: std.mem.Allocator) ![]usize {
-            var results = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            var results = std.ArrayList(usize).empty;
             try queryContainsRec(allocator, self.root, value, &results);
             return results.toOwnedSlice(allocator);
         }
 
         pub fn queryOverlaps(self: Self, query_range: RangeType, allocator: std.mem.Allocator) ![]usize {
-            var results = std.ArrayList(usize).initCapacity(allocator, 0) catch return error.OutOfMemory;
+            var results = std.ArrayList(usize).empty;
             try queryOverlapsRec(allocator, self.root, query_range, &results);
             return results.toOwnedSlice(allocator);
         }

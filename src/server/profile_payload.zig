@@ -381,10 +381,10 @@ pub fn buildProfilePayloadFromTrace(
         });
     }
 
-    var peak_contributors = std.ArrayList(schema.ProfilePeakContributor).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var peak_contributors = std.ArrayList(schema.ProfilePeakContributor).empty;
     errdefer peak_contributors.deinit(allocator);
 
-    var mem_curve = std.ArrayList(schema.ProfileMemCurvePoint).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var mem_curve = std.ArrayList(schema.ProfileMemCurvePoint).empty;
     errdefer mem_curve.deinit(allocator);
 
     var flagger_findings = std.ArrayList([]const u8).initCapacity(allocator, opts.flagger_findings.len) catch return error.OutOfMemory;

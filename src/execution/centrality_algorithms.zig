@@ -52,7 +52,7 @@ fn singleResult(allocator: std.mem.Allocator, columns: [][]const u8, row: []Valu
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -86,7 +86,7 @@ fn getSpicePool(allocator: std.mem.Allocator) *SpicePool {
 /// Get neighbors of a node using adjacency indexes (O(degree) instead of O(E)).
 /// Returns a caller-owned slice of neighbor node IDs.
 pub fn getNeighbors(store: *graph_store.GraphStore, node_id: u64, allocator: std.mem.Allocator) ![]u64 {
-    var neighbors = try std.ArrayList(u64).initCapacity(allocator, 0);
+    var neighbors = std.ArrayList(u64).empty;
 
     // Use adjacency indexes for O(degree) lookup instead of full edge scan
     if (store.getOutgoingEdgeIds(node_id)) |out_edge_ids| {
@@ -217,7 +217,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -240,7 +240,7 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
 
     // Brandes algorithm
     for (node_list.items) |source| {
-        var stack = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var stack = std.ArrayList(u64).empty;
         defer stack.deinit(allocator);
 
         var paths = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator);
@@ -262,7 +262,7 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
         defer delta.deinit();
 
         for (node_list.items) |node| {
-            try paths.put(node, try std.ArrayList(u64).initCapacity(allocator, 0));
+            try paths.put(node, std.ArrayList(u64).empty);
             try sigma.put(node, 0.0);
             try dist.put(node, -1);
             try delta.put(node, 0.0);
@@ -271,7 +271,7 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
         try sigma.put(source, 1.0);
         try dist.put(source, 0);
 
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
         try queue.append(allocator, source);
 
@@ -326,7 +326,7 @@ pub fn executeBetweennessCentrality(allocator: std.mem.Allocator, store: *graph_
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -345,7 +345,7 @@ pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_st
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
 
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
 
         try distances.put(node_id, 0);
@@ -387,7 +387,7 @@ pub fn executeClosenessCentrality(allocator: std.mem.Allocator, store: *graph_st
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -404,7 +404,7 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -483,7 +483,7 @@ pub fn executeEigenvectorCentrality(allocator: std.mem.Allocator, store: *graph_
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -499,7 +499,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -600,7 +600,7 @@ pub fn executePageRank(allocator: std.mem.Allocator, store: *graph_store.GraphSt
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -616,7 +616,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -646,7 +646,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -783,7 +783,7 @@ pub fn executeLouvainCommunities(allocator: std.mem.Allocator, store: *graph_sto
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -850,7 +850,7 @@ pub fn executeLabelPropagation(allocator: std.mem.Allocator, store: *graph_store
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -954,7 +954,7 @@ pub fn executeUnionFind(allocator: std.mem.Allocator, store: *graph_store.GraphS
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -976,7 +976,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     defer component.deinit();
 
     // Tarjan stack (not the DFS call stack)
-    var tarjan_stack = try std.ArrayList(u64).initCapacity(allocator, 0);
+    var tarjan_stack = std.ArrayList(u64).empty;
     defer tarjan_stack.deinit(allocator);
 
     var index_counter: u32 = 0;
@@ -1009,7 +1009,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
         if (index_map.contains(start_node)) continue;
 
         // Begin iterative strongconnect from start_node
-        var call_stack = try std.ArrayList(Frame).initCapacity(allocator, 0);
+        var call_stack = std.ArrayList(Frame).empty;
         defer call_stack.deinit(allocator);
 
         // Initialize start_node
@@ -1095,7 +1095,7 @@ pub fn executeSCC(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1110,7 +1110,7 @@ pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_sto
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
 
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
 
         try distances.put(node_id, 0);
@@ -1150,7 +1150,7 @@ pub fn executeHarmonicCentrality(allocator: std.mem.Allocator, store: *graph_sto
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1183,7 +1183,7 @@ pub fn executeBridgeLeverageCentrality(allocator: std.mem.Allocator, store: *gra
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1210,7 +1210,7 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
         // Closeness via BFS
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
 
         try distances.put(node_id, 0);
@@ -1269,7 +1269,7 @@ pub fn executeGreyCardinalComposite(allocator: std.mem.Allocator, store: *graph_
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1365,7 +1365,7 @@ pub fn executeLeidenCommunities(allocator: std.mem.Allocator, store: *graph_stor
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1398,7 +1398,7 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
     for (node_list.items) |start_node| {
         if (disc.get(start_node).? != -1) continue;
 
-        var stack = try std.ArrayList(struct { node: u64, neighbor_idx: usize, child_count: u32 }).initCapacity(allocator, 0);
+        var stack = std.ArrayList(struct { node: u64, neighbor_idx: usize, child_count: u32 }).empty;
         defer stack.deinit(allocator);
 
         try stack.append(allocator, .{ .node = start_node, .neighbor_idx = 0, .child_count = 0 });
@@ -1454,7 +1454,7 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
     }
 
     // Collect articulation points
-    var result_list = try std.ArrayList(u64).initCapacity(allocator, 0);
+    var result_list = std.ArrayList(u64).empty;
     defer result_list.deinit(allocator);
 
     for (node_list.items) |node| {
@@ -1473,7 +1473,7 @@ pub fn executeArticulationPoints(allocator: std.mem.Allocator, store: *graph_sto
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1496,7 +1496,7 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
         try parent.put(node, null);
     }
 
-    var bridges = try std.ArrayList(struct { source: u64, target: u64 }).initCapacity(allocator, 0);
+    var bridges = std.ArrayList(struct { source: u64, target: u64 }).empty;
     defer bridges.deinit(allocator);
 
     var time_counter: i32 = 0;
@@ -1504,7 +1504,7 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
     for (node_list.items) |start_node| {
         if (disc.get(start_node).? != -1) continue;
 
-        var stack = try std.ArrayList(struct { node: u64, neighbor_idx: usize }).initCapacity(allocator, 0);
+        var stack = std.ArrayList(struct { node: u64, neighbor_idx: usize }).empty;
         defer stack.deinit(allocator);
 
         try stack.append(allocator, .{ .node = start_node, .neighbor_idx = 0 });
@@ -1562,7 +1562,7 @@ pub fn executeBridges(allocator: std.mem.Allocator, store: *graph_store.GraphSto
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1586,7 +1586,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -1608,7 +1608,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
 
     // Edge stack entry: (u, v) representing an undirected edge traversed during DFS
     const EdgeEntry = struct { u: u64, v: u64 };
-    var edge_stack = try std.ArrayList(EdgeEntry).initCapacity(allocator, 0);
+    var edge_stack = std.ArrayList(EdgeEntry).empty;
     defer edge_stack.deinit(allocator);
 
     // DFS stack frame for iterative DFS
@@ -1618,7 +1618,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
         neighbors: []u64, // owned neighbor slice for this frame
         child_count: u32, // number of DFS-tree children (for root articulation check)
     };
-    var dfs_stack = try std.ArrayList(DfsFrame).initCapacity(allocator, 0);
+    var dfs_stack = std.ArrayList(DfsFrame).empty;
     defer {
         // Free any remaining neighbor slices on the stack
         for (dfs_stack.items) |frame| {
@@ -1785,7 +1785,7 @@ pub fn executeBiconnectedComponents(allocator: std.mem.Allocator, store: *graph_
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1813,7 +1813,7 @@ pub fn executeGraphDensity(allocator: std.mem.Allocator, store: *graph_store.Gra
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1830,7 +1830,7 @@ pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.Gr
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
 
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
 
         try distances.put(start_node, 0);
@@ -1865,7 +1865,7 @@ pub fn executeGraphDiameter(allocator: std.mem.Allocator, store: *graph_store.Gr
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1883,7 +1883,7 @@ pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.Gra
         var distances = std.AutoHashMap(u64, u32).init(allocator);
         defer distances.deinit();
 
-        var queue = try std.ArrayList(u64).initCapacity(allocator, 0);
+        var queue = std.ArrayList(u64).empty;
         defer queue.deinit(allocator);
 
         try distances.put(start_node, 0);
@@ -1925,7 +1925,7 @@ pub fn executeMeanDistance(allocator: std.mem.Allocator, store: *graph_store.Gra
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1977,7 +1977,7 @@ pub fn executeGlobalClusteringCoefficient(allocator: std.mem.Allocator, store: *
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1999,7 +1999,7 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -2090,7 +2090,7 @@ pub fn executeKatzCentrality(allocator: std.mem.Allocator, store: *graph_store.G
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -2105,7 +2105,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -2151,9 +2151,9 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     }
 
     // Temporary lists to collect neighbor node IDs from edge IDs
-    var out_tmp = try std.ArrayList(u64).initCapacity(allocator, 0);
+    var out_tmp = std.ArrayList(u64).empty;
     defer out_tmp.deinit(allocator);
-    var in_tmp = try std.ArrayList(u64).initCapacity(allocator, 0);
+    var in_tmp = std.ArrayList(u64).empty;
     defer in_tmp.deinit(allocator);
 
     for (node_list.items) |node| {
@@ -2254,7 +2254,7 @@ pub fn executeHITS(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -2302,7 +2302,7 @@ pub fn executeTriangleCounting(allocator: std.mem.Allocator, store: *graph_store
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -2350,7 +2350,7 @@ pub fn executeLocalClusteringCoefficient(allocator: std.mem.Allocator, store: *g
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -2373,7 +2373,7 @@ pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore
         return ExecutionResult{
             .columns = columns,
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -2481,7 +2481,7 @@ pub fn executeKCore(allocator: std.mem.Allocator, store: *graph_store.GraphStore
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 

@@ -153,7 +153,7 @@ pub const JsonbDocument = struct {
             .object => |obj| {
                 try writer.writeByte('{');
                 // P2-3: Use provided allocator instead of page_allocator
-                var keys = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return Error.OutOfMemory;
+                var keys = std.ArrayList([]const u8).empty;
                 defer keys.deinit(allocator);
 
                 var iter = obj.iterator();
@@ -188,7 +188,7 @@ pub const JsonbDocument = struct {
             .string => |s| .{ .string = s },
             .array => |arr| {
                 // P2-3: Use provided allocator instead of page_allocator
-                var jsonb_arr = std.ArrayList(JsonbValue).initCapacity(allocator, 0) catch return .{ .array = &.{} };
+                var jsonb_arr = std.ArrayList(JsonbValue).empty;
                 for (arr.items) |item| {
                     jsonb_arr.append(allocator, jsonValueToJsonb(allocator, item)) catch {};
                 }
@@ -196,7 +196,7 @@ pub const JsonbDocument = struct {
             },
             .object => |obj| {
                 // P2-3: Use provided allocator instead of page_allocator
-                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).initCapacity(allocator, 0) catch return .{ .object = &.{} };
+                var jsonb_obj = std.ArrayList(JsonbValue.JsonbKeyValue).empty;
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
                     jsonb_obj.append(allocator, .{

@@ -129,16 +129,16 @@ const PathEdge = struct {
 };
 
 pub fn buildPlanIfSupported(allocator: std.mem.Allocator, q: *const ast.Query, context: ExecutionContext) !?Plan {
-    var binding_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var binding_names = std.ArrayList([]const u8).empty;
     errdefer {
         for (binding_names.items) |name| allocator.free(name);
         binding_names.deinit(allocator);
     }
-    var binding_kinds = try std.ArrayList(BindingKind).initCapacity(allocator, 0);
+    var binding_kinds = std.ArrayList(BindingKind).empty;
     defer binding_kinds.deinit(allocator);
     var ops = try std.ArrayList(PlanOp).initCapacity(allocator, 8);
     defer ops.deinit(allocator);
-    var hop_bindings = try std.ArrayList(HopBinding).initCapacity(allocator, 0);
+    var hop_bindings = std.ArrayList(HopBinding).empty;
     defer hop_bindings.deinit(allocator);
 
     const graph_name = try allocator.dupe(u8, resolveGraphName(context));
@@ -465,7 +465,7 @@ fn buildInitialResult(
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -483,7 +483,7 @@ fn executePatternQuery(
 ) !ExecutionResult {
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const chain = q.match.chains[0];
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var rows = std.ArrayList([]Value).empty;
     defer rows.deinit(allocator);
     var owned_entities = try OwnedGraphEntities.init(allocator);
     errdefer owned_entities.deinit();
@@ -493,7 +493,7 @@ fn executePatternQuery(
         const empty_result = ExecutionResult{
             .columns = column_result.columns,
             .rows = try rows.toOwnedSlice(allocator),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
             .column_buffer = column_result.buffer,
         };
         owned_entities.deinit();
@@ -537,7 +537,7 @@ fn executePatternQuery(
     const result = ExecutionResult{
         .columns = column_result.columns,
         .rows = try rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
         .column_buffer = column_result.buffer,
         .owned_graph_entities = if (owned_entities.nodes.items.len > 0 or owned_entities.edges.items.len > 0) owned_entities else null,
     };
@@ -606,9 +606,9 @@ fn materializeNodeOnlyRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+    var local_nodes = std.ArrayList(*graph_store.Node).empty;
     defer local_nodes.deinit(allocator);
-    var local_edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0);
+    var local_edges = std.ArrayList(*graph_store.Edge).empty;
     defer local_edges.deinit(allocator);
 
     const node = try materializeNode(allocator, plan.graph_name, node_slot);
@@ -650,9 +650,9 @@ fn materializePathRow(
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
 ) !void {
-    var local_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+    var local_nodes = std.ArrayList(*graph_store.Node).empty;
     defer local_nodes.deinit(allocator);
-    var local_edges = try std.ArrayList(*graph_store.Edge).initCapacity(allocator, 0);
+    var local_edges = std.ArrayList(*graph_store.Edge).empty;
     defer local_edges.deinit(allocator);
 
     const binding_values = try allocator.alloc(Value, plan.binding_names.len);
@@ -775,7 +775,7 @@ fn collectHopEdges(
     node_slot: u64,
     dir: ast.RelDir,
 ) ![]PathEdge {
-    var edges = try std.ArrayList(PathEdge).initCapacity(allocator, 0);
+    var edges = std.ArrayList(PathEdge).empty;
     defer edges.deinit(allocator);
 
     switch (dir) {

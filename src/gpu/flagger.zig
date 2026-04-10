@@ -16,7 +16,7 @@ pub const GPUFlaggerFinding = struct {
 };
 
 pub fn detect(allocator: std.mem.Allocator) ![]GPUFlaggerFinding {
-    var list = try std.ArrayList(GPUFlaggerFinding).initCapacity(allocator, 0);
+    var list = std.ArrayList(GPUFlaggerFinding).empty;
     defer list.deinit(allocator);
     const cuda = @import("cuda_loader.zig");
     var loader = cuda.CudaLoader.init();

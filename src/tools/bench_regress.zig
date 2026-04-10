@@ -62,7 +62,7 @@ pub fn main() !void {
 
     var failures: usize = 0;
     var total_compared: usize = 0;
-    var regression_list = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var regression_list = std.ArrayList([]const u8).empty;
     defer regression_list.deinit(allocator);
     var it = baseline_map.iterator();
     while (it.next()) |entry| {
@@ -217,7 +217,7 @@ fn writeBaseline(path: []const u8, map: *MetricMap) !void {
         var line_buf: [2048]u8 = undefined;
         var fba = std.heap.FixedBufferAllocator.init(&line_buf);
         const allocator = fba.allocator();
-        var arr = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        var arr = std.ArrayList(u8).empty;
         const w = arr.writer(allocator);
         try std.fmt.format(w, "{{\"kind\":\"{s}\"", .{entry.key_ptr.*});
         var m_it = metrics.iterator();
@@ -240,7 +240,7 @@ fn emitSummary(paths: *const struct { baseline_path: []const u8, current_path: [
     var buf: [4096]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const allocator = fba.allocator();
-    var arr = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var arr = std.ArrayList(u8).empty;
     const tol_int: u64 = @intFromFloat(tol_pct + 0.5);
     // Build JSON manually to avoid format brace escaping issues.
     try arr.appendSlice(allocator, "{\"type\":\"bench_regress_summary\",");
@@ -299,7 +299,7 @@ test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary" {
     var inner_c = std.StringHashMap(u64).init(allocator);
     try inner_c.put(try allyDup(allocator, "elapsed_ns"), 1090);
     try cur.put(try allyDup(allocator, "K1"), inner_c);
-    var regressions = std.ArrayList([]const u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var regressions = std.ArrayList([]const u8).empty;
     defer regressions.deinit(allocator);
     // Should be within tolerance 15%
     // call emitSummary to ensure JSON summary path works

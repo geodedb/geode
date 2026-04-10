@@ -239,7 +239,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
             const grouped_result = ExecutionResult{
                 .columns = grouped_columns,
                 .rows = try grouped_rows.toOwnedSlice(allocator),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
 
             // Clean up current_result
@@ -300,14 +300,14 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
             return ExecutionResult{
                 .columns = final_columns,
                 .rows = try final_rows.toOwnedSlice(allocator),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         } else {
             // This is the final query, apply ORDER BY if present
             var result = ExecutionResult{
                 .columns = grouped_columns,
                 .rows = try grouped_rows.toOwnedSlice(allocator),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
 
             if (agg_query.ret.items.len > 0) {
@@ -639,7 +639,7 @@ pub fn executeQueryChain(allocator: std.mem.Allocator, current_query: ast.Query,
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -941,7 +941,7 @@ fn executeQueryChainWithBindings(allocator: std.mem.Allocator, q: ast.Query, con
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         }
 
@@ -1193,10 +1193,10 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
     // Check if this is a simple MATCH with only node patterns (no relationships)
     var all_vars_bound = true;
     // GAP-0220 FIX: Use try for proper error propagation
-    var bound_var_env_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var bound_var_env_names = std.ArrayList([]const u8).empty;
     defer bound_var_env_names.deinit(allocator);
     // GAP-0220 FIX: Use try for proper error propagation
-    var bound_var_env_values = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var bound_var_env_values = std.ArrayList(Value).empty;
     defer bound_var_env_values.deinit(allocator);
 
     // CANARY: REQ=REQ-GQL-CHAIN-FIX-002; FEATURE="BoundVariableShortcutFix"; ASPECT=HopsCheck; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-24
@@ -1300,7 +1300,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
                 return ExecutionResult{
                     .columns = columns,
                     .rows = try allocator.alloc([]Value, 0),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
             }
         }
@@ -1320,7 +1320,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -1357,7 +1357,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
                 return ExecutionResult{
                     .columns = columns,
                     .rows = try allocator.alloc([]Value, 0),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
             }
         }
@@ -1375,7 +1375,7 @@ pub fn executeQueryWithBindingsImpl(allocator: std.mem.Allocator, q: ast.Query, 
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -1445,7 +1445,7 @@ fn executeCTE(
                 const working_result = ExecutionResult{
                     .columns = columns,
                     .rows = working_rows.items,
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
                 const cte_val = try cteResultToValue(allocator, working_result);
 
@@ -1491,7 +1491,7 @@ fn executeCTE(
             const final_result = ExecutionResult{
                 .columns = columns,
                 .rows = try all_rows.toOwnedSlice(allocator),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
             return cteResultToValue(allocator, final_result);
         },
@@ -1547,10 +1547,10 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
 
     // Evaluate LET bindings first and add them to parameter environment
     // GAP-0220 FIX: Use try for proper error propagation
-    var param_names = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var param_names = std.ArrayList([]const u8).empty;
     defer param_names.deinit(allocator);
     // GAP-0220 FIX: Use try for proper error propagation
-    var param_values = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var param_values = std.ArrayList(Value).empty;
     defer param_values.deinit(allocator);
 
     if (context.query_param_names.len != 0) {
@@ -1675,7 +1675,7 @@ pub fn executeLegacyQueryWithResolvedParams(
             return last_result orelse ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         }
 
@@ -1897,7 +1897,7 @@ pub fn executeLegacyQueryWithResolvedParams(
         var initial_result = ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
             .rows = try allocator.alloc([]Value, 1),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
         initial_result.rows[0] = try allocator.alloc(Value, 0);
 
@@ -2037,7 +2037,7 @@ pub fn executeLegacyQueryWithResolvedParams(
         var result = ExecutionResult{
             .columns = col_result.columns,
             .rows = try final_rows.toOwnedSlice(allocator),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
             .column_buffer = col_result.buffer,
         };
 

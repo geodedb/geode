@@ -77,7 +77,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
     }
 
     // Build rows based on show type
-    var rows_list = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var rows_list = std.ArrayList([]Value).empty;
 
     // Phase 3: Shared lock for SHOW (read-only, allows concurrent access)
     cat.rwlock.lockShared();
@@ -95,7 +95,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 row[2] = Value{ .Str = try allocator.dupe(u8, info.table_name) };
 
                 // Join columns with comma
-                var columns_str = try std.ArrayList(u8).initCapacity(allocator, 0);
+                var columns_str = std.ArrayList(u8).empty;
                 for (info.columns, 0..) |col, i| {
                     if (i > 0) try columns_str.appendSlice(allocator, ", ");
                     try columns_str.appendSlice(allocator, col);
@@ -140,7 +140,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                 row[2] = Value{ .Str = try allocator.dupe(u8, info.label) };
 
                 // Join properties with comma
-                var props_str = try std.ArrayList(u8).initCapacity(allocator, 0);
+                var props_str = std.ArrayList(u8).empty;
                 for (info.properties, 0..) |prop, i| {
                     if (i > 0) try props_str.appendSlice(allocator, ", ");
                     try props_str.appendSlice(allocator, prop);
@@ -270,7 +270,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
     return ExecutionResult{
         .columns = columns,
         .rows = try rows_list.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -282,7 +282,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         return ExecutionResult{
             .columns = try allocator.alloc([]const u8, 0),
             .rows = try allocator.alloc([]Value, 0),
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -296,7 +296,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, env);
 
     // Extract list items from the collection
-    var items = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var items = std.ArrayList(Value).empty;
 
     switch (collection_value) {
         .List => |list| {
@@ -311,11 +311,11 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     }
 
     // Build result rows by iterating over collection
-    var result_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var result_rows = std.ArrayList([]Value).empty;
 
     // Build arrays for iteration environment
-    var env_names_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
-    var env_values_list = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var env_names_list = std.ArrayList([]const u8).empty;
+    var env_values_list = std.ArrayList(Value).empty;
 
     for (items.items, 0..) |item, idx| {
         // Clear environment for this iteration
@@ -352,7 +352,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
         };
 
         // Evaluate RETURN items for this iteration
-        var row = try std.ArrayList(Value).initCapacity(allocator, 0);
+        var row = std.ArrayList(Value).empty;
 
         for (for_stmt.return_clause.items) |ret_item| {
             const value = try eval.evalExpr(allocator, ret_item.expr, iteration_env);
@@ -363,7 +363,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     }
 
     // Build column names from RETURN clause
-    var columns = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var columns = std.ArrayList([]const u8).empty;
 
     for (for_stmt.return_clause.items) |ret_item| {
         const col_name = if (ret_item.alias) |alias|
@@ -376,7 +376,7 @@ pub fn executeForWithBindings(allocator: std.mem.Allocator, for_stmt: ast.ForSta
     return ExecutionResult{
         .columns = try columns.toOwnedSlice(allocator),
         .rows = try result_rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -428,7 +428,7 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     const collection_value = try eval.evalExpr(allocator, for_stmt.collection, empty_env);
 
     // Extract list items from the collection
-    var items = try std.ArrayList(Value).initCapacity(allocator, 0);
+    var items = std.ArrayList(Value).empty;
 
     switch (collection_value) {
         .List => |list| {
@@ -509,7 +509,7 @@ pub fn executeFor(allocator: std.mem.Allocator, for_stmt: ast.ForStatement, cont
     return ExecutionResult{
         .columns = col_result.columns,
         .rows = try result_rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
         .column_buffer = col_result.buffer,
     };
 }
@@ -590,7 +590,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     return ExecutionResult{
                         .columns = if (final_columns) |cols| @constCast(cols) else try allocator.alloc([]const u8, 0),
                         .rows = try final_rows.toOwnedSlice(allocator),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 } else {
                     // VALUES ... RETURN pattern (no MATCH): evaluate RETURN for each VALUES row
@@ -648,7 +648,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
                     return ExecutionResult{
                         .columns = col_result.columns,
                         .rows = try final_rows.toOwnedSlice(allocator),
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                         .column_buffer = col_result.buffer,
                     };
                 }
@@ -667,7 +667,7 @@ pub fn executeValues(allocator: std.mem.Allocator, values_stmt: ast.ValuesStatem
     return ExecutionResult{
         .columns = columns,
         .rows = try result_rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -917,7 +917,7 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -955,7 +955,7 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     columns[1] = try allocator.dupe(u8, "value");
 
     // Create statistics rows
-    var stats = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var stats = std.ArrayList([]Value).empty;
     defer stats.deinit(allocator);
 
     // Profile type indicator
@@ -993,7 +993,7 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     return ExecutionResult{
         .columns = columns,
         .rows = try stats.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1013,7 +1013,7 @@ fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_ru
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -1048,7 +1048,7 @@ fn buildPlannedProfileResult(allocator: std.mem.Allocator, planned: planned_read
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 

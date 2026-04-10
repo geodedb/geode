@@ -5,8 +5,8 @@ pub const Timer = struct { id: u64, deadline_us: u64 };
 pub const TimerHeap = struct {
     a: std.ArrayList(Timer),
 
-    pub fn init(allocator: std.mem.Allocator) !TimerHeap {
-        return .{ .a = try std.ArrayList(Timer).initCapacity(allocator, 0) };
+    pub fn init(_: std.mem.Allocator) !TimerHeap {
+        return .{ .a = std.ArrayList(Timer).empty };
     }
     pub fn deinit(self: *TimerHeap, allocator: std.mem.Allocator) void {
         self.a.deinit(allocator);

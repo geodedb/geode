@@ -47,7 +47,7 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
     defer file.close();
     var buf: [4096]u8 = undefined;
     var rd = file.reader(&buf);
-    var line_buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var line_buf = std.ArrayList(u8).empty;
     defer line_buf.deinit(allocator);
 
     var seq: u64 = 0;

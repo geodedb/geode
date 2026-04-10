@@ -523,7 +523,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
         const Point = struct { x: f64, y: f64 };
 
         // Parse all coordinate pairs
-        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        var points = std.ArrayList(Point).empty;
         defer points.deinit(allocator);
 
         var pairs = std.mem.tokenizeAny(u8, coords_str, ",");
@@ -583,7 +583,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
         const Point = struct { x: f64, y: f64 };
 
         // Parse all coordinate pairs
-        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        var points = std.ArrayList(Point).empty;
         defer points.deinit(allocator);
 
         var pairs = std.mem.tokenizeAny(u8, coords_str, ",");
@@ -636,7 +636,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
     // CANARY: REQ=REQ-GEO-MULTI-001; FEATURE="MultiGeometry"; ASPECT=SpatialTypes; STATUS=TESTED; TEST=geodetestlab/specs/spatial_wkb_functions.yml; OWNER=types; UPDATED=2026-01-10
     if (std.mem.startsWith(u8, wkt, "MULTIPOINT")) {
         const Point = struct { x: f64, y: f64 };
-        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        var points = std.ArrayList(Point).empty;
         defer points.deinit(allocator);
 
         // Find the opening paren
@@ -709,7 +709,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
         const lines_str = wkt[start_idx + 2 .. end_idx];
 
         // Parse first linestring (simplified - full implementation would parse all)
-        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        var points = std.ArrayList(Point).empty;
         defer points.deinit(allocator);
 
         var pairs = std.mem.tokenizeAny(u8, lines_str, ",");
@@ -763,7 +763,7 @@ fn parseWktToWkb(allocator: std.mem.Allocator, wkt: []const u8) ![]const u8 {
         const end_idx = std.mem.indexOf(u8, wkt, ")))") orelse return error.InvalidWkt;
         const poly_str = wkt[start_idx + 3 .. end_idx];
 
-        var points = try std.ArrayList(Point).initCapacity(allocator, 0);
+        var points = std.ArrayList(Point).empty;
         defer points.deinit(allocator);
 
         var pairs = std.mem.tokenizeAny(u8, poly_str, ",");

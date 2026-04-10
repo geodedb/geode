@@ -312,7 +312,7 @@ pub fn handleShortestPathAssignment(
                     return ExecutionResult{
                         .columns = columns,
                         .rows = rows,
-                        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                        .flags = std.ArrayList([]const u8).empty,
                     };
                 }
             }
@@ -347,7 +347,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         return ExecutionResult{
             .columns = &.{},
             .rows = &.{},
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -480,7 +480,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
                 return ExecutionResult{
                     .columns = columns,
                     .rows = rows,
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
             }
         }
@@ -501,7 +501,7 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -521,7 +521,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
 
     // Match each chain separately and collect bindings
     // GAP-0220 FIX: Use try for proper error propagation
-    var chain_matches = try std.ArrayList(std.StringHashMap(u64)).initCapacity(allocator, 0);
+    var chain_matches = std.ArrayList(std.StringHashMap(u64)).empty;
     defer {
         for (chain_matches.items) |*chain_match| {
             chain_match.deinit();
@@ -642,7 +642,7 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         }
 
@@ -819,7 +819,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     for (q.match.chains) |chain| {
         const node_pattern = chain.head.?;
         // GAP-0220 FIX: Use try for proper error propagation
-        var matches = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+        var matches = std.ArrayList(*graph_store.Node).empty;
 
         if (node_pattern.labels.len > 0) {
             // Use label_index for O(1) lookup instead of full scan
@@ -942,7 +942,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     if (items.len == 0) {
         // No RETURN clause - return matched variables
         // GAP-0220 FIX: Use try for proper error propagation
-        var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var col_list = std.ArrayList([]const u8).empty;
         defer col_list.deinit(allocator);
 
         for (chain_vars.items) |var_name| {
@@ -958,7 +958,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
     // Generate Cartesian product of all matching nodes
     // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var rows = std.ArrayList([]Value).empty;
 
     // Recursive function to generate combinations
     const Context = struct {
@@ -1077,7 +1077,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     };
 
     // GAP-0220 FIX: Use try for proper error propagation
-    var current_combo = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+    var current_combo = std.ArrayList(*graph_store.Node).empty;
     defer current_combo.deinit(allocator);
 
     try context.generateCombinations(&current_combo, 0);
@@ -1246,7 +1246,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             };
 
             // GAP-0220 FIX: Use try for proper error propagation
-            var combo = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+            var combo = std.ArrayList(*graph_store.Node).empty;
             defer combo.deinit(allocator);
             try binding_context.collectBindings(&combo, 0);
 
@@ -1284,7 +1284,7 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
     var result = ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     if (q.order_by) |order| {
@@ -1459,7 +1459,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 
     // Start with first chain and build bindings
     // GAP-0220 FIX: Use try for proper error propagation
-    var bindings = try std.ArrayList(MatchBinding).initCapacity(allocator, 0);
+    var bindings = std.ArrayList(MatchBinding).empty;
     defer {
         for (bindings.items) |*b| b.deinit();
         bindings.deinit(allocator);
@@ -1481,7 +1481,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
         return ExecutionResult{
             .columns = &.{},
             .rows = &.{},
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 
@@ -2055,7 +2055,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
     var result = ExecutionResult{
         .columns = eval_columns,
         .rows = try rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // If WITH clause exists, apply RETURN projection on the WITH result
@@ -2139,7 +2139,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     // Find all nodes matching the required left pattern
     // GAP-0220 FIX: Use try for proper error propagation
-    var base_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+    var base_nodes = std.ArrayList(*graph_store.Node).empty;
     defer base_nodes.deinit(allocator);
 
     var node_iter = store.nodes.iterator();
@@ -2245,11 +2245,11 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
     // Step 2: For each base node, try to extend with optional chains
     // GAP-0220 FIX: Use try for proper error propagation
-    var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var rows = std.ArrayList([]Value).empty;
 
     // Collect all variable names for columns
     // GAP-0220 FIX: Use try for proper error propagation
-    var all_vars = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+    var all_vars = std.ArrayList([]const u8).empty;
     defer all_vars.deinit(allocator);
 
     // Add required variable (left node of first chain)
@@ -2288,7 +2288,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // Section 14.4 Fix: Also handle required chains WITH hops (relationship patterns)
     // e.g., MATCH (n) OPTIONAL MATCH (n)-[:CHILD]->(c) MATCH (c)-[:CHILD]->(gc)
     // GAP-0220 FIX: Use try for proper error propagation
-    var required_chains_after_optional = try std.ArrayList(usize).initCapacity(allocator, 0);
+    var required_chains_after_optional = std.ArrayList(usize).empty;
     defer required_chains_after_optional.deinit(allocator);
     var seen_optional = false;
     for (q.match.chains[1..], 1..) |chain, idx| {
@@ -2323,7 +2323,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         node_var_pos: ?usize, // position for node-only patterns
     };
     // GAP-0220 FIX: Use try for proper error propagation
-    var chain_var_info = try std.ArrayList(ChainVarInfo).initCapacity(allocator, 0);
+    var chain_var_info = std.ArrayList(ChainVarInfo).empty;
     defer chain_var_info.deinit(allocator);
 
     // Calculate positions for each optional chain's variables
@@ -2365,7 +2365,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     // CANARY: REQ=REQ-GQL-OPTIONAL-MATCH-HOP-004; FEATURE="OptionalMatchWithHops"; ASPECT=FirstChainTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=execution; UPDATED=2026-01-29
     // Process first chain fully before OPTIONAL MATCH processing
     // For chains with hops, we need to traverse the relationship and get all matching bindings
-    var first_chain_bindings = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var first_chain_bindings = std.ArrayList([]Value).empty;
     defer {
         for (first_chain_bindings.items) |row| {
             allocator.free(row);
@@ -2626,7 +2626,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     for (first_chain_bindings.items) |first_chain_row| {
         // Start with the first chain binding as the base row
         // GAP-0220 FIX: Use try for proper error propagation
-        var current_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var current_rows = std.ArrayList([]Value).empty;
         defer current_rows.deinit(allocator);
 
         // Copy the first chain row as the initial base row
@@ -2644,13 +2644,13 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             chain_info_idx += 1;
 
             // GAP-0220 FIX: Use try for proper error propagation
-            var new_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var new_rows = std.ArrayList([]Value).empty;
             defer new_rows.deinit(allocator);
 
             // For each existing row, try to extend with this optional chain
             for (current_rows.items) |existing_row| {
                 // GAP-0220 FIX: Use try for proper error propagation
-                var matches_found = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var matches_found = std.ArrayList([]Value).empty;
                 defer matches_found.deinit(allocator);
 
                 // Handle node-only OPTIONAL MATCH (e.g., OPTIONAL MATCH (e:Employee {prop: value}))
@@ -3191,7 +3191,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         rows = processed_rows;
         // Transfer ownership - don't deinit processed_rows
         // GAP-0220 FIX: Use try for proper error propagation
-        processed_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        processed_rows = std.ArrayList([]Value).empty;
     }
 
     // Build columns
@@ -3203,7 +3203,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     var intermediate_result = ExecutionResult{
         .columns = columns,
         .rows = try rows.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     // E30/E31 Fix: Apply WHERE clause AFTER optional matching when it references optional variables
@@ -3223,7 +3223,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         if (references_optional_var) {
             // Filter rows based on WHERE clause evaluation
             // GAP-0220 FIX: Use try for proper error propagation
-            var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var filtered_rows = std.ArrayList([]Value).empty;
             defer filtered_rows.deinit(allocator);
 
             for (intermediate_result.rows) |row| {
@@ -3269,7 +3269,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         }
 
         // GAP-0220 FIX: Use try for proper error propagation
-        var with_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var with_rows = std.ArrayList([]Value).empty;
 
         if (has_aggregation) {
             // Group by non-aggregation expressions
@@ -3292,7 +3292,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             for (intermediate_result.rows) |input_row| {
                 // Build group key from non-aggregation WITH items
                 // GAP-0220 FIX: Use try for proper error propagation
-                var key_parts = try std.ArrayList(u8).initCapacity(allocator, 0);
+                var key_parts = std.ArrayList(u8).empty;
                 defer key_parts.deinit(allocator);
                 const writer = key_parts.writer(allocator);
 
@@ -3323,7 +3323,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                 } else {
                     // New entry - HashMap takes ownership of the key
                     // GAP-0220 FIX: Use try for proper error propagation
-                    gop.value_ptr.* = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                    gop.value_ptr.* = std.ArrayList([]Value).empty;
                 }
                 try gop.value_ptr.append(allocator, input_row);
             }
@@ -3618,7 +3618,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
         .columns = return_columns,
         .rows = return_rows,
         .flags = blk: {
-            const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            const list = std.ArrayList([]const u8).empty;
             break :blk list;
         },
     };
@@ -4461,7 +4461,7 @@ fn executeMultiHopGroupBy(
 
     // Generate result rows from groups
     // GAP-0220 FIX: Use try for proper error propagation
-    var rows_mh = try std.ArrayList([]Value).initCapacity(allocator, 0);
+    var rows_mh = std.ArrayList([]Value).empty;
     var group_iter_mh = binding_groups_mh.iterator();
     while (group_iter_mh.next()) |group_entry| {
         const group_bindings = group_entry.value_ptr.*;
@@ -4490,7 +4490,7 @@ fn executeMultiHopGroupBy(
     var result = ExecutionResult{
         .columns = columns,
         .rows = try rows_mh.toOwnedSlice(allocator),
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 
     if (order_by) |order| {
@@ -4963,7 +4963,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                 // Generate rows for each group
                 // GAP-0220 FIX: Use try for proper error propagation
-                var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var rows = std.ArrayList([]Value).empty;
                 var group_iter = binding_groups.iterator();
                 while (group_iter.next()) |group_entry| {
                     const group_bindings = group_entry.value_ptr.items;
@@ -5004,7 +5004,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .columns = columns,
                     .rows = try rows.toOwnedSlice(allocator),
                     .flags = blk: {
-                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        const list = std.ArrayList([]const u8).empty;
                         break :blk list;
                     },
                 };
@@ -5025,7 +5025,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // GROUP BY with aggregations - group rows and compute aggregations per group
             var groups = std.StringHashMap(std.ArrayList(*graph_store.Node)).init(allocator);
             // GAP-0220 FIX: Use try for proper error propagation
-            var group_keys = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            var group_keys = std.ArrayList([]const u8).empty;
             defer {
                 var iter = groups.iterator();
                 while (iter.next()) |entry| {
@@ -5171,7 +5171,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const stored_key = try allocator.dupe(u8, group_key);
                         try group_keys.append(allocator, stored_key);
                         // GAP-0220 FIX: Use try for proper error propagation
-                        var new_group = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+                        var new_group = std.ArrayList(*graph_store.Node).empty;
                         try new_group.append(allocator, node);
                         try groups.put(stored_key, new_group);
                     }
@@ -5180,7 +5180,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // Generate rows for each group
             // GAP-0220 FIX: Use try for proper error propagation
-            var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+            var rows = std.ArrayList([]Value).empty;
             var group_iter = groups.iterator();
             while (group_iter.next()) |group_entry| {
                 _ = group_entry.key_ptr.*;
@@ -5220,7 +5220,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 .columns = columns,
                 .rows = try rows.toOwnedSlice(allocator),
                 .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    const list = std.ArrayList([]const u8).empty;
                     break :blk list;
                 },
             };
@@ -5241,7 +5241,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // Fix: Collect matched nodes that pass WHERE clause before aggregating
 
             // GAP-0220 FIX: Use try for proper error propagation
-            var matched_nodes = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+            var matched_nodes = std.ArrayList(*graph_store.Node).empty;
             defer matched_nodes.deinit(allocator);
 
             // CANARY: REQ=REQ-GQL-REL-AGG-NO-GROUPBY-001; FEATURE="RelationshipAggregationNoGroupBy"; ASPECT=EdgeCollection; STATUS=TESTED; TEST=geodetestlab/specs/gql_query_comprehensive.yml; OWNER=execution; UPDATED=2025-12-28
@@ -5255,7 +5255,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // GAP-0220 FIX: Use try for proper error propagation
-                var bindings = try std.ArrayList(BindingRow).initCapacity(allocator, 0);
+                var bindings = std.ArrayList(BindingRow).empty;
                 defer {
                     for (bindings.items) |binding| {
                         allocator.free(binding.env_names);
@@ -5509,7 +5509,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .columns = columns,
                     .rows = rows_slice,
                     .flags = blk: {
-                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        const list = std.ArrayList([]const u8).empty;
                         break :blk list;
                     },
                 };
@@ -5663,7 +5663,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .columns = columns,
                     .rows = rows_slice,
                     .flags = blk: {
-                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        const list = std.ArrayList([]const u8).empty;
                         break :blk list;
                     },
                 };
@@ -5874,7 +5874,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     .columns = result_columns,
                     .rows = rows_slice,
                     .flags = blk: {
-                        const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                        const list = std.ArrayList([]const u8).empty;
                         break :blk list;
                     },
                 };
@@ -5885,7 +5885,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 .columns = result_columns,
                 .rows = rows_slice,
                 .flags = blk: {
-                    const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                    const list = std.ArrayList([]const u8).empty;
                     break :blk list;
                 },
             };
@@ -5911,7 +5911,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
                 if (q.where_clause) |where_expr| {
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                    var filtered_rows = std.ArrayList([]Value).empty;
                     for (with_result.rows) |row| {
                         const where_env = Env{
                             .names = with_result.columns,
@@ -6007,7 +6007,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         // CANARY: REQ=REQ-GQL-WITH-RETURN; FEATURE="WithReturnExpressions"; ASPECT=Execution; STATUS=TESTED; OWNER=execution; UPDATED=2025-10-12
 
         // GAP-0220 FIX: Use try for proper error propagation
-        var rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+        var rows = std.ArrayList([]Value).empty;
 
         if (has_relationship) {
             // CANARY: REQ=REQ-GQL-MULTIHOP-001; FEATURE="MultiHopPatterns"; ASPECT=Execution; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
@@ -6022,7 +6022,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 };
 
                 // GAP-0220 FIX: Use try for proper error propagation
-                var current_bindings = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+                var current_bindings = std.ArrayList(MultiHopBinding).empty;
                 defer {
                     for (current_bindings.items) |binding| {
                         allocator.free(binding.env_names);
@@ -6124,7 +6124,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 // Process each hop
                 for (chain.hops, 0..) |hop, hop_idx| {
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var next_bindings = try std.ArrayList(MultiHopBinding).initCapacity(allocator, 0);
+                    var next_bindings = std.ArrayList(MultiHopBinding).empty;
 
                     for (current_bindings.items) |binding| {
                         // Find the current node from the binding
@@ -6345,7 +6345,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         const intermediate_result = ExecutionResult{
                             .columns = with_columns,
                             .rows = try rows.toOwnedSlice(allocator),
-                            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                            .flags = std.ArrayList([]const u8).empty,
                         };
 
                         const with_result = try execution.executeWithClauseWithGroupBy(allocator, intermediate_result, with_clause, q.group_by, q.having);
@@ -6447,7 +6447,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 var result = ExecutionResult{
                     .columns = columns,
                     .rows = try rows.toOwnedSlice(allocator),
-                    .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                    .flags = std.ArrayList([]const u8).empty,
                 };
 
                 // Apply ORDER BY if present
@@ -6511,7 +6511,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
             // If left node is bound, only process that single node; otherwise iterate all nodes
             // GAP-0220 FIX: Use try for proper error propagation
-            var left_nodes_to_process = try std.ArrayList(*graph_store.Node).initCapacity(allocator, 0);
+            var left_nodes_to_process = std.ArrayList(*graph_store.Node).empty;
             defer left_nodes_to_process.deinit(allocator);
 
             if (bound_left_node) |bln| {
@@ -6898,7 +6898,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // For simple node matches, we have match_variable
             // For relationship matches, we have left_node_var, rel_var, right_node_var
             // GAP-0220 FIX: Use try for proper error propagation
-            var col_list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+            var col_list = std.ArrayList([]const u8).empty;
             defer col_list.deinit(allocator);
 
             if (has_relationship) {
@@ -6924,7 +6924,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             .columns = columns,
             .rows = try rows.toOwnedSlice(allocator),
             .flags = blk: {
-                const list = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+                const list = std.ArrayList([]const u8).empty;
                 break :blk list;
             },
         };
@@ -6953,7 +6953,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             // This allows WHERE to reference WITH-aliased columns like "WHERE salary > 80000"
             if (q.where_clause) |where_expr| {
                 // GAP-0220 FIX: Use try for proper error propagation
-                var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, 0);
+                var filtered_rows = std.ArrayList([]Value).empty;
                 for (with_result.rows) |row| {
                     const where_env = Env{
                         .names = with_result.columns,

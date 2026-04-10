@@ -716,7 +716,7 @@ pub const FederationManager = struct {
     pub fn init(allocator: std.mem.Allocator) FederationManager {
         return .{
             .allocator = allocator,
-            .shards = std.ArrayList(ShardInfo).initCapacity(allocator, 0) catch return FederationManager{ .allocator = allocator, .shards = undefined, .coordinator_id = 0 },
+            .shards = std.ArrayList(ShardInfo).empty,
             .coordinator_id = 0,
         };
     }
@@ -756,12 +756,12 @@ pub const DistributionAnalysis = struct {
     pub fn init(allocator: std.mem.Allocator) DistributionAnalysis {
         return .{
             .allocator = allocator,
-            .target_shards = std.ArrayList(u32).initCapacity(allocator, 0) catch std.ArrayList(u32){},
+            .target_shards = std.ArrayList(u32).empty,
             .label_affinities = std.StringHashMap(u32).init(allocator),
-            .property_filters = std.ArrayList(PropertyFilter).initCapacity(allocator, 0) catch std.ArrayList(PropertyFilter){},
-            .cross_shard_joins = std.ArrayList(CrossShardJoin).initCapacity(allocator, 0) catch std.ArrayList(CrossShardJoin){},
+            .property_filters = std.ArrayList(PropertyFilter).empty,
+            .cross_shard_joins = std.ArrayList(CrossShardJoin).empty,
             .edge_type_affinities = std.StringHashMap(u32).init(allocator),
-            .function_filters = std.ArrayList(FunctionFilter).initCapacity(allocator, 0) catch std.ArrayList(FunctionFilter){},
+            .function_filters = std.ArrayList(FunctionFilter).empty,
         };
     }
 
@@ -908,7 +908,7 @@ pub const CoordinatorPlan = struct {
     pub fn init(allocator: std.mem.Allocator) CoordinatorPlan {
         return .{
             .allocator = allocator,
-            .target_shards = std.ArrayList(u32).initCapacity(allocator, 0) catch std.ArrayList(u32){},
+            .target_shards = std.ArrayList(u32).empty,
         };
     }
 

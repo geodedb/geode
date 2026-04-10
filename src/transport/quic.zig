@@ -163,8 +163,8 @@ pub const QuicTransport = struct {
         return QuicTransport{
             .allocator = allocator,
             .config = config,
-            .connections = try std.ArrayList(*QuicConnection).initCapacity(allocator, 0),
-            .pending_destroy = try std.ArrayList(*Connection).initCapacity(allocator, 0),
+            .connections = std.ArrayList(*QuicConnection).empty,
+            .pending_destroy = std.ArrayList(*Connection).empty,
         };
     }
 

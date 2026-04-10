@@ -14,7 +14,7 @@ pub const HistoryStore = struct {
             .allocator = allocator,
             .path = null,
             .enabled = enabled,
-            .entries = try std.ArrayList([]u8).initCapacity(allocator, 0),
+            .entries = std.ArrayList([]u8).empty,
         };
 
         if (path) |p| {

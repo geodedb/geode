@@ -291,8 +291,8 @@ fn captureQueryEvent(
     };
 }
 
-fn emptyStrings(allocator: std.mem.Allocator) !std.ArrayList([]const u8) {
-    return std.ArrayList([]const u8).initCapacity(allocator, 0);
+fn emptyStrings(_: std.mem.Allocator) !std.ArrayList([]const u8) {
+    return std.ArrayList([]const u8).empty;
 }
 
 fn buildOkStatus(allocator: std.mem.Allocator) !schema.Status {
@@ -441,7 +441,7 @@ fn buildExplainMessage(allocator: std.mem.Allocator) !schema.ExecutionResponse {
         .status = try buildOkStatus(allocator),
         .payload = .{ .explain = .{
             .schema = try allocator.dupe(u8, "RETURN 1"),
-            .ops = try std.ArrayList(schema.ExplainOp).initCapacity(allocator, 0),
+            .ops = std.ArrayList(schema.ExplainOp).empty,
             .totals = null,
             .properties = null,
             .calibration = null,

@@ -673,7 +673,7 @@ test "GraphRBACPolicy - graph binding authorization check" {
     try rbac.role_permissions.put(role_reader, read_perms);
 
     // role_none has no permissions (empty)
-    var no_perms = try std.ArrayList(auth.Permission).initCapacity(allocator, 0);
+    var no_perms = std.ArrayList(auth.Permission).empty;
     _ = &no_perms; // suppress unused warning
     try rbac.role_permissions.put(role_none, no_perms);
 

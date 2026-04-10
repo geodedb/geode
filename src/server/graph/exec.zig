@@ -97,7 +97,7 @@ pub fn nodeScan(
     prop_key: ?[]const u8,
     prop_val: ?PropertyValue,
 ) ![]Binding {
-    var results = try std.ArrayList(Binding).initCapacity(allocator, 0);
+    var results = std.ArrayList(Binding).empty;
 
     var iter = graph.nodes.iterator();
     while (iter.next()) |entry| {
@@ -167,7 +167,7 @@ pub fn expand(
     target_var: ?[]const u8,
     _: ?[]const u8, // edge_var
 ) ![]Binding {
-    var results = try std.ArrayList(Binding).initCapacity(allocator, 0);
+    var results = std.ArrayList(Binding).empty;
 
     for (bindings) |binding| {
         // Extract source node from binding
@@ -292,7 +292,7 @@ pub fn executeWith(
 ) ![]Binding {
     _ = graph;
 
-    var results = try std.ArrayList(Binding).initCapacity(allocator, 0);
+    var results = std.ArrayList(Binding).empty;
 
     // Process each input binding and transform according to WITH items
     for (input_bindings) |input_binding| {

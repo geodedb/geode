@@ -70,7 +70,7 @@ pub const Url = struct {
     }
 
     pub fn getOrigin(self: Url, allocator: std.mem.Allocator) ![]u8 {
-        var result = try std.ArrayList(u8).initCapacity(allocator, 0);
+        var result = std.ArrayList(u8).empty;
         defer result.deinit(allocator);
 
         try std.fmt.format(result.writer(allocator), "{s}://{s}", .{ self.scheme, self.host });
@@ -101,7 +101,7 @@ pub const Domain = struct {
     pub fn fromString(allocator: std.mem.Allocator, domain_str: []const u8) Error!Domain {
         const parsed = advanced_types.Domain.parse(domain_str) catch return Error.InvalidDomain;
 
-        var labels = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var labels = std.ArrayList([]const u8).empty;
         defer labels.deinit(allocator);
 
         var iter = parsed.labels();

@@ -206,7 +206,7 @@ const TemporalEntry = union(enum) {
 };
 
 fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.ArrayList(TemporalEntry) {
-    var list = std.ArrayList(TemporalEntry).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var list = std.ArrayList(TemporalEntry).empty;
     const self = struct {
         fn walkStmt(ally_inner: std.mem.Allocator, dst: *std.ArrayList(TemporalEntry), st: ast.Statement) !void {
             switch (st) {
@@ -435,7 +435,7 @@ pub fn printExpr(w: anytype, e: ast.Expr, prec: u8) !void {
 
 // Helper to stringify a single expression with options, for granular tests and utilities.
 pub fn stringifyExprAlloc(allocator: std.mem.Allocator, e: ast.Expr, opts: PrintOptions) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 0) catch return error.OutOfMemory;
+    var buf = std.ArrayList(u8).empty;
     errdefer buf.deinit(allocator);
     try printExprWith(buf.writer(allocator), e, 0, opts);
     return buf.toOwnedSlice(allocator);

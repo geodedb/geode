@@ -45,7 +45,7 @@ pub const UserStore = struct {
 
         const file_path = try std.fs.path.join(allocator, &.{ geode_dir, "users.json" });
 
-        const users = std.ArrayList(User).initCapacity(allocator, 0) catch return error.OutOfMemory;
+        const users = std.ArrayList(User).empty;
 
         var store = UserStore{
             .users = users,

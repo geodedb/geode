@@ -23,7 +23,7 @@ pub const XmlDocument = struct {
 
     /// P2-3: Now accepts allocator parameter for tag stack
     fn validateWellFormed(allocator: std.mem.Allocator, data: []const u8) Error!void {
-        var tag_stack = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        var tag_stack = std.ArrayList([]const u8).empty;
         defer tag_stack.deinit(allocator);
 
         var i: usize = 0;

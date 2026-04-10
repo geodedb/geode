@@ -48,7 +48,7 @@ pub fn buildMemberPath(allocator: std.mem.Allocator, expr: *ast.Expr, result: *s
 /// Performs breadth-first traversal up to max_depth, returning all paths discovered.
 /// Useful for finding shortest paths and level-by-level exploration.
 pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
-    var paths = try std.ArrayList([]u64).initCapacity(allocator, 0);
+    var paths = std.ArrayList([]u64).empty;
     defer {
         for (paths.items) |path| {
             allocator.free(path);
@@ -57,7 +57,7 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     }
 
     // Queue for BFS: (current_node_id, path_so_far, depth)
-    var queue = try std.ArrayList(struct { node_id: u64, path: []const u64, depth: u32 }).initCapacity(allocator, 0);
+    var queue = std.ArrayList(struct { node_id: u64, path: []const u64, depth: u32 }).empty;
     defer queue.deinit(allocator);
 
     // Start with initial node
@@ -126,7 +126,7 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -135,7 +135,7 @@ pub fn executeBFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
 /// Performs depth-first traversal up to max_depth, returning all paths discovered.
 /// Useful for exhaustive exploration and finding all possible paths.
 pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8, start_node_id: u64, max_depth: u32) !ExecutionResult {
-    var paths = try std.ArrayList([]u64).initCapacity(allocator, 0);
+    var paths = std.ArrayList([]u64).empty;
     defer {
         for (paths.items) |path| {
             allocator.free(path);
@@ -144,7 +144,7 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     }
 
     // Stack for DFS: (current_node_id, path_so_far, depth)
-    var stack = try std.ArrayList(struct { node_id: u64, path: []const u64, depth: u32 }).initCapacity(allocator, 0);
+    var stack = std.ArrayList(struct { node_id: u64, path: []const u64, depth: u32 }).empty;
     defer stack.deinit(allocator);
 
     // Start with initial node
@@ -213,7 +213,7 @@ pub fn executeDFS(allocator: std.mem.Allocator, store: *graph_store.GraphStore, 
     return ExecutionResult{
         .columns = columns,
         .rows = rows,
-        .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+        .flags = std.ArrayList([]const u8).empty,
     };
 }
 
@@ -373,7 +373,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     } else {
         // Fallback: attempt a simple two-hop search to avoid empty results in test scenarios
@@ -438,7 +438,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
-                .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+                .flags = std.ArrayList([]const u8).empty,
             };
         }
 
@@ -453,7 +453,7 @@ pub fn executeDijkstra(allocator: std.mem.Allocator, store: *graph_store.GraphSt
         return ExecutionResult{
             .columns = columns,
             .rows = rows,
-            .flags = try std.ArrayList([]const u8).initCapacity(allocator, 0),
+            .flags = std.ArrayList([]const u8).empty,
         };
     }
 }

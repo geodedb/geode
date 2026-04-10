@@ -38,8 +38,8 @@ pub const ConnectionState = struct {
         return ConnectionState{
             .id = id_owned,
             .congestion_ctrl = congestion.NewReno.init(mss),
-            .streams = try std.ArrayList(drr.Stream).initCapacity(allocator, 0),
-            .sent_packets = try std.ArrayList(loss_recovery.SentPacket).initCapacity(allocator, 0),
+            .streams = std.ArrayList(drr.Stream).empty,
+            .sent_packets = std.ArrayList(loss_recovery.SentPacket).empty,
             .latest_acked_pn = 0,
             .srtt_us = 100000, // Initial RTT estimate: 100ms
             .created_at_us = now_us,

@@ -84,7 +84,7 @@ pub const DomainTrie = struct {
     }
 
     pub fn querySuffix(self: DomainTrie, domain: url.Domain, allocator: std.mem.Allocator) ![]usize {
-        var results = std.ArrayList(usize).initCapacity(allocator, 0) catch std.ArrayList(usize){};
+        var results = std.ArrayList(usize).empty;
 
         if (self.root == null) return results.toOwnedSlice(allocator);
 
