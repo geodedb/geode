@@ -1611,20 +1611,23 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else if (rel_type) |rt| {
             // #558: No labels at all but relationship type present — use edge type scan
-            const typed_edges = store.getEdgesByType(allocator, rt, filter_tenant);
-            defer if (typed_edges.len > 0) allocator.free(typed_edges);
+            // PERF-P2-003: getEdgesByType now returns []u64 (edge IDs) to
+            // avoid copying ~96+ byte Edge structs. Use getPtr for read-only access.
+            const typed_edge_ids = store.getEdgesByType(allocator, rt, filter_tenant);
+            defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
-            for (typed_edges) |edge| {
-                if (!matchesEdgeProperties(allocator, edge, rel_props)) continue;
-                const from_node = store.nodes.getPtr(edge.from_id) orelse continue;
-                const to_node = store.nodes.getPtr(edge.to_id) orelse continue;
+            for (typed_edge_ids) |edge_id| {
+                const edge_ptr = store.edges.getPtr(edge_id) orelse continue;
+                if (!matchesEdgeProperties(allocator, edge_ptr.*, rel_props)) continue;
+                const from_node = store.nodes.getPtr(edge_ptr.from_id) orelse continue;
+                const to_node = store.nodes.getPtr(edge_ptr.to_id) orelse continue;
 
                 if (rel_dir == .right or rel_dir == .undirected) {
                     if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(allocator, from_node.*) and passesRLSFilter(allocator, to_node.*)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
                         if (hop.right.name) |v| try binding.vars.put(v, to_node);
-                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
+                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, to_node);
                         try bindings.append(allocator, binding);
                     }
@@ -1634,7 +1637,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
                         if (hop.right.name) |v| try binding.vars.put(v, from_node);
-                        if (hop.rel.name) |rn| if (store.edges.getPtr(edge.id)) |ep| try binding.edge_vars.put(rn, ep);
+                        if (hop.rel.name) |rn| try binding.edge_vars.put(rn, edge_ptr);
                         if (needs_hop_tracking) try binding.vars.put(chain_last_right_key, from_node);
                         try bindings.append(allocator, binding);
                     }
