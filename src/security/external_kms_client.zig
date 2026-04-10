@@ -331,7 +331,7 @@ pub const VaultTransitClient = struct {
         defer request.deinit();
 
         // Add X-Vault-Token header via extra headers
-        request.headers.append("X-Vault-Token", token) catch {};
+        try request.headers.append("X-Vault-Token", token);
 
         // Send body
         request.transfer_encoding = .{ .content_length = body.len };
@@ -651,7 +651,7 @@ pub const AwsKmsClient = struct {
         defer request.deinit();
 
         // Add X-Amz-Target header
-        request.headers.append("X-Amz-Target", target) catch {};
+        try request.headers.append("X-Amz-Target", target);
 
         // Send body
         request.transfer_encoding = .{ .content_length = body.len };

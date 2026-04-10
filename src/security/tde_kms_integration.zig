@@ -40,7 +40,7 @@ pub const TDEKeyManager = struct {
         if (!self.isEnabled()) return error.TDENotEnabled;
 
         // Initialize KMS provider
-        var provider = kms.KMSProvider.init(self.allocator, kms_config);
+        var provider = try kms.KMSProvider.init(self.allocator, kms_config);
 
         // Generate or fetch master key
         const master_key_id = try provider.fetchActiveMasterKey();

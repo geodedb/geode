@@ -1,19 +1,21 @@
 # Gap Analysis
 
-Last updated: 2026-04-07
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)**
+Last updated: 2026-04-09
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + multi-tenancy system audit (2026-04-01, 16-agent pipeline) + **full security + performance audit (2026-04-09)**
 
 ## Summary
 
-- **Total open gaps:** 4
-- **Critical:** 2 (GAP-0256 blocked, GAP-0511)
-- **High:** 0
-- **Medium:** 0
+- **Total open gaps:** 5
+- **Critical:** 1 (GAP-0256 blocked)
+- **High:** 1 (GAP-0521)
+- **Medium:** 3 (GAP-0246 blocked, GAP-0247 blocked, GAP-0525)
 - **Low:** 0
 - **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
 - **Won't Do:** 1 (GAP-0258)
+- **Closed (2026-04-09):** GAP-0294 (superseded by GAP-0524), GAP-0518 (2a83f598), GAP-0519 (d9ecb236), GAP-0520 (27047593), GAP-0522 (397595f3), GAP-0523 (da29bba1), GAP-0524 (88fee6f1), GAP-0526 (bbef876d)
 - **Closed (2026-04-05):** GAP-0500, GAP-0501, GAP-0502, GAP-0503, GAP-0504, GAP-0508, SEC-04..SEC-27 (17 critical security), R4, performance items #675/#681/#683/#688/#692/#695, migration security SEC-MIG-06/07/09/10/11, quality Q13/Q15/Q17/Q18, #696 dead imports
 - **Closed (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295), GAP-0255 (savepoint/transport parity)
+- **Opened (2026-04-09):** GAP-0518, GAP-0519, GAP-0520, GAP-0521, GAP-0522, GAP-0523, GAP-0524, GAP-0525, GAP-0526
 - **Opened (2026-03-30):** GAP-0273, GAP-0274, GAP-0275, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
@@ -135,12 +137,13 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **CWE:** CWE-256
 - **Evidence:** `src/server/quic_connection_handler.zig:1372`
 
-### GAP-0294: Fail-open RLS expression evaluation (MEDIUM)
+### GAP-0294: Fail-open RLS expression evaluation — **CLOSED (2026-04-09)**
 
 - **Category:** Security / RLS
 - **Severity:** Medium (P2)
 - **CWE:** CWE-285
 - **Evidence:** `src/security/rls_enhanced.zig:513-514` — `return true` for unrecognized expressions
+- **Resolution (2026-04-09):** The `rls_enhanced.zig:513-514` fail-open was fixed to return `false` (fail-closed). However, the fail-open pattern has shifted to the `match_operations.zig` integration point (`catch return true` / `catch true` at lines 121, 133). This is now tracked as **GAP-0524** which supersedes this item.
 
 ### GAP-0295: graph_bound only blocks USE GRAPH, not cross-graph reads (MEDIUM)
 
@@ -1888,3 +1891,165 @@ ERROR geode.server Protobuf read error error=Timeout
 4. **COMMIT must acquire write lock:** The commit path at `quic_connection_handler.zig:2606-2611` should hold the write lock to prevent races with the persistence thread.
 
 5. **WouldBlock resilience:** The QUIC connection handler should distinguish between "backend busy" WouldBlock (retryable) and "server deadlocked" (should abort and return error to client).
+
+#### Acceptance Criteria
+
+- Sequential MERGE transactions (10+ statements each) complete without hanging.
+- Index rebuilds are deferred to COMMIT or performed incrementally (not full rebuild per property mutation).
+- The write lock is not held during index rebuild operations.
+- The server remains responsive to other connections during bulk MERGE workloads.
+
+---
+
+## Security Audit Gaps (2026-04-09)
+
+### GAP-0518: Hardcoded "secret-key" in gRPC server initialization -- **CLOSED (2026-04-09)**
+
+- **Category:** Security / Credentials
+- **Severity:** Critical
+- **CWE:** CWE-798 (Use of Hard-coded Credentials)
+- **Requirement source:** OWASP A07:2021 (Identification and Authentication Failures)
+- **Current state (evidence):**
+  - `src/transport/grpc_server.zig:528` -- hardcoded string `"secret-key"` passed to `GrpcServer.init()`
+- **Resolution (2026-04-09):** Replaced hardcoded `"secret-key"` with crypto-random 32-byte key generated at server startup using `std.crypto.random.bytes()`. The gRPC server now generates a unique secret key per instance. Commit `2a83f598`.
+- **Evidence:** `src/transport/grpc_server.zig` -- no hardcoded secret strings remain; key generated via `std.crypto.random`.
+- **Acceptance criteria:**
+  - [x] No hardcoded secret strings in `grpc_server.zig`
+  - [x] gRPC server generates crypto-random secret key at startup
+  - [ ] Server reads secret key from environment variable (stretch -- current fix uses random generation)
+
+---
+
+### GAP-0519: Raft snapshot creates empty data payload -- **CLOSED (2026-04-09)**
+
+- **Category:** Correctness / Distributed Systems
+- **Severity:** Critical
+- **Requirement source:** Raft consensus protocol safety properties (snapshot-based state transfer)
+- **Resolution:** Closed (2026-04-09) -- `createSnapshot()` now serializes full graph state via JSON-lines with CRC32 checksum. Evidence: `src/distributed/raft_snapshot_manager.zig`, commit d9ecb236
+- **Acceptance criteria:**
+  - [x] Raft snapshot `.data` contains serialized state machine state
+  - [x] Snapshot `.checksum` is computed over the actual data payload
+  - [x] A node restored from snapshot contains all data committed before the snapshot
+
+---
+
+### GAP-0520: Raft log persistence is a no-op -- **CLOSED (2026-04-09)**
+
+- **Category:** Correctness / Distributed Systems
+- **Severity:** Critical
+- **Requirement source:** Raft consensus protocol safety properties (log persistence)
+- **Resolution:** Closed (2026-04-09) -- `PersistentStorage` now uses append-only binary log with CRC32 integrity. Evidence: `src/distributed/raft_log_storage.zig`, commit 27047593
+- **Acceptance criteria:**
+  - [x] `getLogEntries` returns previously appended entries after server restart
+  - [x] `appendLogEntry` durably persists entries to disk before returning
+  - [x] Raft leader election and log replication function correctly across server restarts
+
+---
+
+### GAP-0521: KMS remote client hardcodes connectInsecure(true)
+
+- **Category:** Security / Encryption / Key Management
+- **Severity:** High
+- **CWE:** CWE-295 (Improper Certificate Validation)
+- **Requirement source:** OWASP A02:2021 (Cryptographic Failures); enterprise KMS integration requirements
+- **Current state (evidence):**
+  - `src/security/kms_remote.zig:374` -- `connectInsecure(true)` hardcoded in KMS client connection
+- **Why this is a gap:** The KMS client connects to the remote key management service without TLS certificate validation. This enables man-in-the-middle attacks on the KMS link.
+- **Impact/Risk:** An attacker performing MITM on the network between Geode and KMS can intercept encryption keys in transit. All TDE and FLE encryption is compromised if the KMS link is intercepted. CVSS: High.
+- **Recommended fix:** Add environment variable gate (`GEODE_KMS_INSECURE=true`) to allow insecure connections only in development. Default to secure (TLS-verified) connections. Log a warning when insecure mode is active.
+- **Acceptance criteria:**
+  - [ ] KMS client uses TLS certificate validation by default
+  - [ ] Insecure mode requires explicit opt-in via environment variable
+  - [ ] Server logs a warning when KMS insecure mode is enabled
+
+---
+
+### GAP-0522: Query parameters dropped in 4 match_operations paths -- **CLOSED (2026-04-09)**
+
+- **Category:** Correctness / Query Engine
+- **Severity:** High
+- **Requirement source:** ISO/IEC 39075:2024 (GQL parameterized queries); REQ-0003 Query Correctness
+- **Current state (evidence):**
+  - `src/execution/match_operations.zig:1760` -- Env constructed without `param_names`/`param_values`
+  - `src/execution/match_operations.zig:5547` -- Env constructed without `param_names`/`param_values`
+  - `src/execution/match_operations.zig:5609` -- Env constructed without `param_names`/`param_values`
+  - `src/execution/match_operations.zig:5707` -- Env constructed without `param_names`/`param_values`
+- **Resolution (2026-04-09):** Added `.param_names` and `.param_values` fields to all 4 `Env` construction sites in `match_operations.zig`. Parameters now propagate correctly through variable-length path traversal and relationship matching paths. Commit `397595f3`.
+- **Evidence:** `src/execution/match_operations.zig` -- all Env construction sites now include param_names/param_values; 1 new regression test added.
+- **Acceptance criteria:**
+  - [x] All `Env` construction sites in `match_operations.zig` include `param_names` and `param_values`
+  - [x] `MATCH (n:Label) WHERE n.prop = $param RETURN n` returns correct results in all code paths
+  - [x] Regression test covering parameterized property filters in variable-length path traversal
+
+---
+
+### GAP-0523: KMS non-production provider not blocked in release builds -- **CLOSED (2026-04-09)**
+
+- **Category:** Security / Key Management
+- **Severity:** High
+- **Requirement source:** Enterprise KMS security policy; defense-in-depth
+- **Current state (evidence):**
+  - `src/security/kms.zig:74-80` -- logs an error when non-production KMS provider is used but falls through to allow it
+- **Resolution (2026-04-09):** Added `return error.UnsafeKMSProvider` after the error log in release builds. Non-production KMS providers (file-based, in-memory) are now blocked in release mode. Debug builds retain the warning-only behavior. Also propagated KMS auth header errors (`external_kms_client.zig:334,654`): replaced `catch {}` with proper error returns so Vault/AWS auth failures are no longer silently ignored. Commits `da29bba1` (KMS block) + `6891f461` (KMS auth headers).
+- **Evidence:** `src/security/kms.zig` -- release builds return `error.UnsafeKMSProvider`; `src/security/external_kms_client.zig` -- auth header errors now propagate.
+- **Acceptance criteria:**
+  - [x] Release builds reject non-production KMS providers with `error.UnsafeKMSProvider`
+  - [x] Debug builds allow non-production KMS providers with a warning
+  - [ ] Explicit override (`GEODE_ALLOW_DEV_KMS=true`) permits non-production KMS in release (not yet implemented)
+
+---
+
+### GAP-0524: RLS expression evaluation fails open on errors -- **CLOSED (2026-04-09)**
+
+- **Category:** Security / RLS / Authorization
+- **Severity:** High
+- **CWE:** CWE-285 (Improper Authorization)
+- **Requirement source:** OWASP A01:2021 (Broken Access Control); RLS policy enforcement
+- **Current state (evidence):**
+  - `src/execution/match_operations.zig:121` -- `catch return true` (error in RLS check grants access)
+  - `src/execution/match_operations.zig:133` -- `catch true` (error in RLS check grants access)
+- **Resolution (2026-04-09):** Changed `catch return true` to `catch return false` and `catch true` to `catch false` at both RLS evaluation sites. RLS now fails closed on all evaluation errors. Combined with GAP-0294 fix in `rls_enhanced.zig`, all RLS error paths now deny access by default. Commit `88fee6f1`.
+- **Evidence:** `src/execution/match_operations.zig:121,133` -- catch handlers now return `false` (deny).
+- **Acceptance criteria:**
+  - [x] All `catch` handlers in RLS evaluation paths return `false` (deny access)
+  - [x] A malformed RLS policy denies access rather than granting it
+  - [ ] RLS evaluation errors are logged at WARN level (stretch -- logging not added in this pass)
+
+---
+
+### GAP-0525: Vault dev mode in production docker-compose
+
+- **Category:** Security / Deployment / Configuration
+- **Severity:** Medium
+- **CWE:** CWE-489 (Active Debug Code)
+- **Requirement source:** OWASP A05:2021 (Security Misconfiguration); production deployment hardening
+- **Current state (evidence):**
+  - `docker-compose.yml:18` -- Vault runs `server -dev` with hardcoded root token
+  - `docker-compose.gpu.yml:24,28` -- Vault runs `server -dev` with hardcoded root token
+- **Why this is a gap:** The production docker-compose files start HashiCorp Vault in development mode, which uses in-memory storage (data lost on restart), disables TLS, and uses a hardcoded root token. This is explicitly not recommended for production by HashiCorp.
+- **Impact/Risk:** Vault dev mode means: (1) encryption keys stored in memory are lost on container restart, (2) the hardcoded root token can be used by any attacker to access all secrets, (3) no TLS means secrets are transmitted in plaintext. All KMS-managed encryption keys are exposed.
+- **Recommended fix:** Create separate `docker-compose.prod.yml` with production Vault configuration (persistent storage, TLS, auto-unseal). Keep dev mode only in `docker-compose.dev.yml` or `docker-compose.override.yml`.
+- **Acceptance criteria:**
+  - [ ] Production docker-compose does not use `server -dev` for Vault
+  - [ ] Production Vault uses persistent storage backend (Consul, Raft, or filesystem)
+  - [ ] Hardcoded root tokens are removed from production compose files
+  - [ ] Development compose files are clearly marked as non-production
+
+---
+
+### GAP-0526: No write-permission enforcement on query execution -- **CLOSED (2026-04-09)**
+
+- **Category:** Security / Authorization
+- **Severity:** Critical
+- **CWE:** CWE-862 (Missing Authorization)
+- **Requirement source:** OWASP A01:2021 (Broken Access Control); RBAC enforcement
+- **Current state (evidence):**
+  - `src/server/quic_connection_handler.zig` (around line 2109) -- `is_mutation` flag is used only for lock selection (read lock vs write lock), not for authorization checks
+- **Resolution (2026-04-09):** Added write-permission check in `geode_auth_lib.zig` that verifies the user's role permits mutation operations before query execution. ReadOnly and basic User roles are blocked from executing CREATE, DELETE, MERGE, SET, REMOVE, and DROP statements with `42000: Insufficient privileges` error. Write and Admin roles proceed normally. Check occurs before lock acquisition. 4 new regression tests added. Commit `bbef876d`.
+- **Evidence:** `src/security/geode_auth_lib.zig` -- `checkWritePermission()` function; `src/server/quic_connection_handler.zig` -- permission check called before mutation execution; 4 new unit tests.
+- **Acceptance criteria:**
+  - [x] ReadOnly users receive `42000` error when attempting CREATE, DELETE, MERGE, SET, REMOVE, or DROP
+  - [x] Write-privileged users can execute mutation statements
+  - [x] Admin users can execute all statement types
+  - [x] Authorization check occurs before lock acquisition (fail fast)
+  - [x] Regression test: ReadOnly user cannot `CREATE (n:Test {id: 1})`

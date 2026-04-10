@@ -10,6 +10,7 @@ const protobuf = @import("protobuf");
 const raft_schema = @import("raft_schema");
 const raft_lib = @import("raft");
 
+const raft_log = @import("raft_log_storage.zig");
 const cluster_auth = @import("cluster_auth.zig");
 
 const logging = @import("logging");
@@ -228,12 +229,30 @@ pub const Transport = struct {
 pub const PersistentStorage = struct {
     allocator: Allocator,
     data_dir: []const u8,
+    log_storage: ?raft_log.LogStorage,
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !PersistentStorage {
-        return PersistentStorage{ .allocator = allocator, .data_dir = data_dir };
+        // Build path: {data_dir}/raft_log.bin
+        const log_path = try std.fmt.allocPrint(allocator, "{s}/raft_log.bin", .{data_dir});
+        const ls = raft_log.LogStorage.init(allocator, log_path) catch |err| {
+            allocator.free(log_path);
+            return err;
+        };
+        return PersistentStorage{
+            .allocator = allocator,
+            .data_dir = data_dir,
+            .log_storage = ls,
+        };
     }
 
-    pub fn close(_: *PersistentStorage) void {}
+    pub fn close(self: *PersistentStorage) void {
+        if (self.log_storage) |*ls| {
+            // Free the path we allocated in init()
+            self.allocator.free(ls.file_path);
+            ls.deinit();
+            self.log_storage = null;
+        }
+    }
 
     /// Read current_term from {data_dir}/current_term. Returns null if file does not exist.
     pub fn getCurrentTerm(self: *PersistentStorage) !?u64 {
@@ -271,13 +290,23 @@ pub const PersistentStorage = struct {
         }
     }
 
-    /// Log persistence is future work — returns null.
-    pub fn getLogEntries(_: *PersistentStorage) !?[]LogEntry {
+    /// Read all persisted log entries, or null if the log is empty.
+    pub fn getLogEntries(self: *PersistentStorage, allocator: Allocator) !?[]LogEntry {
+        if (self.log_storage) |*ls| {
+            const entries = try ls.readAllEntries(allocator);
+            if (entries.len == 0) {
+                allocator.free(entries);
+                return null;
+            }
+            return entries;
+        }
         return null;
     }
 
-    /// Log persistence is future work — no-op.
-    pub fn appendLogEntry(_: *PersistentStorage, _: LogEntry) !void {}
+    /// Append a single entry to the persistent log.
+    pub fn appendLogEntry(self: *PersistentStorage, entry: LogEntry) !void {
+        if (self.log_storage) |*ls| try ls.appendEntry(entry);
+    }
 
     // ---- Internal helpers ----
 

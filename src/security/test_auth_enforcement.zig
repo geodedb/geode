@@ -792,3 +792,53 @@ test "TestAuthz_NoPrivilegeEscalation_ReplacementAndSpecials" {
     try testing.expect(Role.fromString("admin\u{FFFE}") == null); // Invalid (byte order mark reversed)
     try testing.expect(Role.fromString("admin\u{FFFF}") == null); // Invalid character
 }
+
+// ============================================================================
+// GAP-0526: MUTATION AUTHORIZATION ENFORCEMENT VIA ROLE U8 VALUE
+// CANARY: REQ=REQ-AUTH-ENFORCE-031; FEATURE="MutationAuthorization"; ASPECT=RoleU8Enforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-04-09
+// These tests validate the exact check used in QUIC and gRPC handlers:
+// converting the u8 role value (from state.authenticated_role) back to
+// a Role enum and checking hasPermission(.Write).
+// ============================================================================
+
+test "GAP0526_MutationDenied_ReadOnlyViaU8" {
+    // Simulates the exact handler check: @intFromEnum -> @enumFromInt -> hasPermission
+    const role_u8: u8 = @intFromEnum(Role.ReadOnly);
+    const role = @as(Role, @enumFromInt(role_u8));
+    // ReadOnly must NOT have Write permission — mutations must be denied
+    try testing.expect(!user_management.hasPermission(role, .Write));
+}
+
+test "GAP0526_MutationDenied_UserViaU8" {
+    const role_u8: u8 = @intFromEnum(Role.User);
+    const role = @as(Role, @enumFromInt(role_u8));
+    // User must NOT have Write permission — mutations must be denied
+    try testing.expect(!user_management.hasPermission(role, .Write));
+}
+
+test "GAP0526_MutationAllowed_ReadWriteViaU8" {
+    const role_u8: u8 = @intFromEnum(Role.ReadWrite);
+    const role = @as(Role, @enumFromInt(role_u8));
+    // ReadWrite MUST have Write permission — mutations must be allowed
+    try testing.expect(user_management.hasPermission(role, .Write));
+}
+
+test "GAP0526_MutationAllowed_AdminViaU8" {
+    const role_u8: u8 = @intFromEnum(Role.Admin);
+    const role = @as(Role, @enumFromInt(role_u8));
+    // Admin MUST have Write permission — mutations must be allowed
+    try testing.expect(user_management.hasPermission(role, .Write));
+}
+
+test "GAP0526_AllRolesU8RoundTrip_MutationMatrix" {
+    // Comprehensive: for every role, verify the u8 round-trip produces the
+    // correct mutation authorization decision.
+    const roles = [_]Role{ .Admin, .User, .ReadWrite, .ReadOnly };
+    const expected_write = [_]bool{ true, false, true, false };
+
+    for (roles, 0..) |role, i| {
+        const role_u8: u8 = @intFromEnum(role);
+        const recovered = @as(Role, @enumFromInt(role_u8));
+        try testing.expectEqual(expected_write[i], user_management.hasPermission(recovered, .Write));
+    }
+}

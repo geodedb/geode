@@ -10,6 +10,7 @@ const quic = @import("transport/quic");
 const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
 const cluster_auth = @import("cluster_auth.zig");
+const raft_apply = @import("raft_apply.zig");
 
 const logging = @import("logging");
 const log = logging.scoped("cluster");
@@ -339,6 +340,12 @@ pub const ClusterCoordinator = struct {
         );
 
         const store = graph_store.getGlobalStore(allocator);
+
+        // Wire the Raft apply callback so committed entries are routed to
+        // the graph store.  The module-level store reference must be set
+        // before the raft node starts ticking.
+        raft_apply.setGlobalStore(store);
+        raft.apply_callback = &raft_apply.applyCallbackFn;
 
         return ClusterCoordinator{
             .allocator = allocator,

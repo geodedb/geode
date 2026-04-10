@@ -517,6 +517,8 @@ pub const GeodeGrpcServer = struct {
     allocator: std.mem.Allocator,
     server: GrpcServer,
     session_store: *SessionStore,
+    /// GAP-0518: Heap-allocated random session key (freed in deinit).
+    grpc_session_key: ?[]u8 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -525,7 +527,14 @@ pub const GeodeGrpcServer = struct {
         key_path: ?[]const u8,
         config: GrpcConfig,
     ) !GeodeGrpcServer {
-        var server = try GrpcServer.init(allocator, port, "secret-key");
+        // GAP-0518: Generate a random session key per startup instead of a
+        // hardcoded literal.  The 32-byte key is hex-encoded (64 chars) and
+        // heap-allocated so it lives as long as the server.
+        var grpc_session_key_raw: [32]u8 = undefined;
+        std.crypto.random.bytes(&grpc_session_key_raw);
+        const grpc_session_key = try allocator.alloc(u8, 64);
+        _ = std.fmt.bufPrint(grpc_session_key, "{}", .{std.fmt.fmtSliceHexLower(&grpc_session_key_raw)}) catch unreachable;
+        var server = try GrpcServer.init(allocator, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         // Initialize TLS if cert and key are provided
@@ -571,6 +580,7 @@ pub const GeodeGrpcServer = struct {
             .allocator = allocator,
             .server = server,
             .session_store = store,
+            .grpc_session_key = grpc_session_key,
         };
 
         try self.registerHandlers();
@@ -582,6 +592,11 @@ pub const GeodeGrpcServer = struct {
         self.allocator.destroy(self.session_store);
         setSessionStore(null);
         grpc_tls.deinitTlsContext();
+        // GAP-0518: Securely zero and free the random session key.
+        if (self.grpc_session_key) |key| {
+            std.crypto.secureZero(u8, key);
+            self.allocator.free(key);
+        }
         self.server.deinit();
     }
 
@@ -1895,6 +1910,20 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             // P1: Per-graph locking — queries against different graphs no longer serialize.
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and query_traits.isMutatingProgram(&parse_result.program);
+
+            // GAP-0526: Enforce write-permission check before mutation execution.
+            // ReadOnly and User roles lack Write permission and must be denied.
+            if (is_mutation) {
+                if (state.authenticated_role) |role_u8| {
+                    const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
+                    if (!user_mgmt.hasPermission(auth_role, .Write)) {
+                        var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                        defer resp.deinit(allocator);
+                        return encodeMessage(allocator, resp);
+                    }
+                }
+            }
+
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {

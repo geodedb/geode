@@ -111,26 +111,28 @@ fn passesRLSFilter(allocator: std.mem.Allocator, node: graph_store.Node) bool {
 
 // GAP-0510 D2: Evaluate expression-based RLS policies against a node's properties.
 // Returns true (allow) when no expression engine is configured, or when the
-// expression engine grants access. Fails open on evaluation errors (documented choice).
-// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+// expression engine grants access. Fails closed on evaluation errors (GAP-0524).
+// CANARY: REQ=REQ-SEC-RLS-WIRE-015; FEATURE="RLS Expression Wiring"; ASPECT=MatchExprEval; STATUS=IMPL; OWNER=security; UPDATED=2026-04-09
 fn passesRLSExprFilter(allocator: std.mem.Allocator, node: graph_store.Node, username: []const u8) bool {
     const expr_engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return true;
     const expr_engine: *rls.RLSEngine = @ptrCast(@alignCast(expr_engine_ptr));
 
     // Convert node properties to RLS row format
-    var rls_row = rls_value_bridge.nodePropertiesToRLSRow(allocator, &node.properties) catch return true;
+    // GAP-0524: Fail closed on conversion errors — deny access rather than allow bypass
+    var rls_row = rls_value_bridge.nodePropertiesToRLSRow(allocator, &node.properties) catch return false;
     defer rls_row.deinit();
 
     // Use first label as the table name for policy lookup
     const table = if (node.labels.len > 0) node.labels[0] else "default";
 
+    // GAP-0524: Fail closed on evaluation errors — deny access rather than allow bypass
     return expr_engine.checkRowAccessByUsername(
         &rls_row,
         .select,
         username,
         node.graph_name,
         table,
-    ) catch true; // Fail-open on evaluation error
+    ) catch false;
 }
 
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
@@ -267,8 +269,10 @@ pub fn handleShortestPathAssignment(
                     // This is a shortestPath pattern assignment
                     // Build environment from inline_let_bindings (which come from WITH clause)
                     const env = Env{
-                        .names = param_names,
-                        .values = param_values,
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
                         .allocator = allocator,
                     };
 
@@ -1757,7 +1761,7 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             // Check right node properties
                             if (extra_right_props) |rprops| {
                                 var passes = true;
-                                const empty_env = eval.Env{ .names = &.{}, .values = &.{}, .allocator = allocator };
+                                const empty_env = eval.Env{ .names = &.{}, .values = &.{}, .param_names = param_names, .param_values = param_values, .allocator = allocator };
                                 for (rprops) |prop| {
                                     if (right_node.properties.get(prop.key)) |npv| {
                                         const nv = propertyValueToValue(npv);
@@ -3747,8 +3751,10 @@ fn executeVariableLengthPathTraversal(
                 if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
                     const node_val = propertyValueToValue(node_prop_val);
                     const prop_env = eval.Env{
-                        .names = param_names,
-                        .values = param_values,
+                        .names = &.{},
+                        .values = &.{},
+                        .param_names = param_names,
+                        .param_values = param_values,
                         .allocator = allocator,
                     };
                     const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -3993,8 +3999,10 @@ fn executeSingleHopEdgeTraversal(
                     if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
                         const node_val = propertyValueToValue(node_prop_val);
                         const prop_env = eval.Env{
-                            .names = param_names,
-                            .values = param_values,
+                            .names = &.{},
+                            .values = &.{},
+                            .param_names = param_names,
+                            .param_values = param_values,
                             .allocator = allocator,
                         };
                         const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -4617,8 +4625,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             if (left_node.properties.get(prop.key)) |node_prop_val| {
                                 const node_val = propertyValueToValue(node_prop_val);
                                 const prop_env = eval.Env{
-                                    .names = param_names,
-                                    .values = param_values,
+                                    .names = &.{},
+                                    .values = &.{},
+                                    .param_names = param_names,
+                                    .param_values = param_values,
                                     .allocator = allocator,
                                 };
                                 const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -4682,8 +4692,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
                                     const node_val = propertyValueToValue(node_prop_val);
                                     const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .param_names = param_names,
+                                        .param_values = param_values,
                                         .allocator = allocator,
                                     };
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -4826,8 +4838,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
                                     const node_val = propertyValueToValue(node_prop_val);
                                     const prop_env = eval.Env{
-                                        .names = param_names,
-                                        .values = param_values,
+                                        .names = &.{},
+                                        .values = &.{},
+                                        .param_names = param_names,
+                                        .param_values = param_values,
                                         .allocator = allocator,
                                     };
                                     const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -5528,6 +5542,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 const empty_env = eval.Env{
                                     .names = &.{},
                                     .values = &.{},
+                                    .param_names = param_names,
+                                    .param_values = param_values,
                                     .allocator = allocator,
                                 };
                                 const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
@@ -5590,6 +5606,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     const empty_env = eval.Env{
                                         .names = &.{},
                                         .values = &.{},
+                                        .param_names = param_names,
+                                        .param_values = param_values,
                                         .allocator = allocator,
                                     };
                                     const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
@@ -5688,6 +5706,8 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const empty_env = eval.Env{
                                 .names = &.{},
                                 .values = &.{},
+                                .param_names = param_names,
+                                .param_values = param_values,
                                 .allocator = allocator,
                             };
                             const prop_val = try eval.evalExpr(allocator, prop.value.*, empty_env);
@@ -6170,8 +6190,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                     if (right_node_ptr.properties.get(prop.key)) |node_prop_val| {
                                         const node_val = propertyValueToValue(node_prop_val);
                                         const prop_env = eval.Env{
-                                            .names = param_names,
-                                            .values = param_values,
+                                            .names = &.{},
+                                            .values = &.{},
+                                            .param_names = param_names,
+                                            .param_values = param_values,
                                             .allocator = allocator,
                                         };
                                         const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {
@@ -6520,8 +6542,10 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                             const node_val = propertyValueToValue(node_prop_val);
                             // Evaluate the expected property value
                             const prop_env = eval.Env{
-                                .names = param_names,
-                                .values = param_values,
+                                .names = &.{},
+                                .values = &.{},
+                                .param_names = param_names,
+                                .param_values = param_values,
                                 .allocator = allocator,
                             };
                             const prop_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch {

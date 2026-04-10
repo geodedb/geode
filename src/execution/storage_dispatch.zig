@@ -390,7 +390,22 @@ pub fn executeTde(
         };
 
         // Initialize the provider
-        var provider = kms_mod.KMSProvider.init(allocator, provider_config);
+        var provider = kms_mod.KMSProvider.init(allocator, provider_config) catch |err| {
+            const columns = try allocator.alloc([]const u8, 3);
+            columns[0] = try allocator.dupe(u8, "success");
+            columns[1] = try allocator.dupe(u8, "provider_type");
+            columns[2] = try allocator.dupe(u8, "status");
+
+            const row = try allocator.alloc([]const u8, 3);
+            row[0] = try allocator.dupe(u8, "false");
+            row[1] = try allocator.dupe(u8, @tagName(provider_config.provider_type));
+            row[2] = try std.fmt.allocPrint(allocator, "Provider init failed: {s}", .{@errorName(err)});
+
+            const rows = try allocator.alloc([]const []const u8, 1);
+            rows[0] = row;
+
+            return .{ .columns = columns, .rows = rows };
+        };
         defer provider.deinit();
 
         // Test connectivity and configuration
@@ -516,7 +531,7 @@ pub fn executeTde(
         defer if (auth_token) |token| allocator.free(token);
 
         // Initialize mock KMS provider with in-memory storage
-        var mock_provider = kms_mod.KMSProvider.init(allocator, kms_mod.KMSConfig{
+        var mock_provider = try kms_mod.KMSProvider.init(allocator, kms_mod.KMSConfig{
             .provider_type = .external_kms, // Use external KMS in mock mode
             .seed = test_seed,
             .endpoint = "localhost",

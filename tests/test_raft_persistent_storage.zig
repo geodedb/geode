@@ -18,6 +18,7 @@ test "PersistentStorage round-trips current_term and voted_for via file" {
     defer allocator.free(path);
 
     var ps = try PersistentStorage.init(allocator, path);
+    defer ps.close();
 
     // Before any save, getCurrentTerm should be null (file does not exist).
     const initial_term = try ps.getCurrentTerm();
@@ -58,6 +59,7 @@ test "PersistentStorage getVotedFor returns null when no file exists" {
     defer allocator.free(path);
 
     var ps = try PersistentStorage.init(allocator, path);
+    defer ps.close();
     const vf = try ps.getVotedFor();
     try std.testing.expect(vf == null);
 }

@@ -21,11 +21,11 @@ services:
     environment:
       - LOG_LEVEL=info
       - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=geode-dev-token
-      - REDIS_URL=redis://geode-redis-password@redis:6379
+      - VAULT_TOKEN=${VAULT_TOKEN:?set VAULT_TOKEN in .env}
+      - REDIS_URL=redis://${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
       - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=geode-minio-admin
-      - S3_SECRET_KEY=geode-minio-password-change-me
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?set S3_ACCESS_KEY in .env}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:?set S3_SECRET_KEY in .env}
       - S3_BUCKET=geode-backups-gpu
       - FIPS_MODE=enabled
       - GPU_ENABLED=true
