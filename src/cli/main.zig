@@ -239,6 +239,10 @@ fn printQueryUsage() void {
         "  # Execute from file\n" ++
         "  geode query --file ~/my_queries.gql\n" ++
         "  geode query -f ./schema.gql --insecure-tls-skip-verify\n" ++
+        "\n" ++
+        "  # Batch mode — one QUIC connection for all queries (one query per line)\n" ++
+        "  cat queries.txt | geode query --batch\n" ++
+        "  echo -e 'RETURN 1\\nRETURN 2' | geode query --batch --server localhost:3141\n" ++
         "\n", .{});
 }
 
@@ -886,6 +890,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var source_file: ?[]const u8 = null;
     // GAP-0271: FLE role for field-level access control
     var role: ?[]const u8 = null;
+    // PERF-P1-002: Batch mode — read semicolon-delimited queries from stdin,
+    // execute all over a single QUIC connection to amortize handshake cost.
+    var batch_mode = false;
     var params = std.ArrayList(schema.Param){};
     var params_owned = true;
     defer if (params_owned) {
@@ -962,6 +969,9 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
             // --insecure silently accepted as alias for --insecure-tls-skip-verify
+        } else if (std.mem.eql(u8, arg, "--batch")) {
+            // PERF-P1-002: Read semicolon-delimited queries from stdin over single connection
+            batch_mode = true;
         } else if (std.mem.eql(u8, arg, "--grpc")) {
             use_grpc = true;
         } else if (std.mem.eql(u8, arg, "--ca-cert")) {
@@ -1383,6 +1393,28 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         return;
     }
 
+    // PERF-P1-002: Batch mode — execute multiple queries from stdin over a single
+    // QUIC connection to amortize the 1.3-1.9s TLS handshake across all queries.
+    if (batch_mode) {
+        const stdin_file = std.fs.File{ .handle = getStdinHandle() catch {
+            std.debug.print("Error: --batch requires stdin input\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        } };
+        const stdin_content = stdin_file.readToEndAlloc(allocator, 16 * 1024 * 1024) catch |err| {
+            std.debug.print("Error: Failed to read stdin: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        defer allocator.free(stdin_content);
+
+        if (stdin_content.len == 0) {
+            std.debug.print("Error: empty input from stdin\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        try executeBatchQueries(allocator, server_addr, stdin_content, format, insecure, timeout_secs, user, password, ca_cert_path, client_cert_path, client_key_path, graph_for_prepend, graph, page_size, role);
+        return;
+    }
+
     // Issue #424: Start a progress-based deadline watchdog for single queries.
     var query_deadline_state = QueryDeadlineState.init();
     active_query_deadline_state = &query_deadline_state;
@@ -1745,6 +1777,99 @@ fn executeQueryOnGrpc(
     defer result.deinit();
 
     _ = try result.render(stdout, stderr_handle);
+}
+
+/// PERF-P1-002: Execute multiple queries from stdin over a single QUIC connection.
+/// Each non-empty line is treated as a separate query. The QUIC+TLS handshake
+/// happens once; each query opens a new multiplexed stream (negligible cost).
+fn executeBatchQueries(
+    allocator: std.mem.Allocator,
+    server_addr: []const u8,
+    stdin_content: []const u8,
+    format: []const u8,
+    insecure: bool,
+    timeout_secs: u32,
+    username: ?[]const u8,
+    password: ?[]const u8,
+    ca_cert_path: ?[]const u8,
+    client_cert_path: ?[]const u8,
+    client_key_path: ?[]const u8,
+    graph: ?[]const u8,
+    graph_for_hello: ?[]const u8,
+    page_size: u32,
+    fle_role: ?[]const u8,
+) !void {
+    const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+
+    // Split stdin into individual queries (one per line, skip empty/whitespace-only lines)
+    var queries = std.ArrayList([]const u8){};
+    defer queries.deinit(allocator);
+
+    var line_iter = std.mem.splitScalar(u8, stdin_content, '\n');
+    while (line_iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len > 0) {
+            queries.append(allocator, trimmed) catch return error.OutOfMemory;
+        }
+    }
+
+    if (queries.items.len == 0) {
+        _ = stderr.writeAll("Error: no queries found in stdin\n") catch {};
+        return error.EmptyInput;
+    }
+
+    // Parse server address
+    var addr_port = std.mem.splitSequence(u8, server_addr, ":");
+    const host = addr_port.next() orelse "127.0.0.1";
+    const port_str = addr_port.next() orelse "3141";
+    const port = std.fmt.parseInt(u16, port_str, 10) catch {
+        _ = stderr.writeAll("Error: Invalid port number in server address\n") catch {};
+        return error.InvalidAddress;
+    };
+
+    // Single QUIC connection for all queries
+    var quic_client = quic.QuicClient.init(allocator);
+    defer quic_client.deinit();
+
+    const use_client_certs = client_cert_path != null or client_key_path != null;
+    const connect_err = if (use_client_certs)
+        quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
+    else if (insecure or ca_cert_path != null)
+        quic_client.connectInsecure(host, port, true)
+    else
+        quic_client.connectInsecure(host, port, true);
+
+    if (connect_err) |_| {
+        const handshake_timeout = @max(1, timeout_secs);
+        if (quic_client.waitForHandshake(handshake_timeout)) |_| {
+            // Connected — execute all queries over this single connection
+            var executed: usize = 0;
+            var error_count: usize = 0;
+            const empty_params = std.ArrayList(schema.Param){};
+
+            for (queries.items) |query_line| {
+                executeQueryOnConnection(allocator, &quic_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role) catch |err| {
+                    std.debug.print("Error executing query: {}\n", .{err});
+                    error_count += 1;
+                };
+                executed += 1;
+            }
+
+            std.debug.print("\nBatch execution complete: {d} queries executed", .{executed});
+            if (error_count > 0) {
+                std.debug.print(", {d} errors", .{error_count});
+            }
+            std.debug.print("\n", .{});
+            return;
+        } else |_| {
+            _ = stderr.writeAll("Error: Connection handshake timeout\n") catch {};
+        }
+    } else |err| {
+        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {}\n", .{err}) catch "Error: Failed to connect\n";
+        _ = stderr.writeAll(err_msg) catch {};
+    }
+
+    return error.ConnectionFailed;
 }
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
