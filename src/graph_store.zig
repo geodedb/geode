@@ -5202,8 +5202,9 @@ pub const QueryReadSession = struct {
     snapshot: GraphStore,
 
     pub fn initIfAvailable(allocator: std.mem.Allocator, source_store: *GraphStore) !?QueryReadSession {
-        _ = global_adapter orelse return null;
-
+        // GAP-0523: Removed vestigial global_adapter gate. cloneNodesFrom/cloneIdMapsFrom
+        // clone directly from the in-memory store (see line 763 comment: "without going
+        // through the adapter"), so no adapter is needed for snapshot creation.
         const arena = try allocator.create(std.heap.ArenaAllocator);
         errdefer allocator.destroy(arena);
         arena.* = std.heap.ArenaAllocator.init(allocator);
@@ -6227,15 +6228,53 @@ test "GAP-0523: ReadView detects mutation epoch change" {
     // Simulate a concurrent mutation by incrementing epoch
     incrementMutationEpoch();
 
-    // After mutation: epoch changed, getReadStore detects it.
-    // Without a global_adapter, QueryReadSession.initIfAvailable returns null,
-    // so fallback returns base store. But the detection path is exercised.
+    // After mutation: epoch changed, getReadStore creates a snapshot.
+    // GAP-0523 fix: adapter gate removed, so snapshot is created from
+    // in-memory store via cloneNodesFrom/cloneIdMapsFrom.
     const store_after = view.getReadStore();
-    _ = store_after; // Store is still usable
+    try testing.expect(store_after != &store); // Must be snapshot, not base
 
-    // Verify the ReadView noticed the epoch change (fallback was attempted)
-    // In test env without adapter, fallback_snapshot stays null but the
-    // epoch check path was executed (no crash = success).
+    // Verify fallback_snapshot was populated
+    try testing.expect(view.fallback_snapshot != null);
+}
+
+test "GAP-0523: ReadView snapshot isolates from concurrent mutations" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create 1 node before snapshot
+    var labels = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraph(&labels, "default");
+    try testing.expectEqual(@as(usize, 1), store.nodes.count());
+
+    // Create ReadView, capturing current epoch
+    var view = ReadView.init(testing.allocator, &store);
+    defer view.deinit();
+
+    // First read: same epoch, returns base store directly (zero overhead)
+    const s1 = view.getReadStore();
+    try testing.expect(s1 == &store);
+
+    // Mutate: add a second node (increments mutation epoch)
+    _ = try store.createNodeWithGraph(&labels, "default");
+    try testing.expectEqual(@as(usize, 2), store.nodes.count());
+
+    // Second read: epoch changed, returns deep-clone snapshot
+    const s2 = view.getReadStore();
+    try testing.expect(s2 != &store);
+
+    // Snapshot captured 2 nodes (cloned at mutation-detect time, after the second was added)
+    // The base store also has 2 nodes
+    try testing.expectEqual(@as(usize, 2), s2.nodes.count());
+
+    // Mutate again: add a third node to the base store
+    _ = try store.createNodeWithGraph(&labels, "default");
+    try testing.expectEqual(@as(usize, 3), store.nodes.count());
+
+    // Snapshot is frozen — still has 2 nodes
+    const s3 = view.getReadStore();
+    try testing.expect(s3 == s2); // Same snapshot reused
+    try testing.expectEqual(@as(usize, 2), s3.nodes.count());
 }
 
 // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-004; FEATURE="EdgeTypeIndex"; ASPECT=UnitTest; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
