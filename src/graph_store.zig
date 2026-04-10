@@ -6209,6 +6209,36 @@ test "GAP-0525: sorted posting-list ordering is ascending" {
     }
 }
 
+test "GAP-0519: getNodesByLabels heap fallback for >8 labels" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create nodes with 10 labels each (exceeds the 8-label stack allocation)
+    const all_labels = [_][]const u8{ "L0", "L1", "L2", "L3", "L4", "L5", "L6", "L7", "L8", "L9" };
+    var ten_labels: [10][]const u8 = all_labels;
+    _ = try store.createNodeWithGraph(&ten_labels, "default");
+    _ = try store.createNodeWithGraph(&ten_labels, "default");
+
+    // Also create nodes with only some labels (should NOT match 10-label intersection)
+    var partial = [_][]const u8{ "L0", "L1", "L2" };
+    _ = try store.createNodeWithGraph(&partial, "default");
+
+    // Query with all 10 labels — exercises heap fallback (MaxStack = 8)
+    var result = try store.getNodesByLabels(testing.allocator, "default", &all_labels, null);
+    defer result.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), result.items.len);
+
+    // Query with 9 labels — still heap fallback
+    var result9 = try store.getNodesByLabels(testing.allocator, "default", all_labels[0..9], null);
+    defer result9.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 2), result9.items.len);
+
+    // Query with 3 labels — includes the partial node
+    var result3 = try store.getNodesByLabels(testing.allocator, "default", all_labels[0..3], null);
+    defer result3.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 3), result3.items.len);
+}
+
 test "GAP-0523: ReadView detects mutation epoch change" {
     var store = try GraphStore.init(testing.allocator);
     defer store.deinit();
