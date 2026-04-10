@@ -4338,20 +4338,16 @@ fn executeMultiHopGroupBy(
         var next_bindings_mh = try std.ArrayList(MultiHopBinding).initCapacity(arena, 0);
 
         for (current_bindings_mh.items) |binding| {
-            const current_node_var = if (hop_idx == 0)
-                hop.left.name orelse "_anon_left_0"
+            // GAP-0521: O(1) positional node lookup replaces O(schema_len) string scan.
+            // Schema layout: [left_node, rel0?, right0, rel1?, right1, ...].
+            // For hop 0 the current node is left at index 0; for hop N>0 the
+            // current node is right of hop N-1 at the last position of the
+            // binding's env_values (which was built from the previous schema).
+            const current_node_idx: usize = if (hop_idx == 0) 0 else binding.env_values.len - 1;
+            const current_node: ?*const graph_store.Node = if (binding.env_values[current_node_idx] == .Node)
+                binding.env_values[current_node_idx].Node
             else
-                chain.hops[hop_idx - 1].right.name orelse "_anon_right";
-
-            var current_node: ?*const graph_store.Node = null;
-            for (binding.env_names, 0..) |name, i| {
-                if (std.mem.eql(u8, name, current_node_var)) {
-                    if (binding.env_values[i] == .Node) {
-                        current_node = binding.env_values[i].Node;
-                    }
-                    break;
-                }
-            }
+                null;
 
             if (current_node == null) continue;
             const curr_node = current_node.?;
