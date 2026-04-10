@@ -791,6 +791,12 @@ pub fn build(b: *std.Build) void {
     init_ctx_tests.root_module.addImport("json", json_mod);
     const run_init_ctx_tests = b.addRunArtifact(init_ctx_tests);
 
+    // RQ-0022: Case-insensitive procedure dispatch regression tests
+    const proc_case_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_procedure_case_insensitive.zig"), .target = target, .optimize = optimize }) });
+    proc_case_tests.root_module.addImport("geode", root_mod);
+    proc_case_tests.root_module.addImport("json", json_mod);
+    const run_proc_case_tests = b.addRunArtifact(proc_case_tests);
+
     const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
     decimal_tests.root_module.addImport("json", json_mod);
@@ -1120,6 +1126,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
     test_step.dependOn(&run_init_ctx_tests.step);
+    test_step.dependOn(&run_proc_case_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);

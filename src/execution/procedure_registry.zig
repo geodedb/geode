@@ -49,10 +49,18 @@ pub fn getCdcMutex() *std.Thread.Mutex {
 
 // ==================== Main Dispatch Entry Point ====================
 
-pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
-
-    // Get the procedure name from the Call expression
-    const proc_name = switch (call_stmt.procedure) {
+/// Extract the original-case procedure name from a CallProcedure AST node.
+/// Returns an owned slice for member paths (caller must free) or a borrowed
+/// slice for identifier callees (valid for the lifetime of the AST).
+/// The `out_owned` flag tells the caller whether the returned slice was
+/// heap-allocated and must be freed.
+pub fn extractOriginalProcName(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+    out_owned: *bool,
+) ![]const u8 {
+    out_owned.* = false;
+    return switch (call_stmt.procedure) {
         .Call => |call| blk: {
             if (call.callee.* == .Ident) {
                 break :blk call.callee.Ident.orig;
@@ -60,12 +68,35 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
                 var name_parts = std.ArrayList(u8).empty;
                 defer name_parts.deinit(allocator);
                 try recursion_handler.buildMemberPath(allocator, call.callee, &name_parts);
+                out_owned.* = true;
                 break :blk try name_parts.toOwnedSlice(allocator);
             }
             break :blk "unknown";
         },
         else => "unknown",
     };
+}
+
+/// Extract the procedure name and normalize it to ASCII lowercase for
+/// case-insensitive dispatch, per ISO/IEC 39075:2024 RQ-0022.
+/// The returned slice is always owned by the caller and must be freed.
+pub fn extractNormalizedProcName(
+    allocator: std.mem.Allocator,
+    call_stmt: ast.CallProcedure,
+) ![]u8 {
+    var orig_owned = false;
+    const orig = try extractOriginalProcName(allocator, call_stmt, &orig_owned);
+    defer if (orig_owned) allocator.free(orig);
+    return try std.ascii.allocLowerString(allocator, orig);
+}
+
+pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedure, context: ExecutionContext) !ExecutionResult {
+
+    // Get the procedure name from the Call expression, normalized to ASCII
+    // lowercase for case-insensitive dispatch per ISO/IEC 39075:2024 RQ-0022.
+    // CANARY: REQ=REQ-GQL-CASE-INSENSITIVE-002; FEATURE="CaseInsensitiveProcedures"; ASPECT=Dispatch; STATUS=TESTED; TEST=src/execution/procedure_registry.zig; OWNER=execution; UPDATED=2026-04-10
+    const proc_name = try extractNormalizedProcName(allocator, call_stmt);
+    defer allocator.free(proc_name);
 
     // Get the graph store
     const store = graph_store.getGlobalStore(allocator);
