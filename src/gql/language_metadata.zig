@@ -1596,10 +1596,10 @@ pub fn findKeyword(name: []const u8) ?KeywordInfo {
     return null;
 }
 
-/// Find function info by name (case-sensitive for functions)
+/// Find function info by name (case-insensitive per ISO/IEC 39075:2024 RQ-0022)
 pub fn findFunction(name: []const u8) ?FunctionInfo {
     for (functions) |f| {
-        if (std.mem.eql(u8, name, f.name)) {
+        if (std.ascii.eqlIgnoreCase(name, f.name)) {
             return f;
         }
     }
@@ -1616,14 +1616,14 @@ pub fn findType(name: []const u8) ?TypeInfo {
     return null;
 }
 
-/// Find procedure info by name or alias
+/// Find procedure info by name or alias (case-insensitive per ISO/IEC 39075:2024 RQ-0022)
 pub fn findProcedure(name: []const u8) ?ProcedureInfo {
     for (procedures) |p| {
-        if (std.mem.eql(u8, name, p.name)) {
+        if (std.ascii.eqlIgnoreCase(name, p.name)) {
             return p;
         }
         if (p.alias) |alias| {
-            if (std.mem.eql(u8, name, alias)) {
+            if (std.ascii.eqlIgnoreCase(name, alias)) {
                 return p;
             }
         }
@@ -1671,6 +1671,32 @@ test "findFunction works" {
     try std.testing.expect(not_found == null);
 }
 
+test "findFunction is case-insensitive" {
+    // ISO/IEC 39075:2024 compliance: built-in function names are case-insensitive.
+    // CANARY: TESTED RQ=0022 type=regression pri=P0 notes="findFunction case-insensitive lookup"
+    const count_upper = findFunction("COUNT");
+    try std.testing.expect(count_upper != null);
+    try std.testing.expectEqualStrings("count", count_upper.?.name);
+
+    const count_mixed = findFunction("Count");
+    try std.testing.expect(count_mixed != null);
+    try std.testing.expectEqualStrings("count", count_mixed.?.name);
+
+    const count_weird = findFunction("cOuNt");
+    try std.testing.expect(count_weird != null);
+    try std.testing.expectEqualStrings("count", count_weird.?.name);
+
+    const sum_upper = findFunction("SUM");
+    try std.testing.expect(sum_upper != null);
+
+    const avg_mixed = findFunction("Avg");
+    try std.testing.expect(avg_mixed != null);
+
+    // Negative case: non-existent function still returns null
+    const not_found = findFunction("NOTAFUNCTION");
+    try std.testing.expect(not_found == null);
+}
+
 test "findProcedure works with alias" {
     const pagerank = findProcedure("algo.pagerank.stream");
     try std.testing.expect(pagerank != null);
@@ -1678,6 +1704,33 @@ test "findProcedure works with alias" {
     const pagerank_alias = findProcedure("pagerank");
     try std.testing.expect(pagerank_alias != null);
     try std.testing.expectEqualStrings("algo.pagerank.stream", pagerank_alias.?.name);
+}
+
+test "findProcedure is case-insensitive" {
+    // ISO/IEC 39075:2024 compliance: stored procedure names are case-insensitive.
+    // CANARY: TESTED RQ=0022 type=regression pri=P0 notes="findProcedure case-insensitive lookup"
+    const pagerank_upper = findProcedure("ALGO.PAGERANK.STREAM");
+    try std.testing.expect(pagerank_upper != null);
+    try std.testing.expectEqualStrings("algo.pagerank.stream", pagerank_upper.?.name);
+
+    const pagerank_mixed = findProcedure("Algo.PageRank.Stream");
+    try std.testing.expect(pagerank_mixed != null);
+    try std.testing.expectEqualStrings("algo.pagerank.stream", pagerank_mixed.?.name);
+
+    const degree_upper = findProcedure("ALGO.DEGREE.STREAM");
+    try std.testing.expect(degree_upper != null);
+
+    // Alias matching is also case-insensitive
+    const pagerank_alias_upper = findProcedure("PAGERANK");
+    try std.testing.expect(pagerank_alias_upper != null);
+    try std.testing.expectEqualStrings("algo.pagerank.stream", pagerank_alias_upper.?.name);
+
+    const degree_alias_mixed = findProcedure("Degree");
+    try std.testing.expect(degree_alias_mixed != null);
+
+    // Negative case: non-existent procedure still returns null
+    const not_found = findProcedure("NOTAPROCEDURE");
+    try std.testing.expect(not_found == null);
 }
 
 test "findType works" {

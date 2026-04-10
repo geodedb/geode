@@ -2,6 +2,7 @@ const std = @import("std");
 const Lexer = @import("gql/lexer.zig").Lexer;
 const Parser = @import("gql/parser.zig").Parser;
 pub const ast = @import("gql/ast.zig");
+const confusable_check = @import("gql/confusable_check.zig");
 
 /// GAP-0115 DOCUMENTATION: Memory Allocation Error Handling
 // CANARY: REQ=REQ-MEMORY-SAFETY-001; FEATURE="MemorySafetyDocumentation"; ASPECT=Core; STATUS=TESTED; OWNER=core; UPDATED=2026-01-12
@@ -81,6 +82,16 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOpt
     var parser = Parser{ .lx = &lexer, .arena = &arena, .cur = lexer.next() };
 
     const program = try parser.parseProgram();
+
+    // ISO/IEC 39075:2024 RQ-0012: reject programs containing visually
+    // confusable identifiers (e.g., Latin a vs Cyrillic а). The skeleton
+    // algorithm lives in src/unicode/confusables.zig and is invoked here
+    // so every parser entry point — CLI, REPL, QUIC handler, gRPC handler
+    // — gets the protection automatically.
+    confusable_check.checkProgram(allocator, &program) catch |err| switch (err) {
+        confusable_check.Error.ConfusableIdentifier => return error.ConfusableIdentifier,
+        confusable_check.Error.OutOfMemory => return error.OutOfMemory,
+    };
 
     return ParseResult{
         .program = program,

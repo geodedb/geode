@@ -191,20 +191,20 @@ fn lookupSkeleton(cp: u21) ?[]const u8 {
 ///   (no case folding for those characters).
 /// - Suitable for detecting the most common confusable identifier pairs
 pub fn skeleton(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result = std.ArrayList(u8).empty;
+    errdefer result.deinit(allocator);
 
     var i: usize = 0;
     while (i < input.len) {
         const seq_len = std.unicode.utf8ByteSequenceLength(input[i]) catch {
             // Invalid UTF-8: treat byte as-is (lowercased if ASCII)
-            try result.append(std.ascii.toLower(input[i]));
+            try result.append(allocator, std.ascii.toLower(input[i]));
             i += 1;
             continue;
         };
         if (i + seq_len > input.len) break;
         const cp = std.unicode.utf8Decode(input[i .. i + seq_len]) catch {
-            try result.append(std.ascii.toLower(input[i]));
+            try result.append(allocator, std.ascii.toLower(input[i]));
             i += 1;
             continue;
         };
@@ -212,19 +212,19 @@ pub fn skeleton(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
 
         if (lookupSkeleton(cp)) |skel| {
             // Map to skeleton characters
-            try result.appendSlice(skel);
+            try result.appendSlice(allocator, skel);
         } else if (cp < 128) {
             // ASCII: just lowercase
-            try result.append(std.ascii.toLower(@intCast(cp)));
+            try result.append(allocator, std.ascii.toLower(@intCast(cp)));
         } else {
             // Non-ASCII, not in confusables map: reproduce original bytes
             var buf: [4]u8 = undefined;
             const len = std.unicode.utf8Encode(cp, &buf) catch seq_len;
-            try result.appendSlice(buf[0..len]);
+            try result.appendSlice(allocator, buf[0..len]);
         }
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 /// Returns true if two identifiers are confusable (their skeletons are equal)

@@ -38,6 +38,53 @@ ANY, SHORTEST, ALL, WALK, TRAIL, ACYCLIC, SIMPLE
 -- And many more...
 ```
 
+### Case-Sensitivity Contract
+
+Per **ISO/IEC 39075:2024 RQ-0022**, GQL reserved keywords are recognized
+case-insensitively. Geode extends the same contract to built-in functions
+and stored procedures so the entire language surface behaves uniformly.
+User-defined identifiers (labels, property keys, variable names) remain
+case-sensitive — `:Person` and `:person` are distinct labels and `p.Name`
+and `p.name` are distinct properties, matching the convention used by
+SQL, Cypher, and Neo4j.
+
+| Surface                      | Case Behavior     | Examples that resolve identically                          |
+|------------------------------|-------------------|-------------------------------------------------------------|
+| Reserved keywords            | **Insensitive**   | `MATCH` / `match` / `MaTcH`, `RETURN` / `return`            |
+| Type names                   | **Insensitive**   | `INTEGER` / `integer`, `STRING` / `string`, `BOOLEAN`       |
+| Boolean / null literals      | **Insensitive**   | `TRUE` / `true`, `FALSE` / `false`, `NULL` / `null`         |
+| Built-in functions           | **Insensitive**   | `count()` / `COUNT()` / `Count()`, `abs(-5)` / `ABS(-5)`    |
+| Stored procedures (CALL)     | **Insensitive**   | `algo.pageRank.stream()` / `ALGO.PAGERANK.STREAM()`         |
+| Procedure aliases            | **Insensitive**   | `pagerank` / `PAGERANK` / `PageRank` (all map to the alias) |
+| **User identifiers** below — |                   |                                                             |
+| Labels                       | **Sensitive**     | `:Person` ≠ `:person` (two different labels)                |
+| Property keys                | **Sensitive**     | `n.name` ≠ `n.Name` (two different properties)              |
+| Variable / alias names       | **Sensitive**     | `(p)` ≠ `(P)` (two different bindings)                      |
+| Role names (RBAC)            | **Sensitive**     | `ADMIN` ≠ `admin` (security policy decision)                |
+| FLE field names              | **Sensitive**     | encrypted-field metadata is matched verbatim                |
+
+**Where this is enforced:**
+
+- **Lexer** — `src/gql/lexer.zig:keywordKind` calls `std.ascii.toUpper`
+  on every identifier and looks the result up in a comptime `KeywordMap`
+  whose entries are uppercase, so all 150+ keywords match any case.
+- **Function registry** — `src/gql/language_metadata.zig:findFunction`
+  uses `std.ascii.eqlIgnoreCase` (matches `findKeyword` and `findType`
+  which were already case-insensitive).
+- **Procedure registry** — `src/execution/procedure_registry.zig:executeCallProcedure`
+  calls `extractNormalizedProcName` which ASCII-lowercases the procedure
+  name once at the dispatch entry point, so every domain dispatcher
+  (`algo_dispatch`, `audit_dispatch`, `storage_dispatch`, `auth_dispatch`)
+  can keep its existing exact-match comparisons against canonical
+  lowercase literals.
+- **Function evaluator** — `src/eval.zig` uses `std.ascii.eqlIgnoreCase`
+  throughout the function dispatch path so any uppercase or mixed-case
+  spelling that escapes the first-pass handler still resolves correctly.
+- **Tests** — `tests/test_procedure_case_insensitive.zig` covers
+  ABS/COALESCE/SUBSTRING/TRIM (eval path), `findFunction`/`findProcedure`
+  (metadata path), and `extractNormalizedProcName` (dispatch path) with
+  uppercase, lowercase, and mixed-case inputs.
+
 ### Data Types & Literals
 
 ```gql
