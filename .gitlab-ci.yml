@@ -443,6 +443,13 @@ test-zig-unit:
 test-cross-build:
   stage: test
   image: $ZIG_IMAGE
+  # Retry on transient network failures (DNS, GitHub 502) during dependency
+  # fetch for cross-compilation targets whose packages aren't in the CI cache.
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - script_failure
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -483,6 +490,17 @@ test-macos-unit:
   timeout: 2h
   tags:
     - saas-macos-medium-m1
+  # Pull-only cache: macOS Debug builds produce ~27K files across .zig-cache/
+  # and zig-cache/ which exceed GitLab SaaS S3 upload limits (EntityTooLarge).
+  # Dependency packages are vendored in docker/zig-packages/ anyway.
+  cache:
+    key: "zig-cache-${CI_COMMIT_REF_SLUG}"
+    fallback_keys:
+      - "zig-cache-main-protected"
+      - "zig-cache-main"
+    paths:
+      - zig-cache/
+    policy: pull
   variables:
     # Disable git credential storage to avoid Keychain errors on macOS runners
     GIT_CONFIG_COUNT: 3
