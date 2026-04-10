@@ -3,35 +3,23 @@
 
 import contextlib
 import os
+import os as _os
 import subprocess
 import sys
-import time
+
+# Import shared test-runner logic from the core module.
+import sys as _sys
 import uuid
 from pathlib import Path
 
 import yaml
 
-
-def fix_surrogate_pairs(s):
-    """Fix UTF-16 surrogate pairs in a string by converting to proper Unicode.
-
-    YAML may load strings containing raw surrogate pairs (e.g., \\ud83d\\udd10)
-    which Python can't encode as UTF-8. This function converts surrogate pairs
-    to their proper Unicode code points.
-    """
-    if not isinstance(s, str):
-        return s
-
-    # Try to encode/decode to handle surrogates
-    try:
-        # Encode with surrogatepass to handle surrogate pairs, then decode back
-        return s.encode("utf-16", "surrogatepass").decode("utf-16")
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        # If that fails, try to remove invalid surrogates
-        try:
-            return s.encode("utf-8", "replace").decode("utf-8")
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            return s
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from test_runner_core import (  # noqa: E402
+    fix_surrogate_pairs,
+    start_server,
+    stop_server,
+)
 
 
 def run_test(
@@ -1227,137 +1215,7 @@ def run_test(
     return True, "PASSED"
 
 
-def start_server(binary, data_dir, port, args, timeout_ms=30000, env_overrides=None):
-    """Start a geode server for test execution.
-
-    Returns (process, port) tuple or (None, None) on failure.
-    Note: Uses time-based wait since QUIC uses UDP, not TCP sockets.
-    """
-    import os
-
-    # Create data directory
-    os.makedirs(data_dir, exist_ok=True)
-
-    # Build server command
-    server_cmd = [binary, "serve", "--data-dir", data_dir, "--listen", f"127.0.0.1:{port}"] + args
-
-    # Build environment with overrides
-    server_env = os.environ.copy()
-    if env_overrides:
-        server_env.update(env_overrides)
-
-    # Start server process
-    # Capture stderr to a temp file for diagnostics while avoiding pipe buffer deadlocks
-    import tempfile
-
-    server_log = tempfile.NamedTemporaryFile(mode="w", prefix="geode_server_", suffix=".log", delete=False)  # noqa: SIM115
-    try:
-        server_proc = subprocess.Popen(server_cmd, stdout=subprocess.DEVNULL, stderr=server_log, env=server_env)
-    except Exception as e:
-        print(f"  Failed to start server: {e}")
-        server_log.close()
-        return None, None
-
-    # Wait for server to initialize with active readiness probe.
-    # Instead of a fixed sleep, attempt a lightweight query in a retry loop.
-    # This handles CI environments (K8s) where cold-start can exceed 6 seconds.
-    deadline = time.time() + min(timeout_ms / 1000.0, 30)
-    # Initial sleep to let the server bind its listen socket
-    time.sleep(2)
-
-    ready = False
-    last_probe_error = ""
-    probe_env = os.environ.copy()
-    if env_overrides:
-        probe_env.update(env_overrides)
-    username = (env_overrides or {}).get("GEODE_ADMIN_USERNAME", os.environ.get("GEODE_ADMIN_USERNAME", "geode"))
-    password = (env_overrides or {}).get(
-        "GEODE_DEFAULT_PASSWORD", os.environ.get("GEODE_DEFAULT_PASSWORD", "geode-test-password")
-    )
-
-    while time.time() < deadline:
-        # Check process is still alive
-        if server_proc.poll() is not None:
-            print(f"  Server exited prematurely with code {server_proc.returncode}")
-            return None, None
-
-        # Probe with a simple query
-        try:
-            probe = subprocess.run(
-                [
-                    binary,
-                    "query",
-                    "--server",
-                    f"127.0.0.1:{port}",
-                    "--ca-cert",
-                    f"{data_dir}/server.crt",
-                    "-U",
-                    username,
-                    "-P",
-                    password,
-                    "RETURN 1 AS _probe",
-                ],
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-                env=probe_env,
-            )
-            if probe.returncode == 0:
-                ready = True
-                break
-            else:
-                last_probe_error = (probe.stderr or probe.stdout or "").strip()[:200]
-        except subprocess.TimeoutExpired:
-            last_probe_error = "probe timed out"
-        except Exception as e:
-            last_probe_error = str(e)
-
-        time.sleep(1)
-
-    if not ready:
-        # Verify server is still running even if probe never succeeded
-        if server_proc.poll() is not None:
-            print(f"  Server exited prematurely with code {server_proc.returncode}")
-            server_log.close()
-            # Print server log for diagnostics
-            try:
-                with open(server_log.name) as f:
-                    log_content = f.read()[-2000:]  # Last 2KB
-                    if log_content:
-                        print(f"  Server log:\n{log_content}")
-            except Exception:
-                pass
-            return None, None
-        # Print diagnostic info
-        print(f"  Warning: server readiness probe failed after {int(min(timeout_ms / 1000.0, 30))}s")
-        if last_probe_error:
-            print(f"  Last probe error: {last_probe_error}")
-        # Print server log tail
-        server_log.flush()
-        try:
-            with open(server_log.name) as f:
-                log_content = f.read()[-2000:]
-                if log_content:
-                    print(f"  Server stderr:\n{log_content}")
-        except Exception:
-            pass
-
-    return server_proc, port
-
-
-def stop_server(server_proc):
-    """Stop a running geode server."""
-    if server_proc is None:
-        return
-
-    server_proc.terminate()
-    try:
-        server_proc.wait(timeout=5)
-    except Exception:
-        server_proc.kill()
-        with contextlib.suppress(Exception):
-            server_proc.wait(timeout=2)
+# start_server and stop_server are imported from test_runner_core.
 
 
 def main():

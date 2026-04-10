@@ -975,7 +975,6 @@ REQ-FLE-PARSER-001,FieldLevelEncryption,PARSER,TESTED,,,security,2026-01-15,src/
 REQ-FLE-PLANNER-001,FieldLevelEncryption,PLANNER,TESTED,,,security,2026-01-15,src/planner/rewrite.zig
 REQ-FLE-PREDICATE-HELPERS-001,FLE Predicate Rewriting,Helpers,TESTED,,,security,2026-01-09,src/fle_integration.zig
 REQ-FLE-PREDICATE-REWRITE-001,FLE Predicate Rewriting,BlindIndex,TESTED,,,security,2026-01-09,src/planner/rewrite.zig
-REQ-FLE-PROC-002,FLEProcedures,ConfigureField,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PROC-003,FLEProcedures,GetFieldConfig,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PROC-004,FLEProcedures,ListEncryptedFields,TESTED,,,security,2026-01-28,src/execution/storage_dispatch.zig
 REQ-FLE-PRODMODE-001,FLEProductionMode,BuildModeDetection,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig
@@ -3604,9 +3603,9 @@ REQ-SEC-FLE-001,Security,FLE,TESTED,,,security,2026-01-16,tests/test_gap_0193_ba
 REQ-SEC-INPUT-VAL-001,Security,InputValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-KMS-001,Security,KMS,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-SEC-MFA-001,Security,MFA,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
-REQ-SEC-MIG-01,MigrationSignatureVerification,IntegrityCheck,TESTED,,,migration,2026-04-10,src/migration/mod.zig
+REQ-SEC-MIG-01,MigrationSignatureVerification,IntegrityCheck,TESTED,,,migration,2026-04-10,src/migration/lock.zig
 REQ-SEC-MIG-01,MigrationSignatureVerification,UnitTest,TESTED,,,migration,2026-04-10,src/migration/mod.zig
-REQ-SEC-MIG-04,CrossProcessMigrationLock,FileLock,TESTED,,,migration,2026-04-10,src/migration/mod.zig
+REQ-SEC-MIG-04,CrossProcessMigrationLock,FileLock,TESTED,,,migration,2026-04-10,src/migration/lock.zig
 REQ-SEC-NETWORK-001,Security,NetworkSecurity,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
 REQ-SEC-NONCE-001,Nonce Replay Protection,NonceTracker,IMPL,,,security,2026-04-01,src/distributed/nonce_tracker.zig
 REQ-SEC-PERMISSION-CHECK-001,Security,PermissionCheck,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
@@ -3980,15 +3979,10 @@ REQ-TDE-PROC-010,TDEProcedures,EncryptedBackup,TESTED,,,tde,2026-01-15,src/execu
 REQ-TDE-PROC-011,TDEKeyProvider,CloudKMSConfiguration,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-012,MockKMSProvider,Testing,TESTED,,,security,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-037,TDETestProcedures,ConfigureProvider,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
-REQ-TDE-PROC-038,TDEProcedures,InitKeyHierarchy,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-038,TDETestProcedures,GetRotationState,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
-REQ-TDE-PROC-039,TDEProcedures,RotateKeys,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-039,TDETestProcedures,ConfigureRotation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
-REQ-TDE-PROC-040,TDEProcedures,EncryptionStatus,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-040,TDETestProcedures,EncryptPageTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
-REQ-TDE-PROC-041,TDEProcedures,ConfigureKMS,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-041,TDETestProcedures,EncryptBackupTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
-REQ-TDE-PROC-042,TDEProcedures,VerifyEncryption,TESTED,,,tde,2025-10-19,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-042,TDETestProcedures,RoundtripTest,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-043,TDETestProcedures,CreateEncryptedBackup,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TDE-PROC-044,TDETestProcedures,RestoreWithKeys,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
@@ -4012,7 +4006,6 @@ REQ-TDE-TENANT-001,PerTenantTDEKeys,KeyDerivation,TESTED,,,security,2026-04-01,s
 REQ-TDE-TENANT-002,PerTenantTDEKeys,EncryptDecrypt,TESTED,,,security,2026-04-01,src/security/tde.zig
 REQ-TDE-TENANT-003,PerTenantTDEFileEncryption,FileIO,TESTED,,,security,2026-04-01,src/storage/tde_file_encryption.zig
 REQ-TDE-TEST-IMPL,TDETestImplementations,RealFunctionality,EXEMPT,,,tde,2025-11-12,src/security/tde.zig
-REQ-TDE-TEST-PROCEDURES,TDETestProcedures,RealImplementation,TESTED,,,tde,2026-01-15,src/execution/storage_dispatch.zig
 REQ-TEMPORAL-ARITH-001,TemporalArithmeticModule,Extraction,TESTED,,,eval,2026-04-01,src/eval/temporal_arithmetic.zig
 REQ-TEMPORAL-PROP-001,TemporalPropertyFiltering,Temporal,TESTED,,,temporal,2026-01-25,src/temporal/time_travel.zig
 REQ-TEST-ASSERT-001,Testing,AssertionTesting,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig

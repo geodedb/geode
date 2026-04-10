@@ -60,6 +60,10 @@ pub const LockHandle = struct {
 pub const MigrationPlan = struct {
     up: []const []const u8 = &.{},
     down: []const []const u8 = &.{},
+    /// Whether this plan owns heap-allocated slices that freePlan must release.
+    /// Only true for plans returned by planDryRun; default-initialized plans
+    /// use comptime empty slices and must NOT be freed.
+    owned: bool = false,
 };
 
 pub const StatusRow = struct {
@@ -87,38 +91,27 @@ pub const ResumeState = struct {
     done: bool,
 };
 
-const Ledger = struct {
-    rows: std.ArrayList(StatusRow),
-    baseline_fingerprint: u64,
-    metrics: Metrics,
-    alloc: std.mem.Allocator,
+// Sub-modules (Q9/#621)
+pub const ledger_mod = @import("ledger.zig");
+pub const lock_mod = @import("lock.zig");
+pub const apply_mod = @import("apply.zig");
+const Ledger = ledger_mod.Ledger;
+const loadLedger = ledger_mod.loadLedger;
+const saveLedger = ledger_mod.saveLedger;
+const writeLedgerJson = ledger_mod.writeLedgerJson;
 
-    fn deinit(self: *Ledger) void {
-        for (self.rows.items) |row| {
-            self.alloc.free(row.name);
-        }
-        self.rows.deinit(self.alloc);
-    }
-};
-
-const LedgerFile = struct {
-    baseline_fingerprint: u64,
-    rows: []StatusRow,
-    metrics: Metrics = .{},
-};
-
-var baseline_override: ?u64 = null;
+pub var baseline_override: ?u64 = null;
 
 // Named constants
-const fnv_offset_basis: u64 = 0xcbf29ce484222325;
-const fnv_prime: u64 = 0x100000001b3;
-const max_ledger_bytes: usize = 4 * 1024 * 1024;
-const max_script_bytes: usize = 8 * 1024 * 1024;
-const default_lock_ttl_ms: u64 = 300_000; // 5 minutes
-const max_migration_name_len: usize = 255;
+pub const fnv_offset_basis: u64 = 0xcbf29ce484222325;
+pub const fnv_prime: u64 = 0x100000001b3;
+pub const max_ledger_bytes: usize = 4 * 1024 * 1024;
+pub const max_script_bytes: usize = 8 * 1024 * 1024;
+pub const default_lock_ttl_ms: u64 = 300_000; // 5 minutes
+pub const max_migration_name_len: usize = 255;
 const max_version_digits: usize = 17;
 const default_resume_batches: u32 = 5;
-const max_resume_slots: usize = 8;
+pub const max_resume_slots: usize = 8;
 
 // ------------------ Helpers ------------------
 
@@ -134,11 +127,11 @@ pub fn validateMigrationName(name: []const u8) MigrationError!void {
     if (std.mem.indexOf(u8, name, "..")) |_| return error.InvalidMigrationName;
 }
 
-fn nowMs() u64 {
+pub fn nowMs() u64 {
     return @intCast(std.time.milliTimestamp());
 }
 
-fn parseVersion(name: []const u8) ?i64 {
+pub fn parseVersion(name: []const u8) ?i64 {
     var i: usize = 0;
     var value: i64 = 0;
     while (i < name.len and name[i] >= '0' and name[i] <= '9') : (i += 1) {
@@ -149,7 +142,7 @@ fn parseVersion(name: []const u8) ?i64 {
     return value;
 }
 
-fn checksumPrefix(bytes: []const u8) [7]u8 {
+pub fn checksumPrefix(bytes: []const u8) [7]u8 {
     var h: u64 = fnv_offset_basis;
     for (bytes) |b| {
         h ^= b;
@@ -169,15 +162,15 @@ fn checksumPrefix(bytes: []const u8) [7]u8 {
 }
 
 /// SEC-MIG-05: Computes the SHA-256 hash of content, returned as a 64-char lowercase hex string.
-fn computeContentSha256(data: []const u8) [64]u8 {
+pub fn computeContentSha256(data: []const u8) [64]u8 {
     var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
     return std.fmt.bytesToHex(hash, .lower);
 }
 
-const sha256_zero: [64]u8 = "0000000000000000000000000000000000000000000000000000000000000000".*;
+pub const sha256_zero: [64]u8 = "0000000000000000000000000000000000000000000000000000000000000000".*;
 
-fn computeFingerprint(rows: []const StatusRow) u64 {
+pub fn computeFingerprint(rows: []const StatusRow) u64 {
     var h: u64 = fnv_offset_basis;
     for (rows) |row| {
         if (!row.applied) continue;
@@ -205,117 +198,7 @@ fn computeFingerprint(rows: []const StatusRow) u64 {
     return h;
 }
 
-fn ledgerPath(alloc: std.mem.Allocator, cfg: MigrationConfig) ![]u8 {
-    return std.fs.path.join(alloc, &.{ cfg.migrations_dir, cfg.ledger_filename });
-}
-
-fn ensureDir(cfg: MigrationConfig) !void {
-    std.fs.cwd().makePath(cfg.migrations_dir) catch |err| {
-        if (err != error.PathAlreadyExists) return err;
-    };
-}
-
-fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
-    ensureDir(cfg) catch return error.FileSystemError;
-    // Create empty ledger - no fake "init_schema" stub
-    const rows = std.ArrayList(StatusRow).initCapacity(alloc, 4) catch return error.OutOfMemory;
-    return Ledger{ .rows = rows, .baseline_fingerprint = 0, .metrics = .{}, .alloc = alloc };
-}
-
-fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
-    const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
-    defer alloc.free(path);
-
-    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
-        if (err == error.FileNotFound) return initLedger(alloc, cfg);
-        return error.FileSystemError;
-    };
-    defer file.close();
-
-    const data = file.readToEndAlloc(alloc, max_ledger_bytes) catch return error.OutOfMemory;
-    defer alloc.free(data);
-
-    var parsed = std.json.parseFromSlice(LedgerFile, alloc, data, .{ .duplicate_field_behavior = .@"error" }) catch {
-        return error.LedgerCorrupt;
-    };
-    defer parsed.deinit();
-
-    var rows = std.ArrayList(StatusRow).initCapacity(alloc, parsed.value.rows.len) catch return error.OutOfMemory;
-    errdefer {
-        for (rows.items) |row| alloc.free(row.name);
-        rows.deinit(alloc);
-    }
-    for (parsed.value.rows) |row| {
-        const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
-        errdefer alloc.free(name_copy);
-        rows.append(alloc, .{
-            .version = row.version,
-            .name = name_copy,
-            .applied = row.applied,
-            .checksum_prefix = row.checksum_prefix,
-            .content_sha256 = row.content_sha256,
-        }) catch return error.OutOfMemory;
-    }
-
-    return Ledger{
-        .rows = rows,
-        .baseline_fingerprint = parsed.value.baseline_fingerprint,
-        .metrics = parsed.value.metrics,
-        .alloc = alloc,
-    };
-}
-
-fn writeLedgerJson(buffer: *std.ArrayList(u8), alloc: std.mem.Allocator, ledger: *const Ledger) !void {
-    const ledger_file = LedgerFile{
-        .baseline_fingerprint = ledger.baseline_fingerprint,
-        .rows = ledger.rows.items,
-        .metrics = ledger.metrics,
-    };
-    const json_bytes = std.json.Stringify.valueAlloc(alloc, ledger_file, .{}) catch return error.OutOfMemory;
-    defer alloc.free(json_bytes);
-    buffer.appendSlice(alloc, json_bytes) catch return error.OutOfMemory;
-}
-
-fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const Ledger) MigrationError!void {
-    ensureDir(cfg) catch return error.FileSystemError;
-    const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
-    defer alloc.free(path);
-
-    // SEC-MIG-07: Use timestamp + cryptographic random suffix to prevent predictable
-    // temp file names (CWE-377 / symlink attack mitigation).
-    var rand_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand_bytes);
-    const rand_hex = std.fmt.bytesToHex(rand_bytes, .lower);
-    var suffix_buf: [96]u8 = undefined;
-    const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.{s}.tmp", .{ nowMs(), rand_hex }) catch return error.OutOfMemory;
-    const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
-    defer alloc.free(tmp_path);
-
-    var tmp = std.fs.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
-    errdefer tmp.close();
-
-    // SEC-MIG-06: Restrict ledger file permissions to owner-only (0o600) to prevent
-    // other users from reading migration state or tampering with checksums.
-    if (builtin.os.tag != .windows) {
-        tmp.chmod(0o600) catch {};
-    }
-
-    // Serialize to a buffer manually
-    var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
-    defer buffer.deinit(alloc);
-    writeLedgerJson(&buffer, alloc, ledger) catch return error.OutOfMemory;
-
-    // Write to file, then close handle before rename for portability.
-    tmp.writeAll(buffer.items) catch return error.FileSystemError;
-    tmp.sync() catch return error.FileSystemError;
-    tmp.close();
-    std.fs.cwd().rename(tmp_path, path) catch {
-        std.fs.cwd().deleteFile(tmp_path) catch {};
-        return error.FileSystemError;
-    };
-}
-
-fn versionExists(rows: []const StatusRow, v: i64) bool {
+pub fn versionExists(rows: []const StatusRow, v: i64) bool {
     for (rows) |r| {
         if (r.version == v and r.applied) return true;
     }
@@ -324,7 +207,7 @@ fn versionExists(rows: []const StatusRow, v: i64) bool {
 
 /// Returns the latest applied migration, excluding version <= 1 (base schema).
 /// Version 1 is treated as the immutable initial migration and cannot be rolled back.
-fn latestApplied(rows: []const StatusRow) ?StatusRow {
+pub fn latestApplied(rows: []const StatusRow) ?StatusRow {
     var best: ?StatusRow = null;
     for (rows) |r| {
         if (!r.applied or r.version <= 1) continue;
@@ -333,419 +216,30 @@ fn latestApplied(rows: []const StatusRow) ?StatusRow {
     return best;
 }
 
-fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![]u8 {
+pub fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![]u8 {
     return std.fs.path.join(alloc, &.{ cfg.migrations_dir, name });
 }
 
-// ------------------ HMAC-SHA256 Migration Signature (SEC-MIG-01) ------------------
-// CANARY: REQ=REQ-SEC-MIG-01; FEATURE="MigrationSignatureVerification"; ASPECT=IntegrityCheck; STATUS=TESTED; TEST="verifyMigrationSignature rejects tampered content"; OWNER=migration; UPDATED=2026-04-10
-
-const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
-
-/// Computes the HMAC-SHA256 of `data` using the given 32-byte `key`.
-/// Returns the 32-byte MAC as a hex-encoded 64-byte string.
-fn computeHmacSha256(key: *const [32]u8, data: []const u8) [64]u8 {
-    var mac: [HmacSha256.mac_length]u8 = undefined;
-    HmacSha256.create(&mac, data, key);
-    return std.fmt.bytesToHex(mac, .lower);
-}
-
-/// Verifies that a migration script's HMAC-SHA256 signature matches its sidecar `.sig` file.
-/// Returns MigrationSignatureMissing if the `.sig` file does not exist, or
-/// MigrationSignatureInvalid if the computed HMAC does not match the stored signature.
-fn verifyMigrationSignature(
-    alloc: std.mem.Allocator,
-    cfg: MigrationConfig,
-    name: []const u8,
-    script: []const u8,
-) MigrationError!void {
-    if (cfg.allow_unsigned) {
-        std.log.warn("migration: running unsigned migration '{s}' (allow_unsigned=true)", .{name});
-        return;
-    }
-
-    const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
-
-    const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
-    defer alloc.free(sig_name);
-    const sig_path = joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
-    defer alloc.free(sig_path);
-
-    const sig_contents = std.fs.cwd().readFileAlloc(alloc, sig_path, 128) catch {
-        return error.MigrationSignatureMissing;
-    };
-    defer alloc.free(sig_contents);
-
-    // Trim whitespace/newlines from the sig file
-    const sig_hex = std.mem.trim(u8, sig_contents, " \t\r\n");
-    if (sig_hex.len != 64) return error.MigrationSignatureInvalid;
-
-    const expected = computeHmacSha256(hmac_key, script);
-
-    // Constant-time comparison to avoid timing side channels
-    if (!constTimeEqlHex(sig_hex, &expected)) {
-        return error.MigrationSignatureInvalid;
-    }
-}
-
-/// Constant-time comparison of two 64-byte hex strings.
-fn constTimeEqlHex(a: []const u8, b: []const u8) bool {
-    if (a.len != 64 or b.len != 64) return false;
-    var diff: u8 = 0;
-    for (a, b) |x, y| {
-        diff |= x ^ y;
-    }
-    return diff == 0;
-}
-
-/// Signs a migration file by computing its HMAC-SHA256 and writing a sidecar `.sig` file.
-/// The `.sig` file contains the 64-character hex-encoded HMAC digest.
-pub fn signMigrationFile(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) MigrationError!void {
-    try validateMigrationName(name);
-
-    const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
-
-    const path = joinPath(alloc, cfg, name) catch return error.OutOfMemory;
-    defer alloc.free(path);
-
-    const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
-    defer alloc.free(script);
-
-    const hex_sig = computeHmacSha256(hmac_key, script);
-
-    const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
-    defer alloc.free(sig_name);
-    const sig_path = joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
-    defer alloc.free(sig_path);
-
-    var file = std.fs.cwd().createFile(sig_path, .{ .truncate = true }) catch return error.FileSystemError;
-    defer file.close();
-
-    // Restrict signature file permissions to owner-only
-    if (builtin.os.tag != .windows) {
-        file.chmod(0o600) catch {};
-    }
-
-    file.writeAll(&hex_sig) catch return error.FileSystemError;
-    file.writeAll("\n") catch return error.FileSystemError;
-}
-
-// ------------------ Lock management ------------------
-
 /// Protects global_lock, policy_mode, resume_slots, and baseline_override from concurrent access.
-var migration_mutex: std.Thread.Mutex = .{};
-var global_lock: ?LockHandle = null;
-var lock_steal_count: u64 = 0;
+pub var migration_mutex: std.Thread.Mutex = .{};
+pub var global_lock: ?LockHandle = null;
+pub var lock_steal_count: u64 = 0;
+pub const lock_filename = ".migration_lock";
+// Lock+signature in lock.zig
+pub const acquireLock = lock_mod.acquireLock;
+pub const heartbeatLock = lock_mod.heartbeatLock;
+pub const releaseLock = lock_mod.releaseLock;
+pub const FileLock = lock_mod.FileLock;
+pub const signMigrationFile = lock_mod.signMigrationFile;
+const verifyMigrationSignature = lock_mod.verifyMigrationSignature;
+const constTimeEqlHex = lock_mod.constTimeEqlHex;
+const computeHmacSha256 = lock_mod.computeHmacSha256;
 
-/// Acquires the migration lock with the given TTL in milliseconds. Thread-safe.
-/// Q13: Removed unused allocator parameter that was ignored in the implementation.
-pub fn acquireLock(ttl_ms: u64) MigrationError!LockHandle {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
-    const now = nowMs();
-    if (global_lock) |lh| {
-        if (lh.expires_at_ms > now) {
-            return error.AlreadyLocked;
-        } else {
-            lock_steal_count += 1;
-            global_lock = null;
-        }
-    }
-    const handle = LockHandle{ .id = 1, .owner = "local", .acquired_at_ms = now, .expires_at_ms = now + ttl_ms };
-    global_lock = handle;
-    return handle;
-}
-
-/// Extends the lock TTL. Returns error if the lock has expired or is not held.
-pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
-    const now = nowMs();
-    if (global_lock) |*lh| {
-        if (lh.id != h.id) return error.NoLockHeld;
-        if (lh.expires_at_ms <= now) return error.LockExpired;
-        const ttl = lh.expires_at_ms - lh.acquired_at_ms;
-        lh.expires_at_ms = now + ttl;
-        h.* = lh.*;
-    } else return error.NoLockHeld;
-}
-
-/// Releases the migration lock. Returns error if the lock is not held by this handle.
-pub fn releaseLock(h: *LockHandle) MigrationError!void {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
-    if (global_lock) |lh| {
-        if (lh.id != h.id) return error.NoLockHeld;
-        global_lock = null;
-    } else return error.NoLockHeld;
-}
-
-// ------------------ SEC-MIG-04: Cross-process file lock ------------------
-// CANARY: REQ=REQ-SEC-MIG-04; FEATURE="CrossProcessMigrationLock"; ASPECT=FileLock; STATUS=TESTED; TEST="acquireFileLock creates lockfile and blocks concurrent processes"; OWNER=migration; UPDATED=2026-04-10
-
-const lock_filename = ".migration_lock";
-
-/// Filesystem-based lock for cross-process migration serialization.
-/// Uses flock() on POSIX or a lockfile presence check on Windows.
-/// The OS automatically releases the lock if the process crashes.
-pub const FileLock = struct {
-    file: std.fs.File,
-
-    /// Acquires an exclusive file lock on `.migration_lock` in the migrations directory.
-    /// Blocks until the lock is available (flock LOCK_EX). Returns AlreadyLocked on EWOULDBLOCK
-    /// when using non-blocking mode (not currently used — we block to match user expectation).
-    pub fn acquire(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!FileLock {
-        ensureDir(cfg) catch return error.FileSystemError;
-        const path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, lock_filename }) catch return error.OutOfMemory;
-        defer alloc.free(path);
-
-        const file = std.fs.cwd().createFile(path, .{
-            .truncate = false,
-            .read = true,
-        }) catch return error.FileSystemError;
-        errdefer file.close();
-
-        // Set restrictive permissions (owner-only)
-        if (builtin.os.tag != .windows) {
-            file.chmod(0o600) catch {};
-        }
-
-        // flock() with LOCK_EX — blocks until lock is available.
-        // OS releases the lock automatically if the process crashes.
-        if (builtin.os.tag != .windows) {
-            file.lock(.exclusive) catch return error.AlreadyLocked;
-        }
-        // On Windows, CreateFile with exclusive sharing provides similar semantics;
-        // the createFile call above will fail if another process holds the file open.
-
-        return .{ .file = file };
-    }
-
-    /// Releases the file lock and closes the lockfile handle.
-    pub fn release(self: *FileLock) void {
-        if (builtin.os.tag != .windows) {
-            self.file.unlock();
-        }
-        self.file.close();
-    }
-};
-
-// ------------------ Apply / Status ------------------
-
-/// Applies pending up-migrations in version order. Skips already-applied versions.
-/// Saves ledger after each successful migration for crash safety.
-/// SEC-MIG-04: Acquires both in-process mutex and filesystem flock for cross-process safety.
-pub fn applyUpMigrations(
-    alloc: std.mem.Allocator,
-    cfg: MigrationConfig,
-    names: []const []const u8,
-    executor: QueryExecutor,
-) MigrationError!void {
-    // SEC-MIG-04: Cross-process file lock (blocks until available; OS auto-releases on crash)
-    var file_lock = FileLock.acquire(alloc, cfg) catch |err| {
-        std.log.warn("migration: failed to acquire file lock: {}", .{err});
-        return error.AlreadyLocked;
-    };
-    defer file_lock.release();
-    var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
-    defer releaseLock(&lock) catch {};
-    var ledger = try loadLedger(alloc, cfg);
-    defer ledger.deinit();
-
-    // Collect and sort unique, not-yet-applied versions.
-    var staged = std.ArrayList(StagedMigration).initCapacity(alloc, names.len) catch return error.OutOfMemory;
-    defer staged.deinit(alloc);
-
-    names_loop: for (names) |nm| {
-        try validateMigrationName(nm);
-        const ver = parseVersion(nm) orelse return error.InvalidMigrationName;
-        if (versionExists(ledger.rows.items, ver)) continue;
-        for (staged.items) |s| {
-            if (s.version == ver) continue :names_loop;
-        }
-        staged.append(alloc, .{ .version = ver, .name = nm }) catch return error.OutOfMemory;
-    }
-
-    if (staged.items.len == 0) return;
-
-    std.sort.heap(StagedMigration, staged.items, {}, struct {
-        fn lessThan(_: void, a: StagedMigration, b: StagedMigration) bool {
-            return a.version < b.version;
-        }
-    }.lessThan);
-
-    for (staged.items) |entry| {
-        const path = joinPath(alloc, cfg, entry.name) catch return error.OutOfMemory;
-        defer alloc.free(path);
-        const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
-        defer alloc.free(script);
-
-        // SEC-MIG-01: Verify HMAC-SHA256 signature before execution
-        try verifyMigrationSignature(alloc, cfg, entry.name, script);
-
-        executor.execFn(executor.context, script) catch |err| {
-            // Q15: Log the underlying executor error instead of silently erasing it.
-            std.log.warn("migration: executor failed on version {d}: {}", .{ entry.version, err });
-            ledger.metrics.failed_total += 1;
-            return error.ApplyFailed;
-        };
-
-        const prefix = checksumPrefix(script);
-        const sha256 = computeContentSha256(script);
-        const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
-        ledger.rows.append(alloc, .{
-            .version = entry.version,
-            .name = new_name,
-            .applied = true,
-            .checksum_prefix = prefix,
-            .content_sha256 = sha256,
-        }) catch {
-            alloc.free(new_name);
-            return error.OutOfMemory;
-        };
-        ledger.metrics.applied_total += 1;
-
-        // Save ledger after each successful migration for crash safety (GAP-0280).
-        ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
-        try saveLedger(alloc, cfg, &ledger);
-    }
-}
-
-/// Rolls back the single latest applied migration (version > 1).
-/// Version 1 is treated as immutable base schema.
-/// SEC-MIG-04: Acquires both in-process mutex and filesystem flock for cross-process safety.
-pub fn applyDownMigration(
-    alloc: std.mem.Allocator,
-    cfg: MigrationConfig,
-    executor: QueryExecutor,
-) MigrationError!void {
-    // SEC-MIG-04: Cross-process file lock
-    var file_lock = FileLock.acquire(alloc, cfg) catch |err| {
-        std.log.warn("migration: failed to acquire file lock for down-migration: {}", .{err});
-        return error.AlreadyLocked;
-    };
-    defer file_lock.release();
-    var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
-    defer releaseLock(&lock) catch {};
-    var ledger = try loadLedger(alloc, cfg);
-    defer ledger.deinit();
-
-    const latest = latestApplied(ledger.rows.items) orelse return;
-    try validateMigrationName(latest.name);
-    // Down scripts convention: <name>.down.gql
-    const down_name = std.fmt.allocPrint(alloc, "{s}.down.gql", .{latest.name}) catch return error.OutOfMemory;
-    defer alloc.free(down_name);
-    const path = joinPath(alloc, cfg, down_name) catch return error.OutOfMemory;
-    defer alloc.free(path);
-
-    const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.DownScriptMissing;
-    defer alloc.free(script);
-
-    // SEC-MIG-01: Verify HMAC-SHA256 signature before executing down-migration
-    try verifyMigrationSignature(alloc, cfg, down_name, script);
-
-    executor.execFn(executor.context, script) catch |err| {
-        // Q15: Log the underlying executor error instead of silently erasing it.
-        std.log.warn("migration: down-migration executor failed on version {d}: {}", .{ latest.version, err });
-        ledger.metrics.failed_total += 1;
-        return error.ApplyFailed;
-    };
-
-    // Mark latest as unapplied (keep history)
-    for (ledger.rows.items) |*row| {
-        if (row.version == latest.version and row.applied) {
-            row.applied = false;
-            break;
-        }
-    }
-
-    ledger.baseline_fingerprint = computeFingerprint(ledger.rows.items);
-    try saveLedger(alloc, cfg, &ledger);
-}
-
-/// Returns a list of all discovered migration files with their applied status.
-pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError![]StatusRow {
-    var ledger = try loadLedger(alloc, cfg);
-    defer ledger.deinit();
-
-    // Scan migrations directory for .gql files (excluding .down.gql)
-    var dir = std.fs.cwd().openDir(cfg.migrations_dir, .{ .iterate = true }) catch |err| {
-        if (err == error.FileNotFound) {
-            // No migrations directory - return empty
-            const empty_slice = alloc.alloc(StatusRow, 0) catch return error.OutOfMemory;
-            return empty_slice;
-        }
-        return error.FileSystemError;
-    };
-    defer dir.close();
-
-    var migration_files = std.ArrayList([]const u8).initCapacity(alloc, 16) catch return error.OutOfMemory;
-    defer {
-        for (migration_files.items) |f| alloc.free(f);
-        migration_files.deinit(alloc);
-    }
-
-    var dir_iter = dir.iterate();
-    while (dir_iter.next() catch return error.FileSystemError) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql") and !std.mem.endsWith(u8, entry.name, ".down.gql")) {
-            const name_copy = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
-            migration_files.append(alloc, name_copy) catch {
-                alloc.free(name_copy);
-                return error.OutOfMemory;
-            };
-        }
-    }
-
-    // Create status rows - merge ledger with discovered files
-    var result = std.ArrayList(StatusRow).initCapacity(alloc, migration_files.items.len) catch return error.OutOfMemory;
-    errdefer {
-        for (result.items) |r| alloc.free(r.name);
-        result.deinit(alloc);
-    }
-
-    for (migration_files.items) |filename| {
-        const version = parseVersion(filename) orelse 0;
-
-        // Check if this migration is in the ledger as applied
-        var applied = false;
-        var checksum: [7]u8 = "0000000".*;
-        var sha256: [64]u8 = sha256_zero;
-        for (ledger.rows.items) |row| {
-            if (std.mem.eql(u8, row.name, filename) and row.applied) {
-                applied = true;
-                checksum = row.checksum_prefix;
-                sha256 = row.content_sha256;
-                break;
-            }
-        }
-
-        const name_copy = alloc.dupe(u8, filename) catch return error.OutOfMemory;
-        result.append(alloc, .{
-            .version = version,
-            .name = name_copy,
-            .applied = applied,
-            .checksum_prefix = checksum,
-            .content_sha256 = sha256,
-        }) catch {
-            alloc.free(name_copy);
-            return error.OutOfMemory;
-        };
-    }
-
-    // Convert to owned slice and return
-    const slice = result.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    return slice;
-}
-
-/// Frees all heap-allocated names and the slice returned by `statusReport`.
-/// The `len > 0` guard distinguishes heap-duped names from the default
-/// empty-string literal in `StatusRow` (which must not be freed).
-pub fn freeStatusRows(alloc: std.mem.Allocator, rows: []StatusRow) void {
-    for (rows) |row| {
-        if (row.name.len > 0) alloc.free(row.name);
-    }
-    alloc.free(rows);
-}
+// Apply+status in apply.zig
+pub const applyUpMigrations = apply_mod.applyUpMigrations;
+pub const applyDownMigration = apply_mod.applyDownMigration;
+pub const statusReport = apply_mod.statusReport;
+pub const freeStatusRows = apply_mod.freeStatusRows;
 
 // ------------------ Policy / Drift / Checksums ------------------
 
@@ -896,11 +390,13 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
         alloc.free(up_slice);
     }
     const down_slice = pending_down.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    return MigrationPlan{ .up = up_slice, .down = down_slice };
+    return MigrationPlan{ .up = up_slice, .down = down_slice, .owned = true };
 }
 
 /// Frees all heap-allocated slices within a MigrationPlan returned by planDryRun.
+/// Safe to call on default-initialized plans (owned=false is a no-op).
 pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
+    if (!plan.owned) return;
     for (plan.up) |name| alloc.free(name);
     alloc.free(plan.up);
     for (plan.down) |name| alloc.free(name);
@@ -1273,6 +769,14 @@ test "MigrationPlan has empty defaults" {
     const plan = MigrationPlan{};
     try std.testing.expectEqual(@as(usize, 0), plan.up.len);
     try std.testing.expectEqual(@as(usize, 0), plan.down.len);
+    try std.testing.expect(!plan.owned);
+}
+
+test "freePlan is safe on default-initialized MigrationPlan (Q19 regression)" {
+    const alloc = std.testing.allocator;
+    const plan = MigrationPlan{};
+    // Must not crash — default plan has comptime slices, not heap-allocated.
+    freePlan(alloc, &plan);
 }
 
 test "computeFingerprint with single applied row" {
@@ -1323,51 +827,6 @@ test "validateMigrationName rejects names exceeding 255 bytes" {
     // 255 bytes should be fine
     const max_name = "a" ** 255;
     try validateMigrationName(max_name);
-}
-
-// ==================== JSON Round-Trip Test (GAP-0311) ====================
-
-test "writeLedgerJson round-trips through std.json.parseFromSlice" {
-    const alloc = std.testing.allocator;
-
-    var rows = std.ArrayList(StatusRow).initCapacity(alloc, 3) catch unreachable;
-    defer {
-        for (rows.items) |row| alloc.free(row.name);
-        rows.deinit(alloc);
-    }
-
-    const name1 = try alloc.dupe(u8, "001_init.gql");
-    errdefer alloc.free(name1);
-    try rows.append(alloc, .{ .version = 1, .name = name1, .applied = true, .checksum_prefix = "abc1234".* });
-
-    const name2 = try alloc.dupe(u8, "002_with-special_chars.gql");
-    errdefer alloc.free(name2);
-    try rows.append(alloc, .{ .version = 2, .name = name2, .applied = false, .checksum_prefix = "def5678".* });
-
-    const ledger = Ledger{
-        .rows = rows,
-        .baseline_fingerprint = 42,
-        .metrics = .{ .applied_total = 1, .failed_total = 0, .drift_detected_total = 3, .lock_steal_attempts_total = 7 },
-        .alloc = alloc,
-    };
-
-    var buffer = try std.ArrayList(u8).initCapacity(alloc, 512);
-    defer buffer.deinit(alloc);
-    try writeLedgerJson(&buffer, alloc, &ledger);
-
-    var parsed = try std.json.parseFromSlice(LedgerFile, alloc, buffer.items, .{ .duplicate_field_behavior = .@"error" });
-    defer parsed.deinit();
-
-    try std.testing.expectEqual(@as(u64, 42), parsed.value.baseline_fingerprint);
-    try std.testing.expectEqual(@as(usize, 2), parsed.value.rows.len);
-    try std.testing.expect(std.mem.eql(u8, "001_init.gql", parsed.value.rows[0].name));
-    try std.testing.expectEqual(true, parsed.value.rows[0].applied);
-    try std.testing.expect(std.mem.eql(u8, "abc1234", &parsed.value.rows[0].checksum_prefix));
-    try std.testing.expect(std.mem.eql(u8, "002_with-special_chars.gql", parsed.value.rows[1].name));
-    try std.testing.expectEqual(false, parsed.value.rows[1].applied);
-    try std.testing.expectEqual(@as(u64, 1), parsed.value.metrics.applied_total);
-    try std.testing.expectEqual(@as(u64, 3), parsed.value.metrics.drift_detected_total);
-    try std.testing.expectEqual(@as(u64, 7), parsed.value.metrics.lock_steal_attempts_total);
 }
 
 // ==================== Core Logic Tests (GAP-0310) ====================

@@ -4,19 +4,17 @@ This directory contains test runners and utility scripts for the Geode test suit
 
 ## Test Runners
 
+### Core Module
+
+- `test_runner_core.py` - Shared logic: surrogate-pair fixing, variable substitution,
+  test isolation (label/index/schema/graph name suffixing), expectation validation
+  (exit_code, stdout_contains, stderr_contains, regex, JSON assertions), server
+  lifecycle management, secret resolution, timeout resolution, and shared constants
+
 ### Main Test Runners
 
-- `extended_test_runner.py` - Comprehensive test runner with detailed reporting
-- `parallel_test_runner.py` - Parallel test execution with configurable workers
-- `run_all_geodetestlab_tests.py` - Run all geodetestlab spec tests
-
-### Specialized Test Runners
-
-- `optimized_test_runner.py` - Optimized test execution
-- `parallel_optimized_runner.py` - Parallel + optimized execution
-- `progressive_runner.py` - Progressive test execution
-- `fast_sequential_runner.py` - Fast sequential test execution
-- `quick_test_runner.py` - Quick test subset execution
+- `extended_test_runner.py` - Comprehensive sequential test runner (uses `test_runner_core`)
+- `parallel_test_runner.py` - Parallel test execution with configurable workers (uses `test_runner_core`)
 
 ### Analysis Scripts
 

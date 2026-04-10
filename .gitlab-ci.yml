@@ -90,15 +90,47 @@ variables:
 # Governance Stage - Status and Feature Flag Checks
 # CANARY: REQ=REQ-CI-GOV-001; FEATURE="CI Governance Checks"; ASPECT=Core; STATUS=TESTED; TEST=GAP-0219-CI-Tests-Block-Merge; OWNER=ci; UPDATED=2026-01-16
 # GAP-0160: Adds CI enforcement for status-generate and no-feature-flags
+# Issue #555: Governance jobs consolidated via extends templates
 # =============================================================================
 
-governance-status-check:
+# ---------------------------------------------------------------------------
+# Governance job templates (Issue #555)
+# ---------------------------------------------------------------------------
+
+# Base template: shared stage, variables, rules, and allow_failure default
+.governance-base:
   stage: governance
-  image: python:3.12-slim
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+  rules:
+    - if: '$CI_MERGE_REQUEST_ID'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  allow_failure: false
+
+# Python governance jobs (image: python:3.12-slim)
+.governance-python:
+  extends: .governance-base
+  image: python:3.12-slim
+
+# Python governance jobs that need pyyaml installed
+.governance-python-pyyaml:
+  extends: .governance-python
   before_script:
     - pip install --no-cache-dir pyyaml
+
+# Zig governance jobs (image: $ZIG_IMAGE, vendor cache pre-populated)
+.governance-zig:
+  extends: .governance-base
+  image: $ZIG_IMAGE
+  before_script:
+    - *zig-vendor-cache
+
+# ---------------------------------------------------------------------------
+# Governance jobs
+# ---------------------------------------------------------------------------
+
+governance-status-check:
+  extends: .governance-python-pyyaml
   script:
     - |
       echo "=== Running Status Generation Check ==="
@@ -115,31 +147,17 @@ governance-status-check:
         diff docs/status.csv /tmp/status_check.csv || true
         exit 1
       fi
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-no-feature-flags:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Running No-Feature-Flags Check ==="
       python3 tools/no_feature_flags_check.py --repo .
       echo "✓ No prohibited feature flags found"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-zig-package-cache:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Running Zig Package Cache Staleness Check ==="
@@ -149,24 +167,15 @@ governance-zig-package-cache:
       else
         echo "⚠ docker/zig-packages not present (gitignored) — skipping staleness check"
       fi
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-match-ops-campaign:
-  stage: governance
-  image: $ZIG_IMAGE
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-zig
   retry:
     max: 1
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
       - script_failure
-  before_script:
-    - *zig-vendor-cache
   script:
     - |
       echo "=== Running MATCH staged parity campaign ==="
@@ -176,16 +185,10 @@ governance-match-ops-campaign:
       echo "=== Running CLI transport response parity goldens ==="
       zig build test-cli-transport-parity --summary all
       echo "✓ MATCH and CLI transport parity campaigns passed"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-no-page-allocator:
-  stage: governance
+  extends: .governance-base
   image: alpine:3.21
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
   before_script:
     - apk add --no-cache ripgrep
   script:
@@ -200,31 +203,17 @@ governance-no-page-allocator:
         exit 1
       fi
       echo "✓ allocator policy check passed"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-stdio-abstraction:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Enforcing centralized CLI stdio abstraction ==="
       python3 tools/stdio_abstraction_guard.py --repo .
       echo "✓ CLI stdio abstraction check passed"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 governance-release-manifests:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Enforcing release target/docker manifest sync ==="
@@ -240,15 +229,9 @@ governance-release-manifests:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
     - if: '$CI_COMMIT_TAG'
-  allow_failure: false
 
 governance-canary-drift:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-  before_script:
-    - pip install --no-cache-dir pyyaml
+  extends: .governance-python-pyyaml
   script:
     - |
       echo "=== Running CANARY Marker Validation ==="
@@ -263,9 +246,6 @@ governance-canary-drift:
       fi
 
       echo "✓ CANARY governance check passed"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: true
 
 # =============================================================================
@@ -276,10 +256,7 @@ governance-canary-drift:
 # =============================================================================
 
 governance-canary-lint:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Running CANARY Marker Lint (Repo-Wide) ==="
@@ -291,11 +268,7 @@ governance-canary-lint:
         exit 1
       }
       echo "✓ All CANARY markers conform to required schema"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   # GAP-0225 FIX: Enforce compliance (was allow_failure: true)
-  allow_failure: false
 
 # =============================================================================
 # Governance Stage - Canaryscan GAP Verification
@@ -304,10 +277,8 @@ governance-canary-lint:
 # =============================================================================
 
 governance-canaryscan-verify:
-  stage: governance
+  extends: .governance-base
   image: golang:1.23-alpine
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
   script:
     - |
       echo "=== Building Canaryscan Tool ==="
@@ -323,11 +294,7 @@ governance-canaryscan-verify:
         exit 1
       }
       echo "✓ GAP_ANALYSIS.md claims verified against CANARY markers"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   # GAP-0227 FIX: Enforce verification
-  allow_failure: false
 
 # =============================================================================
 # Governance Stage - REQ-DOC Report Generator
@@ -336,10 +303,7 @@ governance-canaryscan-verify:
 # =============================================================================
 
 governance-req-doc-reports:
-  stage: governance
-  image: python:3.12-slim
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
+  extends: .governance-python
   script:
     - |
       echo "=== Generating REQ-DOC Requirement Reports ==="
@@ -365,9 +329,6 @@ governance-req-doc-reports:
     paths:
       - reports/
     expire_in: 1 week
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: true  # Reports are informational, not blocking
 
 # =============================================================================
@@ -379,12 +340,7 @@ governance-req-doc-reports:
 # =============================================================================
 
 governance-conformance-sync:
-  stage: governance
-  image: $ZIG_IMAGE
-  variables:
-    GIT_SUBMODULE_STRATEGY: recursive
-  before_script:
-    - *zig-vendor-cache
+  extends: .governance-zig
   script:
     - |
       echo "=== Running Conformance Sync Scanner ==="
@@ -396,10 +352,6 @@ governance-conformance-sync:
       }
       cat /tmp/conformance_report.json
       echo "✓ Conformance scan complete"
-  rules:
-    - if: '$CI_MERGE_REQUEST_ID'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-  allow_failure: false
 
 # =============================================================================
 # Test Stage - Unit Tests

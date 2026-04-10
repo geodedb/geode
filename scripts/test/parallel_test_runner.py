@@ -8,6 +8,9 @@ Features:
 - Create summary reports and failure analysis
 - Track progress across test runs
 - Enable per-scenario and per-test debugging
+
+Shared logic (surrogate-pair fixing, expectation validation, constants)
+lives in ``test_runner_core``.
 """
 
 import atexit
@@ -28,6 +31,18 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
+
+# Import shared logic from core module
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from test_runner_core import (  # noqa: E402
+    EXTERNAL_COMMANDS,
+)
+from test_runner_core import (
+    fix_surrogate_pairs as _core_fix_surrogate_pairs,
+)
+from test_runner_core import (
+    validate_expectations as _core_validate_expectations,
+)
 
 
 @dataclass
@@ -240,22 +255,8 @@ class ParallelTestRunner:
         ]
 
     def _fix_surrogate_pairs(self, s: str) -> str:
-        """Fix UTF-16 surrogate pairs in a string by converting to proper Unicode.
-
-        YAML may load strings containing raw surrogate pairs (e.g., \\ud83d\\udd10)
-        which Python can't encode as UTF-8. This function converts surrogate pairs
-        to their proper Unicode code points.
-        """
-        if not isinstance(s, str):
-            return s
-        try:
-            # Encode with surrogatepass to handle surrogate pairs, then decode back
-            return s.encode("utf-16", "surrogatepass").decode("utf-16")
-        except (UnicodeEncodeError, UnicodeDecodeError):
-            try:
-                return s.encode("utf-8", "replace").decode("utf-8")
-            except (UnicodeEncodeError, UnicodeDecodeError):
-                return s
+        """Fix UTF-16 surrogate pairs -- delegates to shared core."""
+        return _core_fix_surrogate_pairs(s)
 
     def _substitute_variables(
         self,
@@ -689,28 +690,9 @@ class ParallelTestRunner:
         """Run a single test case and return the result."""
         test_name = test_case.get("name", "unnamed")
 
-        # Define external commands that should be run directly (not via geode binary)
-        external_commands = {
-            "grep",
-            "ls",
-            "cat",
-            "head",
-            "tail",
-            "find",
-            "wc",
-            "diff",
-            "xxd",
-            "hexdump",
-            "strings",
-            "file",
-            "stat",
-            "sh",
-            "bash",
-        }
-
         # Check if test specifies an external command
         test_command = test_case.get("command")
-        is_external_command = isinstance(test_command, str) and test_command in external_commands
+        is_external_command = isinstance(test_command, str) and test_command in EXTERNAL_COMMANDS
 
         # Handle both args format and command/query format
         if "args" in test_case:
@@ -968,103 +950,9 @@ class ParallelTestRunner:
     def validate_expectations(
         self, result: subprocess.CompletedProcess, expect: dict, test_case: dict, spec_name: str
     ) -> tuple[bool, str]:
-        """Validate test result against expectations."""
+        """Validate test result against expectations -- delegates to shared core."""
         test_name = test_case.get("name", "unnamed")
-
-        # Check exit code
-        if "exit_code" in expect:
-            expected_exit = expect["exit_code"]
-            # Handle list of acceptable exit codes
-            if isinstance(expected_exit, list):
-                if result.returncode not in expected_exit:
-                    return False, f"exit code: expected {expected_exit}, got {result.returncode}"
-            else:
-                # Special case for integration test invalid-command
-                if (
-                    spec_name == "geode_integration.yml"
-                    and test_name == "invalid-command"
-                    and expected_exit == 0
-                    and result.returncode == 2
-                ):
-                    # This is the conflicting test - keep exit code 2 for consistency
-                    pass
-                elif result.returncode != expected_exit:
-                    return False, f"exit code: expected {expected_exit}, got {result.returncode}"
-
-        # Filter out JSON log lines from stdout/stderr for cleaner output matching
-        stdout_lines = [line for line in result.stdout.split("\n") if not line.startswith("{")]
-        stderr_lines = [line for line in result.stderr.split("\n") if not line.startswith("{")]
-        filtered_stdout = "\n".join(stdout_lines)
-        filtered_stderr = "\n".join(stderr_lines)
-
-        # Check stdout_contains
-        if "stdout_contains" in expect:
-            combined = filtered_stdout + filtered_stderr + result.stdout + result.stderr
-
-            # For table format tests, also check JSON output
-            if "--format" in test_case.get("args", []) and "table" in test_case.get("args", []):
-                for line in result.stdout.split("\n"):
-                    if line.startswith('{"status_class":"00000"'):
-                        try:
-                            data = json.loads(line)
-                            if "result" in data:
-                                # Add column names
-                                if "columns" in data["result"]:
-                                    for col in data["result"]["columns"]:
-                                        if "name" in col:
-                                            combined += " " + col["name"]
-                                # Add row values
-                                if "rows" in data["result"]:
-                                    for row in data["result"]["rows"]:
-                                        for key, val in row.items():
-                                            combined += " " + str(key) + " " + str(val)
-                        except Exception:
-                            pass
-
-            for pattern in expect["stdout_contains"]:
-                # Check both stdout and stderr (some commands output to stderr)
-                combined_all = combined.lower() + " " + filtered_stderr.lower() + " " + result.stderr.lower()
-                if pattern.lower() not in combined_all:
-                    return False, f"missing: '{pattern}'"
-
-        # Check stderr_contains
-        if "stderr_contains" in expect:
-            combined_stderr = filtered_stderr + result.stderr
-            for pattern in expect["stderr_contains"]:
-                if pattern.lower() not in combined_stderr.lower():
-                    return False, f"stderr missing: '{pattern}'"
-
-        # Check stdout_regex
-        if "stdout_regex" in expect:
-            import re
-
-            combined = result.stdout + result.stderr
-            for pattern in expect["stdout_regex"]:
-                try:
-                    if not re.search(pattern, combined):
-                        return False, f"regex not matched: '{pattern}'"
-                except Exception as e:
-                    return False, f"invalid regex: '{pattern}' - {str(e)}"
-
-        # Handle JSON assertions
-        if "stdout_json_assert" in expect:
-            try:
-                json_lines = [line for line in result.stdout.split("\n") if line.startswith("{")]
-                if json_lines:
-                    for _assertion in expect.get("stdout_json_assert", []):
-                        # Simple validation - check that we got JSON output
-                        if not json_lines:
-                            return False, "no JSON output for assertion"
-                else:
-                    return False, "no JSON output"
-            except Exception as e:
-                return False, f"JSON assertion failed: {str(e)}"
-
-        # Handle geode_query expectation
-        if "geode_query" in expect and not result.stdout and not result.stderr:
-            return False, "no query output"
-
-        return True, "PASSED"
+        return _core_validate_expectations(result, expect, spec_name=spec_name, test_name=test_name)
 
     def run_spec_file(self, spec_file: Path, scenario: Scenario, loaded_spec: Optional[dict] = None) -> SpecResult:
         """Run all tests in a specification file for a specific scenario."""

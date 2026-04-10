@@ -12,6 +12,10 @@ RUN apt-get update && apt-get install -y \
 
 COPY zig-out/bin/geode /usr/local/bin/geode
 
+# Copy shared health check script (issue #549: single source of truth)
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/health-check.sh
+
 USER geode
 WORKDIR /home/geode
 
@@ -19,9 +23,9 @@ ENV LOG_LEVEL=error
 
 EXPOSE 3141/udp 50051/tcp 9091/tcp
 
+# Health check using shared script (see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/health-check.sh
 
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]
 CMD ["--data-dir", "/data", "--enable-auth"]
