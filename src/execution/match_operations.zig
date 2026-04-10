@@ -1905,7 +1905,11 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 // Find all matching relationships for this chain and combine with existing binding
                 const left_labels = hop.left.labels;
                 var node_iter = store.nodes.iterator();
+                // PERF-P1-003: LIMIT pushdown — stop Cartesian product expansion
+                // once we have enough bindings, avoiding full N*M generation.
+                var cart_reached_cap = false;
                 while (node_iter.next()) |node_entry| {
+                    if (cart_reached_cap) break;
                     const new_left_node = node_entry.value_ptr;
                     if (!std.mem.eql(u8, new_left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(new_left_node.*, filter_tenant)) continue;
@@ -1936,8 +1940,17 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             if (right_var) |rv| try new_binding.vars.put(rv, right_node);
                             if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
                             try new_bindings.append(allocator, new_binding);
+                            // PERF-P1-003: LIMIT pushdown for Cartesian products
+                            if (scan_cap) |cap| {
+                                if (new_bindings.items.len >= cap) {
+                                    cart_reached_cap = true;
+                                    break;
+                                }
+                            }
                         }
                     }
+
+                    if (cart_reached_cap) continue;
 
                     // Process incoming edges
                     for (incoming_edge_ids) |edge_id| {
@@ -1959,6 +1972,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                             if (right_var) |rv| try new_binding.vars.put(rv, right_node);
                             if (chain_rel_var) |rn| try new_binding.edge_vars.put(rn, edge);
                             try new_bindings.append(allocator, new_binding);
+                            // PERF-P1-003: LIMIT pushdown for Cartesian products
+                            if (scan_cap) |cap| {
+                                if (new_bindings.items.len >= cap) {
+                                    cart_reached_cap = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
