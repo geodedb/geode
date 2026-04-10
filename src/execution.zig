@@ -1756,7 +1756,9 @@ pub const VariableLengthPath = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PathIterator; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+// CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=PathIterator; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
+// CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
+// CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-04-10
 // Iterator-based BFS path expansion for streaming consumption of variable-length paths.
 // Encapsulates BFS state and yields qualifying paths one at a time via next().
 pub const PathIterator = struct {
@@ -2062,53 +2064,9 @@ pub const PathIterator = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-09
-// CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2025-12-23
-// Expands variable-length paths using BFS
-// Returns all paths from start_node that match the length constraints and relationship type filter
-// rel_direction: 'r' for right (forward), 'l' for left (reverse), 'u' for undirected (both)
-// path_mode: controls path traversal semantics (walk/trail/acyclic/simple)
-// CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathExpansion; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-08
-pub fn expandVariableLengthPaths(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    start_node_id: u64,
-    min_len: u32,
-    max_len: ?u32,
-    rel_type: ?[]const u8,
-    rel_direction: u8,
-) !std.ArrayList(VariableLengthPath) {
-    // Default to acyclic for backward compatibility
-    return expandVariableLengthPathsWithMode(allocator, store, start_node_id, min_len, max_len, rel_type, rel_direction, .acyclic);
-}
-
-// Extended version with path mode parameter for ISO GQL path mode support
-// Backward-compatible wrapper that drains a PathIterator into an ArrayList.
-pub fn expandVariableLengthPathsWithMode(
-    allocator: std.mem.Allocator,
-    store: *graph_store.GraphStore,
-    start_node_id: u64,
-    min_len: u32,
-    max_len: ?u32,
-    rel_type: ?[]const u8,
-    rel_direction: u8,
-    path_mode: ast.PathMode,
-) !std.ArrayList(VariableLengthPath) {
-    var iter = try PathIterator.init(allocator, store, start_node_id, min_len, max_len, rel_type, rel_direction, path_mode);
-    defer iter.deinit();
-
-    var result_paths = std.ArrayList(VariableLengthPath).empty;
-    errdefer {
-        for (result_paths.items) |*p| p.deinit(allocator);
-        result_paths.deinit(allocator);
-    }
-
-    while (try iter.next()) |path| {
-        try result_paths.append(allocator, path);
-    }
-
-    return result_paths;
-}
+// GAP-0520: Removed expandVariableLengthPaths and expandVariableLengthPathsWithMode
+// materializing wrappers — all call sites now use PathIterator.init() directly
+// for streaming path consumption. CANARY markers relocated to PathIterator definition.
 
 pub fn createTestGraphG1(allocator: std.mem.Allocator) !void {
     const store = graph_store.getGlobalStore(allocator);
