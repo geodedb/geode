@@ -30,6 +30,48 @@ const ExecutionContext = execution.ExecutionContext;
 
 const Value = value_types.Value;
 
+// ---------------------------------------------------------------------------
+// StaticStringMap dispatch table — O(1) lookup replaces sequential if-else chain.
+// All handlers share a uniform signature; unused parameters are discarded.
+// ---------------------------------------------------------------------------
+const MetaHandler = *const fn (std.mem.Allocator, *graph_store.GraphStore, ExecutionContext) anyerror!ExecutionResult;
+
+const dispatch_table = std.StaticStringMap(MetaHandler).initComptime(.{
+    // db.* graph introspection
+    .{ "db.labels", handleDbLabels },
+    .{ "db.relationshiptypes", handleDbRelationshipTypes },
+    .{ "db.propertykeys", handleDbPropertyKeys },
+    .{ "db.indexes", handleDbIndexes },
+    .{ "db.constraints", handleDbConstraints },
+    // dbms.* server introspection
+    .{ "dbms.procedures", handleDbmsProcedures },
+    .{ "dbms.functions", handleDbmsFunctions },
+});
+
+// ---- Uniform-signature wrappers ----
+
+fn handleDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbLabels(allocator, store);
+}
+fn handleDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbRelationshipTypes(allocator, store);
+}
+fn handleDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbPropertyKeys(allocator, store);
+}
+fn handleDbIndexes(allocator: std.mem.Allocator, _: *graph_store.GraphStore, context: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbIndexes(allocator, context);
+}
+fn handleDbConstraints(allocator: std.mem.Allocator, _: *graph_store.GraphStore, context: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbConstraints(allocator, context);
+}
+fn handleDbmsProcedures(allocator: std.mem.Allocator, _: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbmsProcedures(allocator);
+}
+fn handleDbmsFunctions(allocator: std.mem.Allocator, _: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbmsFunctions(allocator);
+}
+
 /// Execute a db.* or dbms.* introspection procedure.
 /// Returns null if the procedure name is not recognized by this dispatcher
 /// (caller falls through to other dispatchers).
@@ -42,29 +84,8 @@ pub fn execute(
 ) !?ExecutionResult {
     _ = call_stmt;
 
-    // ---- db.* graph introspection ----
-    if (std.mem.eql(u8, proc_name, "db.labels")) {
-        return try executeDbLabels(allocator, store);
-    }
-    if (std.mem.eql(u8, proc_name, "db.relationshiptypes")) {
-        return try executeDbRelationshipTypes(allocator, store);
-    }
-    if (std.mem.eql(u8, proc_name, "db.propertykeys")) {
-        return try executeDbPropertyKeys(allocator, store);
-    }
-    if (std.mem.eql(u8, proc_name, "db.indexes")) {
-        return try executeDbIndexes(allocator, context);
-    }
-    if (std.mem.eql(u8, proc_name, "db.constraints")) {
-        return try executeDbConstraints(allocator, context);
-    }
-
-    // ---- dbms.* server introspection ----
-    if (std.mem.eql(u8, proc_name, "dbms.procedures")) {
-        return try executeDbmsProcedures(allocator);
-    }
-    if (std.mem.eql(u8, proc_name, "dbms.functions")) {
-        return try executeDbmsFunctions(allocator);
+    if (dispatch_table.get(proc_name)) |handler| {
+        return try handler(allocator, store, context);
     }
 
     return null;
