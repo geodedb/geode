@@ -396,15 +396,18 @@ pub fn executeTde(
             columns[1] = try allocator.dupe(u8, "provider_type");
             columns[2] = try allocator.dupe(u8, "status");
 
-            const row = try allocator.alloc([]const u8, 3);
-            row[0] = try allocator.dupe(u8, "false");
-            row[1] = try allocator.dupe(u8, @tagName(provider_config.provider_type));
-            row[2] = try std.fmt.allocPrint(allocator, "Provider init failed: {s}", .{@errorName(err)});
-
-            const rows = try allocator.alloc([]const []const u8, 1);
+            const rows = try allocator.alloc([]Value, 1);
+            const row = try allocator.alloc(Value, 3);
+            row[0] = Value{ .Bool = false };
+            row[1] = Value{ .Str = try allocator.dupe(u8, @tagName(provider_config.provider_type)) };
+            row[2] = Value{ .Str = try std.fmt.allocPrint(allocator, "Provider init failed: {s}", .{@errorName(err)}) };
             rows[0] = row;
 
-            return .{ .columns = columns, .rows = rows };
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+            };
         };
         defer provider.deinit();
 

@@ -533,7 +533,8 @@ pub const GeodeGrpcServer = struct {
         var grpc_session_key_raw: [32]u8 = undefined;
         std.crypto.random.bytes(&grpc_session_key_raw);
         const grpc_session_key = try allocator.alloc(u8, 64);
-        _ = std.fmt.bufPrint(grpc_session_key, "{}", .{std.fmt.fmtSliceHexLower(&grpc_session_key_raw)}) catch unreachable;
+        const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
+        @memcpy(grpc_session_key, &hex_array);
         var server = try GrpcServer.init(allocator, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 

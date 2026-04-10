@@ -242,6 +242,9 @@ pub const AuditLog = struct {
         return .{ .allocator = a, .entries = try std.ArrayList(AuditEntry).initCapacity(a, 0) };
     }
     pub fn deinit(self: *AuditLog) void {
+        for (self.entries.items) |entry| {
+            self.allocator.free(entry.details);
+        }
         self.entries.deinit(self.allocator);
     }
     fn append(self: *AuditLog, ev: AuditEventType, user_id: UserId, comptime fmt: []const u8, args: anytype) !void {
@@ -503,6 +506,18 @@ pub const SecurityManager = struct {
             if (e.value_ptr.mfa_secret) |secret| {
                 self.allocator.free(secret);
             }
+            if (e.value_ptr.recovery_codes) |*codes| {
+                for (codes.items) |code| {
+                    self.allocator.free(code);
+                }
+                codes.deinit(self.allocator);
+            }
+            var attr_it = e.value_ptr.attributes.iterator();
+            while (attr_it.next()) |attr| {
+                self.allocator.free(attr.key_ptr.*);
+                self.allocator.free(attr.value_ptr.*);
+            }
+            e.value_ptr.attributes.deinit();
         }
         self.users.deinit();
 
@@ -515,12 +530,53 @@ pub const SecurityManager = struct {
         }
         self.roles.deinit();
 
+        // Release permission map strings.
+        var perm_it = self.permissions.iterator();
+        while (perm_it.next()) |e| {
+            self.allocator.free(e.value_ptr.name);
+            self.allocator.free(e.value_ptr.resource);
+            if (e.value_ptr.conditions) |conditions| {
+                self.allocator.free(conditions);
+            }
+        }
+        self.permissions.deinit();
+
         // Release RBAC user-role assignment ArrayLists
         var rbac_it = self.rbac.user_roles.iterator();
         while (rbac_it.next()) |e| {
             e.value_ptr.deinit(self.allocator);
         }
         self.rbac.user_roles.deinit();
+
+        var role_perm_it = self.rbac.role_permissions.iterator();
+        while (role_perm_it.next()) |e| {
+            e.value_ptr.deinit(self.allocator);
+        }
+        self.rbac.role_permissions.deinit();
+
+        var hierarchy_it = self.rbac.role_hierarchy.iterator();
+        while (hierarchy_it.next()) |e| {
+            e.value_ptr.deinit(self.allocator);
+        }
+        self.rbac.role_hierarchy.deinit();
+
+        var session_it = self.sessions.iterator();
+        while (session_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.ip_address) |ip| {
+                self.allocator.free(ip);
+            }
+            if (entry.value_ptr.user_agent) |user_agent| {
+                self.allocator.free(user_agent);
+            }
+        }
+        self.sessions.deinit();
+
+        self.abac_policies.deinit(self.allocator);
+        self.row_policies.deinit(self.allocator);
+        self.mfa_policies.deinit(self.allocator);
+        self.mfa_require_cache.deinit();
+        self.audit_log.deinit();
     }
     // ---- MFA Policies ----
 
@@ -1662,6 +1718,116 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
 // Unit Tests for GAP-0149: Fail-Secure Risk Score Parsing
 // CANARY: REQ=REQ-AUTH-RISKSCORE-001; FEATURE="FailSecureRiskScore"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-01-13
 // ============================================================================
+
+test "SecurityManager.deinit releases default startup allocations" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    var sm = try SecurityManager.init(gpa.allocator());
+    defer sm.deinit();
+}
+
+test "SecurityManager.deinit releases hydrated runtime state" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer std.debug.assert(gpa.deinit() == .ok);
+
+    const allocator = gpa.allocator();
+
+    var sm = try SecurityManager.initEmpty(allocator);
+    defer sm.deinit();
+
+    const role = try sm.createRole("reader", "Hydrated role");
+    const perm = try sm.createPermission("read_graph", "graph", .read);
+    perm.conditions = try allocator.dupe(u8, "tenant_id = 7");
+    try sm.grantPermission(role.id, perm.id);
+
+    var parents = try std.ArrayList(RoleId).initCapacity(allocator, 0);
+    try parents.append(allocator, role.id);
+    try sm.rbac.role_hierarchy.put(role.id, parents);
+
+    try sm.hydrateUser(
+        42,
+        "alice",
+        "alice@example.com",
+        "$argon2id$v=19$m=19456,t=2,p=1$00112233445566778899aabbccddeeff$00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+        false,
+        true,
+        false,
+        false,
+        true,
+        "SECRET42",
+        7,
+        "{\"risk_score\":\"77\",\"department\":\"eng\"}",
+    );
+    try sm.assignRole(42, role.id);
+
+    if (sm.users.getPtr(42)) |user| {
+        user.recovery_codes = try std.ArrayList([]const u8).initCapacity(allocator, 0);
+        try user.recovery_codes.?.append(allocator, try allocator.dupe(u8, "recover-1"));
+        try user.recovery_codes.?.append(allocator, try allocator.dupe(u8, "recover-2"));
+    } else {
+        return error.TestUnexpectedResult;
+    }
+
+    const session_token = try sm.createSession(42);
+    if (sm.sessions.getPtr(session_token)) |session| {
+        session.ip_address = try allocator.dupe(u8, "127.0.0.1");
+        session.user_agent = try allocator.dupe(u8, "zig-test");
+    } else {
+        return error.TestUnexpectedResult;
+    }
+
+    const subject_conditions = [_]AttributeCondition{
+        .{
+            .attribute = "department",
+            .operator = .equals,
+            .value = .{ .string = "eng" },
+        },
+    };
+    const resource_conditions = [_]AttributeCondition{
+        .{
+            .attribute = "name",
+            .operator = .equals,
+            .value = .{ .string = "graph" },
+        },
+    };
+    const actions = [_]Action{.read};
+    const env_conditions = [_]EnvironmentCondition{};
+    try sm.createABACPolicy(.{
+        .id = 1,
+        .name = "allow-eng-read",
+        .description = "Allow readers from engineering",
+        .effect = .allow,
+        .subjects = &subject_conditions,
+        .resources = &resource_conditions,
+        .actions = &actions,
+        .conditions = &env_conditions,
+        .priority = 1,
+        .enabled = true,
+    });
+
+    const row_roles = [_]RoleId{role.id};
+    try sm.createRowLevelPolicy(.{
+        .id = 2,
+        .name = "tenant-read-filter",
+        .table = "nodes",
+        .operation = .select,
+        .using_clause = "n.tenant_id = 7",
+        .check_clause = null,
+        .roles = &row_roles,
+        .enabled = true,
+    });
+
+    const mfa_roles = [_]RoleId{role.id};
+    try sm.addMfaPolicy(.{
+        .id = 3,
+        .enabled = true,
+        .scope = .role,
+        .roles = &mfa_roles,
+        .condition = .match_any_role,
+    });
+    try sm.mfa_require_cache.put(42, true);
+}
 
 test "parseRiskScore: valid numeric string parses correctly" {
     const parsed = std.fmt.parseInt(u8, "50", 10) catch 255;
