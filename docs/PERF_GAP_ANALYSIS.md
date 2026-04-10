@@ -5,7 +5,7 @@ Last updated: 2026-04-09
 ## Summary
 
 - Total findings: 43
-- Open: 12
+- Open: 9
 - Closed / Implemented: 24
 - Closed (Won't Do / Sufficient): 7 (1 transport + 6 migration engine)
 - Blocked: 0
@@ -16,11 +16,9 @@ Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 n
 
 | Rank | Sev | Score | Finding | Expected Impact |
 |------|-----|------:|---------|-----------------|
-| 1 | P0 | 60 | getEdgesByType O(E) full scan -- no edge-type index | Two full passes over all edges per type lookup; linear in total edge count |
-| 2 | P1 | 48 | O(n^2) BFS dequeue via orderedRemove(0) | Quadratic memmove cost on large BFS traversals |
-| 3 | P1 | 48 | c=4 throughput regression -- PollSync contention | 727 QPS at c=2 drops to 646 QPS at c=4 (11% regression) |
-| 4 | P1 | 45 | No CLI connection reuse | Full QUIC+TLS handshake per `geode query` (1.3-1.9s overhead per invocation) |
-| 5 | P1 | 32 | Unbounded OS thread spawning per QUIC stream | Up to 65 threads per connection; 100 connections = 6,500 threads |
+| 1 | P1 | 48 | c=4 throughput regression -- PollSync contention | 727 QPS at c=2 drops to 646 QPS at c=4 (11% regression) |
+| 2 | P1 | 45 | No CLI connection reuse | Full QUIC+TLS handshake per `geode query` (1.3-1.9s overhead per invocation) |
+| 3 | P1 | 32 | Cartesian product no LIMIT pushdown | Full N*M cross product before truncation |
 
 > PathIterator BFS memory leak (previously #1, PerfScore 100) -- **Closed 2026-04-09** (commit `9f5e587f`)
 
@@ -78,11 +76,11 @@ Context: Full perf-scan + perf-review of execution engine, graph store, transpor
 | Rank | Sev | Score | Finding | Component | Evidence | Fix Summary | Status |
 |---|---|---:|---|---|---|---|---|
 | 31 | P0 | 100 | PathIterator BFS memory leak -- `getEdgesFrom`/`getEdgesTo` allocations never freed during var-len path traversal | Execution | `src/execution.zig:1937-1938`: allocates `[]Edge` slices via `getEdgesFrom(allocator, last_node_id)` and `getEdgesTo(allocator, last_node_id)` in BFS loop; neither slice is freed before next iteration or on path completion | Fixed: added `defer allocator.free()` for all `getEdgesFrom`/`getEdgesTo` allocations in BFS loop; also freed edge slices in streaming PathIterator. Commit `9f5e587f`. | Closed / Implemented |
-| 32 | P0 | 60 | `getEdgesByType` O(E) full scan -- no edge-type index | Graph store | `src/graph_store.zig:2850-2875`: two full passes over `self.edges.valueIterator()` (count pass + copy pass); nodes have `label_index` but edges have no type index | Add `edge_type_index: StringHashMap(ArrayList(u64))` keyed by `"graph:type"`; maintain on `addEdge`/`removeEdge`; convert `getEdgesByType` to index lookup | Open |
-| 33 | P1 | 48 | O(n^2) BFS dequeue via `orderedRemove(0)` | Execution | `src/execution.zig:1909` (main BFS queue), `:1964` (pending_results queue): `orderedRemove(0)` triggers `memmove` of remaining items on every dequeue; BFS on large graphs becomes quadratic | Replace with ring buffer (circular index into existing ArrayList backing) or two-stack queue; `pending_results.orderedRemove(0)` at `:1964` has same issue | Open |
+| 32 | P0 | 60 | `getEdgesByType` O(E) full scan -- no edge-type index | Graph store | `src/graph_store.zig:2850-2875`: two full passes over `self.edges.valueIterator()` (count pass + copy pass); nodes have `label_index` but edges have no type index | Added `edge_type_index: StringHashMap(ArrayList(u64))` keyed by `"graph:type"`; maintained on all 6 mutation paths (`addEdge`/`removeEdge`/clone/load/restore); `getEdgesByType` uses index for O(1) lookup. 5 new tests. | Closed (2026-04-10) |
+| 33 | P1 | 48 | O(n^2) BFS dequeue via `orderedRemove(0)` | Execution | `src/execution.zig:1909` (main BFS queue), `:1964` (pending_results queue): `orderedRemove(0)` triggers `memmove` of remaining items on every dequeue; BFS on large graphs becomes quadratic | Replaced with O(1) front-index dequeue (`queue_front`/`pending_front`) with amortized compaction when front > len/2. Both queue and pending_results use same pattern. | Closed (2026-04-10) |
 | 34 | P1 | 48 | c=4 throughput regression -- PollSync contention + broadcast wakeup storms | Transport | Load test baseline: 727 QPS at c=2 drops to 646 QPS at c=4 (11% regression); root cause: `PollSync` mutex contention in `src/transport/quic.zig`, persistence thread lock contention, and `streams_cv.broadcast()` waking all waiters in `src/server/quic_connection_handler.zig:746` | Instrument contention points; increase poll sleep gap; replace `broadcast()` with `signal()` for single-waiter wakeup; consider per-connection poll locks | Open |
 | 35 | P1 | 45 | No CLI connection reuse -- full QUIC+TLS handshake per `geode query` invocation | CLI | `src/cli/main.zig:1992-2037`: each `geode query` call creates new `QuicClient.init`, connects, handshakes (1.3-1.9s overhead), executes one query, then deinits | Add `--batch` mode that accepts multiple queries on stdin over a single QUIC connection; alternatively, implement Unix domain socket for local server communication | Open |
-| 36 | P1 | 32 | Unbounded OS thread spawning per QUIC stream -- up to 65 threads per connection | Transport | `src/server/quic_connection_handler.zig:740`: `std.Thread.spawn(.{}, handleAdditionalStream, ...)` for each additional multiplexed stream; QUIC allows up to 65 concurrent streams per connection; comment at `:735-739` explains why Spice pool was not used | Reuse existing Spice thread pool for stream handlers; add stream handler work items with proper lifecycle management; alternatively cap concurrent stream threads per connection | Open |
+| 36 | P1 | 32 | Unbounded OS thread spawning per QUIC stream -- up to 65 threads per connection | Transport | `src/server/quic_connection_handler.zig:740`: `std.Thread.spawn(.{}, handleAdditionalStream, ...)` for each additional multiplexed stream; QUIC allows up to 65 concurrent streams per connection; comment at `:735-739` explains why Spice pool was not used | Added `GlobalStreamThrottle` with atomic CAS fast path + condvar backpressure, capped at 256 global threads (configurable). Excess streams wait 10ms then get rejected. 7 new tests. | Closed (2026-04-10) |
 | 37 | P1 | 32 | Cartesian product no LIMIT pushdown -- full N*M cross product before truncation | Execution | `src/execution/match_operations.zig:1903`: Cartesian product path generates all N*M bindings before any LIMIT is applied; `scan_cap` hint exists in other paths but not here | Add early break when `new_bindings.items.len >= scan_cap` in the Cartesian product nested loop (after `:1895` append); propagate `scan_cap` from LIMIT clause | Open |
 | 38 | P2 | 27 | Linear visited-check in PathIterator `shouldSkipByPathMode` | Execution | `src/execution.zig:1818-1838`: `.trail` mode scans `current_path.edges.items` linearly per edge expansion; `.acyclic` and `.simple` modes scan `current_path.nodes.items` linearly; O(d) per expansion where d = path depth | Replace linear scans with `AutoHashMap(u64, void)` for O(1) membership tests; maintain per-path visited sets alongside the node/edge lists | Open |
 | 39 | P2 | 20 | 341x `initCapacity(allocator, 0)` -- no-op allocations on hot paths | Execution | 341 occurrences across 43 files; top offenders: `match_operations.zig` (55), `execution.zig` (33), `centrality_algorithms.zig` (53), `statement_handlers.zig` (22), `crud_operations.zig` (20) | Replace with `.empty` (zero-cost, no allocator call) for lazy-init paths, or `initCapacity(allocator, 8)` for hot paths that always grow; batch fix via project-wide search-replace | Open |
@@ -97,7 +95,8 @@ Context: Full perf-scan + perf-review of execution engine, graph store, transpor
 
 - `#444` (Closed), `#452` (Closed), `#456` (Closed), `#460` (Closed), `#557` (Closed), `#558` (Closed), `#560` (Closed), `#561` (Closed), `#563` (Closed)
 - **Closed (2026-04-09)**: #31 PathIterator memory leak (P0/100, commit `9f5e587f`)
-- **Open**: #33 BFS orderedRemove (P1/48), #37 Cartesian LIMIT pushdown (P1/32), #38 linear visited-check (P2/27), #39 initCapacity(0) (P2/20)
+- **Closed (2026-04-10)**: #32 edge-type index (P0/60), #33 BFS dequeue (P1/48), #36 global thread throttle (P1/32)
+- **Open**: #37 Cartesian LIMIT pushdown (P1/32), #38 linear visited-check (P2/27), #39 initCapacity(0) (P2/20)
 
 ### DB (Storage / Graph Store)
 

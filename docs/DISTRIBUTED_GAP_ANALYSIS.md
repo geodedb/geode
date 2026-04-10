@@ -11,19 +11,19 @@
 | EXEMPT | 34 | 37.8% |
 | BENCHED | 1 | 1.1% |
 
-## Open Gaps (23 total)
+## Open Gaps (21 total)
 
 ### Critical (0)
 
 All critical gaps have been closed. See Closed Gaps section below.
 
-### High (4)
+### High (2)
 
 | Gap-ID | Category | Description | File:Line | Req ID |
 |--------|----------|-------------|-----------|--------|
 | GAP-D005 | Incomplete Impl | union_distinct merge is a placeholder (calls union_all) | `federation.zig:856-859` | -- |
 | GAP-D006 | Incomplete Impl | hash_aggregate merge has hardcoded sum=0 | `enhanced_query_coordinator.zig:465-523` | -- |
-| GAP-D007 | Missing Impl | query_planner.zig entirely scaffolded (15+ stub methods) | `query_planner.zig` (entire) | -- |
+| ~~GAP-D007~~ | ~~Missing Impl~~ | ~~query_planner.zig entirely scaffolded~~ — **CLOSED (2026-04-10)**: 6 stub methods replaced with real implementations (planExecutionPhases, addPropertyFilters, addEdgePattern, addFilterCondition, addFunctionFilter, analyzeDataFlow). 12 new tests in `tests/test_distributed_query_planner.zig`. | `query_planner.zig` | -- |
 | GAP-D008 | Incomplete Impl | Raft PersistentStorage methods all return null/no-op | `raft_consensus.zig:222-245` | REQ-GQL-RAFT-PERSIST |
 
 ### Medium (11)
@@ -40,7 +40,7 @@ All critical gaps have been closed. See Closed Gaps section below.
 | GAP-D016 | Missing Test | `e2e_raft_persist_snapshot_membership` is print-only sham | `raft_persistent.zig:4` | REQ-GQL-RAFT-PERSIST |
 | GAP-D017 | Missing Test | `e2e_distributed_cluster` commented out in all_tests.zig | `network_transport.zig:6` | REQ-GQL-041 |
 | GAP-D028 | Missing Test | No unit tests for twophase Transaction prepare/commit/abort | `twophase.zig:399-630` | REQ-DIST-2PC-001/002/003 |
-| GAP-D027 | Missing CANARY | query_planner.zig has 0 CANARY tokens (577 lines) | `query_planner.zig` | -- |
+| ~~GAP-D027~~ | ~~Missing CANARY~~ | ~~query_planner.zig has 0 CANARY tokens~~ — **CLOSED (2026-04-10)**: 6 CANARY markers added (REQ-DIST-PLAN-010 through REQ-DIST-PLAN-015) | `query_planner.zig` | -- |
 
 ### Low (8) -- Status Mismatches
 

@@ -8,12 +8,12 @@ Audited by: Claude Opus 4.6 (adversarial security review)
 
 - **Total findings:** 24 (13 prior + 11 new from re-audit)
 - **Critical:** 0
-- **High:** 5 -- 2 closed, 2 won't do, 1 open (SEC-MIG-01)
+- **High:** 5 -- 3 closed, 2 won't do, 0 open
 - **Medium:** 9 -- 3 closed, 2 won't do, 4 open (SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05)
 - **Low:** 10 -- 7 closed, 2 won't do, 1 open (SEC-MIG-08)
 - **Closed / Implemented:** 12 (7 prior + 5 closed 2026-04-05)
 - **Won't Do:** 5 (unsigned ledger, weak checksum, GQL injection, missing authz, password exposure)
-- **Open:** 6 (SEC-MIG-01, SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05, SEC-MIG-08)
+- **Open:** 5 (SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05, SEC-MIG-08)
 - **Confidential issues:** 2 (#592, #598)
 
 ### Top 5 Risks (Overall)
@@ -78,7 +78,7 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 
 | Rank | ID | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence (file:line) | Fix Guidance | Owner | SLA | Status |
 |------|-----|----------|-----------|---------|-----------|-----------|---------------------|--------------|-------|-----|--------|
-| 1 | SEC-MIG-01 | HIGH | 40 | No cryptographic signing of migration files -- executed verbatim from filesystem | migration | CWE-345 / A08:2021 | mod.zig:415-418 | Ed25519 or HMAC-SHA256 signing; verify signature before execution | migration | 30 days | Open |
+| 1 | SEC-MIG-01 | HIGH | 40 | No cryptographic signing of migration files -- executed verbatim from filesystem | migration | CWE-345 / A08:2021 | mod.zig:415-418 | HMAC-SHA256 signing with `.sig` sidecar files; `verifyMigrationSignature` before execution; `--allow-unsigned` escape hatch; constant-time comparison; `geode migrate sign` CLI command. 15 new tests. | migration | -- | Closed (2026-04-10) |
 | 2 | SEC-MIG-03 | MEDIUM | 36 | `migrate status`/`create` have zero authentication -- local filesystem only | cli | CWE-306 / A07:2021 | backup_cli.zig:1052, 1283 | Require authentication for CLI migration commands or restrict to admin role | migration | 90 days | Open |
 | 3 | SEC-MIG-04 | MEDIUM | 36 | In-process lock provides no cross-process protection | migration | CWE-362, CWE-667 / A04:2021 | mod.zig:329-373 | Replace in-process mutex with `flock()` on lockfile for cross-process safety | migration | 90 days | Open |
 | 4 | SEC-MIG-02 | MEDIUM | 32 | No CI pipeline migration guard -- .gql files not reviewed/validated by CI | ci | CWE-829 / A08:2021 | .gitlab-ci.yml | Add CI job to lint/validate .gql migration files; require approval for changes | migration | 90 days | Open |
