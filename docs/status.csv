@@ -28,6 +28,7 @@ GQL-39075-RQ-0011,Unicode Confusable Detection,ConfusableNeverSelf,TESTED,,,conf
 GQL-39075-RQ-0012,Conformance/ConfusableDetection,SQLSTATE42004,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0012,Confusables/SkeletonAlgorithm,DetectConfusablePair,TESTED,,,unicode,2026-02-23,docs/plans/2026-02-23-gql-conformance-implementation.md
 GQL-39075-RQ-0012,Unicode Confusable Detection,ConfusableIdentifierSqlstate42004,IMPL,,,conformance,2026-02-23,src/unicode/confusables.zig
+GQL-39075-RQ-0012,Unicode Confusable Detection,ParseTimeEnforcement,TESTED,,,conformance,2026-04-10,src/gql/confusable_check.zig
 GQL-39075-RQ-0013,Conformance/UtcSls,ImplDefined,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig
 GQL-39075-RQ-0013,GQL Conformance Profile,UtcSlsDeclaration,TESTED,,,conformance,2026-02-23,src/conformance.zig
 GQL-39075-RQ-0014,Conformance/TemporalLiteralFormat,ImplDefined,TESTED,,,conformance,2026-02-23,tests/test_gql_conformance_rq.zig

@@ -797,6 +797,12 @@ pub fn build(b: *std.Build) void {
     proc_case_tests.root_module.addImport("json", json_mod);
     const run_proc_case_tests = b.addRunArtifact(proc_case_tests);
 
+    // RQ-0012: Confusable identifier detection regression tests
+    const confusable_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_confusable_identifiers.zig"), .target = target, .optimize = optimize }) });
+    confusable_tests.root_module.addImport("geode", root_mod);
+    confusable_tests.root_module.addImport("json", json_mod);
+    const run_confusable_tests = b.addRunArtifact(confusable_tests);
+
     const decimal_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_decimal_handling.zig"), .target = target, .optimize = optimize }) });
     decimal_tests.root_module.addImport("geode", root_mod);
     decimal_tests.root_module.addImport("json", json_mod);
@@ -1127,6 +1133,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_multihop_tests.step);
     test_step.dependOn(&run_init_ctx_tests.step);
     test_step.dependOn(&run_proc_case_tests.step);
+    test_step.dependOn(&run_confusable_tests.step);
     test_step.dependOn(&run_decimal_tests.step);
     test_step.dependOn(&run_repl_advanced_tests.step);
     test_step.dependOn(&run_integration_tests.step);
