@@ -99,6 +99,67 @@ const ReplicationPayload = struct {
     }
 };
 
+/// SEC-D012: Minimal join response that does not leak full cluster topology.
+const JoinResponsePayload = struct {
+    assigned_node_id: u64 = 0,
+    node_count: u32 = 0,
+    success: bool = false,
+
+    pub const _desc_table = .{
+        .assigned_node_id = fd(1, .{ .scalar = .uint64 }),
+        .node_count = fd(2, .{ .scalar = .uint32 }),
+        .success = fd(3, .{ .scalar = .bool }),
+    };
+
+    pub fn deinit(_: *@This(), _: Allocator) void {}
+};
+
+/// SEC-D009: Replay protection guard for Raft frames.
+const ReplayGuard = struct {
+    mutex: std.Thread.Mutex = .{},
+    entries: std.AutoHashMap(u128, i64), // key = (from << 64) | term, value = timestamp
+    max_entries: usize,
+    window_ms: i64,
+
+    fn init(allocator: Allocator, max_entries: usize, window_ms: i64) ReplayGuard {
+        return .{
+            .entries = std.AutoHashMap(u128, i64).init(allocator),
+            .max_entries = max_entries,
+            .window_ms = window_ms,
+        };
+    }
+
+    fn deinit(self: *ReplayGuard) void {
+        self.entries.deinit();
+    }
+
+    /// Returns true if this (from, term) pair is fresh (not a replay).
+    fn check(self: *ReplayGuard, from: u64, term: u64) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        const now = std.time.milliTimestamp();
+        const key: u128 = (@as(u128, from) << 64) | @as(u128, term);
+        if (self.entries.get(key)) |prev_ts| {
+            if (now - prev_ts < self.window_ms) return false; // replay
+        }
+        // Evict oldest if full
+        if (self.entries.count() >= self.max_entries) {
+            var oldest_key: u128 = 0;
+            var oldest_ts: i64 = std.math.maxInt(i64);
+            var it = self.entries.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* < oldest_ts) {
+                    oldest_ts = entry.value_ptr.*;
+                    oldest_key = entry.key_ptr.*;
+                }
+            }
+            _ = self.entries.remove(oldest_key);
+        }
+        self.entries.put(key, now) catch return true; // allow on OOM
+        return true;
+    }
+};
+
 const NodeInfoProto = struct {
     id: u64 = 0,
     endpoint: []const u8 = "",
@@ -191,6 +252,8 @@ pub const ClusterCoordinator = struct {
     health_monitor: HealthMonitor,
     /// SEC-D009: Nonce tracker for Raft frame replay protection.
     raft_nonce_tracker: NonceTracker,
+    /// SEC-D009: Replay guard for (from, term) deduplication.
+    replay_guard: ReplayGuard,
     message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
     // PERF-D006: Connection semaphore to limit concurrent cluster threads
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -359,12 +422,14 @@ pub const ClusterCoordinator = struct {
             .network_transport = try initNetworkTransport(allocator, config),
             .health_monitor = try initHealthMonitor(allocator, config),
             .raft_nonce_tracker = try NonceTracker.init(allocator, 10000),
+            .replay_guard = ReplayGuard.init(allocator, 1024, 30_000),
         };
     }
 
     pub fn deinit(self: *ClusterCoordinator) void {
         self.stop();
         self.raft_nonce_tracker.deinit();
+        self.replay_guard.deinit();
         self.raft.deinit();
         self.allocator.destroy(self.raft);
         for (self.cluster_state.nodes.items) |*node| {
@@ -521,7 +586,7 @@ pub const ClusterCoordinator = struct {
             const frame_res = raft_consensus.readRaftFrame(self.allocator, stream) catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.WouldBlock => {
-                    std.Thread.sleep(5 * std.time.ns_per_ms);
+                    std.Thread.sleep(200 * std.time.ns_per_us);
                     continue;
                 },
                 else => return err,
@@ -542,6 +607,15 @@ pub const ClusterCoordinator = struct {
                 log.warn("Raft frame rejected: replay or missing nonce", &.{
                     Attr.uint("from", frame_res.from),
                     Attr.uint("nonce", frame_res.nonce),
+                });
+                continue;
+            }
+
+            // SEC-D009: Reject replayed frames
+            if (!self.replay_guard.check(frame_res.from, frame_res.term)) {
+                log.warn("Rejected replayed Raft frame", &.{
+                    Attr.uint("from", frame_res.from),
+                    Attr.uint("term", frame_res.term),
                 });
                 continue;
             }
@@ -587,7 +661,7 @@ pub const ClusterCoordinator = struct {
 
         return Response{
             .status = .OK,
-            .data = try self.serializeClusterTopology(),
+            .data = try self.serializeMinimalJoinResponse(node_info.id),
         };
     }
 
@@ -958,6 +1032,20 @@ pub const ClusterCoordinator = struct {
         return self.allocator.dupe(u8, body);
     }
 
+    /// SEC-D012: Build a minimal join response that reveals only the assigned
+    /// node ID, the current node count, and a success flag -- no topology.
+    fn serializeMinimalJoinResponse(self: *ClusterCoordinator, assigned_id: u64) ![]const u8 {
+        const payload = JoinResponsePayload{
+            .assigned_node_id = assigned_id,
+            .node_count = @intCast(self.cluster_state.nodes.items.len),
+            .success = true,
+        };
+        var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 64);
+        defer aw.deinit();
+        try protobuf.encode(&aw.writer, self.allocator, payload);
+        return self.allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
+    }
+
     fn parseNodeInfo(allocator: Allocator, data: []const u8) !NodeInfo {
         var reader: std.Io.Reader = .fixed(data);
         var parsed = protobuf.decode(NodeInfoProto, &reader, allocator) catch |e| {
@@ -1257,4 +1345,38 @@ test "Message struct carries auth_token field" {
 test "Message auth_token defaults to empty" {
     const msg = Message{};
     try testing.expectEqualStrings("", msg.auth_token);
+}
+
+test "SEC-D012: minimal join response has no topology" {
+    // JoinResponsePayload must carry exactly 3 fields: assigned_node_id, node_count, success.
+    // It must NOT contain endpoint, shard, or any other topology detail.
+    const info = @typeInfo(JoinResponsePayload);
+    const fields = info.@"struct".fields;
+    try testing.expectEqual(@as(usize, 3), fields.len);
+
+    // Verify the exact field names
+    try testing.expectEqualStrings("assigned_node_id", fields[0].name);
+    try testing.expectEqualStrings("node_count", fields[1].name);
+    try testing.expectEqualStrings("success", fields[2].name);
+
+    // Verify defaults are safe (no information leak)
+    const payload = JoinResponsePayload{};
+    try testing.expectEqual(@as(u64, 0), payload.assigned_node_id);
+    try testing.expectEqual(@as(u32, 0), payload.node_count);
+    try testing.expectEqual(false, payload.success);
+}
+
+test "SEC-D009: ReplayGuard rejects duplicate within window" {
+    var guard = ReplayGuard.init(testing.allocator, 16, 30_000);
+    defer guard.deinit();
+
+    // First call should be accepted (fresh)
+    try testing.expect(guard.check(1, 10));
+
+    // Identical (from, term) within the window must be rejected
+    try testing.expect(!guard.check(1, 10));
+
+    // Different (from, term) pair should be accepted
+    try testing.expect(guard.check(2, 10));
+    try testing.expect(guard.check(1, 11));
 }

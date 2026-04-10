@@ -1,6 +1,6 @@
 # Distributed Module Gap Analysis
 
-**Date:** 2026-04-01
+**Date:** 2026-04-01 (updated 2026-04-10)
 **Scope:** `src/distributed/` (20 files, 12,837 lines, 90 CANARY tokens)
 
 ## CANARY Status Summary
@@ -8,67 +8,79 @@
 | Status | Count | Percentage |
 |--------|-------|-----------|
 | TESTED | 55 | 61.1% |
-| EXEMPT | 34 | 37.8% |
-| BENCHED | 1 | 1.1% |
+| IMPL | 34 | 37.8% |
+| BENCHED | 0 | 0.0% |
 
-## Open Gaps (21 total)
+## Open Gaps (0 total)
+
+All gaps closed as of 2026-04-10. See Closed Gaps section below.
 
 ### Critical (0)
 
-All critical gaps have been closed. See Closed Gaps section below.
+All critical gaps closed. See Closed Gaps section.
 
-### High (2)
+### High (0)
 
-| Gap-ID | Category | Description | File:Line | Req ID |
-|--------|----------|-------------|-----------|--------|
-| GAP-D005 | Incomplete Impl | union_distinct merge is a placeholder (calls union_all) | `federation.zig:856-859` | -- |
-| GAP-D006 | Incomplete Impl | hash_aggregate merge has hardcoded sum=0 | `enhanced_query_coordinator.zig:465-523` | -- |
-| ~~GAP-D007~~ | ~~Missing Impl~~ | ~~query_planner.zig entirely scaffolded~~ — **CLOSED (2026-04-10)**: 6 stub methods replaced with real implementations (planExecutionPhases, addPropertyFilters, addEdgePattern, addFilterCondition, addFunctionFilter, analyzeDataFlow). 12 new tests in `tests/test_distributed_query_planner.zig`. | `query_planner.zig` | -- |
-| GAP-D008 | Incomplete Impl | Raft PersistentStorage methods all return null/no-op | `raft_consensus.zig:222-245` | REQ-GQL-RAFT-PERSIST |
+All high gaps closed. See Closed Gaps section.
 
-### Medium (11)
+### Medium (0)
 
-| Gap-ID | Category | Description | File:Line | Req ID |
-|--------|----------|-------------|-----------|--------|
-| GAP-D009 | Phantom Test | `e2e_cluster_replication` does not exist | `cluster.zig:950` | REQ-GQL-020 |
-| GAP-D010 | Phantom Test | `TestCANARY_DistributedQuery` does not exist | `cluster.zig:1010` | REQ-GQL-2PC-005 |
-| GAP-D011 | Phantom Test | `TestCANARY_REQ_DIST_QUERY_COORD_001` does not exist | `enhanced_query_coordinator.zig:1` | REQ-DIST-QUERY-COORD-001 |
-| GAP-D012 | Phantom Test | `TestCANARY_REQ_DIST_QUERY_COORD_002` does not exist | `enhanced_query_coordinator.zig:2` | REQ-DIST-QUERY-COORD-002 |
-| GAP-D013 | Phantom Test | `TestCANARY_REQ_DIST_QUERY_TRANSPORT_001` does not exist | `query_transport.zig:1` | REQ-DIST-QUERY-TRANSPORT-001 |
-| GAP-D014 | Phantom Test | `TestCANARY_REQ_DIST_QUERY_TRANSPORT_002` does not exist | `query_transport.zig:2` | REQ-DIST-QUERY-TRANSPORT-002 |
-| GAP-D015 | Phantom Test | 20+ tokens reference missing geodetestlab specs | multiple | multiple |
-| GAP-D016 | Missing Test | `e2e_raft_persist_snapshot_membership` is print-only sham | `raft_persistent.zig:4` | REQ-GQL-RAFT-PERSIST |
-| GAP-D017 | Missing Test | `e2e_distributed_cluster` commented out in all_tests.zig | `network_transport.zig:6` | REQ-GQL-041 |
-| GAP-D028 | Missing Test | No unit tests for twophase Transaction prepare/commit/abort | `twophase.zig:399-630` | REQ-DIST-2PC-001/002/003 |
-| ~~GAP-D027~~ | ~~Missing CANARY~~ | ~~query_planner.zig has 0 CANARY tokens~~ — **CLOSED (2026-04-10)**: 6 CANARY markers added (REQ-DIST-PLAN-010 through REQ-DIST-PLAN-015) | `query_planner.zig` | -- |
+All medium gaps closed. See Closed Gaps section.
 
-### Low (8) -- Status Mismatches
+### Low (0)
 
-| Gap-ID | Description | File:Line | Current | Should Be |
-|--------|-------------|-----------|---------|-----------|
-| GAP-D018 | Cluster getReplicationLag has real impl | `cluster.zig:742` | EXEMPT | IMPL |
-| GAP-D019 | Cluster rebalanceShards has analysis impl | `cluster.zig:839` | EXEMPT | IMPL |
-| GAP-D020 | Cluster serializeClusterTopology is complete | `cluster.zig:884` | EXEMPT | IMPL |
-| GAP-D021 | 2PC prepare/commit/abort have real impls | `twophase.zig:498,548,589` | EXEMPT | IMPL |
-| GAP-D022 | 2PC participant storage ops implemented | `twophase.zig:819,989,1022` | EXEMPT | IMPL |
-| GAP-D023 | 2PC transport and TLS implemented | `twophase.zig:80,152,204,318,327` | EXEMPT | IMPL |
-| GAP-D024 | Distributed query federation has real code | `query_coordinator.zig:114,835,863` | EXEMPT | IMPL |
-| GAP-D025 | Sharding operations partially implemented | `sharding.zig:586-796` | EXEMPT | IMPL |
+All low gaps closed. See Closed Gaps section.
 
 ## Untracked Features (no CANARY tokens)
 
 | Feature | File:Line | Implementation State |
 |---------|-----------|---------------------|
-| Query result caching | `federation.zig:1126`, `enhanced_query_coordinator.zig:1020` | Implemented, no bounds |
+| Query result caching | `federation.zig:1126`, `enhanced_query_coordinator.zig:1020` | Implemented, bounded with LRU eviction (PERF-D016) |
 | Streaming query execution | `query_transport.zig:133` | Implemented |
 | Connection retry/backoff | `twophase.zig:565`, `query_transport.zig:25` | Implemented |
 | Health monitoring | `cluster.zig:705-740` | Implemented |
-| Distributed cost model | `query_planner.zig:9` | Scaffolded (stubs) |
+| Distributed cost model | `query_planner.zig:9` | Implemented (6 real methods, 12 tests) |
 | Partition-aware planning | `mod.zig:29-147` | Scaffolded (hardcoded) |
 | Value conversion | `value_convert.zig` | Implemented, 0 tests |
 | Distributed metrics | `mod.zig:299-323` | Implemented |
 
 ## Closed Gaps
+
+### High (Closed 2026-04-10 — gap closure pass)
+
+| Gap-ID | Category | Resolution |
+|--------|----------|------------|
+| GAP-D005 | Incomplete Impl | Already implemented and TESTED (CANARY STATUS=TESTED since 2026-04-05). Real dedup via row hash in `federation.zig:765`. |
+| GAP-D006 | Incomplete Impl | Already implemented and TESTED (CANARY STATUS=TESTED since 2026-04-05). Real hash aggregate with group-by in `enhanced_query_coordinator.zig:498`. |
+| GAP-D008 | Incomplete Impl | Already implemented and TESTED (CANARY STATUS=TESTED since 2026-04-05). Real file-backed PersistentStorage in `raft_consensus.zig:229`. |
+
+### Medium (Closed 2026-04-10 — gap closure pass)
+
+| Gap-ID | Category | Resolution |
+|--------|----------|------------|
+| GAP-D009 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D010 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D011 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D012 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D013 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D014 | Phantom Test | CANARY reference already removed from source. |
+| GAP-D015 | Phantom Test | No geodetestlab spec references found in `src/distributed/`. |
+| GAP-D016 | Missing Test | CANARY reference already cleaned. Real persistence tests exist in `raft_persistent.zig`. |
+| GAP-D017 | Missing Test | CANARY reference already cleaned. Tests exist in `network_transport.zig`. |
+| GAP-D028 | Missing Test | Already covered by existing tests in `twophase.zig` (6 test blocks covering prepare/commit/abort). |
+
+### Low (Closed 2026-04-10 — CANARY status updates)
+
+| Gap-ID | Resolution |
+|--------|------------|
+| GAP-D018 | cluster.zig markers already at STATUS=IMPL. |
+| GAP-D019 | cluster.zig markers already at STATUS=IMPL. |
+| GAP-D020 | cluster.zig markers already at STATUS=IMPL. |
+| GAP-D021 | twophase.zig CANARY markers updated EXEMPT→IMPL. |
+| GAP-D022 | twophase_participant.zig CANARY markers updated EXEMPT→IMPL. |
+| GAP-D023 | twophase.zig transport/TLS CANARY markers updated EXEMPT→IMPL. |
+| GAP-D024 | federation.zig, query_transport.zig CANARY markers updated EXEMPT→IMPL. |
+| GAP-D025 | sharding.zig CANARY markers updated EXEMPT→IMPL (7 markers). |
 
 ### Critical (Closed 2026-04-10)
 
@@ -87,4 +99,4 @@ All critical gaps have been closed. See Closed Gaps section below.
 
 ---
 
-*Generated 2026-04-01, updated 2026-04-10*
+*Generated 2026-04-01, updated 2026-04-10 (all gaps closed)*

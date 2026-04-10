@@ -181,7 +181,7 @@ pub const NetworkTransport = struct {
     }
 };
 
-// CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=NetworkTransportTests; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_041_NetworkTransportCompile; OWNER=distributed; UPDATED=2026-04-06
+// CANARY: REQ=REQ-GQL-041; FEATURE="Cluster Networking"; ASPECT=NetworkTransportTests; STATUS=TESTED; TEST="ClusterMessageType and ClusterMessage are re-exported correctly"; OWNER=distributed; UPDATED=2026-04-10
 
 test "ClusterMessageType and ClusterMessage are re-exported correctly" {
     // Verify that module-level type re-exports compile correctly in Zig 0.15.

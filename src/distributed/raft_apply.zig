@@ -64,7 +64,7 @@ pub fn applyCallbackFn(allocator: Allocator, cmd: Command) anyerror![]u8 {
 // Core routing logic
 // ---------------------------------------------------------------------------
 
-// CANARY: REQ=REQ-GQL-RAFT-APPLY; FEATURE="Raft Apply Callback"; ASPECT=CommandRouting; STATUS=TESTED; TEST=test_raft_apply; OWNER=distributed; UPDATED=2026-04-09
+// CANARY: REQ=REQ-GQL-RAFT-APPLY; FEATURE="Raft Apply Callback"; ASPECT=CommandRouting; STATUS=TESTED; TEST="applyCommand: noop returns empty slice"; OWNER=distributed; UPDATED=2026-04-10
 
 /// Route a committed Raft `Command` to the appropriate graph-store mutation.
 ///

@@ -49,7 +49,21 @@ pub const QueryCoordinator = struct {
         self.node_registry.deinit();
     }
 
-    /// Execute a distributed query with global ORDER BY and LIMIT
+    /// Execute a distributed query with global ORDER BY and LIMIT.
+    ///
+    /// PERF-D019: The scatter-gather pipeline fully materializes all shard
+    /// results before the merge phase begins.  Streaming merge is not
+    /// practical here because:
+    ///   1. merge_sorted uses a TopKHeap that needs to compare rows across
+    ///      all shards -- it requires the full result set from each shard
+    ///      before it can produce globally-ordered output.
+    ///   2. union_all with OFFSET/LIMIT needs total row counts across all
+    ///      shards to compute correct windows.
+    ///   3. hash_aggregate and union_distinct require full materialization
+    ///      for deduplication.
+    /// A streaming approach would only help if shards returned pre-sorted
+    /// cursors and the merge used a k-way merge iterator, but the current
+    /// QUIC protocol returns complete DataPage batches, not streaming cursors.
     // CANARY: REQ=REQ-GQL-FED-001; FEATURE="Distributed Query Federation"; ASPECT=Core; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn executeDistributedQuery(
         self: *Self,
@@ -117,7 +131,17 @@ pub const QueryCoordinator = struct {
         return plan;
     }
 
-    /// Scatter query fragments to shards with concurrent execution
+    /// Scatter query fragments to shards with concurrent execution.
+    ///
+    /// PERF-D020: Allocation analysis for scatter-gather path:
+    ///   - results[] and errors[] are pre-allocated once (O(shard_count)).
+    ///   - Per-fragment query_text duplication in planDistributedQuery is
+    ///     bounded by shard count (typically 3-16), each sharing the same
+    ///     source text length. This is acceptable overhead vs. the cost
+    ///     of the QUIC round-trips.
+    ///   - The parallel Context struct is stack-allocated (zero heap cost).
+    ///   - Pre-sizing the results array with ensureTotalCapacity avoids
+    ///     incremental growth allocations during parallel execution.
     /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ConcurrentExecution; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01
     /// GAP-0184: Implements actual concurrent scatter/gather for fragment execution
     fn scatterQuery(self: *Self, plan: DistributedPlan, params: []const protocol.Value) ![]federation.QueryResults {

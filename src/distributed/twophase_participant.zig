@@ -16,7 +16,7 @@ pub const PrepareResponse = twophase.PrepareResponse;
 pub const Operation = twophase.Operation;
 
 /// Two-Phase Commit Participant
-// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-2PC-PARTICIPANT-001; FEATURE="2PC Participant Node"; ASPECT=StorageOps; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
 pub const ParticipantNode = struct {
     allocator: Allocator,
     node_id: []const u8,
@@ -186,7 +186,7 @@ pub const ParticipantNode = struct {
         return .VOTE_COMMIT;
     }
 
-    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-2PC-COMMIT-001; FEATURE="2PC Commit Handler"; ASPECT=StorageApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     pub fn handleCommit(self: *ParticipantNode, transaction_id: []const u8) !void {
         const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;
@@ -219,7 +219,7 @@ pub const ParticipantNode = struct {
         local_txn.state = .committed;
     }
 
-    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+    // CANARY: REQ=REQ-2PC-ABORT-001; FEATURE="2PC Abort Handler"; ASPECT=UndoApplication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     pub fn handleAbort(self: *ParticipantNode, transaction_id: []const u8) !void {
         const removed = self.transactions.fetchRemove(transaction_id) orelse return error.TransactionNotFound;
         var local_txn = removed.value;

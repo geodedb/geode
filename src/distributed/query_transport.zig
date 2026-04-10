@@ -568,7 +568,7 @@ const Connection = struct {
 };
 
 /// Node registry for distributed cluster - tracks node addresses
-// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-10
+// CANARY: REQ=REQ-DIST-REGISTRY-001; FEATURE="Node Registry"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
 pub const NodeRegistry = struct {
     allocator: std.mem.Allocator,
     nodes: std.AutoHashMap(u32, NodeInfo),

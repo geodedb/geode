@@ -15,6 +15,9 @@ const logging = @import("logging");
 const log = logging.scoped("twophase");
 const Attr = logging.Attr;
 
+/// SEC-D008 / PERF-D012-D013: Maximum allowed frame size to prevent allocation bombs.
+const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024; // 16 MiB
+
 pub const ParticipantNode = @import("twophase_participant.zig").ParticipantNode;
 
 const fd = protobuf.fd;
@@ -107,7 +110,7 @@ pub const Savepoint = struct {
     timestamp: i64,
 };
 
-// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+// CANARY: REQ=REQ-DIST-2PC-MSG-001; FEATURE="Two-Phase Commit Message Format"; ASPECT=Protocol; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
 /// 2PC protocol message for network communication
 pub const TwoPhaseMessage = dist_schema.TwoPhaseMessage;
 
@@ -184,7 +187,7 @@ pub const TwoPhaseTransport = struct {
         // Phase 2: Connect + handshake WITHOUT holding the mutex.
         // Parse endpoint into host and port
         // GAP-0144: Secure TLS connections for 2PC coordination
-        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
+        // CANARY: REQ=REQ-2PC-TLS-001; FEATURE="2PC TLS"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
         const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
         const host = endpoint[0..colon_pos];
         const port_str = endpoint[colon_pos + 1 ..];
@@ -244,7 +247,7 @@ pub const TwoPhaseTransport = struct {
         }
     }
 
-    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+    // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     /// Send a 2PC message and receive response with timeout handling
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
         const start_time = std.time.milliTimestamp();
@@ -352,13 +355,14 @@ fn readFrame(
     try readExact(client, stream, len_buf[0..], deadline);
     const len = std.mem.readInt(u32, &len_buf, .big);
     if (len == 0) return error.InvalidMessage;
+    if (len > MAX_FRAME_SIZE) return error.FrameTooLarge;
     const body = try allocator.alloc(u8, len);
     errdefer allocator.free(body);
     try readExact(client, stream, body, deadline);
     return body;
 }
 
-// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-09
+// CANARY: REQ=REQ-DIST-2PC-TRANSPORT-001; FEATURE="Two-Phase Commit Network Transport"; ASPECT=QUICMessaging; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
 /// Send a 2PC message to a participant endpoint using QUIC transport
 fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
     // Use global transport if available, otherwise fall back to creating a one-shot connection
@@ -367,7 +371,7 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     }
 
     // GAP-0144: Secure TLS for one-shot 2PC connections
-    // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-13
+    // CANARY: REQ=REQ-2PC-TLS-002; FEATURE="2PC TLS One-shot"; ASPECT=Security; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     // One-shot connection for when transport not initialized
     // Parse endpoint into host and port
     const colon_pos = std.mem.indexOf(u8, endpoint, ":") orelse return error.InvalidEndpoint;
@@ -810,7 +814,7 @@ pub const Transaction = struct {
     // PERF-D003: Parallel prepare -- contact all participants concurrently
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
-        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-05
+        // CANARY: REQ=REQ-DIST-2PC-001; FEATURE="Two-Phase Commit Messaging"; ASPECT=Prepare; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
         const participant_count = self.participants.items.len;
         if (participant_count == 0) {
             self.state = .prepared;
@@ -855,7 +859,7 @@ pub const Transaction = struct {
             return error.InvalidState;
         }
         self.state = .committing;
-        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-04-05
+        // CANARY: REQ=REQ-DIST-2PC-002; FEATURE="Two-Phase Commit Messaging"; ASPECT=Commit; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
         const participant_count = self.participants.items.len;
         if (participant_count == 0) {
             self.state = .committed;
@@ -881,7 +885,7 @@ pub const Transaction = struct {
     pub fn abort(self: *Transaction) !void {
         self.state = .aborting;
 
-        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-08
+        // CANARY: REQ=REQ-DIST-2PC-003; FEATURE="Two-Phase Commit Messaging"; ASPECT=Abort; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
         // Send abort messages to all participants
         for (self.participants.items) |*participant| {
             participant.state = .aborting;
@@ -1082,6 +1086,7 @@ pub const Coordinator = struct {
             if (len_read < 4) return error.UnexpectedEndOfStream;
 
             const msg_len = std.mem.readInt(u32, &len_buf, .big);
+            if (msg_len > MAX_FRAME_SIZE) return error.FrameTooLarge;
             const msg_buf = try self.allocator.alloc(u8, msg_len);
             defer self.allocator.free(msg_buf);
             const msg_read = try reader.readAll(msg_buf);

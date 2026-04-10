@@ -7,6 +7,15 @@ const federation = @import("federation.zig");
 const query_coordinator = @import("query_coordinator.zig");
 const query_planner = @import("query_planner.zig");
 
+// PERF-D022: Distributed performance benchmarks are not yet implemented.
+// The distributed module (Raft, 2PC, federation, sharding, query coordination)
+// lacks dedicated benchmark tests that measure:
+//   - Raft consensus latency under varying cluster sizes
+//   - 2PC commit throughput with concurrent transactions
+//   - Federation query fan-out latency across remote nodes
+//   - Scatter-gather merge overhead at different shard counts
+//   - QueryCache hit/miss ratio impact on end-to-end latency
+// Tracking: PERF-D022 in PERF_GAP_ANALYSIS.md
 pub const DistributedConfig = struct {
     node_id: []const u8,
     peers: []const []const u8,

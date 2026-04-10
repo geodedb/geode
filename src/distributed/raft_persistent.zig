@@ -202,7 +202,7 @@ pub const RaftNode = struct {
 };
 
 // ---- Tests ----
-// CANARY: REQ=REQ-SEC-ATOMIC-WRITE-001; FEATURE="Atomic Raft File Write"; ASPECT=Persistence; STATUS=TESTED; TEST=raft_persistent_atomic_write; OWNER=security; UPDATED=2026-04-01
+// CANARY: REQ=REQ-SEC-ATOMIC-WRITE-001; FEATURE="Atomic Raft File Write"; ASPECT=Persistence; STATUS=TESTED; TEST="raft_persistent: atomic write creates file with correct content"; OWNER=security; UPDATED=2026-04-10
 
 test "raft_persistent: atomic write creates file with correct content" {
     var tmp = std.testing.tmpDir(.{});

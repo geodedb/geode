@@ -117,7 +117,7 @@ pub const DistributedQueryPlanner = struct {
         return shard_plans.toOwnedSlice(self.allocator);
     }
 
-    // CANARY: REQ=REQ-DIST-PLAN-004; FEATURE="ShardPruning"; ASPECT=QueryRouting; STATUS=IMPL; TEST=query_planner.selectParticipatingShards; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-PLAN-004; FEATURE="ShardPruning"; ASPECT=QueryRouting; STATUS=TESTED; TEST="selectParticipatingShards: returns defaults when registry is empty"; OWNER=distributed; UPDATED=2026-04-10
     /// Select which shards participate in a query based on label affinity.
     /// If the analysis specifies labels and shards advertise matching labels,
     /// only those shards are included (shard pruning). Otherwise all shards
@@ -266,7 +266,7 @@ pub const DistributedQueryPlanner = struct {
 
     /// Estimate row count for a shard using CBO statistics when available.
     /// Falls back to a default heuristic (1000 rows) when no stats exist.
-    // CANARY: REQ=REQ-DIST-PLAN-002; FEATURE="ShardRowEstimation"; ASPECT=CBO; STATUS=IMPL; TEST=query_planner.estimateShardRows; OWNER=distributed; UPDATED=2026-04-01
+    // CANARY: REQ=REQ-DIST-PLAN-002; FEATURE="ShardRowEstimation"; ASPECT=CBO; STATUS=TESTED; TEST="estimateShardRows: returns default 1000 without stats"; OWNER=distributed; UPDATED=2026-04-10
     pub fn estimateShardRows(self: *DistributedQueryPlanner, shard_id: u32, analysis: DistributionAnalysis) usize {
         // Try CBO statistics for each label that has shard affinity
         if (self.stats_registry) |registry| {

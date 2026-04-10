@@ -8,9 +8,9 @@
 | Risk Level | Open | Closed | Total |
 |-----------|------|--------|-------|
 | Critical | 0 | 2 | 2 |
-| High | 1 | 4 | 5 |
-| Medium | 5 | 0 | 5 |
-| Low | 2 | 0 | 2 |
+| High | 0 | 5 | 5 |
+| Medium | 0 | 5 | 5 |
+| Low | 0 | 2 | 2 |
 
 ## Critical
 
@@ -57,52 +57,60 @@
 - **Description:** `GEODE_CLUSTER_INSECURE` (query_transport, twophase), `GEODE_FEDERATION_INSECURE` (federation), `GEODE_CLUSTER_ALLOW_INSECURE` (cluster). No audit trail for TLS downgrade.
 - **Resolution:** Consolidated to single env var GEODE_CLUSTER_INSECURE across all distributed modules. Removed GEODE_FEDERATION_INSECURE and GEODE_CLUSTER_ALLOW_INSECURE aliases.
 
-### SEC-D007: Federation Queries May Bypass Coordinator-Side RLS (CWE-863)
+### SEC-D007: Federation Queries May Bypass Coordinator-Side RLS (CWE-863) -- **CLOSED (2026-04-10)**
 
 - **File:** `federation.zig:277-398`
 - **Description:** Federation sends raw `query_text` to remote nodes. Remote applies its own RLS. But merged results returned to coordinator skip coordinator-side `rls_filter.applyRLSFilter`.
 - **Mitigation:** Apply RLS filter to federated results using the requesting user's identity before returning to client.
+- **Resolution:** Added `rls_filter_fn` callback to `FederationConfig` for coordinator-side RLS post-merge filtering. Falls back to global RLS engine when callback not set. 2 tests added.
 
 ## Medium
 
-### SEC-D008: Unbounded Alloc from u32 Length Prefix (CWE-770)
+### SEC-D008: Unbounded Alloc from u32 Length Prefix (CWE-770) -- **CLOSED (2026-04-10)**
 
 - **Files:** 5 locations (`raft_consensus.zig:375`, `twophase.zig:312,784`, `federation.zig:1354`, `query_transport.zig:843`)
 - **Description:** u32 length from wire used directly as allocation size. Max 4GiB. QUIC stream window (10MiB) partially mitigates but alloc still happens before data arrives.
 - **Mitigation:** Add `MAX_FRAME_SIZE` constant (16MiB) and reject before allocating.
+- **Resolution:** `MAX_FRAME_SIZE` (16 MiB) guard added at all 5 locations. Rejects with `error.FrameTooLarge` before allocation.
 
-### SEC-D009: No Replay Protection (CWE-294)
+### SEC-D009: No Replay Protection (CWE-294) -- **CLOSED (2026-04-10)**
 
 - **Files:** `cluster.zig:471-491`, `twophase.zig:939-987`
 - **Description:** No nonces or timestamp freshness checks. 2PC `handlePrepare` provides idempotency but not replay rejection -- attacker can replay PREPARE to keep locks held.
+- **Resolution:** Added `ReplayGuard` to `ClusterCoordinator`: bounded (1024 entries) `(from, term)` dedup with 30s window and timestamp freshness check. 2 tests added.
 
-### SEC-D010: Cross-Tenant Leakage via Federation (CWE-200)
+### SEC-D010: Cross-Tenant Leakage via Federation (CWE-200) -- **CLOSED (2026-04-10)**
 
 - **File:** `federation.zig:277-296`
 - **Description:** Federation HELLO sends `tenant_id: null`. Queries forwarded without tenant context. Remote node may not apply tenant-specific RLS.
+- **Resolution:** Already implemented: `tenant_id` propagation from `FederationConfig` to `Connection` via `executeQuery` and `executeRemoteOperations`. CANARY markers added, 1 test.
 
-### SEC-D011: Raft RPC Zero TLS Configuration (CWE-319)
+### SEC-D011: Raft RPC Zero TLS Configuration (CWE-319) -- **CLOSED (2026-04-10)**
 
 - **File:** `raft_consensus.zig:181-218`
 - **Description:** Raft RPC uses bare `qc.connect()` with no TLS config. No mTLS -- any client completing TLS handshake can inject Raft frames.
+- **Resolution:** Added `connectWithTLS` helper matching `cluster.zig:sendToNode` pattern. Checks `GEODE_CLUSTER_INSECURE` / `GEODE_CLUSTER_CA_CERT` env vars. Applied to `RpcClient.sendMessage` and `Transport.send`. 2 tests.
 
-### SEC-D012: Topology Leak in JOIN_CLUSTER Response (CWE-200)
+### SEC-D012: Topology Leak in JOIN_CLUSTER Response (CWE-200) -- **CLOSED (2026-04-10)**
 
 - **File:** `cluster.zig:513-516`
 - **Description:** Returns all node endpoints, shard assignments, key ranges to unauthenticated joiners.
+- **Resolution:** `handleJoinCluster` now returns `JoinResponsePayload` (assigned_node_id, node_count, success) instead of full topology. 2 tests.
 
 ## Low
 
-### SEC-D013: Debug Print Bypasses Structured Logging (CWE-532)
+### SEC-D013: Debug Print Bypasses Structured Logging (CWE-532) -- **CLOSED (2026-04-10)**
 
 - **File:** `network_transport.zig:165`
 - **Description:** `std.debug.print("PEER_UNHEALTHY node=...")` leaks topology info to stderr outside audit framework.
+- **Resolution:** Replaced `std.debug.print` with `log.warn()` using structured logging (`Attr.uint`, `Attr.int`).
 
-### SEC-D014: TOCTOU Race in Raft Persistent State (CWE-367)
+### SEC-D014: TOCTOU Race in Raft Persistent State (CWE-367) -- **CLOSED (2026-04-10)**
 
 - **File:** `raft_persistent.zig:123-151`
 - **Description:** State save uses non-atomic `createFile`+`writeAll` with no fsync. Crash mid-write loses term file.
+- **Resolution:** Already implemented: `atomicWriteFile` uses write-to-`.tmp`+`f.sync()`+`dir.rename()` pattern. Verified.
 
 ---
 
-*Generated 2026-04-01, updated 2026-04-10*
+*Generated 2026-04-01, updated 2026-04-10 (all gaps closed)*

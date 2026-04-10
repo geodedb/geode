@@ -477,7 +477,7 @@ pub fn extractNumeric(val: protocol.Value) f64 {
 // ============================================================
 
 test "extractNumeric: Int, Double, SmallInt, Null, Bool" {
-    // CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=TESTED; TEST=src/distributed/merge_strategies.zig; OWNER=dist; UPDATED=2026-04-06
+    // CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=TESTED; TEST="extractNumeric: Int, Double, SmallInt, Null, Bool"; OWNER=dist; UPDATED=2026-04-10
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), extractNumeric(.{ .Int = 42 }), 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, 3.14), extractNumeric(.{ .Double = 3.14 }), 1e-9);
     try std.testing.expectApproxEqAbs(@as(f64, -5.0), extractNumeric(.{ .SmallInt = -5 }), 1e-9);

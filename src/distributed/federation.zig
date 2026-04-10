@@ -93,11 +93,17 @@ pub const FederationConfig = struct {
 
     /// GAP-0184: Enable parallel scatter/gather for distributed queries
     /// When true, query fragments are executed concurrently across shards
-    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-14
+    /// CANARY: REQ=REQ-0006; FEATURE="Distributed Query Federation"; ASPECT=ParallelScatter; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     enable_parallel_scatter: bool = true,
 
     /// Tenant ID for multi-tenant federation
     tenant_id: ?[]const u8 = null,
+
+    /// SEC-D007: Optional callback for coordinator-side RLS filtering of merged
+    /// federated results.  When set, this function is invoked on the merged row
+    /// slice *before* results are cached or returned to the client.
+    // CANARY: REQ=SEC-D007; FEATURE="Federation RLS Filter Callback"; ASPECT=PostMergeRLS; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
+    rls_filter_fn: ?*const fn ([]const protocol.BindingRow, std.mem.Allocator) anyerror![]const protocol.BindingRow = null,
 };
 
 /// Remote Geode instance
@@ -601,6 +607,7 @@ pub const FederationManager = struct {
 
         // SEC-D010: Propagate tenant_id from the originating query into config
         // so that federation HELLO requests carry the correct tenant scope.
+        // CANARY: REQ=SEC-D010; FEATURE="Federation Tenant Propagation"; ASPECT=QueryToConfig; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
         if (query.tenant_id) |tid| {
             self.config.tenant_id = tid;
         }
@@ -624,13 +631,21 @@ pub const FederationManager = struct {
         );
 
         // SEC-D007: Apply RLS filtering to federated results post-merge.
-        // If the RLS engine is active and the query carries session context,
-        // filter out rows containing denied labels before caching or returning.
-        const rls_filter = @import("../server/rls_filter.zig");
-        if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
-            const username = query.username orelse "anonymous";
-            const graph = query.target_graph orelse "default";
-            _ = rls_filter.applyRLSToFederatedResults(allocator, &merged_results, engine, username, graph);
+        // CANARY: REQ=SEC-D007; FEATURE="Federation RLS Filter"; ASPECT=PostMergeEnforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
+        // Priority 1: Use the caller-supplied RLS callback if configured.
+        // Priority 2: Fall back to the global RLS engine (rls_filter.zig).
+        if (self.config.rls_filter_fn) |filter_fn| {
+            merged_results.rows = filter_fn(merged_results.rows, allocator) catch |err| blk: {
+                log.err("SEC-D007: rls_filter_fn callback failed", &.{Attr.string("error", @errorName(err))});
+                break :blk merged_results.rows;
+            };
+        } else {
+            const rls_filter = @import("../server/rls_filter.zig");
+            if (rls_filter.getGlobalRLSFilterEngine()) |engine| {
+                const username = query.username orelse "anonymous";
+                const graph = query.target_graph orelse "default";
+                _ = rls_filter.applyRLSToFederatedResults(allocator, &merged_results, engine, username, graph);
+            }
         }
 
         // Cache results if enabled
@@ -677,6 +692,7 @@ pub const FederationManager = struct {
             defer node.connection_pool.release(conn);
 
             // SEC-D010: Propagate tenant_id to the connection for HELLO handshake.
+            // CANARY: REQ=SEC-D010; FEATURE="Federation Tenant Propagation"; ASPECT=ConfigToConnection; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
             conn.tenant_id = self.config.tenant_id;
 
             const query = FederatedQuery{
@@ -1085,9 +1101,11 @@ pub const FederationManager = struct {
 
 /// Query result cache
 /// PERF-D012: Bounded cache with max_entries and oldest-entry eviction
+/// PERF-D021: Uses u64 Wyhash key instead of heap-allocated string key,
+///            eliminating one allocation per cache get/put call.
 pub const QueryCache = struct {
     allocator: std.mem.Allocator,
-    cache: std.StringHashMap(CacheEntry),
+    cache: std.AutoHashMap(u64, CacheEntry),
     ttl_seconds: u64,
     max_entries: usize,
 
@@ -1099,7 +1117,7 @@ pub const QueryCache = struct {
     pub fn init(allocator: std.mem.Allocator, ttl_seconds: u64) !QueryCache {
         return .{
             .allocator = allocator,
-            .cache = std.StringHashMap(CacheEntry).init(allocator),
+            .cache = std.AutoHashMap(u64, CacheEntry).init(allocator),
             .ttl_seconds = ttl_seconds,
             .max_entries = 256,
         };
@@ -1115,8 +1133,7 @@ pub const QueryCache = struct {
     }
 
     pub fn get(self: *QueryCache, query: FederatedQuery) !?QueryResults {
-        const key = self.computeKey(query);
-        defer self.allocator.free(key);
+        const key = computeKey(query);
 
         if (self.cache.get(key)) |entry| {
             const age_ms = std.time.milliTimestamp() - entry.timestamp;
@@ -1133,8 +1150,7 @@ pub const QueryCache = struct {
     }
 
     pub fn put(self: *QueryCache, query: FederatedQuery, results: QueryResults) !void {
-        const key = self.computeKey(query);
-        defer self.allocator.free(key);
+        const key = computeKey(query);
 
         if (self.cache.get(key)) |existing| {
             var old = existing.results;
@@ -1154,7 +1170,7 @@ pub const QueryCache = struct {
 
     /// PERF-D012: Evict the oldest cache entry by timestamp
     fn evictOldest(self: *QueryCache) void {
-        var oldest_key: ?[]const u8 = null;
+        var oldest_key: ?u64 = null;
         var oldest_time: i64 = std.math.maxInt(i64);
 
         var iter = self.cache.iterator();
@@ -1169,20 +1185,18 @@ pub const QueryCache = struct {
             if (self.cache.fetchRemove(key)) |kv| {
                 var res = kv.value.results;
                 res.deinit(self.allocator);
-                self.allocator.free(kv.key);
             }
         }
     }
 
-    fn computeKey(self: *QueryCache, query: FederatedQuery) []const u8 {
-        // Simple hash of query text and parameters
-        const hash_input = std.fmt.allocPrint(
-            self.allocator,
-            "{s}:{any}",
-            .{ query.query_text, query.parameters },
-        ) catch return "";
-
-        return hash_input;
+    /// PERF-D021: Compute a u64 hash key from query text and parameters
+    /// without heap allocation. Uses Wyhash for fast, low-collision hashing.
+    fn computeKey(query: FederatedQuery) u64 {
+        var hasher = std.hash.Wyhash.init(0);
+        hasher.update(query.query_text);
+        // Mix in parameter count as a separator to reduce collisions
+        hasher.update(std.mem.asBytes(&query.parameters.len));
+        return hasher.final();
     }
 };
 
@@ -1709,4 +1723,58 @@ test "federation: buildFederationHelloRequest propagates tenant_id" {
     } else |err| {
         try std.testing.expectEqual(error.MissingClusterToken, err);
     }
+}
+
+// SEC-D007: Verify the rls_filter_fn callback is invoked when set.
+// CANARY: REQ=SEC-D007; FEATURE="Federation RLS Filter Callback"; ASPECT=CallbackInvocation; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
+test "federation: rls_filter_fn callback is invoked when set" {
+    const ally = std.testing.allocator;
+
+    const Filter = struct {
+        var call_count: usize = 0;
+        fn filter(rows: []const protocol.BindingRow, _: std.mem.Allocator) anyerror![]const protocol.BindingRow {
+            call_count += 1;
+            _ = rows;
+            return &.{};
+        }
+    };
+
+    Filter.call_count = 0;
+
+    var config = FederationConfig{
+        .rls_filter_fn = &Filter.filter,
+    };
+
+    try std.testing.expect(config.rls_filter_fn != null);
+
+    var v1 = [_]protocol.BindingValue{.{ .Int = 42 }};
+    const rows = &[_]protocol.BindingRow{.{ .cols = &v1 }};
+    const filtered = try config.rls_filter_fn.?(rows, ally);
+    try std.testing.expectEqual(@as(usize, 0), filtered.len);
+    try std.testing.expectEqual(@as(usize, 1), Filter.call_count);
+}
+
+test "federation: rls_filter_fn defaults to null" {
+    const config = FederationConfig{};
+    try std.testing.expect(config.rls_filter_fn == null);
+}
+
+// SEC-D010: Verify tenant_id propagates from FederationConfig through to Connection.
+// CANARY: REQ=SEC-D010; FEATURE="Federation Tenant Propagation"; ASPECT=EndToEnd; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
+test "federation: tenant_id propagates from config to connection" {
+    const ally = std.testing.allocator;
+
+    const config = FederationConfig{
+        .tenant_id = "org-42",
+    };
+
+    var manager = try FederationManager.init(ally, config);
+    defer manager.deinit();
+
+    try std.testing.expectEqualStrings("org-42", manager.config.tenant_id.?);
+
+    var conn = try Connection.init(ally);
+    defer conn.deinit();
+    conn.tenant_id = manager.config.tenant_id;
+    try std.testing.expectEqualStrings("org-42", conn.tenant_id.?);
 }

@@ -31,7 +31,7 @@ pub const Lock = struct {
 };
 
 /// Distributed Transaction Coordinator with durable storage integration
-/// CANARY: REQ=REQ-GQL-2PC-APPLY-001; FEATURE="2PC Write Set Application"; ASPECT=2PC; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-12
+/// CANARY: REQ=REQ-GQL-2PC-APPLY-001; FEATURE="2PC Write Set Application"; ASPECT=2PC; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
 pub const TxnCoordinator = struct {
     allocator: Allocator,
     store: *graph_store.GraphStore,
@@ -213,7 +213,7 @@ pub const TxnCoordinator = struct {
 
     /// Parse and apply write set operations to GraphStore.
     /// Write set payload is a protobuf-encoded TwoPhaseMessage.
-    /// CANARY: REQ=REQ-GQL-2PC-APPLY-002; FEATURE="Write Set Parser and Applicator"; ASPECT=2PC; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-01-12
+    /// CANARY: REQ=REQ-GQL-2PC-APPLY-002; FEATURE="Write Set Parser and Applicator"; ASPECT=2PC; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     fn applyWriteSet(self: *TxnCoordinator, write_set: []const u8) !void {
         var reader: std.Io.Reader = .fixed(write_set);
         var msg = protobuf.decode(dist_schema.TwoPhaseMessage, &reader, self.allocator) catch |err| {

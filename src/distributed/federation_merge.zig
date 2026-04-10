@@ -12,6 +12,9 @@ const value_utilities = @import("../execution/value_utilities.zig");
 
 const result_utils = @import("result_utils.zig");
 
+/// SEC-D008 / PERF-D014: Maximum allowed frame size to prevent allocation bombs.
+const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024; // 16 MiB
+
 // ---------------------------------------------------------------------------
 // Binding-row helpers — delegated to result_utils.zig
 // ---------------------------------------------------------------------------
@@ -183,6 +186,7 @@ pub fn readProtoMessage(
 
     const msg_len = std.mem.readInt(u32, &len_buf, .big);
     if (msg_len == 0) return error.InvalidMessage;
+    if (msg_len > MAX_FRAME_SIZE) return error.FrameTooLarge;
     const msg_bytes = try allocator.alloc(u8, msg_len);
     defer allocator.free(msg_bytes);
 
@@ -225,7 +229,7 @@ pub fn hashRow(allocator: std.mem.Allocator, row: protocol.BindingRow) ![]u8 {
 // Unit tests — pure helpers only (no QUIC stream or protobuf I/O)
 // ---------------------------------------------------------------------------
 
-// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-001; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderKeys; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-001; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderKeys; STATUS=TESTED; TEST="cloneOrderKeys: deep-clone 2-element slice, values match and pointers differ"; OWNER=dist; UPDATED=2026-04-10
 test "cloneOrderKeys: deep-clone 2-element slice, values match and pointers differ" {
     const allocator = std.testing.allocator;
 
@@ -245,7 +249,7 @@ test "cloneOrderKeys: deep-clone 2-element slice, values match and pointers diff
     try std.testing.expect(orig[1].ptr != cloned[1].ptr);
 }
 
-// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-002; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderDirs; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-002; FEATURE="Distributed Federation Merge"; ASPECT=CloneOrderDirs; STATUS=TESTED; TEST="cloneOrderDirs: copy 2-element bool slice, values match"; OWNER=dist; UPDATED=2026-04-10
 test "cloneOrderDirs: copy 2-element bool slice, values match" {
     const allocator = std.testing.allocator;
 
@@ -258,7 +262,7 @@ test "cloneOrderDirs: copy 2-element bool slice, values match" {
     try std.testing.expectEqual(false, cloned[1]);
 }
 
-// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-003; FEATURE="Distributed Federation Merge"; ASPECT=HashRowDeterminism; STATUS=TESTED; TEST=tests/test_federation_merge.zig; OWNER=dist; UPDATED=2026-04-06
+// CANARY: REQ=REQ-DIST-FEDERATION-MERGE-003; FEATURE="Distributed Federation Merge"; ASPECT=HashRowDeterminism; STATUS=TESTED; TEST="hashRow: same row produces same hash, different row produces different hash"; OWNER=dist; UPDATED=2026-04-10
 test "hashRow: same row produces same hash, different row produces different hash" {
     const allocator = std.testing.allocator;
 

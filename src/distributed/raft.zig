@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_040_RaftLeaderElection; BENCH=BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency; OWNER=distributed; UPDATED=2025-09-21
+// CANARY: REQ=REQ-GQL-040; FEATURE="Raft Consensus"; ASPECT=Distributed; STATUS=TESTED; TEST="raft shim single node leader"; OWNER=distributed; UPDATED=2026-04-10
 //
 // Compatibility shim over raft_consensus.RaftNode.
 // Preserves the string-based node ID API used by mod.zig:DistributedCoordinator
