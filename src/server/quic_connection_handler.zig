@@ -602,8 +602,10 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         stream.close();
         cs.unregisterActiveStream(stream.stream_id);
         _ = cs.active_streams.fetchSub(1, .release);
-        // GAP-0274: Signal the drain waiter that a stream closed
-        cs.streams_cv.broadcast();
+        // GAP-0274: Signal the drain waiter that a stream closed.
+        // PERF-P1-001: signal() not broadcast() — only one waiter
+        // (either drain at shutdown or acceptor at stream limit).
+        cs.streams_cv.signal();
         // PERF-P1-004: Release the global stream thread slot so another
         // connection's stream can proceed.
         g_stream_throttle.release();
@@ -759,7 +761,7 @@ fn streamAcceptorLoop(
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.broadcast();
+                conn_state.streams_cv.signal(); // PERF-P1-001: signal, not broadcast
                 g_stream_throttle.release();
                 continue;
             };
@@ -780,7 +782,7 @@ fn streamAcceptorLoop(
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.broadcast();
+                conn_state.streams_cv.signal(); // PERF-P1-001: signal, not broadcast
                 g_stream_throttle.release();
                 gpa.destroy(ctx);
                 continue;

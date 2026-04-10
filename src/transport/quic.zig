@@ -366,13 +366,14 @@ pub const QuicTransport = struct {
         while (!shutdown.load(.acquire)) {
             // Non-blocking poll — process any pending UDP datagrams without
             // blocking on the socket. poll(0) returns immediately if no data
-            // is available. 1ms sleep keeps idle CPU <5% while maintaining
-            // acceptable latency for incoming packets (was 50μs which caused
-            // 55%+ idle CPU from 20k syscalls/sec overhead).
+            // is available. PERF-P1-001: 500μs sleep (was 100μs) reduces
+            // poll_cv.broadcast() frequency 5x while keeping latency well
+            // within the 2ms handler waitForPoll timeout. Eliminates broadcast
+            // wakeup storms that caused c=4 throughput regression.
             // drainPendingDestroy is handled by the main accept loop thread only
             // (it acquires ep.mu which would contend with poll's internal locking).
             self.poll(0) catch {}; // Best-effort cleanup
-            std.Thread.sleep(100 * std.time.ns_per_us);
+            std.Thread.sleep(500 * std.time.ns_per_us);
         }
         // Final poll to flush any remaining packets on shutdown
         self.poll(0) catch {}; // Best-effort cleanup
