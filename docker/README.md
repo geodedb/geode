@@ -2,6 +2,20 @@
 
 This directory and repository contain multiple Dockerfile variants for different use cases.
 
+## Shared Resources (docker/)
+
+| File | Purpose |
+|------|---------|
+| `docker/health-check.sh` | Shared health check script used by all server Dockerfiles (issue #549) |
+| `Dockerfile.base` | Common Debian runtime base image (optional, for pre-built base workflows) |
+
+### Health Check Consolidation (#549)
+
+All Geode server containers use `docker/health-check.sh` as a single source of truth for
+health checks instead of duplicating the inline HEALTHCHECK CMD across every Dockerfile.
+The script respects `GEODE_HEALTH_PORT` (default 3141), `GEODE_USERNAME`, and `GEODE_PASSWORD`
+environment variables.
+
 ## Dockerfile Overview
 
 ### Production Server (Root Directory)
@@ -9,6 +23,7 @@ This directory and repository contain multiple Dockerfile variants for different
 | File | Purpose | Base Image |
 |------|---------|------------|
 | `Dockerfile` | Main development build | debian:bookworm-slim |
+| `Dockerfile.base` | Shared runtime base | debian:bookworm-slim |
 | `Dockerfile.prod` | Production build with GPU support | ubuntu:24.04 + nvidia/cuda |
 | `Dockerfile.gpu` | GPU-enabled build | nvidia/cuda:12.3.2-devel |
 | `Dockerfile.simple` | Simple fallback build | debian:bookworm-slim |
@@ -80,20 +95,12 @@ docker-compose up --build
 
 ## Consolidation Status
 
-**Issue #408**: The 19 Dockerfiles serve distinct purposes and are organized by use case.
+**Issue #549**: Health check logic and runtime setup consolidated via `docker/health-check.sh`
+and `Dockerfile.base`. All 11 server-role Dockerfiles now reference the shared health check
+script instead of duplicating the inline HEALTHCHECK CMD.
 
-**Current state**: Reasonably well-structured with multi-stage builds where appropriate.
-
-**Future consolidation opportunity**: Could reduce to ~6 core files using parameterized multi-target builds:
-
-1. `Dockerfile.server` - Unified server (debian/alpine/gpu targets)
-2. `Dockerfile.clients` - Unified test clients (go/python/rust/zig targets)
-3. `Dockerfile.testing` - Unified test runners
-4. `Dockerfile.dev` - Development environment (keep as-is)
-5. `Dockerfile.release` - GoReleaser builds (keep as-is)
-6. `Dockerfile.ci` - CI builds (keep as-is)
-
-This consolidation would require CI pipeline updates and is tracked in GitLab issue #408.
+**Issue #408**: The Dockerfiles serve distinct purposes and are organized by use case.
+Further consolidation into ~6 parameterized multi-target builds is tracked in issue #408.
 
 ## Notes
 

@@ -73,6 +73,10 @@ RUN useradd -m -u 1000 geode
 # Copy binaries from builder
 COPY --from=builder --chown=geode:geode /build/zig-out/bin/geode /usr/local/bin/geode
 
+# Copy shared health check script (issue #549: single source of truth)
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/health-check.sh
+
 # Create data directory
 RUN mkdir -p /data && chown geode:geode /data
 VOLUME ["/data"]
@@ -87,13 +91,10 @@ ENV LOG_LEVEL=error
 # Expose QUIC and gRPC ports
 EXPOSE 3141/udp 50051/tcp
 
-# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled.
-# SEC-22: --insecure is acceptable here because the health check connects to
-# localhost (127.0.0.1) only, never leaving the container. The auto-generated
-# TLS cert's CN won't match 127.0.0.1, so TLS verification must be skipped.
+# Health check using shared script (see docker/health-check.sh)
+# SEC-22: --insecure is acceptable (localhost only, see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/health-check.sh
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/geode"]

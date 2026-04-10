@@ -81,6 +81,10 @@ RUN apt-get update && apt-get install -y \
 # Copy all built binaries from builder
 COPY --from=builder /build/zig-out/bin/ /usr/local/bin/
 
+# Copy shared health check script (issue #549: single source of truth)
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/health-check.sh
+
 # Note: Mount certificates as volume at runtime instead of copying during build
 # Example: docker run -v ./certs:/certs:ro geode:latest
 
@@ -104,13 +108,10 @@ ENV LOG_LEVEL=error
 # Expose ports (QUIC + gRPC + metrics)
 EXPOSE 3141/udp 50051/tcp 9091/tcp
 
-# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled.
-# SEC-22: --insecure is acceptable here because the health check connects to
-# localhost (127.0.0.1) only, never leaving the container. The auto-generated
-# TLS cert's CN won't match 127.0.0.1, so TLS verification must be skipped.
+# Health check using shared script (see docker/health-check.sh)
+# SEC-22: --insecure is acceptable (localhost only, see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/health-check.sh
 
 # Default entrypoint and command
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

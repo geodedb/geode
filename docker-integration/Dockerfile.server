@@ -61,6 +61,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy built binary
 COPY --from=builder /build/zig-out/bin/geode /usr/local/bin/geode
 
+# Copy shared health check script (issue #549: single source of truth)
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+RUN chmod +x /usr/local/bin/health-check.sh
+
 # Switch to non-root user
 USER geode
 WORKDIR /home/geode
@@ -73,10 +77,9 @@ ENV GEODE_LOG_LEVEL=info \
 # Expose ports (QUIC + metrics)
 EXPOSE 3141/udp 9090/tcp
 
-# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
+# Health check using shared script (see docker/health-check.sh)
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
-    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/health-check.sh
 
 # Entrypoint
 ENTRYPOINT ["/usr/local/bin/geode", "serve"]

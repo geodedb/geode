@@ -18,7 +18,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # These are provided by the CI pipeline via artifacts
 COPY --chown=geode:geode zig-out/bin/* /usr/local/bin/
 
-# Set execute permissions on binaries
+# Copy shared health check script (issue #549: single source of truth)
+COPY docker/health-check.sh /usr/local/bin/health-check.sh
+
+# Set execute permissions on binaries and scripts
 RUN chmod +x /usr/local/bin/*
 
 # Switch to non-root user
@@ -28,10 +31,9 @@ WORKDIR /home/geode
 # Expose ports (QUIC + gRPC + metrics)
 EXPOSE 3141/udp 50051/tcp 9090/tcp
 
-# Health check - uses GEODE_USERNAME/GEODE_PASSWORD env vars if auth is enabled
+# Health check using shared script (see docker/health-check.sh)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD /usr/local/bin/geode query "RETURN 1 AS health" --server 127.0.0.1:3141 --insecure \
-        ${GEODE_USERNAME:+-U "$GEODE_USERNAME"} ${GEODE_PASSWORD:+-P "$GEODE_PASSWORD"}
+    CMD /usr/local/bin/health-check.sh
 
 # Default entrypoint
 # Production default: error-level logging only
