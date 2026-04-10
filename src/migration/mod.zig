@@ -442,7 +442,7 @@ var global_lock: ?LockHandle = null;
 var lock_steal_count: u64 = 0;
 
 /// Acquires the migration lock with the given TTL in milliseconds. Thread-safe.
-/// Q13: Removed unused allocator parameter that was ignored in the implementation.
+/// Steals expired locks automatically and increments the steal counter for metrics.
 pub fn acquireLock(ttl_ms: u64) MigrationError!LockHandle {
     migration_mutex.lock();
     defer migration_mutex.unlock();
