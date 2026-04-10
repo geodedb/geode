@@ -992,6 +992,19 @@ pub fn build(b: *std.Build) void {
     const match_bench_step = b.step("test-match-bench", "Run MATCH staged benchmark campaign smoke");
     match_bench_step.dependOn(&run_match_bench_tests.step);
 
+    // GAP-0525: Performance gap closure micro-benchmarks
+    const perf_gap_bench_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/benchmark_perf_gap_closure.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    perf_gap_bench_tests.root_module.addImport("geode", root_mod);
+    const run_perf_gap_bench_tests = b.addRunArtifact(perf_gap_bench_tests);
+    const perf_gap_bench_step = b.step("test-perf-gap-bench", "Run performance gap closure micro-benchmarks");
+    perf_gap_bench_step.dependOn(&run_perf_gap_bench_tests.step);
+
     // GAP-0461: CLI transport response abstraction parity goldens
     const cli_transport_parity_tests = b.addTest(.{
         .root_module = b.createModule(.{
