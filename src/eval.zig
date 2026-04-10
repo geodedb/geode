@@ -885,7 +885,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             // server-wide store set during startup.  This ensures timeseries.value()
             // returns real data whether called from the CLI path (env.timeseries_store)
             // or the QUIC/gRPC server path (g_timeseries_store).
-            if (std.mem.eql(u8, function_name, "timeseries.value")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "timeseries.value")) {
                 if (call.args.len != 3) return EvalError.InvalidArgs;
                 const maybe_store: ?*TimeseriesStore = resolveTimeseriesStore(env, null);
 
@@ -923,7 +923,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // CANARY: REQ=REQ-GQL-089; FEATURE="ListComprehension"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.ymlEMENTED; OWNER=eval; UPDATED=2025-10-14
             // Handle all(x IN list WHERE condition) - returns true if all elements match the condition
-            if (std.mem.eql(u8, function_name, "all")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "all")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = call.args[0].*;
 
@@ -978,7 +978,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Handle any(x IN list WHERE condition) - returns true if any element matches the condition
-            if (std.mem.eql(u8, function_name, "any")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "any")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = call.args[0].*;
 
@@ -1033,7 +1033,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Handle special case string functions directly for better nesting support
-            if (std.mem.eql(u8, function_name, "substring")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "substring")) {
                 if (call.args.len < 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const start_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1070,7 +1070,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            if (std.mem.eql(u8, function_name, "replace")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "replace")) {
                 if (call.args.len != 3) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const search_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1138,7 +1138,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
-            if (std.mem.eql(u8, function_name, "trim")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "trim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1153,7 +1153,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-001; FEATURE="StringFunctions"; ASPECT=LTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "ltrim")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "ltrim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1168,7 +1168,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-002; FEATURE="StringFunctions"; ASPECT=RTrim; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "rtrim")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "rtrim")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1183,7 +1183,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-003; FEATURE="StringFunctions"; ASPECT=Left; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "left")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "left")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const len_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1204,7 +1204,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-GQL-STRING-FUNCTIONS-004; FEATURE="StringFunctions"; ASPECT=Right; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "right")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "right")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const len_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1225,7 +1225,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = str[start..] };
             }
 
-            if (std.mem.eql(u8, function_name, "upper") or std.mem.eql(u8, function_name, "toupper")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "upper") or std.ascii.eqlIgnoreCase(function_name, "toupper")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1241,7 +1241,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Str = result };
             }
 
-            if (std.mem.eql(u8, function_name, "lower") or std.mem.eql(u8, function_name, "tolower")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "lower") or std.ascii.eqlIgnoreCase(function_name, "tolower")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1258,7 +1258,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // icontains(str, substr) - case-insensitive string containment check
-            if (std.mem.eql(u8, function_name, "icontains")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "icontains")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const needle_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1288,7 +1288,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // CANARY: REQ=REQ-GQL-CAST-001; FEATURE="TypeCasting"; ASPECT=Evaluation; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-25
             // Handle CAST(expr AS type) - type conversions
-            if (std.mem.eql(u8, function_name, "cast")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "cast")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
 
                 // First arg is the value to cast, second is the type name as string
@@ -1516,7 +1516,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
 
             // CANARY: REQ=REQ-GQL-KEYS-002; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
             // B06 Fix: Handle keys() for Map, Node, AND Edge types
-            if (std.mem.eql(u8, function_name, "keys")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1551,7 +1551,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            if (std.mem.eql(u8, function_name, "values")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "values")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1569,7 +1569,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Handle special case math functions for better nesting support
-            if (std.mem.eql(u8, function_name, "abs")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "abs")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1589,7 +1589,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            if (std.mem.eql(u8, function_name, "sqrt")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "sqrt")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1607,7 +1607,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            if (std.mem.eql(u8, function_name, "pow")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "pow")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const base_arg = try evalExpr(allocator, call.args[0].*, env);
                 const exp_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1632,7 +1632,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "sin")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "sin")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1646,7 +1646,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "cos")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "cos")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1660,7 +1660,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "tan")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "tan")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1677,7 +1677,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-001; FEATURE="TrigonometricFunctions"; ASPECT=ATAN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "atan")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "atan")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1692,7 +1692,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-002; FEATURE="TrigonometricFunctions"; ASPECT=ATAN2; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "atan2")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "atan2")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const arg_y = try evalExpr(allocator, call.args[0].*, env);
                 const arg_x = try evalExpr(allocator, call.args[1].*, env);
@@ -1716,7 +1716,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-003; FEATURE="TrigonometricFunctions"; ASPECT=ASIN; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "asin")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "asin")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1733,7 +1733,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-TRIG-004; FEATURE="TrigonometricFunctions"; ASPECT=ACOS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "acos")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "acos")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1750,7 +1750,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-CONVERT-001; FEATURE="AngleConversion"; ASPECT=DEGREES; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "degrees")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "degrees")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1766,7 +1766,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-CONVERT-002; FEATURE="AngleConversion"; ASPECT=RADIANS; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=math; UPDATED=2025-12-27
-            if (std.mem.eql(u8, function_name, "radians")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "radians")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1781,7 +1781,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(@round(result * float_to_decimal_scale_f64)), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "log")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "log")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1796,7 +1796,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(result * float_to_decimal_scale_f64), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "exp")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "exp")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 const val = switch (arg) {
@@ -1812,7 +1812,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 break :blk_call .{ .Decimal = .{ .coeff = @intFromFloat(scaled), .scale = 6, .orig_scale = 6, .orig_repr = null } };
             }
 
-            if (std.mem.eql(u8, function_name, "ceil")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "ceil")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1831,7 +1831,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                 }
             }
 
-            if (std.mem.eql(u8, function_name, "floor")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "floor")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
                 switch (arg) {
@@ -1851,7 +1851,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=ROUND; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-12-22
-            if (std.mem.eql(u8, function_name, "round")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "round")) {
                 if (call.args.len < 1 or call.args.len > 2) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1932,7 +1932,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-ARITH-001; FEATURE="ArithmeticFunctions"; ASPECT=MOD; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "mod")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "mod")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const dividend_arg = try evalExpr(allocator, call.args[0].*, env);
                 const divisor_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -1954,7 +1954,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // CANARY: REQ=REQ-MATH-ARITH-002; FEATURE="ArithmeticFunctions"; ASPECT=SIGN; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=math; UPDATED=2025-10-26
-            if (std.mem.eql(u8, function_name, "sign")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "sign")) {
                 if (call.args.len != 1) break :blk_call .{ .Null = {} };
                 const arg = try evalExpr(allocator, call.args[0].*, env);
 
@@ -1968,7 +1968,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Special handling for random() with no args — returns decimal in [0, 1)
-            if (std.mem.eql(u8, function_name, "random")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "random")) {
                 if (call.args.len != 0) break :blk_call .{ .Null = {} };
                 // Use cryptographically secure random source
                 var rand_bytes: [8]u8 = undefined;
@@ -1980,7 +1980,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             }
 
             // Handle Char function - converts string to fixed-length char with length validation
-            if (std.mem.eql(u8, function_name, "char") or std.mem.eql(u8, function_name, "Char")) {
+            if (std.ascii.eqlIgnoreCase(function_name, "char") or std.ascii.eqlIgnoreCase(function_name, "Char")) {
                 if (call.args.len != 2) break :blk_call .{ .Null = {} };
                 const str_arg = try evalExpr(allocator, call.args[0].*, env);
                 const len_arg = try evalExpr(allocator, call.args[1].*, env);
@@ -3220,7 +3220,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     const evaluator_functions = @import("types/evaluator_functions.zig");
 
     // Handle current_user() function - returns the current authenticated user
-    if (std.mem.eql(u8, function_name, "current_user")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "current_user")) {
         if (args.len != 0) return null;
         // Check if we have a token-authenticated user in the environment
         if (env.get("__token_user__")) |user| {
@@ -3231,7 +3231,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle coalesce() function - return first non-null value
-    if (std.mem.eql(u8, function_name, "coalesce")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "coalesce")) {
         for (args) |arg_expr| {
             const arg = try evalExpr(allocator, arg_expr.*, env);
             switch (arg) {
@@ -3244,7 +3244,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-PROPERTIES-001; FEATURE="PropertiesFunction"; ASPECT=NodeProperties; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B05 Fix: Handle properties() function - returns property map of a node or edge
-    if (std.mem.eql(u8, function_name, "properties")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "properties")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3275,7 +3275,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-KEYS-001; FEATURE="KeysFunction"; ASPECT=NodePropertyKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B06 Fix: Handle keys() function for maps AND nodes
-    if (std.mem.eql(u8, function_name, "keys")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3313,7 +3313,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle values() function for maps
-    if (std.mem.eql(u8, function_name, "values")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "values")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3333,7 +3333,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-PATH-002; FEATURE="ShortestPath"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper path finding implementation
     // Handle shortestPath function - returns shortest path between nodes
-    if (std.mem.eql(u8, function_name, "shortestpath") or std.mem.eql(u8, function_name, "shortest_path")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "shortestpath") or std.ascii.eqlIgnoreCase(function_name, "shortest_path")) {
         // shortestPath expects either:
         // 1. A Path value (from pattern like (a)-[*]-(b))
         // 2. Two node arguments (start, end)
@@ -3396,7 +3396,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-PATH-003; FEATURE="AllShortestPaths"; ASPECT=GraphTraversal; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-10
     // GAP-0088 RESOLVED: Proper all-paths implementation
     // Handle allShortestPaths function
-    if (std.mem.eql(u8, function_name, "allshortestpaths") or std.mem.eql(u8, function_name, "all_shortest_paths")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "allshortestpaths") or std.ascii.eqlIgnoreCase(function_name, "all_shortest_paths")) {
         // allShortestPaths returns a list of all shortest paths
         if (args.len == 1) {
             const arg = try evalExpr(allocator, args[0].*, env);
@@ -3458,7 +3458,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle algo.asNode function - converts nodeId to node reference
-    if (std.mem.eql(u8, function_name, "algo.asnode") or std.mem.eql(u8, function_name, "asnode")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "algo.asnode") or std.ascii.eqlIgnoreCase(function_name, "asnode")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         // Just return the node ID for now
@@ -3466,7 +3466,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle id() function - returns node ID or input if already an integer
-    if (std.mem.eql(u8, function_name, "id")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "id")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3479,7 +3479,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-GQL-EXISTS-PROP-001; FEATURE="ExistsFunction"; ASPECT=PropertyExistence; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
     // Handle exists() function - checks if a property exists on a node/edge (returns true/false)
     // This is different from EXISTS { ... } predicate which checks pattern matches
-    if (std.mem.eql(u8, function_name, "exists")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "exists")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         // exists() returns true if the value is NOT null, false if it is null
@@ -3491,7 +3491,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns relationship type for edges, type name for other values
-    if (std.mem.eql(u8, function_name, "type")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "type")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3501,7 +3501,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle labels() function - returns node labels as a list
-    if (std.mem.eql(u8, function_name, "labels")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "labels")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3518,7 +3518,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-INDEGREE-001; FEATURE="IndegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle indegree() function - returns number of incoming edges to a node
-    if (std.mem.eql(u8, function_name, "indegree")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "indegree")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3552,7 +3552,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-OUTDEGREE-001; FEATURE="OutdegreeFunction"; ASPECT=NodeDegree; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2026-01-03
     // Handle outdegree() function - returns number of outgoing edges from a node
-    if (std.mem.eql(u8, function_name, "outdegree")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "outdegree")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3585,7 +3585,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle length() function - returns length of path, string, or list
-    if (std.mem.eql(u8, function_name, "length")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3597,7 +3597,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle nodes() function - returns list of nodes in a path
-    if (std.mem.eql(u8, function_name, "nodes")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "nodes")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3613,7 +3613,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle relationships() function - returns list of edges in a path
-    if (std.mem.eql(u8, function_name, "relationships")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "relationships")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3629,7 +3629,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle string case conversion functions
-    if (std.mem.eql(u8, function_name, "toupper") or std.mem.eql(u8, function_name, "upper")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "toupper") or std.ascii.eqlIgnoreCase(function_name, "upper")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3644,7 +3644,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         }
     }
 
-    if (std.mem.eql(u8, function_name, "tolower") or std.mem.eql(u8, function_name, "lower")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "tolower") or std.ascii.eqlIgnoreCase(function_name, "lower")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3660,7 +3660,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // icontains(str, substr) - case-insensitive containment check
-    if (std.mem.eql(u8, function_name, "icontains")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "icontains")) {
         if (args.len != 2) return null;
         const str_arg = try evalExpr(allocator, args[0].*, env);
         const needle_arg = try evalExpr(allocator, args[1].*, env);
@@ -3689,7 +3689,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle reverse function
-    if (std.mem.eql(u8, function_name, "reverse")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "reverse")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -3716,7 +3716,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Math functions are now handled as special cases in the Call block above
 
     // Handle aggregation functions (simplified for now - real implementation needs context)
-    if (std.mem.eql(u8, function_name, "count")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "count")) {
         // COUNT(*) or COUNT(expr)
         if (args.len == 1) {
             // Check if argument is "*"
@@ -3733,7 +3733,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             return Value{ .Int = 0 };
         }
         return Value{ .Int = 0 };
-    } else if (std.mem.eql(u8, function_name, "sum")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "sum")) {
         // SUM aggregation function
         if (args.len == 0) return Value{ .Null = {} };
 
@@ -3790,7 +3790,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "avg")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "avg")) {
         // AVG aggregation function
         if (args.len == 0) return Value{ .Null = {} };
 
@@ -3856,7 +3856,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "min")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "min")) {
         // MIN aggregation function
         if (args.len == 0) return Value{ .Null = {} };
 
@@ -3887,7 +3887,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "max")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "max")) {
         // MAX aggregation function
         if (args.len == 0) return Value{ .Null = {} };
 
@@ -3921,24 +3921,24 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle random() function which takes no arguments
-    if (std.mem.eql(u8, function_name, "random")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "random")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.random_val(allocator) catch return null;
         return heapValueToEvalValue(result);
     }
 
     // Handle date/time functions which take no arguments
-    if (std.mem.eql(u8, function_name, "current_date")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "current_date")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.current_date();
         return heapValueToEvalValue(result);
     }
-    if (std.mem.eql(u8, function_name, "current_time")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "current_time")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.current_time();
         return heapValueToEvalValue(result);
     }
-    if (std.mem.eql(u8, function_name, "current_timestamp")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "current_timestamp")) {
         if (args.len != 0) return null;
         const result = evaluator_functions.current_timestamp();
         return heapValueToEvalValue(result);
@@ -3946,7 +3946,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=datetime; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle datetime() function - returns current datetime or parses ISO datetime string
-    if (std.mem.eql(u8, function_name, "datetime")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "datetime")) {
         const datetime_module = @import("types/datetime.zig");
         const eval_ext = @import("eval_extended.zig");
 
@@ -3974,7 +3974,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=timestamp; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle timestamp() function - returns current timestamp as integer (epoch millis)
-    if (std.mem.eql(u8, function_name, "timestamp")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "timestamp")) {
         if (args.len != 0) return null;
         const ts = std.time.milliTimestamp();
         return Value{ .Int = ts };
@@ -3982,7 +3982,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=localdatetime; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2025-12-22
     // Handle localdatetime() function - returns current local datetime
-    if (std.mem.eql(u8, function_name, "localdatetime")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "localdatetime")) {
         if (args.len == 0) {
             // localdatetime() with no args returns current local datetime (same as datetime for now)
             const result = evaluator_functions.current_timestamp();
@@ -4007,7 +4007,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle date(string) function that parses ISO date strings
-    if (std.mem.eql(u8, function_name, "date")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "date")) {
         if (args.len == 0) {
             // date() with no args returns current date
             const result = evaluator_functions.current_date();
@@ -4031,7 +4031,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     }
 
     // Handle time(string) function that parses ISO time strings
-    if (std.mem.eql(u8, function_name, "time")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "time")) {
         if (args.len == 0) {
             // time() with no args returns current time
             const result = evaluator_functions.current_time();
@@ -4057,7 +4057,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
     // Handle duration() function - parses ISO 8601 duration string and returns Interval
-    if (std.mem.eql(u8, function_name, "duration")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "duration")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
@@ -4074,7 +4074,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
     // Handle type() function - returns the type name of a value
-    if (std.mem.eql(u8, function_name, "type")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "type")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         const type_name = getTypeName(arg);
@@ -4083,7 +4083,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-088; FEATURE="GraphSimilarityFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
     // Handle algo.similarity.jaccard(list1, list2) - Jaccard similarity coefficient
-    if (std.mem.eql(u8, function_name, "algo.similarity.jaccard") or std.mem.eql(u8, function_name, "jaccard")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.jaccard") or std.ascii.eqlIgnoreCase(function_name, "jaccard")) {
         if (args.len != 2) return null;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
@@ -4121,7 +4121,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // Handle algo.similarity.cosine(vector1, vector2) - Cosine similarity
     // CANARY: REQ=REQ-ALG-SIM-001; FEATURE="SimilarityAlgorithms"; ASPECT=Cosine; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=eval; UPDATED=2025-10-16
-    if (std.mem.eql(u8, function_name, "algo.similarity.cosine") or std.mem.eql(u8, function_name, "cosine")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "algo.similarity.cosine") or std.ascii.eqlIgnoreCase(function_name, "cosine")) {
         if (args.len != 2) return null;
         const arg1 = try evalExpr(allocator, args[0].*, env);
         const arg2 = try evalExpr(allocator, args[1].*, env);
@@ -4176,22 +4176,22 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     const heap_first_arg = evalValueToHeapValue(first_arg);
 
     // Handle common string functions
-    if (std.mem.eql(u8, function_name, "length")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "length")) {
         const result = evaluator_functions.length_chars(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "upper")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "upper")) {
         const result = evaluator_functions.upper(allocator, heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "lower")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "lower")) {
         const result = evaluator_functions.lower(allocator, heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "trim")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "trim")) {
         const result = evaluator_functions.trim(allocator, heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "abs")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "abs")) {
         const result = evaluator_functions.abs_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "sqrt")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "sqrt")) {
         const result = evaluator_functions.sqrt_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
@@ -4200,28 +4200,28 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "ceil")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "ceil")) {
         const result = evaluator_functions.ceil_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "floor")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "floor")) {
         const result = evaluator_functions.floor_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "pow") or std.mem.eql(u8, function_name, "power")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "pow") or std.ascii.eqlIgnoreCase(function_name, "power")) {
         // CANARY: REQ=REQ-GQL-POWER-001; FEATURE="MathFunctions"; ASPECT=PowerAlias; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         if (args.len != 2) return null;
         const heap_second_arg = evalValueToHeapValue(try evalExpr(allocator, args[1].*, env));
         const result = evaluator_functions.pow_val(allocator, heap_first_arg, heap_second_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "sin")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "sin")) {
         const result = evaluator_functions.sin_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "cos")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "cos")) {
         const result = evaluator_functions.cos_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "tan")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "tan")) {
         const result = evaluator_functions.tan_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "asin")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "asin")) {
         const result = evaluator_functions.asin_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
@@ -4230,7 +4230,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "acos")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "acos")) {
         const result = evaluator_functions.acos_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
@@ -4239,7 +4239,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "log")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "log")) {
         const result = evaluator_functions.log_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidInput => EvalError.TypeMismatch,
@@ -4248,7 +4248,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "log10")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "log10")) {
         // CANARY: REQ=REQ-GQL-LOG10-001; FEATURE="MathFunctions"; ASPECT=Log10; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_math_algorithms.yml; OWNER=eval; UPDATED=2025-12-24
         // log10(x) = log(x) / log(10)
         switch (first_arg) {
@@ -4266,16 +4266,16 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "exp")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "exp")) {
         const result = evaluator_functions.exp_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "type")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "type")) {
         const result = evaluator_functions.type_val(heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "tostring")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "tostring")) {
         const result = evaluator_functions.toString_val(allocator, heap_first_arg) catch return null;
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "tointeger")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
         const result = evaluator_functions.toInteger_val(heap_first_arg) catch |err| {
             // Convert evaluator errors to eval errors
             return switch (err) {
@@ -4286,7 +4286,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "toreal")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "toreal")) {
         const result = evaluator_functions.toReal_val(heap_first_arg) catch |err| {
             return switch (err) {
                 evaluator_functions.EvaluatorError.InvalidFormat => EvalError.TypeMismatch,
@@ -4296,7 +4296,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             };
         };
         return heapValueToEvalValue(result);
-    } else if (std.mem.eql(u8, function_name, "size") or std.mem.eql(u8, function_name, "length")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "size") or std.ascii.eqlIgnoreCase(function_name, "length")) {
         // CANARY: REQ=REQ-GQL-SIZE-001; FEATURE="SizeFunction"; ASPECT=ListPropertySize; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-27
         // Size of a list, string, or map
         switch (first_arg) {
@@ -4310,7 +4310,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Int = 0 },
         }
-    } else if (std.mem.eql(u8, function_name, "head")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "head")) {
         // CANARY: REQ=REQ-GQL-HEAD-001; FEATURE="ListFunctions"; ASPECT=HeadElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
         // Return the first element of a list
         switch (first_arg) {
@@ -4320,7 +4320,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "tail")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "tail")) {
         // CANARY: REQ=REQ-GQL-TAIL-001; FEATURE="ListFunctions"; ASPECT=TailElements; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2026-01-09
         // Return all elements except the first
         switch (first_arg) {
@@ -4334,7 +4334,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .List = &[_]Value{} },
         }
-    } else if (std.mem.eql(u8, function_name, "last")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "last")) {
         // CANARY: REQ=REQ-GQL-LAST-001; FEATURE="ListFunctions"; ASPECT=LastElement; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
         // Return the last element of a list
         switch (first_arg) {
@@ -4344,7 +4344,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "toString")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "toString")) {
         // Convert to string
         switch (first_arg) {
             .Int => |i| {
@@ -4362,7 +4362,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             .Null => return Value{ .Str = "null" },
             else => return Value{ .Str = "" },
         }
-    } else if (std.mem.eql(u8, function_name, "tofloat") or std.mem.eql(u8, function_name, "toFloat") or std.mem.eql(u8, function_name, "todouble") or std.mem.eql(u8, function_name, "toDouble")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "tofloat") or std.ascii.eqlIgnoreCase(function_name, "toFloat") or std.ascii.eqlIgnoreCase(function_name, "todouble") or std.ascii.eqlIgnoreCase(function_name, "toDouble")) {
         // CANARY: REQ=REQ-GQL-086; FEATURE="TypeConversionFunctions"; ASPECT=Evaluation; STATUS=TESTED; OWNER=eval; UPDATED=2025-10-14
         // Convert to float - use scale=6 for 6 decimal places of precision
         const float_scale: u8 = 6;
@@ -4376,7 +4376,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "toint") or std.mem.eql(u8, function_name, "tointeger")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "toint") or std.ascii.eqlIgnoreCase(function_name, "tointeger")) {
         // Convert to integer
         switch (first_arg) {
             .Int => |i| return Value{ .Int = i },
@@ -4388,7 +4388,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "toboolean") or std.mem.eql(u8, function_name, "toBoolean") or std.mem.eql(u8, function_name, "tobool")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "toboolean") or std.ascii.eqlIgnoreCase(function_name, "toBoolean") or std.ascii.eqlIgnoreCase(function_name, "tobool")) {
         // CANARY: REQ=REQ-GQL-TOBOOLEAN-001; FEATURE="TypeConversionFunctions"; ASPECT=ToBooleanConversion; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-24
         // Convert to boolean
         switch (first_arg) {
@@ -4412,7 +4412,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         const second_arg = try evalExpr(allocator, args[1].*, env);
         const heap_second_arg = evalValueToHeapValue(second_arg);
 
-        if (std.mem.eql(u8, function_name, "substring")) {
+        if (std.ascii.eqlIgnoreCase(function_name, "substring")) {
             if (args.len >= 3) {
                 const third_arg = try evalExpr(allocator, args[2].*, env);
                 const heap_third_arg = evalValueToHeapValue(third_arg);
@@ -4423,29 +4423,29 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
                 const result = evaluator_functions.substring(allocator, heap_first_arg, heap_second_arg, null) catch return null;
                 return heapValueToEvalValue(result);
             }
-        } else if (std.mem.eql(u8, function_name, "replace")) {
+        } else if (std.ascii.eqlIgnoreCase(function_name, "replace")) {
             if (args.len >= 3) {
                 const third_arg = try evalExpr(allocator, args[2].*, env);
                 const heap_third_arg = evalValueToHeapValue(third_arg);
                 const result = evaluator_functions.replace(allocator, heap_first_arg, heap_second_arg, heap_third_arg) catch return null;
                 return heapValueToEvalValue(result);
             }
-        } else if (std.mem.eql(u8, function_name, "decimal_add")) {
+        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_add")) {
             const result = evaluator_functions.decimal_add(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
             return heapValueToEvalValue(result);
-        } else if (std.mem.eql(u8, function_name, "decimal_sub")) {
+        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_sub")) {
             const result = evaluator_functions.decimal_sub(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
             return heapValueToEvalValue(result);
-        } else if (std.mem.eql(u8, function_name, "decimal_mul")) {
+        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_mul")) {
             const result = evaluator_functions.decimal_mul(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
             return heapValueToEvalValue(result);
-        } else if (std.mem.eql(u8, function_name, "decimal_div")) {
+        } else if (std.ascii.eqlIgnoreCase(function_name, "decimal_div")) {
             const result = evaluator_functions.decimal_div(heap_first_arg, heap_second_arg) catch |err| {
                 return err;
             };
@@ -4455,7 +4455,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-GQL-KEYS-003; FEATURE="KeysFunction"; ASPECT=NodeEdgeMapKeys; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=eval; UPDATED=2025-12-28
     // B06 Fix: Handle keys() for Map, Node, AND Edge types
-    if (std.mem.eql(u8, function_name, "keys")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "keys")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -4488,7 +4488,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
             },
             else => return Value{ .Null = {} },
         }
-    } else if (std.mem.eql(u8, function_name, "values")) {
+    } else if (std.ascii.eqlIgnoreCase(function_name, "values")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         switch (arg) {
@@ -4508,7 +4508,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // CANARY: REQ=REQ-CLIENT-INTEGRATION-001; FEATURE="range() function"; ASPECT=BuiltinFunctions; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=eval; UPDATED=2025-11-15
     // Handle range(start, stop[, step]) function - generates integer sequences
     // Used for performance testing: UNWIND range(1, 100) AS x RETURN x
-    if (std.mem.eql(u8, function_name, "range")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "range")) {
         // range() requires 2 or 3 arguments
         if (args.len < 2 or args.len > 3) return Value{ .Null = {} };
 
@@ -4716,12 +4716,13 @@ fn evalTimeseriesFunction(
 ) EvalError!?Value {
     const ts_module = @import("timeseries/timeseries.zig");
 
-    // All timeseries functions start with "timeseries." prefix (except timeseries.value handled above)
-    if (!std.mem.startsWith(u8, function_name, "timeseries.")) return null;
+    // All timeseries functions start with "timeseries." prefix (except timeseries.value handled above).
+    // Per ISO/IEC 39075:2024 RQ-0022 the prefix match is case-insensitive.
+    if (!std.ascii.startsWithIgnoreCase(function_name, "timeseries.")) return null;
     const suffix = function_name["timeseries.".len..];
 
     // Skip "value" -- already handled in the main dispatch above
-    if (std.mem.eql(u8, suffix, "value")) return null;
+    if (std.ascii.eqlIgnoreCase(suffix, "value")) return null;
 
     // GAP-0290: Array-based functions take f64 list args directly (no device_id/metric)
     if (try evalArrayBasedTsFunction(allocator, suffix, args, env)) |result| {
