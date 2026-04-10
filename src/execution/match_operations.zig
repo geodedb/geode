@@ -2,6 +2,15 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+
+// GAP-0522: Diagnostic counter for full-scan MATCH queries (no indexable labels).
+// Observable via getFullScanCount() for monitoring/alerting.
+var g_full_scan_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+pub fn getFullScanCount() u64 {
+    return g_full_scan_count.load(.monotonic);
+}
+
+const match_log = std.log.scoped(.match_ops);
 const property_mutation = @import("property_mutation.zig");
 const value_types = @import("../value_types.zig");
 
@@ -592,6 +601,9 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
             }
         } else {
             // Fallback: no labels available, full node scan required
+            // GAP-0522: Diagnostic warning for full-scan MATCH+CALL
+            _ = g_full_scan_count.fetchAdd(1, .monotonic);
+            match_log.warn("MATCH+CALL full node scan: no labels specified on node pattern", .{});
             var node_iter = read_store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node_id = entry.key_ptr.*;
@@ -882,6 +894,9 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
             }
         } else {
             // No labels - fall back to full scan
+            // GAP-0522: Diagnostic warning for full-scan multi-node MATCH
+            _ = g_full_scan_count.fetchAdd(1, .monotonic);
+            match_log.warn("multi-node MATCH full node scan: no labels specified on node pattern", .{});
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
@@ -1645,6 +1660,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             }
         } else {
             // No labels and no relationship type — true full scan fallback (unavoidable)
+            // GAP-0522: Diagnostic warning for full-scan relationship MATCH
+            _ = g_full_scan_count.fetchAdd(1, .monotonic);
+            match_log.warn("relationship MATCH full node scan: no labels or relationship type specified", .{});
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const left_node = entry.value_ptr;
@@ -1708,6 +1726,9 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 try bindings.append(allocator, binding);
             }
         } else {
+            // GAP-0522: Diagnostic warning for full-scan simple node-pattern MATCH
+            _ = g_full_scan_count.fetchAdd(1, .monotonic);
+            match_log.warn("simple node-pattern MATCH full node scan: no labels specified", .{});
             var node_iter = store.nodes.iterator();
             while (node_iter.next()) |entry| {
                 const node = entry.value_ptr;
@@ -6093,6 +6114,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         try NodeCollector2.addBinding(allocator, node, first_hop.left, param_names, param_values, &current_bindings);
                     }
                 } else {
+                    // GAP-0522: Diagnostic warning for full-scan multi-hop initialization
+                    _ = g_full_scan_count.fetchAdd(1, .monotonic);
+                    match_log.warn("multi-hop MATCH full node scan: no labels on first-hop left node", .{});
                     var init_iter = store.nodes.iterator();
                     while (init_iter.next()) |entry| {
                         const node = entry.value_ptr;
