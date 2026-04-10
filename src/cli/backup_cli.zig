@@ -1148,6 +1148,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
 // CANARY: REQ=REQ-CLI-MIGRATE-STATUS-001; FEATURE="CLIMigrateStatus"; ASPECT=MigrationModule; STATUS=TESTED; TEST=geodetestlab/specs/geode_migrations.yml; OWNER=cli; UPDATED=2026-01-11
 fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var migrations_dir: []const u8 = "migrations";
+    var allow_unauthenticated = false;
 
     var i: usize = start_idx;
     while (i < argv.len) : (i += 1) {
@@ -1158,12 +1159,15 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 "\n" ++
                 "Options:\n" ++
                 "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
+                "  --allow-unauthenticated  Skip HMAC key requirement (dev only)\n" ++
                 "  -h, --help             Show this help\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
             i += 1;
             migrations_dir = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--allow-unauthenticated")) {
+            allow_unauthenticated = true;
         }
     }
 
@@ -1171,6 +1175,21 @@ fn cmdMigrateStatus(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     if (!isPathSafe(migrations_dir)) {
         std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // SEC-MIG-03: Require HMAC key authentication for migrate status.
+    // Having the HMAC key proves the caller is an authorized migration admin.
+    if (!allow_unauthenticated) {
+        var hmac_key_buf: [32]u8 = undefined;
+        if (loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator) == null) {
+            std.debug.print("Error: Authentication required for 'migrate status'.\n" ++
+                "  Set GEODE_MIGRATION_HMAC_KEY env var (64 hex chars), or\n" ++
+                "  create {s}/.hmac_key file.\n" ++
+                "  Use --allow-unauthenticated to skip (dev only).\n", .{migrations_dir});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+        // Zero out the key buffer — we only needed to prove it exists
+        @memset(&hmac_key_buf, 0);
     }
 
     const cfg = migration.MigrationConfig{ .migrations_dir = migrations_dir };
@@ -1426,6 +1445,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var migration_name: ?[]const u8 = null;
     var migrations_dir: []const u8 = "migrations";
+    var no_sign = false;
 
     // Parse arguments
     var i: usize = start_idx;
@@ -1440,12 +1460,18 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
                 "\n" ++
                 "Options:\n" ++
                 "  --dir <path>           Migrations directory (default: ./migrations)\n" ++
+                "  --no-sign              Skip auto-signing (dev only, not recommended)\n" ++
                 "  -h, --help             Show this help\n" ++
+                "\n" ++
+                "Requires HMAC key (GEODE_MIGRATION_HMAC_KEY env var or <dir>/.hmac_key file).\n" ++
+                "Created migrations are automatically signed unless --no-sign is specified.\n" ++
                 "\n", .{});
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--dir") and i + 1 < argv.len) {
             i += 1;
             migrations_dir = argv[i];
+        } else if (std.mem.eql(u8, argv[i], "--no-sign")) {
+            no_sign = true;
         } else if (migration_name == null and !std.mem.startsWith(u8, argv[i], "-")) {
             migration_name = argv[i];
         }
@@ -1460,6 +1486,21 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     if (!isPathSafe(migrations_dir)) {
         std.debug.print("Error: --dir path contains invalid traversal components\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
+
+    // SEC-MIG-03: Require HMAC key for migrate create (admin role proof).
+    // The key is needed to sign the created migration file.
+    var hmac_key_buf: [32]u8 = undefined;
+    var hmac_key_ptr: ?*const [32]u8 = null;
+    if (!no_sign) {
+        hmac_key_ptr = loadMigrationHmacKey(&hmac_key_buf, migrations_dir, allocator);
+        if (hmac_key_ptr == null) {
+            std.debug.print("Error: Authentication required for 'migrate create'.\n" ++
+                "  Set GEODE_MIGRATION_HMAC_KEY env var (64 hex chars), or\n" ++
+                "  create {s}/.hmac_key file.\n" ++
+                "  Use --no-sign to skip (dev only, not recommended).\n", .{migrations_dir});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
     }
 
     // Validate migration name for path traversal (GAP-0285/0301)
@@ -1513,6 +1554,13 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
     defer allocator.free(filename);
 
+    // Extract just the base filename (without directory) for signing
+    const basename = std.fmt.allocPrint(allocator, "{d:0>3}_{s}.gql", .{ new_version, migration_name.? }) catch {
+        std.debug.print("Error: Out of memory\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(basename);
+
     // Create the migration file with template content
     const template = std.fmt.allocPrint(allocator,
         \\-- Migration: {s}
@@ -1542,6 +1590,20 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
 
     printStdout("Created migration file: {s}\n", .{filename});
+
+    // SEC-MIG-03: Auto-sign the newly created migration file
+    if (hmac_key_ptr) |key| {
+        const cfg = migration.MigrationConfig{
+            .migrations_dir = migrations_dir,
+            .hmac_key = key,
+        };
+        migration.signMigrationFile(allocator, cfg, basename) catch |err| {
+            std.debug.print("Warning: Failed to auto-sign migration: {}\n", .{err});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        printStdout("  Signed: {s}\n", .{basename});
+    }
+
     std.process.exit(@intFromEnum(ExitCode.success));
 }
 

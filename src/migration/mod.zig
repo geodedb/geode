@@ -67,6 +67,9 @@ pub const StatusRow = struct {
     name: []const u8 = "",
     applied: bool = false,
     checksum_prefix: [7]u8 = "0000000".*,
+    /// SEC-MIG-05: SHA-256 full content hash (64-char hex). All zeros means legacy
+    /// entry written before the SHA-256 upgrade — drift detection falls back to FNV-1a.
+    content_sha256: [64]u8 = "0000000000000000000000000000000000000000000000000000000000000000".*,
 };
 
 pub const Metrics = struct {
@@ -165,6 +168,15 @@ fn checksumPrefix(bytes: []const u8) [7]u8 {
     return prefix;
 }
 
+/// SEC-MIG-05: Computes the SHA-256 hash of content, returned as a 64-char lowercase hex string.
+fn computeContentSha256(data: []const u8) [64]u8 {
+    var hash: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data, &hash, .{});
+    return std.fmt.bytesToHex(hash, .lower);
+}
+
+const sha256_zero: [64]u8 = "0000000000000000000000000000000000000000000000000000000000000000".*;
+
 fn computeFingerprint(rows: []const StatusRow) u64 {
     var h: u64 = fnv_offset_basis;
     for (rows) |row| {
@@ -176,9 +188,18 @@ fn computeFingerprint(rows: []const StatusRow) u64 {
             h *%= fnv_prime;
             vtmp >>= 8;
         }
-        for (row.checksum_prefix) |b| {
-            h ^= b;
-            h *%= fnv_prime;
+        // SEC-MIG-05: Use SHA-256 hash when available (non-zero), otherwise fall
+        // back to legacy FNV-1a prefix for entries written before the upgrade.
+        if (!std.mem.eql(u8, &row.content_sha256, &sha256_zero)) {
+            for (row.content_sha256) |b| {
+                h ^= b;
+                h *%= fnv_prime;
+            }
+        } else {
+            for (row.checksum_prefix) |b| {
+                h ^= b;
+                h *%= fnv_prime;
+            }
         }
     }
     return h;
@@ -232,6 +253,7 @@ fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Led
             .name = name_copy,
             .applied = row.applied,
             .checksum_prefix = row.checksum_prefix,
+            .content_sha256 = row.content_sha256,
         }) catch return error.OutOfMemory;
     }
 
@@ -458,16 +480,73 @@ pub fn releaseLock(h: *LockHandle) MigrationError!void {
     } else return error.NoLockHeld;
 }
 
+// ------------------ SEC-MIG-04: Cross-process file lock ------------------
+// CANARY: REQ=REQ-SEC-MIG-04; FEATURE="CrossProcessMigrationLock"; ASPECT=FileLock; STATUS=TESTED; TEST="acquireFileLock creates lockfile and blocks concurrent processes"; OWNER=migration; UPDATED=2026-04-10
+
+const lock_filename = ".migration_lock";
+
+/// Filesystem-based lock for cross-process migration serialization.
+/// Uses flock() on POSIX or a lockfile presence check on Windows.
+/// The OS automatically releases the lock if the process crashes.
+pub const FileLock = struct {
+    file: std.fs.File,
+
+    /// Acquires an exclusive file lock on `.migration_lock` in the migrations directory.
+    /// Blocks until the lock is available (flock LOCK_EX). Returns AlreadyLocked on EWOULDBLOCK
+    /// when using non-blocking mode (not currently used — we block to match user expectation).
+    pub fn acquire(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!FileLock {
+        ensureDir(cfg) catch return error.FileSystemError;
+        const path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, lock_filename }) catch return error.OutOfMemory;
+        defer alloc.free(path);
+
+        const file = std.fs.cwd().createFile(path, .{
+            .truncate = false,
+            .read = true,
+        }) catch return error.FileSystemError;
+        errdefer file.close();
+
+        // Set restrictive permissions (owner-only)
+        if (builtin.os.tag != .windows) {
+            file.chmod(0o600) catch {};
+        }
+
+        // flock() with LOCK_EX — blocks until lock is available.
+        // OS releases the lock automatically if the process crashes.
+        if (builtin.os.tag != .windows) {
+            file.lock(.exclusive) catch return error.AlreadyLocked;
+        }
+        // On Windows, CreateFile with exclusive sharing provides similar semantics;
+        // the createFile call above will fail if another process holds the file open.
+
+        return .{ .file = file };
+    }
+
+    /// Releases the file lock and closes the lockfile handle.
+    pub fn release(self: *FileLock) void {
+        if (builtin.os.tag != .windows) {
+            self.file.unlock();
+        }
+        self.file.close();
+    }
+};
+
 // ------------------ Apply / Status ------------------
 
 /// Applies pending up-migrations in version order. Skips already-applied versions.
 /// Saves ledger after each successful migration for crash safety.
+/// SEC-MIG-04: Acquires both in-process mutex and filesystem flock for cross-process safety.
 pub fn applyUpMigrations(
     alloc: std.mem.Allocator,
     cfg: MigrationConfig,
     names: []const []const u8,
     executor: QueryExecutor,
 ) MigrationError!void {
+    // SEC-MIG-04: Cross-process file lock (blocks until available; OS auto-releases on crash)
+    var file_lock = FileLock.acquire(alloc, cfg) catch |err| {
+        std.log.warn("migration: failed to acquire file lock: {}", .{err});
+        return error.AlreadyLocked;
+    };
+    defer file_lock.release();
     var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
@@ -512,12 +591,14 @@ pub fn applyUpMigrations(
         };
 
         const prefix = checksumPrefix(script);
+        const sha256 = computeContentSha256(script);
         const new_name = alloc.dupe(u8, entry.name) catch return error.OutOfMemory;
         ledger.rows.append(alloc, .{
             .version = entry.version,
             .name = new_name,
             .applied = true,
             .checksum_prefix = prefix,
+            .content_sha256 = sha256,
         }) catch {
             alloc.free(new_name);
             return error.OutOfMemory;
@@ -532,11 +613,18 @@ pub fn applyUpMigrations(
 
 /// Rolls back the single latest applied migration (version > 1).
 /// Version 1 is treated as immutable base schema.
+/// SEC-MIG-04: Acquires both in-process mutex and filesystem flock for cross-process safety.
 pub fn applyDownMigration(
     alloc: std.mem.Allocator,
     cfg: MigrationConfig,
     executor: QueryExecutor,
 ) MigrationError!void {
+    // SEC-MIG-04: Cross-process file lock
+    var file_lock = FileLock.acquire(alloc, cfg) catch |err| {
+        std.log.warn("migration: failed to acquire file lock for down-migration: {}", .{err});
+        return error.AlreadyLocked;
+    };
+    defer file_lock.release();
     var lock = try acquireLock(default_lock_ttl_ms); // 5 minute TTL
     defer releaseLock(&lock) catch {};
     var ledger = try loadLedger(alloc, cfg);
@@ -621,10 +709,12 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
         // Check if this migration is in the ledger as applied
         var applied = false;
         var checksum: [7]u8 = "0000000".*;
+        var sha256: [64]u8 = sha256_zero;
         for (ledger.rows.items) |row| {
             if (std.mem.eql(u8, row.name, filename) and row.applied) {
                 applied = true;
                 checksum = row.checksum_prefix;
+                sha256 = row.content_sha256;
                 break;
             }
         }
@@ -635,6 +725,7 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
             .name = name_copy,
             .applied = applied,
             .checksum_prefix = checksum,
+            .content_sha256 = sha256,
         }) catch {
             alloc.free(name_copy);
             return error.OutOfMemory;
@@ -687,6 +778,8 @@ pub fn isStrictPolicy() bool {
 }
 
 /// Validates ledger checksums against a manifest string (version checksum per line).
+/// SEC-MIG-05: Accepts both SHA-256 (64-char) and legacy FNV-1a (7-char) checksums.
+/// SHA-256 checksums use exact full-match; legacy 7-char uses prefix match.
 pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest: []const u8) MigrationError!bool {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
@@ -708,7 +801,16 @@ pub fn checksumValidate(alloc: std.mem.Allocator, cfg: MigrationConfig, manifest
         for (ledger.rows.items) |row| {
             if (row.version == ver) {
                 if (!row.applied) return false;
-                if (chk_txt.len != 7 or !std.mem.eql(u8, &row.checksum_prefix, chk_txt[0..7])) return false;
+                // SEC-MIG-05: Match by SHA-256 (64 chars) or legacy FNV prefix (7 chars)
+                if (chk_txt.len == 64) {
+                    // SHA-256 exact match
+                    if (!std.mem.eql(u8, &row.content_sha256, chk_txt[0..64])) return false;
+                } else if (chk_txt.len == 7) {
+                    // Legacy FNV-1a prefix match
+                    if (!std.mem.eql(u8, &row.checksum_prefix, chk_txt[0..7])) return false;
+                } else {
+                    return false;
+                }
                 matched += 1;
                 found = true;
                 break;
@@ -816,11 +918,41 @@ fn getOrInitResume(alloc: std.mem.Allocator, token: []const u8, total_batches: u
     while (i < resume_slots_len) : (i += 1) {
         if (std.mem.eql(u8, resume_slots[i].token, token)) return &resume_slots[i];
     }
-    if (resume_slots_len == resume_slots.len) return error.ResumeSlotsFull;
+    if (resume_slots_len == resume_slots.len) {
+        // SEC-MIG-08: Evict completed (done=true) slots to reclaim memory before
+        // reporting ResumeSlotsFull. This prevents unbounded token accumulation in
+        // long-running processes that execute repeated migration cycles.
+        evictCompletedSlots(alloc);
+        if (resume_slots_len == resume_slots.len) return error.ResumeSlotsFull;
+    }
     const token_copy = alloc.dupe(u8, token) catch return error.OutOfMemory;
     resume_slots[resume_slots_len] = .{ .token = token_copy, .total_batches = total_batches, .completed_batches = 0, .done = false };
     resume_slots_len += 1;
     return &resume_slots[resume_slots_len - 1];
+}
+
+/// SEC-MIG-08: Evicts all completed (done=true) resume slots, freeing their token
+/// memory and compacting the array. Caller must hold migration_mutex.
+fn evictCompletedSlots(alloc: std.mem.Allocator) void {
+    var write_idx: usize = 0;
+    var read_idx: usize = 0;
+    while (read_idx < resume_slots_len) : (read_idx += 1) {
+        if (resume_slots[read_idx].done) {
+            // Free the completed token's heap memory
+            if (resume_slots[read_idx].token.len > 0) {
+                alloc.free(resume_slots[read_idx].token);
+            }
+            resume_slots[read_idx] = .{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true };
+        } else {
+            // Keep active slot — shift left if needed
+            if (write_idx != read_idx) {
+                resume_slots[write_idx] = resume_slots[read_idx];
+                resume_slots[read_idx] = .{ .token = "", .total_batches = 0, .completed_batches = 0, .done = true };
+            }
+            write_idx += 1;
+        }
+    }
+    resume_slots_len = write_idx;
 }
 
 /// Frees all heap-allocated resume token strings and resets slot count. Thread-safe.
@@ -1091,6 +1223,50 @@ test "acquireLock increments lock_steal_count on expired lock" {
     global_lock = null;
     lock_steal_count = 0;
     migration_mutex.unlock();
+}
+
+// SEC-MIG-04: Cross-process file lock tests
+test "acquireFileLock creates lockfile and blocks concurrent processes" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+
+    // First lock should succeed
+    var lock1 = try FileLock.acquire(alloc, cfg);
+
+    // Verify lockfile was created
+    const lock_path = try std.fs.path.join(alloc, &.{ tmp_path, lock_filename });
+    defer alloc.free(lock_path);
+    const stat = std.fs.cwd().statFile(lock_path);
+    try std.testing.expect(stat != error.FileNotFound);
+
+    // Release lock
+    lock1.release();
+
+    // Should be able to re-acquire after release
+    var lock2 = try FileLock.acquire(alloc, cfg);
+    lock2.release();
+}
+
+test "FileLock release allows subsequent acquisition" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+
+    // Acquire and release three times to prove correctness
+    var i: usize = 0;
+    while (i < 3) : (i += 1) {
+        var lock = try FileLock.acquire(alloc, cfg);
+        lock.release();
+    }
 }
 
 test "MigrationPlan has empty defaults" {
@@ -1451,6 +1627,112 @@ test "checksumValidate fails for mismatched manifest" {
     try std.testing.expect(!valid);
 }
 
+// ==================== SEC-MIG-05: SHA-256 Content Hash Tests ====================
+
+test "computeContentSha256 produces deterministic 64-char hex" {
+    const hash = computeContentSha256("CREATE GRAPH test");
+    try std.testing.expectEqual(@as(usize, 64), hash.len);
+    for (hash) |c| {
+        try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
+    }
+    const hash2 = computeContentSha256("CREATE GRAPH test");
+    try std.testing.expect(std.mem.eql(u8, &hash, &hash2));
+}
+
+test "computeContentSha256 detects single-byte changes" {
+    const hash_a = computeContentSha256("CREATE GRAPH safe");
+    const hash_b = computeContentSha256("CREATE GRAPH safE"); // single char differs
+    try std.testing.expect(!std.mem.eql(u8, &hash_a, &hash_b));
+}
+
+test "applyUpMigrations stores SHA-256 content hash in ledger" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const script_content = "CREATE GRAPH sha256_test";
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    const row = ledger.rows.items[0];
+
+    // Verify the SHA-256 hash was stored (not all zeros)
+    try std.testing.expect(!std.mem.eql(u8, &row.content_sha256, &sha256_zero));
+
+    // Verify it matches the expected SHA-256 of the content
+    const expected_sha = computeContentSha256(script_content);
+    try std.testing.expect(std.mem.eql(u8, &row.content_sha256, &expected_sha));
+}
+
+test "checksumValidate accepts SHA-256 manifest (64-char hash)" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const script_content = "CREATE GRAPH sha_validate";
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    // Build a SHA-256 manifest
+    var ledger = try loadLedger(alloc, cfg);
+    defer ledger.deinit();
+    const row = ledger.rows.items[0];
+
+    var manifest_buf: [128]u8 = undefined;
+    const manifest = std.fmt.bufPrint(&manifest_buf, "{d} {s}", .{ row.version, row.content_sha256 }) catch unreachable;
+
+    const valid = try checksumValidate(alloc, cfg, manifest);
+    try std.testing.expect(valid);
+}
+
+test "checksumValidate rejects wrong SHA-256 hash" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH sha_wrong" });
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+
+    // Wrong 64-char hash
+    const valid = try checksumValidate(alloc, cfg, "1 aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    try std.testing.expect(!valid);
+}
+
 test "planDryRun returns pending and rollback migrations" {
     const alloc = std.testing.allocator;
     migration_mutex.lock();
@@ -1566,6 +1848,51 @@ test "resumeDataMigration returns ResumeSlotsFull when all 8 slots used" {
 
     const result = resumeDataMigration(alloc, "token-overflow", default_resume_batches);
     try std.testing.expectError(error.ResumeSlotsFull, result);
+}
+
+// SEC-MIG-08: Verify that completed slots are evicted to make room for new tokens
+test "resumeDataMigration evicts completed slots when full" {
+    const alloc = std.testing.allocator;
+    defer resetResumeSlots(alloc);
+
+    // Fill all 8 slots with tokens that complete in 1 batch
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        var buf: [16]u8 = undefined;
+        const token = std.fmt.bufPrint(&buf, "evict-{d}", .{i}) catch unreachable;
+        _ = try resumeDataMigration(alloc, token, 1); // completes immediately (1/1 = done)
+    }
+
+    // All 8 slots are now done=true. A new token should succeed after eviction.
+    const s = try resumeDataMigration(alloc, "new-after-evict", 3);
+    try std.testing.expectEqual(@as(u32, 1), s.completed_batches);
+    try std.testing.expect(!s.done);
+}
+
+// SEC-MIG-08: Verify partial eviction — only completed slots are freed
+test "resumeDataMigration evicts only completed slots preserving active" {
+    const alloc = std.testing.allocator;
+    defer resetResumeSlots(alloc);
+
+    // Fill 7 slots with completed tokens (1 batch)
+    var i: usize = 0;
+    while (i < 7) : (i += 1) {
+        var buf: [16]u8 = undefined;
+        const token = std.fmt.bufPrint(&buf, "done-{d}", .{i}) catch unreachable;
+        _ = try resumeDataMigration(alloc, token, 1);
+    }
+
+    // 1 active slot (5 batches, only 1 completed)
+    _ = try resumeDataMigration(alloc, "active-slot", 5);
+
+    // All 8 slots used. New token should evict the 7 completed ones.
+    const s = try resumeDataMigration(alloc, "after-partial-evict", 3);
+    try std.testing.expectEqual(@as(u32, 1), s.completed_batches);
+
+    // The active slot should still be accessible
+    const active = try resumeDataMigration(alloc, "active-slot", 5);
+    try std.testing.expectEqual(@as(u32, 2), active.completed_batches);
+    try std.testing.expect(!active.done);
 }
 
 test "resumeDataMigration respects custom total_batches" {

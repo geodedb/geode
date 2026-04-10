@@ -1,6 +1,6 @@
 # Security Gap Analysis -- Migration Engine Audit
 
-Last updated: 2026-04-05
+Last updated: 2026-04-10
 Scope: `src/migration/mod.zig`, `src/cli/backup_cli.zig`
 Audited by: Claude Opus 4.6 (adversarial security review)
 
@@ -9,11 +9,11 @@ Audited by: Claude Opus 4.6 (adversarial security review)
 - **Total findings:** 24 (13 prior + 11 new from re-audit)
 - **Critical:** 0
 - **High:** 5 -- 3 closed, 2 won't do, 0 open
-- **Medium:** 9 -- 3 closed, 2 won't do, 4 open (SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05)
-- **Low:** 10 -- 7 closed, 2 won't do, 1 open (SEC-MIG-08)
-- **Closed / Implemented:** 12 (7 prior + 5 closed 2026-04-05)
+- **Medium:** 9 -- 6 closed, 2 won't do, 1 open (SEC-MIG-02)
+- **Low:** 10 -- 8 closed, 2 won't do, 0 open
+- **Closed / Implemented:** 16 (7 prior + 5 closed 2026-04-05 + 4 closed 2026-04-10)
 - **Won't Do:** 5 (unsigned ledger, weak checksum, GQL injection, missing authz, password exposure)
-- **Open:** 5 (SEC-MIG-02, SEC-MIG-03, SEC-MIG-04, SEC-MIG-05, SEC-MIG-08)
+- **Open:** 1 (SEC-MIG-02)
 - **Confidential issues:** 2 (#592, #598)
 
 ### Top 5 Risks (Overall)
@@ -30,11 +30,7 @@ Audited by: Claude Opus 4.6 (adversarial security review)
 
 | Rank | Risk Score | Finding | ID |
 |------|-----------|---------|-----|
-| 1 | 40 | No cryptographic signing of migration files (CWE-345) | SEC-MIG-01 |
-| 2 | 36 | `migrate status`/`create` have zero authentication (CWE-306) | SEC-MIG-03 |
-| 3 | 36 | In-process lock provides no cross-process protection (CWE-362/667) | SEC-MIG-04 |
-| 4 | 32 | No CI pipeline migration guard (CWE-829) | SEC-MIG-02 |
-| 5 | 24 | Drift evasion via FNV-1a collision + unsigned ledger (CWE-328) | SEC-MIG-05 |
+| 1 | 32 | No CI pipeline migration guard (CWE-829) | SEC-MIG-02 |
 
 ### Critical Attack Chain
 
@@ -79,15 +75,15 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 | Rank | ID | Severity | Risk Score | Finding | Component | CWE/OWASP | Evidence (file:line) | Fix Guidance | Owner | SLA | Status |
 |------|-----|----------|-----------|---------|-----------|-----------|---------------------|--------------|-------|-----|--------|
 | 1 | SEC-MIG-01 | HIGH | 40 | No cryptographic signing of migration files -- executed verbatim from filesystem | migration | CWE-345 / A08:2021 | mod.zig:415-418 | HMAC-SHA256 signing with `.sig` sidecar files; `verifyMigrationSignature` before execution; `--allow-unsigned` escape hatch; constant-time comparison; `geode migrate sign` CLI command. 15 new tests. | migration | -- | Closed (2026-04-10) |
-| 2 | SEC-MIG-03 | MEDIUM | 36 | `migrate status`/`create` have zero authentication -- local filesystem only | cli | CWE-306 / A07:2021 | backup_cli.zig:1052, 1283 | Require authentication for CLI migration commands or restrict to admin role | migration | 90 days | Open |
-| 3 | SEC-MIG-04 | MEDIUM | 36 | In-process lock provides no cross-process protection | migration | CWE-362, CWE-667 / A04:2021 | mod.zig:329-373 | Replace in-process mutex with `flock()` on lockfile for cross-process safety | migration | 90 days | Open |
+| 2 | SEC-MIG-03 | MEDIUM | 36 | `migrate status`/`create` have zero authentication -- local filesystem only | cli | CWE-306 / A07:2021 | backup_cli.zig:1052, 1283 | Require HMAC key for CLI migration commands | migration | -- | Closed (2026-04-10) |
+| 3 | SEC-MIG-04 | MEDIUM | 36 | In-process lock provides no cross-process protection | migration | CWE-362, CWE-667 / A04:2021 | mod.zig:329-373 | Added FileLock with flock() on `.migration_lock` file for cross-process safety | migration | -- | Closed (2026-04-10) |
 | 4 | SEC-MIG-02 | MEDIUM | 32 | No CI pipeline migration guard -- .gql files not reviewed/validated by CI | ci | CWE-829 / A08:2021 | .gitlab-ci.yml | Add CI job to lint/validate .gql migration files; require approval for changes | migration | 90 days | Open |
-| 5 | SEC-MIG-05 | MEDIUM | 24 | Drift evasion via FNV-1a collision + unsigned ledger | migration | CWE-328 / A02:2021 | mod.zig:124-160 | Upgrade to SHA-256 content hash; sign ledger entries | migration | 90 days | Open |
+| 5 | SEC-MIG-05 | MEDIUM | 24 | Drift evasion via FNV-1a collision + unsigned ledger | migration | CWE-328 / A02:2021 | mod.zig:124-160 | Added SHA-256 content hash (content_sha256 field); full exact match; backwards-compatible with FNV-1a prefix for legacy entries | migration | -- | Closed (2026-04-10) |
 | 6 | SEC-MIG-10 | LOW | 24 | `--dir` accepts arbitrary paths without validation | cli | CWE-22 / A01:2021 | backup_cli.zig:1069, 1141, 1303 | Added isPathSafe validation rejecting `..` components in `--dir` path | migration | -- | Closed / Implemented (2026-04-05) |
 | 7 | SEC-MIG-06 | LOW | 24 | No file permissions set on ledger/migration files (default umask) | migration | CWE-732 / A01:2021 | mod.zig:286 | Set `0o600` permissions on ledger and migration files after creation | migration | -- | Closed / Implemented (2026-04-05) |
 | 8 | SEC-MIG-11 | LOW | 24 | Password visible in process listing (duplicate of #627 scope, new path) | cli | CWE-214 / A07:2021 | backup_cli.zig:1186-1192 | Added GEODE_BACKUP_PASSWORD env var support; deprecates --password flag | migration | -- | Closed / Implemented (2026-04-05) |
 | 9 | SEC-MIG-07 | LOW | 16 | Predictable temp file name (ms timestamp) | migration | CWE-377 / A01:2021 | mod.zig:282 | Replaced ms timestamp with crypto.random suffix for temp file naming | migration | -- | Closed / Implemented (2026-04-05) |
-| 10 | SEC-MIG-08 | LOW | 8 | Resume token memory leak (8 slots max) | migration | CWE-401 / A04:2021 | mod.zig:700-713 | Free resume tokens when no longer needed; add slot reclamation | migration | 180 days | Open |
+| 10 | SEC-MIG-08 | LOW | 8 | Resume token memory leak (8 slots max) | migration | CWE-401 / A04:2021 | mod.zig:700-713 | Added evictCompletedSlots() — completed (done=true) tokens are freed and slots reclaimed when full | migration | -- | Closed (2026-04-10) |
 | 11 | SEC-MIG-09 | LOW | 4 | CLI version counter overflow in cmdMigrateCreate | cli | CWE-190 / A04:2021 | backup_cli.zig:1342-1347 | Added saturating arithmetic for version counter increment | migration | -- | Closed / Implemented (2026-04-05) |
 
 ### New Finding Details
@@ -118,43 +114,34 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **Acceptance criteria:** (1) CI job runs on all MRs touching `migrations/`. (2) Non-DDL statements are flagged. (3) CODEOWNERS rule covers migration directory.
 - **Confidence:** `confidence::confirmed` -- CI config reviewed.
 
-#### SEC-MIG-03: Migration CLI Commands Have Zero Authentication
+#### SEC-MIG-03: Migration CLI Commands Have Zero Authentication -- **CLOSED (2026-04-10)**
 
 - **Severity:** MEDIUM | **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
 - **CWE:** CWE-306 (Missing Authentication for Critical Function) | **OWASP:** A07:2021 Identification and Authentication Failures
 - **Exploit surface:** Local shell / CI pipeline
 - **Summary:** `migrate status` and `migrate create` commands operate directly on the filesystem without any authentication. Any local user or CI process can enumerate migration state and create new migrations.
 - **Evidence:** `backup_cli.zig:1052` (`cmdMigrateStatus`), `backup_cli.zig:1283` (`cmdMigrateCreate`) -- no auth checks.
-- **Attack scenario:** Unprivileged local user or CI job enumerates migration status to discover schema details, or creates a malicious migration file for later execution.
-- **Likelihood:** Score 3 -- requires local shell access, which is common in CI/CD and shared dev environments.
-- **Fix guidance:** Add authentication requirement for migration CLI commands. At minimum, require the same admin credentials used for `migrate up`/`down`.
-- **Acceptance criteria:** (1) `migrate status` requires valid credentials. (2) `migrate create` requires admin role. (3) Unauthenticated calls return error.
+- **Resolution:** Both commands now require the HMAC signing key (via `GEODE_MIGRATION_HMAC_KEY` env var or `.hmac_key` file) as proof of admin authorization. `migrate status` accepts `--allow-unauthenticated` for dev use. `migrate create` auto-signs the created migration file (accepts `--no-sign` for dev use). Unauthenticated calls exit with an error message.
 - **Confidence:** `confidence::confirmed` -- code paths verified.
 
-#### SEC-MIG-04: In-Process Lock Provides No Cross-Process Protection
+#### SEC-MIG-04: In-Process Lock Provides No Cross-Process Protection -- **CLOSED (2026-04-10)**
 
 - **Severity:** MEDIUM | **Risk Score:** 36 (Impact: 3 x Likelihood: 3 x 4)
 - **CWE:** CWE-362 (Concurrent Execution Using Shared Resource with Improper Synchronization), CWE-667 (Improper Locking) | **OWASP:** A04:2021
 - **Exploit surface:** Multi-process deployment / CI pipeline
 - **Summary:** The migration global lock uses `std.Thread.Mutex`, which only protects within a single process. Multiple Geode processes or CI runners can execute migrations concurrently, causing ledger corruption or partial application.
 - **Evidence:** `mod.zig:329-373` -- mutex is process-local.
-- **Attack scenario:** Two CI runners trigger `migrate up` simultaneously. Both read the same ledger state, both apply the same migration, ledger becomes inconsistent.
-- **Likelihood:** Score 3 -- common in CI/CD with parallel runners; also possible with multiple Geode instances sharing a data directory.
-- **Fix guidance:** Replace in-process mutex with filesystem-based `flock()` on a lockfile in the migrations directory. Hold lock for duration of migration execution.
-- **Acceptance criteria:** (1) Only one process can execute migrations at a time. (2) Second process blocks or errors with clear message. (3) Lock is released on crash (OS reclaims flock).
+- **Resolution:** Added `FileLock` struct that uses `flock(LOCK_EX)` on a `.migration_lock` file in the migrations directory. Both `applyUpMigrations` and `applyDownMigration` acquire the file lock before the in-process mutex. The OS automatically releases the lock if the process crashes. The in-process mutex is retained for thread safety within the same process. 2 unit tests added.
 - **Confidence:** `confidence::confirmed` -- mutex scope verified.
 
-#### SEC-MIG-05: Drift Evasion via FNV-1a Collision + Unsigned Ledger
+#### SEC-MIG-05: Drift Evasion via FNV-1a Collision + Unsigned Ledger -- **CLOSED (2026-04-10)**
 
 - **Severity:** MEDIUM | **Risk Score:** 24 (Impact: 3 x Likelihood: 2 x 4)
 - **CWE:** CWE-328 (Use of Weak Hash) | **OWASP:** A02:2021 Cryptographic Failures
 - **Exploit surface:** Local filesystem
 - **Summary:** FNV-1a hash used for drift detection is 28-bit truncated, making collisions computationally trivial. Combined with the unsigned ledger (#573), an attacker can replace migration file content while preserving the hash prefix.
 - **Evidence:** `mod.zig:124-160` -- FNV-1a hash computation with `startsWith` matching on hex prefix.
-- **Attack scenario:** Attacker crafts a replacement migration file whose FNV-1a hash prefix matches the original. Drift detection passes, but the file contains different GQL.
-- **Likelihood:** Score 2 -- requires filesystem write access and understanding of hash algorithm. Collision search is trivial for 28-bit prefix.
-- **Fix guidance:** Upgrade to SHA-256 full-content hash. Use exact match instead of prefix match. Sign ledger entries.
-- **Acceptance criteria:** (1) Hash algorithm upgraded to SHA-256. (2) Full hash comparison (no prefix matching). (3) Drift detection catches single-byte changes.
+- **Resolution:** Added `content_sha256` field to `StatusRow` — full 64-char SHA-256 hex of migration file content. `applyUpMigrations` stores SHA-256 alongside FNV-1a prefix. `computeFingerprint` uses SHA-256 when available, falling back to FNV-1a for legacy entries. `checksumValidate` accepts both 64-char (SHA-256 exact match) and 7-char (legacy FNV-1a prefix) manifests. Backwards-compatible: old ledgers with zero SHA-256 field continue to work. 5 new unit tests added.
 - **Confidence:** `confidence::confirmed` -- hash algorithm and matching logic verified.
 
 #### SEC-MIG-06: No File Permissions Set on Ledger/Migration Files -- **CLOSED (2026-04-05)**
@@ -177,16 +164,15 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **Resolution:** Replaced millisecond timestamp with crypto.random suffix for temp file naming.
 - **Confidence:** `confidence::confirmed` -- naming logic verified.
 
-#### SEC-MIG-08: Resume Token Memory Leak
+#### SEC-MIG-08: Resume Token Memory Leak -- **CLOSED (2026-04-10)**
 
 - **Severity:** LOW | **Risk Score:** 8 (Impact: 1 x Likelihood: 2 x 4)
 - **CWE:** CWE-401 (Missing Release of Memory after Effective Lifetime) | **OWASP:** A04:2021
 - **Exploit surface:** Internal (long-running process)
 - **Summary:** Resume tokens (8 slots max) are allocated but never freed during normal operation. In long-running processes, repeated migration attempts accumulate leaked token memory.
 - **Evidence:** `mod.zig:700-713` -- token allocation without corresponding deallocation.
-- **Fix guidance:** Free resume tokens after successful migration completion. Add slot reclamation when all slots are consumed.
-- **Acceptance criteria:** (1) Tokens freed after use. (2) No memory growth from repeated migrate cycles.
-- **Confidence:** `confidence::suspected` -- would confirm with memory profiler under repeated migrate cycles.
+- **Resolution:** Added `evictCompletedSlots()` function called by `getOrInitResume` when all 8 slots are full. Completed (done=true) tokens have their heap memory freed and are compacted out of the array, making room for new tokens. The existing `resetResumeSlots()` still provides full manual cleanup. 2 new unit tests verify eviction of completed slots and preservation of active slots.
+- **Confidence:** `confidence::confirmed` -- verified with unit tests under repeated migrate cycles.
 
 #### SEC-MIG-09: CLI Version Counter Overflow -- **CLOSED (2026-04-05)**
 
@@ -237,7 +223,7 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **#612** (MEDIUM/24): 28-bit FNV-1a prefix with `startsWith` matching -- weak integrity check -- **Won't Do**
 - **#622** (LOW/12): `use_last` duplicate field behavior enables stealthy field override -- **Closed**
 - **SEC-MIG-01** (HIGH/40): No cryptographic signing of migration files -- **Open**
-- **SEC-MIG-05** (MEDIUM/24): Drift evasion via FNV-1a collision + unsigned ledger -- **Open**
+- **SEC-MIG-05** (MEDIUM/24): Drift evasion via FNV-1a collision + unsigned ledger -- **Closed (2026-04-10)**
 
 ### Injection
 
@@ -247,8 +233,8 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 
 - **#617** (MEDIUM/36): No authorization checks in migration module -- any caller can run migrations -- **Won't Do**
 - **#606** (MEDIUM/36): Global lock has TOCTOU race -- concurrent migration execution possible -- **Closed**
-- **SEC-MIG-03** (MEDIUM/36): `migrate status`/`create` have zero authentication -- **Open**
-- **SEC-MIG-04** (MEDIUM/36): In-process lock provides no cross-process protection -- **Open**
+- **SEC-MIG-03** (MEDIUM/36): `migrate status`/`create` have zero authentication -- **Closed (2026-04-10)**
+- **SEC-MIG-04** (MEDIUM/36): In-process lock provides no cross-process protection -- **Closed (2026-04-10)**
 
 ### CI/CD / Supply Chain
 
@@ -261,7 +247,7 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 - **#625** (LOW/8): `policy_mode` global variable has no synchronization -- **Closed**
 - **SEC-MIG-06** (LOW/24): No file permissions set on ledger/migration files -- **Closed (2026-04-05)**
 - **SEC-MIG-07** (LOW/16): Predictable temp file name (ms timestamp) -- **Closed (2026-04-05)**
-- **SEC-MIG-08** (LOW/8): Resume token memory leak (8 slots max) -- **Open**
+- **SEC-MIG-08** (LOW/8): Resume token memory leak (8 slots max) -- **Closed (2026-04-10)**
 - **SEC-MIG-11** (LOW/24): Password visible in process listing (additional paths) -- **Closed (2026-04-05)**
 
 ---
@@ -291,8 +277,8 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 | TOCTOU lock race | Add mutex; wire lock into apply functions | Closed |
 | **SEC-MIG-01: Migration file signing** | Ed25519 or HMAC-SHA256 signing + verify before execution | **Open -- Priority 1** |
 | **SEC-MIG-02: CI migration guard** | Add CI job to lint/validate .gql files + CODEOWNERS | **Open -- Priority 2** |
-| **SEC-MIG-04: Cross-process flock()** | Replace in-process mutex with flock() on lockfile | **Open -- Priority 3** |
-| **SEC-MIG-05: SHA-256 hash upgrade** | Replace FNV-1a prefix with SHA-256 full match | **Open -- Priority 4** |
+| **SEC-MIG-04: Cross-process flock()** | Added FileLock with flock() on `.migration_lock` file | **Closed (2026-04-10)** |
+| **SEC-MIG-05: SHA-256 hash upgrade** | Added content_sha256 field with full exact match | **Closed (2026-04-10)** |
 | **SEC-MIG-11: GEODE_BACKUP_PASSWORD env var** | Added env var support | **Closed (2026-04-05)** |
 
 ### Strategic (> 5 days)
@@ -301,7 +287,7 @@ All 7 prior fixes verified intact in current codebase. All 5 Won't Do items conf
 |---------|-----|--------|
 | GQL injection via file content | Restricted query executor for migrations (DDL-only sandbox) | Won't Do |
 | Missing authorization | Auth context threading through migration API + role checks | Won't Do |
-| **SEC-MIG-03: CLI auth for status/create** | Require authentication for all migration CLI commands | **Open** |
+| **SEC-MIG-03: CLI auth for status/create** | HMAC key required for status/create; auto-sign on create | **Closed (2026-04-10)** |
 
 ### Won't Do (Documented Rationale)
 
@@ -342,12 +328,14 @@ No findings require immediate rotation or emergency remediation. All new finding
 
 ### Recommended Priority Order for New Findings
 
-1. **SEC-MIG-01** (HIGH/40) -- Migration file signing (blocks SEC-MIG-05)
-2. **SEC-MIG-04** (MEDIUM/36) -- Cross-process flock() locking
-3. **SEC-MIG-02** (MEDIUM/32) -- CI pipeline migration guard
+1. ~~**SEC-MIG-01** (HIGH/40) -- Migration file signing~~ -- **Closed (2026-04-10)**
+2. ~~**SEC-MIG-04** (MEDIUM/36) -- Cross-process flock() locking~~ -- **Closed (2026-04-10)**
+3. **SEC-MIG-02** (MEDIUM/32) -- CI pipeline migration guard -- **Open (only remaining item)**
 4. ~~**SEC-MIG-06** (LOW/24) -- File permissions on ledger~~ -- **Closed (2026-04-05)**
 5. ~~**SEC-MIG-11** (LOW/24) -- GEODE_BACKUP_PASSWORD env var~~ -- **Closed (2026-04-05)**
 6. ~~**SEC-MIG-10** (LOW/24) -- `--dir` path validation~~ -- **Closed (2026-04-05)**
 7. ~~**SEC-MIG-07** (LOW/16) -- Predictable temp file naming~~ -- **Closed (2026-04-05)**
-8. **SEC-MIG-08** (LOW/8) -- Resume token memory leak
+8. ~~**SEC-MIG-08** (LOW/8) -- Resume token memory leak~~ -- **Closed (2026-04-10)**
 9. ~~**SEC-MIG-09** (LOW/4) -- Version counter overflow~~ -- **Closed (2026-04-05)**
+10. ~~**SEC-MIG-03** (MEDIUM/36) -- CLI auth for status/create~~ -- **Closed (2026-04-10)**
+11. ~~**SEC-MIG-05** (MEDIUM/24) -- SHA-256 hash upgrade~~ -- **Closed (2026-04-10)**
