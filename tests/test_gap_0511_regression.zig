@@ -23,7 +23,7 @@ fn seedNodeWithNodeId(
     return node_id;
 }
 
-// CANARY: REQ=REQ-PERF-MERGE-002; FEATURE="Execution"; ASPECT=IndexRebuild; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-MERGE-002; FEATURE="Execution"; ASPECT=IndexRebuild; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: Sequential MERGE transactions do not stall on index rebuilds" {
     var allocator = testing.allocator;
 
@@ -85,7 +85,7 @@ test "GAP-0511: Sequential MERGE transactions do not stall on index rebuilds" {
     try testing.expectEqual(@as(usize, 1), idx_mgr.statistics.rebuild_count);
 }
 
-// CANARY: REQ=REQ-PERF-MERGE-003; FEATURE="Execution"; ASPECT=AdapterMergeSnapshotElision; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-MERGE-003; FEATURE="Execution"; ASPECT=AdapterMergeSnapshotElision; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: Adapter-backed MERGE avoids QueryReadSession snapshots" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -127,7 +127,7 @@ test "GAP-0511: Adapter-backed MERGE avoids QueryReadSession snapshots" {
     try testing.expectEqual(@as(usize, 24), geode.graph_store.getCurrentGlobalStore().?.getNodeCount());
 }
 
-// CANARY: REQ=REQ-PERF-DELETE-005; FEATURE="Execution"; ASPECT=AdapterDeleteSnapshotElision; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-DELETE-005; FEATURE="Execution"; ASPECT=AdapterDeleteSnapshotElision; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: Adapter-backed DELETE avoids QueryReadSession snapshots" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -173,7 +173,7 @@ test "GAP-0511: Adapter-backed DELETE avoids QueryReadSession snapshots" {
     try testing.expectEqual(@as(usize, 0), geode.graph_store.getCurrentGlobalStore().?.getNodeCount());
 }
 
-// CANARY: REQ=REQ-PERF-MERGE-006; FEATURE="Execution"; ASPECT=RelationshipMergeEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-MERGE-006; FEATURE="Execution"; ASPECT=RelationshipMergeEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: Relationship MERGE resolves endpoints without label scans" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -216,7 +216,7 @@ test "GAP-0511: Relationship MERGE resolves endpoints without label scans" {
     try testing.expectEqual(@as(usize, 1), geode.graph_store.getCurrentGlobalStore().?.getEdgeCount());
 }
 
-// CANARY: REQ=REQ-PERF-DELETE-006; FEATURE="Execution"; ASPECT=RelationshipDeleteEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-08
+// CANARY: REQ=REQ-PERF-DELETE-006; FEATURE="Execution"; ASPECT=RelationshipDeleteEndpointLookup; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
 test "GAP-0511: Relationship DELETE resolves endpoints without label scans" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -265,7 +265,7 @@ test "GAP-0511: Relationship DELETE resolves endpoints without label scans" {
     try testing.expectEqual(@as(usize, 31), geode.graph_store.getCurrentGlobalStore().?.getEdgeCount());
 }
 
-// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=StartupMetadataRepair; STATUS=TESTED; OWNER=storage; UPDATED=2026-04-08
+// CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=StartupMetadataRepair; STATUS=TESTED; OWNER=storage; UPDATED=2026-04-10
 test "GAP-0511: global store startup repairs corrupted free.store" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -313,4 +313,77 @@ test "GAP-0511: global store startup repairs corrupted free.store" {
     try testing.expectEqual(@as(usize, 1), recovered_store.getNodeCount());
     const repaired_stat = try std.fs.cwd().statFile(free_store_path);
     try testing.expectEqual(@as(u64, 0), repaired_stat.size);
+}
+
+// CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="IndexRebuild"; ASPECT=RebuildMutex; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
+test "GAP-0511: rebuild_mutex prevents concurrent rebuild races" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(data_dir);
+
+    _ = try geode.graph_store.initGlobalStore(allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+    defer geode.execution.cleanupCatalogInstance();
+
+    const idx_mgr = try geode.index.index_manager.ensureGlobalIndexManager(allocator);
+    defer geode.index.index_manager.cleanupGlobalIndexManager();
+
+    // Create an advanced index and register it
+    try idx_mgr.createAdvancedVectorIndex("mutex_vec_idx", 3, .l2);
+    try idx_mgr.registerAdvancedPropertyIndex("mutex_vec_idx", "Item", "vec", .vector_f32);
+
+    const store = geode.graph_store.getCurrentGlobalStore().?;
+
+    // Seed some nodes so populateAdvancedIndex has work to do
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const nid = try store.createNodeWithGraph(&[_][]const u8{"Item"}, "default");
+        try store.setNodeProperty(nid, "vec", .{ .String = "[1.0, 2.0, 3.0]" });
+    }
+
+    // Rebuild twice sequentially -- the mutex should serialize them safely
+    try idx_mgr.rebuildAdvancedIndex(store, "mutex_vec_idx");
+    try idx_mgr.rebuildAdvancedIndex(store, "mutex_vec_idx");
+
+    // Both rebuilds succeeded; rebuild_count should be 2
+    try testing.expectEqual(@as(u64, 2), idx_mgr.statistics.rebuild_count);
+}
+
+// CANARY: REQ=REQ-PERF-MERGE-008; FEATURE="IndexRebuild"; ASPECT=CommitDeferRebuilds; STATUS=TESTED; OWNER=engine; UPDATED=2026-04-10
+test "GAP-0511: commitDeferRebuilds leaves pending rebuilds for separate flush" {
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(data_dir);
+
+    const store = try geode.graph_store.initGlobalStore(allocator, data_dir);
+    defer geode.graph_store.deinitGlobalStore();
+    defer geode.execution.cleanupCatalogInstance();
+
+    const idx_mgr = try geode.index.index_manager.ensureGlobalIndexManager(allocator);
+    defer geode.index.index_manager.cleanupGlobalIndexManager();
+
+    try idx_mgr.createAdvancedVectorIndex("defer_idx", 3, .l2);
+    try idx_mgr.registerAdvancedPropertyIndex("defer_idx", "Node", "embedding", .vector_f32);
+
+    var undo_log = geode.txn_undo_log.getGlobalUndoLog(allocator);
+    undo_log.begin();
+
+    // Queue a rebuild via the undo log
+    try undo_log.queueAdvancedIndexRebuild("defer_idx");
+
+    // commitDeferRebuilds should clear entries/savepoints and deactivate,
+    // but NOT flush pending rebuilds.
+    undo_log.commitDeferRebuilds();
+    try testing.expect(!undo_log.active);
+    try testing.expectEqual(@as(u64, 0), idx_mgr.statistics.rebuild_count);
+
+    // Now flush pending rebuilds separately (simulates post-lock-release flush)
+    undo_log.flushPendingRebuilds(store);
+    try testing.expectEqual(@as(u64, 1), idx_mgr.statistics.rebuild_count);
 }

@@ -1937,6 +1937,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             defer {
                 if (!lock_released) {
                     if (graph_lock_handle) |h| {
+                        // GAP-0511: Release lock before index rebuild
+                        graph_store.releaseGraphLock(h);
                         if (pending_index_rebuilds.count() > 0) {
                             if (index_manager.getGlobalIndexManager()) |manager| {
                                 const global_store = graph_store.getGlobalStore(allocator);
@@ -1944,7 +1946,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                 while (iter.next()) |k| manager.rebuildAdvancedIndex(global_store, k.*) catch {};
                             }
                         }
-                        graph_store.releaseGraphLock(h);
                     }
                 }
             }
@@ -2010,6 +2011,9 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                             if (needs_store_lock) {
                                 if (graph_lock_handle) |h| {
+                                    // GAP-0511: Release lock before index rebuild
+                                    graph_store.releaseGraphLock(h);
+                                    lock_released = true;
                                     if (pending_index_rebuilds.count() > 0) {
                                         if (index_manager.getGlobalIndexManager()) |manager| {
                                             const idx_store = graph_store.getGlobalStore(allocator);
@@ -2017,8 +2021,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                             while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                         }
                                     }
-                                    graph_store.releaseGraphLock(h);
-                                    lock_released = true;
                                 }
                             }
 
@@ -2073,6 +2075,9 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
                         if (graph_lock_handle) |h| {
+                            // GAP-0511: Release lock before index rebuild
+                            graph_store.releaseGraphLock(h);
+                            lock_released = true;
                             if (pending_index_rebuilds.count() > 0) {
                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                     const idx_store = graph_store.getGlobalStore(allocator);
@@ -2080,8 +2085,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                 }
                             }
-                            graph_store.releaseGraphLock(h);
-                            lock_released = true;
                         }
                     }
 
@@ -2130,6 +2133,9 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
                                     if (needs_store_lock) {
                                         if (graph_lock_handle) |h| {
+                                            // GAP-0511: Release lock before index rebuild
+                                            graph_store.releaseGraphLock(h);
+                                            lock_released = true;
                                             if (pending_index_rebuilds.count() > 0) {
                                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                                     const idx_store = graph_store.getGlobalStore(allocator);
@@ -2137,8 +2143,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                                 }
                                             }
-                                            graph_store.releaseGraphLock(h);
-                                            lock_released = true;
                                         }
                                     }
 
@@ -2187,6 +2191,9 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     // #564: Release lock after execution, before serialization/network I/O
                     if (needs_store_lock) {
                         if (graph_lock_handle) |h| {
+                            // GAP-0511: Release lock before index rebuild
+                            graph_store.releaseGraphLock(h);
+                            lock_released = true;
                             if (pending_index_rebuilds.count() > 0) {
                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                     const idx_store = graph_store.getGlobalStore(allocator);
@@ -2194,8 +2201,6 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                 }
                             }
-                            graph_store.releaseGraphLock(h);
-                            lock_released = true;
                         }
                     }
 

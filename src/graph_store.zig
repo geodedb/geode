@@ -408,6 +408,10 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: std.StringHashMap(u64),
+    // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-001; FEATURE="EdgeTypeIndex"; ASPECT=EdgeTypeLookup; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
+    // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
+    // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
+    edge_type_index: std.StringHashMap(std.ArrayList(u64)),
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
     outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
@@ -442,6 +446,8 @@ pub const GraphStore = struct {
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
             .merge_prop_index = std.StringHashMap(u64).init(allocator),
+            // PERF-P0-001: Edge-type index for O(1) edge-type lookups
+            .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
             .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
             .id_maps = std.StringHashMap(id_map_mod.IdMap).init(allocator),
@@ -459,6 +465,7 @@ pub const GraphStore = struct {
         try self.outgoing_edges.ensureTotalCapacity(@intCast(edge_capacity));
         try self.incoming_edges.ensureTotalCapacity(@intCast(edge_capacity));
         try self.label_index.ensureTotalCapacity(@intCast(node_capacity));
+        try self.edge_type_index.ensureTotalCapacity(@intCast(edge_capacity));
     }
 
     /// DEPRECATED (GAP-0279): Set tenant ID on the process-wide singleton.
@@ -506,6 +513,14 @@ pub const GraphStore = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.merge_prop_index.deinit();
+
+        // PERF-P0-001: Clean up edge-type index
+        var eti_iter = self.edge_type_index.iterator();
+        while (eti_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.edge_type_index.deinit();
 
         // Issue #392: Clean up adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
@@ -613,6 +628,15 @@ pub const GraphStore = struct {
         }
         self.merge_prop_index.deinit();
         self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+
+        // PERF-P0-001: Reset edge-type index
+        var eti_iter = self.edge_type_index.iterator();
+        while (eti_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.edge_type_index.deinit();
+        self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
         // Reset adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
@@ -805,6 +829,8 @@ pub const GraphStore = struct {
             });
 
             try self.addToAdjacencyIndex(src_edge.from_id, src_edge.to_id, src_edge.id);
+            // PERF-P0-001: Maintain edge-type index during clone
+            try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
         }
     }
 
@@ -1471,6 +1497,15 @@ pub const GraphStore = struct {
         self.merge_prop_index.deinit();
         self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
 
+        // PERF-P0-001: Reset edge-type index
+        var eti_iter = self.edge_type_index.iterator();
+        while (eti_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit(self.allocator);
+        }
+        self.edge_type_index.deinit();
+        self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+
         // Reset adjacency indexes
         var out_iter = self.outgoing_edges.iterator();
         while (out_iter.next()) |entry| {
@@ -1501,12 +1536,14 @@ pub const GraphStore = struct {
             }
         }
 
-        // Rebuild adjacency index and ensure graph registry entries for edges
+        // Rebuild adjacency index, edge-type index, and ensure graph registry entries for edges
         var edge_iter = self.edges.iterator();
         while (edge_iter.next()) |entry| {
             const edge = entry.value_ptr;
             try self.ensureGraphNoDirty(edge.graph_name);
             try self.addToAdjacencyIndex(edge.from_id, edge.to_id, edge.id);
+            // PERF-P0-001: Rebuild edge-type index
+            try self.addToEdgeTypeIndex(edge.graph_name, edge.label, edge.id);
         }
     }
 
@@ -2515,6 +2552,8 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
         // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
         try self.addToAdjacencyIndex(from_id, to_id, id);
+        // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
+        try self.addToEdgeTypeIndex(graph_name, edge_type, id);
 
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
         // Mark store as dirty - persistence happens at query completion, not per-edge
@@ -2595,6 +2634,8 @@ pub const GraphStore = struct {
 
         try self.edges.put(edge_id, edge);
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
+        // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
+        try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -2681,6 +2722,81 @@ pub const GraphStore = struct {
                 }
             }
         }
+    }
+
+    // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-002; FEATURE="EdgeTypeIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
+    // PERF-P0-001: Add edge to edge-type index (composite key "graph_name:edge_type")
+    // Uses stack-allocated bufPrint to probe for existing key before heap alloc (same pattern as addToLabelIndex).
+    fn addToEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) !void {
+        var buf: [512]u8 = undefined;
+        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, edge_type }) catch {
+            // Key too long for stack buffer — fall back to heap alloc
+            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+            const result = try self.edge_type_index.getOrPut(key);
+            if (!result.found_existing) {
+                result.value_ptr.* = std.ArrayList(u64).empty;
+            } else {
+                self.allocator.free(key);
+            }
+            try sortedInsert(result.value_ptr, self.allocator, edge_id);
+            return;
+        };
+
+        if (self.edge_type_index.getPtr(probe_key)) |list| {
+            try sortedInsert(list, self.allocator, edge_id);
+        } else {
+            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type });
+            const result = try self.edge_type_index.getOrPut(key);
+            if (!result.found_existing) {
+                result.value_ptr.* = std.ArrayList(u64).empty;
+            } else {
+                self.allocator.free(key);
+            }
+            try sortedInsert(result.value_ptr, self.allocator, edge_id);
+        }
+    }
+
+    // PERF-P0-001: Remove edge from edge-type index
+    fn removeFromEdgeTypeIndex(self: *GraphStore, graph_name: []const u8, edge_type: []const u8, edge_id: u64) void {
+        const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, edge_type }) catch return;
+        defer self.allocator.free(key);
+
+        if (self.edge_type_index.getPtr(key)) |list| {
+            // Binary search for edge_id in sorted posting list
+            const items = list.items;
+            var lo: usize = 0;
+            var hi: usize = items.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (items[mid] < edge_id) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            if (lo < items.len and items[lo] == edge_id) {
+                _ = list.orderedRemove(lo);
+            }
+            if (list.items.len == 0) {
+                if (self.edge_type_index.fetchRemove(key)) |kv| {
+                    self.allocator.free(kv.key);
+                    var list_copy = kv.value;
+                    list_copy.deinit(self.allocator);
+                }
+            }
+        }
+    }
+
+    /// Get edge IDs by type within a graph (O(1) lookup via edge-type index).
+    /// Returns null if no edges of this type exist in the graph.
+    pub fn getEdgeIdsByType(self: *const GraphStore, graph_name: []const u8, edge_type: []const u8) ?[]const u64 {
+        var key_buf: [512]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, edge_type }) catch return null;
+
+        if (self.edge_type_index.get(key)) |list| {
+            return list.items;
+        }
+        return null;
     }
 
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-003; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; OWNER=perf; UPDATED=2026-02-12
@@ -2859,32 +2975,47 @@ pub const GraphStore = struct {
         }
     }
 
+    // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-003; FEATURE="EdgeTypeIndex"; ASPECT=EdgeTypeLookup; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
+    // PERF-P0-001: O(result) edge-type lookup via edge_type_index instead of O(E) full scan.
+    // Iterates over registered graphs (typically 1-3) and collects matching edge IDs from the
+    // per-graph:type index, then resolves to Edge structs with optional tenant filtering.
     // Accepts caller-provided allocator to avoid concurrent threads contending
     // on self.allocator (same class of bug as GAP-0425 getNodesByLabels fix).
     // GAP-0509: tenant_id filters edges to a specific tenant when non-null.
     pub fn getEdgesByType(self: *GraphStore, allocator: std.mem.Allocator, edge_type: []const u8, tenant_id: ?[]const u8) []Edge {
-        var count: usize = 0;
-        var iter = self.edges.valueIterator();
-        while (iter.next()) |edge| {
-            if (std.mem.eql(u8, edge.label, edge_type)) {
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
-                }
-                count += 1;
+        // Collect matching edge IDs from the edge-type index across all graphs.
+        var id_list = std.ArrayList(u64).empty;
+        defer id_list.deinit(allocator);
+
+        var graph_iter = self.graphs.keyIterator();
+        while (graph_iter.next()) |graph_key| {
+            var key_buf: [512]u8 = undefined;
+            const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key.*, edge_type }) catch continue;
+            if (self.edge_type_index.get(probe)) |posting| {
+                id_list.appendSlice(allocator, posting.items) catch continue;
             }
+        }
+
+        // Resolve edge IDs to Edge structs with tenant filtering.
+        // Single-pass: count then fill (avoids ArrayList overhead for the output).
+        var count: usize = 0;
+        for (id_list.items) |eid| {
+            const edge = self.edges.get(eid) orelse continue;
+            if (tenant_id) |tid| {
+                if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+            }
+            count += 1;
         }
 
         const result = allocator.alloc(Edge, count) catch return &.{};
         var i: usize = 0;
-        iter = self.edges.valueIterator();
-        while (iter.next()) |edge| {
-            if (std.mem.eql(u8, edge.label, edge_type)) {
-                if (tenant_id) |tid| {
-                    if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
-                }
-                result[i] = edge.*;
-                i += 1;
+        for (id_list.items) |eid| {
+            const edge = self.edges.get(eid) orelse continue;
+            if (tenant_id) |tid| {
+                if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
             }
+            result[i] = edge;
+            i += 1;
         }
         return result;
     }
@@ -3967,6 +4098,8 @@ pub const GraphStore = struct {
 
                     try self.edges.put(edge_uuid, edge);
                     try self.addToAdjacencyIndex(node_uuid, target_uuid, edge_uuid);
+                    // PERF-P0-001: Maintain edge-type index during adapter load
+                    try self.addToEdgeTypeIndex(graph_name, edge.label, edge_uuid);
 
                     if (edge_uuid >= self.next_edge_id) {
                         self.next_edge_id = edge_uuid + 1;
@@ -4260,6 +4393,8 @@ pub const GraphStore = struct {
             var edge = kv.value;
 
             self.removeFromAdjacencyIndex(edge.from_id, edge.to_id, edge_id);
+            // PERF-P0-001: Remove from edge-type index before freeing label/graph_name
+            self.removeFromEdgeTypeIndex(edge.graph_name, edge.label, edge_id);
 
             // Free label
             self.allocator.free(edge.label);
@@ -4472,6 +4607,8 @@ pub const GraphStore = struct {
 
         try self.ensureGraph(graph_name);
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
+        // PERF-P0-001: Maintain edge-type index during rollback restore
+        try self.addToEdgeTypeIndex(graph_name, label, edge_id);
     }
 
     /// Add a label to a node without saving (used during rollback)
@@ -6092,4 +6229,163 @@ test "GAP-0523: ReadView detects mutation epoch change" {
     // Verify the ReadView noticed the epoch change (fallback was attempted)
     // In test env without adapter, fallback_snapshot stays null but the
     // epoch check path was executed (no crash = success).
+}
+
+// CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-004; FEATURE="EdgeTypeIndex"; ASPECT=UnitTest; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
+// PERF-P0-001: Verify edge-type index maintains correct state through create/delete/query lifecycle
+test "PERF-P0-001: edge-type index provides O(1) lookup for getEdgesByType" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    // Create nodes
+    var labels = [_][]const u8{"Node"};
+    const n1 = try store.createNodeWithGraph(&labels, "default");
+    const n2 = try store.createNodeWithGraph(&labels, "default");
+    const n3 = try store.createNodeWithGraph(&labels, "default");
+
+    // Create edges of different types
+    const e1 = try store.createEdgeWithGraph(n1, n2, "KNOWS", "default");
+    const e2 = try store.createEdgeWithGraph(n2, n3, "KNOWS", "default");
+    const e3 = try store.createEdgeWithGraph(n1, n3, "LIKES", "default");
+
+    // Verify edge-type index contains correct entries
+    const knows_ids = store.getEdgeIdsByType("default", "KNOWS");
+    try testing.expect(knows_ids != null);
+    try testing.expectEqual(@as(usize, 2), knows_ids.?.len);
+
+    const likes_ids = store.getEdgeIdsByType("default", "LIKES");
+    try testing.expect(likes_ids != null);
+    try testing.expectEqual(@as(usize, 1), likes_ids.?.len);
+    try testing.expectEqual(e3, likes_ids.?[0]);
+
+    // Verify getEdgesByType uses the index and returns correct edges
+    const knows_edges = store.getEdgesByType(testing.allocator, "KNOWS", null);
+    defer testing.allocator.free(knows_edges);
+    try testing.expectEqual(@as(usize, 2), knows_edges.len);
+
+    const likes_edges = store.getEdgesByType(testing.allocator, "LIKES", null);
+    defer testing.allocator.free(likes_edges);
+    try testing.expectEqual(@as(usize, 1), likes_edges.len);
+    try testing.expectEqualStrings("LIKES", likes_edges[0].label);
+
+    // Nonexistent type returns empty
+    const none_edges = store.getEdgesByType(testing.allocator, "HATES", null);
+    try testing.expectEqual(@as(usize, 0), none_edges.len);
+
+    // Delete an edge and verify index is updated
+    store.deleteEdge(e1);
+    const knows_after_delete = store.getEdgesByType(testing.allocator, "KNOWS", null);
+    defer testing.allocator.free(knows_after_delete);
+    try testing.expectEqual(@as(usize, 1), knows_after_delete.len);
+    try testing.expectEqual(e2, knows_after_delete[0].id);
+
+    // Verify index entry was cleaned up
+    const knows_ids_after = store.getEdgeIdsByType("default", "KNOWS");
+    try testing.expect(knows_ids_after != null);
+    try testing.expectEqual(@as(usize, 1), knows_ids_after.?.len);
+}
+
+test "PERF-P0-001: edge-type index works with tenant filtering" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"Person"};
+    const n1 = try store.createNodeWithGraphAndTenant(&labels, "default", "t1");
+    const n2 = try store.createNodeWithGraphAndTenant(&labels, "default", "t1");
+    const n3 = try store.createNodeWithGraphAndTenant(&labels, "default", "t2");
+
+    _ = try store.createEdgeWithGraphAndTenant(n1, n2, "FRIEND", "default", "t1");
+    _ = try store.createEdgeWithGraphAndTenant(n3, n1, "FRIEND", "default", "t2");
+
+    // All FRIEND edges across tenants
+    const all = store.getEdgesByType(testing.allocator, "FRIEND", null);
+    defer testing.allocator.free(all);
+    try testing.expectEqual(@as(usize, 2), all.len);
+
+    // Filtered to tenant t1
+    const t1_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t1");
+    defer testing.allocator.free(t1_edges);
+    try testing.expectEqual(@as(usize, 1), t1_edges.len);
+    try testing.expectEqualStrings("t1", t1_edges[0].tenant_id);
+
+    // Filtered to tenant t2
+    const t2_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t2");
+    defer testing.allocator.free(t2_edges);
+    try testing.expectEqual(@as(usize, 1), t2_edges.len);
+    try testing.expectEqualStrings("t2", t2_edges[0].tenant_id);
+}
+
+test "PERF-P0-001: edge-type index across multiple graphs" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"V"};
+    const a1 = try store.createNodeWithGraph(&labels, "graphA");
+    const a2 = try store.createNodeWithGraph(&labels, "graphA");
+    const b1 = try store.createNodeWithGraph(&labels, "graphB");
+    const b2 = try store.createNodeWithGraph(&labels, "graphB");
+
+    _ = try store.createEdgeWithGraph(a1, a2, "REL", "graphA");
+    _ = try store.createEdgeWithGraph(b1, b2, "REL", "graphB");
+
+    // Per-graph lookups via getEdgeIdsByType
+    const rel_a = store.getEdgeIdsByType("graphA", "REL");
+    try testing.expect(rel_a != null);
+    try testing.expectEqual(@as(usize, 1), rel_a.?.len);
+
+    const rel_b = store.getEdgeIdsByType("graphB", "REL");
+    try testing.expect(rel_b != null);
+    try testing.expectEqual(@as(usize, 1), rel_b.?.len);
+
+    // Cross-graph getEdgesByType returns both
+    const all_rel = store.getEdgesByType(testing.allocator, "REL", null);
+    defer testing.allocator.free(all_rel);
+    try testing.expectEqual(@as(usize, 2), all_rel.len);
+}
+
+test "PERF-P0-001: edge-type index survives clearNodes" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"X"};
+    const n1 = try store.createNodeWithGraph(&labels, "default");
+    const n2 = try store.createNodeWithGraph(&labels, "default");
+    _ = try store.createEdgeWithGraph(n1, n2, "LINK", "default");
+
+    // Index should have entries
+    try testing.expect(store.getEdgeIdsByType("default", "LINK") != null);
+
+    // Clear the store
+    store.clearNodes();
+
+    // Index should be empty after clear
+    try testing.expect(store.getEdgeIdsByType("default", "LINK") == null);
+
+    // getEdgesByType should return empty
+    const result = store.getEdgesByType(testing.allocator, "LINK", null);
+    try testing.expectEqual(@as(usize, 0), result.len);
+}
+
+test "PERF-P0-001: edge-type index posting list is sorted ascending" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"N"};
+    // Create many edges of the same type to verify sorted ordering
+    var node_ids: [20]u64 = undefined;
+    for (0..20) |i| {
+        node_ids[i] = try store.createNodeWithGraph(&labels, "default");
+    }
+    for (0..19) |i| {
+        _ = try store.createEdgeWithGraph(node_ids[i], node_ids[i + 1], "CHAIN", "default");
+    }
+
+    const chain_ids = store.getEdgeIdsByType("default", "CHAIN");
+    try testing.expect(chain_ids != null);
+    try testing.expectEqual(@as(usize, 19), chain_ids.?.len);
+
+    // Verify strictly ascending order (binary search correctness depends on this)
+    for (1..chain_ids.?.len) |i| {
+        try testing.expect(chain_ids.?[i] > chain_ids.?[i - 1]);
+    }
 }

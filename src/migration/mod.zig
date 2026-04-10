@@ -24,6 +24,8 @@ pub const MigrationError = error{
     ApplyFailed,
     FileSystemError,
     ResumeSlotsFull,
+    MigrationSignatureInvalid,
+    MigrationSignatureMissing,
 };
 
 const StagedMigration = struct {
@@ -34,6 +36,12 @@ const StagedMigration = struct {
 pub const MigrationConfig = struct {
     migrations_dir: []const u8 = "migrations",
     ledger_filename: []const u8 = "migration_ledger.json",
+    /// When true, skip HMAC-SHA256 signature verification for migration files.
+    /// Use only in development/test environments. Default: false (signatures required).
+    allow_unsigned: bool = false,
+    /// HMAC-SHA256 key for migration file signature verification (32 bytes).
+    /// When null and allow_unsigned is false, migrations will be rejected.
+    hmac_key: ?*const [32]u8 = null,
 };
 
 /// Pluggable executor so production uses QUIC and tests can inject a real executor.
@@ -307,6 +315,99 @@ fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) ![
     return std.fs.path.join(alloc, &.{ cfg.migrations_dir, name });
 }
 
+// ------------------ HMAC-SHA256 Migration Signature (SEC-MIG-01) ------------------
+// CANARY: REQ=REQ-SEC-MIG-01; FEATURE="MigrationSignatureVerification"; ASPECT=IntegrityCheck; STATUS=TESTED; TEST="verifyMigrationSignature rejects tampered content"; OWNER=migration; UPDATED=2026-04-10
+
+const HmacSha256 = std.crypto.auth.hmac.sha2.HmacSha256;
+
+/// Computes the HMAC-SHA256 of `data` using the given 32-byte `key`.
+/// Returns the 32-byte MAC as a hex-encoded 64-byte string.
+fn computeHmacSha256(key: *const [32]u8, data: []const u8) [64]u8 {
+    var mac: [HmacSha256.mac_length]u8 = undefined;
+    HmacSha256.create(&mac, data, key);
+    return std.fmt.bytesToHex(mac, .lower);
+}
+
+/// Verifies that a migration script's HMAC-SHA256 signature matches its sidecar `.sig` file.
+/// Returns MigrationSignatureMissing if the `.sig` file does not exist, or
+/// MigrationSignatureInvalid if the computed HMAC does not match the stored signature.
+fn verifyMigrationSignature(
+    alloc: std.mem.Allocator,
+    cfg: MigrationConfig,
+    name: []const u8,
+    script: []const u8,
+) MigrationError!void {
+    if (cfg.allow_unsigned) {
+        std.log.warn("migration: running unsigned migration '{s}' (allow_unsigned=true)", .{name});
+        return;
+    }
+
+    const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
+
+    const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
+    defer alloc.free(sig_name);
+    const sig_path = joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
+    defer alloc.free(sig_path);
+
+    const sig_contents = std.fs.cwd().readFileAlloc(alloc, sig_path, 128) catch {
+        return error.MigrationSignatureMissing;
+    };
+    defer alloc.free(sig_contents);
+
+    // Trim whitespace/newlines from the sig file
+    const sig_hex = std.mem.trim(u8, sig_contents, " \t\r\n");
+    if (sig_hex.len != 64) return error.MigrationSignatureInvalid;
+
+    const expected = computeHmacSha256(hmac_key, script);
+
+    // Constant-time comparison to avoid timing side channels
+    if (!constTimeEqlHex(sig_hex, &expected)) {
+        return error.MigrationSignatureInvalid;
+    }
+}
+
+/// Constant-time comparison of two 64-byte hex strings.
+fn constTimeEqlHex(a: []const u8, b: []const u8) bool {
+    if (a.len != 64 or b.len != 64) return false;
+    var diff: u8 = 0;
+    for (a, b) |x, y| {
+        diff |= x ^ y;
+    }
+    return diff == 0;
+}
+
+/// Signs a migration file by computing its HMAC-SHA256 and writing a sidecar `.sig` file.
+/// The `.sig` file contains the 64-character hex-encoded HMAC digest.
+pub fn signMigrationFile(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8) MigrationError!void {
+    try validateMigrationName(name);
+
+    const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
+
+    const path = joinPath(alloc, cfg, name) catch return error.OutOfMemory;
+    defer alloc.free(path);
+
+    const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
+    defer alloc.free(script);
+
+    const hex_sig = computeHmacSha256(hmac_key, script);
+
+    const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
+    defer alloc.free(sig_name);
+    const sig_path = joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
+    defer alloc.free(sig_path);
+
+    var file = std.fs.cwd().createFile(sig_path, .{ .truncate = true }) catch return error.FileSystemError;
+    defer file.close();
+
+    // Restrict signature file permissions to owner-only
+    if (builtin.os.tag != .windows) {
+        file.chmod(0o600) catch {};
+    }
+
+    file.writeAll(&hex_sig) catch return error.FileSystemError;
+    file.writeAll("\n") catch return error.FileSystemError;
+}
+
 // ------------------ Lock management ------------------
 
 /// Protects global_lock, policy_mode, resume_slots, and baseline_override from concurrent access.
@@ -400,6 +501,9 @@ pub fn applyUpMigrations(
         const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
         defer alloc.free(script);
 
+        // SEC-MIG-01: Verify HMAC-SHA256 signature before execution
+        try verifyMigrationSignature(alloc, cfg, entry.name, script);
+
         executor.execFn(executor.context, script) catch |err| {
             // Q15: Log the underlying executor error instead of silently erasing it.
             std.log.warn("migration: executor failed on version {d}: {}", .{ entry.version, err });
@@ -448,6 +552,9 @@ pub fn applyDownMigration(
 
     const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.DownScriptMissing;
     defer alloc.free(script);
+
+    // SEC-MIG-01: Verify HMAC-SHA256 signature before executing down-migration
+    try verifyMigrationSignature(alloc, cfg, down_name, script);
 
     executor.execFn(executor.context, script) catch |err| {
         // Q15: Log the underlying executor error instead of silently erasing it.
@@ -1126,7 +1233,7 @@ test "applyUpMigrations applies migration and persists ledger" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1154,7 +1261,7 @@ test "applyUpMigrations skips already-applied versions" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1177,7 +1284,7 @@ test "applyUpMigrations records failure metric on executor error" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "FAIL" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     const executor = makeFailingExecutor();
     const result = applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
     try std.testing.expectError(error.ApplyFailed, result);
@@ -1198,7 +1305,7 @@ test "applyDownMigration rolls back the latest applied migration" {
     try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
     try tmp.dir.writeFile(.{ .sub_path = "002_add.gql.down.gql", .data = "DROP GRAPH g2" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"002_add.gql"}, executor);
@@ -1228,7 +1335,7 @@ test "statusReport returns discovered migration files with applied status" {
     try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql.down.gql", .data = "DROP GRAPH g1" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     const rows = try statusReport(alloc, cfg);
     defer freeStatusRows(alloc, rows);
 
@@ -1253,7 +1360,7 @@ test "driftCheck returns true for consistent ledger" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1277,7 +1384,7 @@ test "driftCheck returns false after simulated drift" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1305,7 +1412,7 @@ test "checksumValidate passes for matching manifest" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1335,7 +1442,7 @@ test "checksumValidate fails for mismatched manifest" {
 
     try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
@@ -1359,7 +1466,7 @@ test "planDryRun returns pending and rollback migrations" {
     try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "ADD" });
     try tmp.dir.writeFile(.{ .sub_path = "003_more.gql", .data = "MORE" });
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
     const executor = makeTestExecutor(&executed);
     try applyUpMigrations(alloc, cfg, &[_][]const u8{"002_add.gql"}, executor);
@@ -1385,7 +1492,7 @@ test "metricsSnapshot returns ledger metrics plus lock steal count" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     const m = try metricsSnapshot(alloc, cfg);
     try std.testing.expectEqual(@as(u64, 5), m.lock_steal_attempts_total);
 
@@ -1474,4 +1581,277 @@ test "resumeDataMigration respects custom total_batches" {
     const s3 = try resumeDataMigration(alloc, "custom-token", 3);
     try std.testing.expectEqual(@as(u32, 3), s3.completed_batches);
     try std.testing.expect(s3.done);
+}
+
+// ==================== Migration Signature Verification Tests (SEC-MIG-01) ====================
+// CANARY: REQ=REQ-SEC-MIG-01; FEATURE="MigrationSignatureVerification"; ASPECT=UnitTest; STATUS=TESTED; TEST="applyUpMigrations rejects unsigned migration by default"; OWNER=migration; UPDATED=2026-04-10
+
+test "computeHmacSha256 produces deterministic 64-char hex" {
+    const key = [_]u8{0x42} ** 32;
+    const result = computeHmacSha256(&key, "CREATE GRAPH test");
+    try std.testing.expectEqual(@as(usize, 64), result.len);
+    // Verify hex chars
+    for (result) |c| {
+        try std.testing.expect((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f'));
+    }
+    // Deterministic: same key + data = same output
+    const result2 = computeHmacSha256(&key, "CREATE GRAPH test");
+    try std.testing.expect(std.mem.eql(u8, &result, &result2));
+}
+
+test "computeHmacSha256 produces different output for different data" {
+    const key = [_]u8{0x42} ** 32;
+    const result_a = computeHmacSha256(&key, "content A");
+    const result_b = computeHmacSha256(&key, "content B");
+    try std.testing.expect(!std.mem.eql(u8, &result_a, &result_b));
+}
+
+test "computeHmacSha256 produces different output for different keys" {
+    const key_a = [_]u8{0x01} ** 32;
+    const key_b = [_]u8{0x02} ** 32;
+    const result_a = computeHmacSha256(&key_a, "same data");
+    const result_b = computeHmacSha256(&key_b, "same data");
+    try std.testing.expect(!std.mem.eql(u8, &result_a, &result_b));
+}
+
+test "constTimeEqlHex returns true for equal strings" {
+    const a = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const b = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    try std.testing.expect(constTimeEqlHex(a, b));
+}
+
+test "constTimeEqlHex returns false for different strings" {
+    const a = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    const b = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde0";
+    try std.testing.expect(!constTimeEqlHex(a, b));
+}
+
+test "constTimeEqlHex returns false for wrong lengths" {
+    const short = "0123456789abcdef";
+    const correct = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    try std.testing.expect(!constTimeEqlHex(short, correct));
+    try std.testing.expect(!constTimeEqlHex(correct, short));
+}
+
+test "signMigrationFile creates valid .sig sidecar file" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const script_content = "CREATE GRAPH signed_test";
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+
+    var key = [_]u8{0xAB} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+    try signMigrationFile(alloc, cfg, "001_init.gql");
+
+    // Verify the .sig file was created and contains the correct HMAC
+    const sig_contents = try tmp.dir.readFileAlloc(alloc, "001_init.gql.sig", 128);
+    defer alloc.free(sig_contents);
+    const trimmed = std.mem.trim(u8, sig_contents, " \t\r\n");
+    try std.testing.expectEqual(@as(usize, 64), trimmed.len);
+
+    // Verify it matches what computeHmacSha256 produces
+    const expected = computeHmacSha256(&key, script_content);
+    try std.testing.expect(std.mem.eql(u8, trimmed, &expected));
+}
+
+test "verifyMigrationSignature accepts valid signature" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const script_content = "CREATE GRAPH verified_test";
+    try tmp.dir.writeFile(.{ .sub_path = "002_schema.gql", .data = script_content });
+
+    var key = [_]u8{0xCD} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+
+    // Sign first
+    try signMigrationFile(alloc, cfg, "002_schema.gql");
+
+    // Verify should succeed
+    try verifyMigrationSignature(alloc, cfg, "002_schema.gql", script_content);
+}
+
+test "verifyMigrationSignature rejects tampered content" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const original_content = "CREATE GRAPH safe";
+    try tmp.dir.writeFile(.{ .sub_path = "003_tamper.gql", .data = original_content });
+
+    var key = [_]u8{0xEF} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+
+    // Sign with the original content
+    try signMigrationFile(alloc, cfg, "003_tamper.gql");
+
+    // Verify with tampered content should fail
+    const tampered_content = "DROP GRAPH safe; CREATE GRAPH evil";
+    const result = verifyMigrationSignature(alloc, cfg, "003_tamper.gql", tampered_content);
+    try std.testing.expectError(error.MigrationSignatureInvalid, result);
+}
+
+test "verifyMigrationSignature rejects missing signature file" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    var key = [_]u8{0x11} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+
+    // No .sig file exists
+    const result = verifyMigrationSignature(alloc, cfg, "004_nosig.gql", "some content");
+    try std.testing.expectError(error.MigrationSignatureMissing, result);
+}
+
+test "verifyMigrationSignature skips check when allow_unsigned is true" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    // No key, no sig file, but allow_unsigned = true
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
+    try verifyMigrationSignature(alloc, cfg, "005_unsigned.gql", "any content");
+}
+
+test "verifyMigrationSignature rejects when no hmac_key and not allow_unsigned" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    // No key, no allow_unsigned
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const result = verifyMigrationSignature(alloc, cfg, "006_nokey.gql", "content");
+    try std.testing.expectError(error.MigrationSignatureMissing, result);
+}
+
+test "applyUpMigrations rejects unsigned migration by default" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+
+    // No hmac_key and allow_unsigned = false (default)
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    const result = applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    try std.testing.expectError(error.MigrationSignatureMissing, result);
+    try std.testing.expect(!executed);
+}
+
+test "applyUpMigrations succeeds with valid signature" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const script_content = "CREATE GRAPH signed_apply";
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+
+    var key = [_]u8{0x77} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+
+    // Sign the migration file
+    try signMigrationFile(alloc, cfg, "001_init.gql");
+
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    try applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    try std.testing.expect(executed);
+}
+
+test "applyUpMigrations rejects tampered migration with valid sig for original" {
+    const alloc = std.testing.allocator;
+    migration_mutex.lock();
+    global_lock = null;
+    lock_steal_count = 0;
+    migration_mutex.unlock();
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    // Write original content and sign it
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH safe" });
+    var key = [_]u8{0x88} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+    try signMigrationFile(alloc, cfg, "001_init.gql");
+
+    // Tamper with the migration file after signing
+    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "DROP GRAPH safe; CREATE GRAPH evil" });
+
+    var executed = false;
+    const executor = makeTestExecutor(&executed);
+    const result = applyUpMigrations(alloc, cfg, &[_][]const u8{"001_init.gql"}, executor);
+    try std.testing.expectError(error.MigrationSignatureInvalid, result);
+    try std.testing.expect(!executed);
+}
+
+test "signMigrationFile rejects missing migration file" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    var key = [_]u8{0x99} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+    const result = signMigrationFile(alloc, cfg, "nonexistent.gql");
+    try std.testing.expectError(error.MigrationFileMissing, result);
+}
+
+test "signMigrationFile rejects invalid migration name" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    var key = [_]u8{0xAA} ** 32;
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
+    const result = signMigrationFile(alloc, cfg, "../etc/passwd");
+    try std.testing.expectError(error.InvalidMigrationName, result);
+}
+
+test "signMigrationFile rejects null hmac_key" {
+    const alloc = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
+    defer alloc.free(tmp_path);
+
+    const cfg = MigrationConfig{ .migrations_dir = tmp_path };
+    const result = signMigrationFile(alloc, cfg, "001_init.gql");
+    try std.testing.expectError(error.MigrationSignatureMissing, result);
 }

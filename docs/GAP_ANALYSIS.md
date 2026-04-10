@@ -5,8 +5,8 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 
 ## Summary
 
-- **Total open gaps:** 4
-- **Critical:** 2 (GAP-0256 blocked, GAP-0511)
+- **Total open gaps:** 3
+- **Critical:** 1 (GAP-0256 blocked)
 - **High:** 0
 - **Medium:** 0
 - **Low:** 0
@@ -2055,3 +2055,34 @@ ERROR geode.server Protobuf read error error=Timeout
 4. **COMMIT must acquire write lock:** The commit path at `quic_connection_handler.zig:2606-2611` should hold the write lock to prevent races with the persistence thread.
 
 5. **WouldBlock resilience:** The QUIC connection handler should distinguish between "backend busy" WouldBlock (retryable) and "server deadlocked" (should abort and return error to client).
+
+#### Resolution (2026-04-10)
+
+**Status: Closed**
+
+Three changes eliminate the write-lock stall during MERGE:
+
+1. **Index rebuilds moved outside the graph write lock** (QUIC + gRPC handlers):
+   All 5 flush points in `quic_connection_handler.zig` and 6 in `grpc_server.zig` now
+   release the graph write lock BEFORE calling `rebuildAdvancedIndex`. Other connections
+   can acquire the write lock immediately after execution completes, without waiting for
+   the O(N) population scan.
+
+2. **COMMIT path split** (`txn_undo_log.zig`):
+   `commitDeferRebuilds()` clears undo log state under the write lock (fast O(entries)),
+   then `flushPendingRebuilds()` runs the index population scan after lock release.
+   For a 10-MERGE transaction this reduces write-lock hold time from ~10s to ~1ms.
+
+3. **rebuild_mutex on IndexManager** (`index_manager.zig`):
+   `rebuildAdvancedIndex` now acquires `rebuild_mutex` internally, preventing concurrent
+   rebuilds from racing on the index manager's hash maps when running outside the write
+   lock. This is a lower-tier lock that does not conflict with graph read/write locks.
+
+**Files changed:**
+
+- `src/index/index_manager.zig` -- added `rebuild_mutex` field, `rebuildAdvancedIndex` acquires it
+- `src/server/quic_connection_handler.zig` -- 5 flush points: lock release moved before rebuild; COMMIT uses `commitDeferRebuilds` + deferred `flushPendingRebuilds`
+- `src/transport/grpc_server.zig` -- 6 flush points: lock release moved before rebuild
+- `src/txn_undo_log.zig` -- added `commitDeferRebuilds()` for split commit
+
+**Tests:** `tests/test_gap_0511_regression.zig` (6 tests covering deferred rebuild, adapter-backed MERGE/DELETE snapshot elision, relationship endpoint lookup, startup metadata repair)

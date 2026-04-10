@@ -5,49 +5,54 @@
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 5 |
-| High | 20+ |
-| Medium | 10 |
-| Low | 8 |
+| Severity | Open | Closed | Total |
+|----------|------|--------|-------|
+| Critical | 0 | 5 | 5 |
+| High | 20+ | 0 | 20+ |
+| Medium | 10 | 0 | 10 |
+| Low | 8 | 0 | 8 |
 
 ## Critical
 
-### QUAL-D001: proposeCommand discards all command data
+### QUAL-D001: proposeCommand discards all command data -- **CLOSED (2026-04-10)**
 
-- **File:** `raft_consensus.zig:650-653`
+- **File:** `raft_consensus.zig:962-972`
 - **Code:** `_ = cmd; self.inner.propose(&.{});`
 - **Classification:** Confirmed Bug
 - **Impact:** Every Raft proposal through raft_consensus.zig proposes empty bytes. The apply callback never sees actual command data. All distributed writes are silently lost.
+- **Resolution:** `serializeCommand` with tag-prefixed format now preserves command data. See also GAP-D003.
 
-### QUAL-D002: handleMessage zeroes AppendEntries/InstallSnapshot
+### QUAL-D002: handleMessage zeroes AppendEntries/InstallSnapshot -- **CLOSED (2026-04-10)**
 
-- **File:** `raft_consensus.zig:615-643`
+- **File:** `raft_consensus.zig:886-960`
 - **Code:** `.append_entries => |_| .{ .term = 0, .prev_log_index = 0, ... entries: &.{} }`
 - **Classification:** Confirmed Bug
 - **Impact:** Log replication and snapshot installation are no-ops. Raft consensus cannot replicate data.
+- **Resolution:** Proper field conversion with serialized entries in handleMessage. See also GAP-D002.
 
-### QUAL-D003: 2PC applyUndoOperation is a no-op
+### QUAL-D003: 2PC applyUndoOperation is a no-op -- **CLOSED (2026-04-10)**
 
-- **File:** `twophase.zig:394-396`
+- **File:** `twophase.zig:491-550`
 - **Code:** `fn applyUndoOperation(entry: UndoEntry) !void { _ = entry; }`
 - **Classification:** Confirmed Bug
 - **Impact:** 2PC abort does not roll back changes. Atomicity violated.
+- **Resolution:** Real undo implemented: CREATE->deleteNode, UPDATE->restore pre-image, DELETE->re-create. See also GAP-D004.
 
-### QUAL-D004: cluster.zig start() blocks forever
+### QUAL-D004: cluster.zig start() blocks forever -- **CLOSED (2026-04-10)**
 
-- **File:** `cluster.zig:405-421`
+- **File:** `cluster.zig:416-422`
 - **Code:** `defer raft_thread.join()` on infinite-loop thread
 - **Classification:** Confirmed Bug
 - **Impact:** Calling thread hangs permanently. No shutdown mechanism exists.
+- **Resolution:** Non-blocking start with background threads and stop() method for graceful shutdown.
 
-### QUAL-D005: apply_callback error silently swallowed
+### QUAL-D005: apply_callback error silently swallowed -- **CLOSED (2026-04-10)**
 
-- **File:** `raft_consensus.zig:682`
+- **File:** `raft_consensus.zig:997-1006`
 - **Code:** `_ = callback(self.allocator, .{ .write = entry.data }) catch {};`
 - **Classification:** Confirmed Bug
 - **Impact:** Committed entry application failures are lost. Silent data loss.
+- **Resolution:** Error logging added with stats increment on callback failure.
 
 ## High -- Code Duplication
 
@@ -145,4 +150,4 @@
 
 ---
 
-*Generated 2026-04-01*
+*Generated 2026-04-01, updated 2026-04-10*

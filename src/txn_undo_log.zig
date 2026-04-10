@@ -281,6 +281,16 @@ pub const UndoLog = struct {
         self.active = false;
     }
 
+    /// GAP-0511: Commit transaction state (clear entries, savepoints, deactivate)
+    /// WITHOUT flushing pending index rebuilds. Caller is responsible for calling
+    /// flushPendingRebuilds separately -- typically after releasing the write lock
+    /// to avoid blocking other connections during the O(N) index population scan.
+    pub fn commitDeferRebuilds(self: *UndoLog) void {
+        self.clear();
+        self.clearSavepoints();
+        self.active = false;
+    }
+
     // CANARY: REQ=REQ-TXN-SAVEPOINT-002; FEATURE="TransactionSavepoints"; ASPECT=CreateSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
     /// Create a named savepoint at the current position in the undo log.
     /// If a savepoint with the same name already exists, it is replaced.

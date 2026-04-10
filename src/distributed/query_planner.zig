@@ -50,13 +50,40 @@ pub const DistributedQueryPlanner = struct {
     fn analyzeQueryDistribution(self: *DistributedQueryPlanner, query: *const ast.Query) !DistributionAnalysis {
         var analysis = DistributionAnalysis.init(self.allocator);
 
-        // Extract label affinities from MATCH pattern chains
+        // Extract label affinities and edge patterns from MATCH pattern chains
         for (query.match.chains) |chain| {
-            for (chain.nodes) |node| {
-                for (node.labels) |label| {
+            for (chain.hops) |hop| {
+                // Node labels
+                for (hop.left.labels) |label| {
                     try analysis.addLabelAffinity(label);
                 }
+                for (hop.right.labels) |label| {
+                    try analysis.addLabelAffinity(label);
+                }
+                // Node properties
+                if (hop.left.props) |props| {
+                    try analysis.addPropertyFilters(props);
+                }
+                if (hop.right.props) |props| {
+                    try analysis.addPropertyFilters(props);
+                }
+                // Edge/relationship type patterns
+                try analysis.addEdgePattern(hop.rel);
             }
+            // Standalone head node (single-node chain with no hops)
+            if (chain.head) |head| {
+                for (head.labels) |label| {
+                    try analysis.addLabelAffinity(label);
+                }
+                if (head.props) |props| {
+                    try analysis.addPropertyFilters(props);
+                }
+            }
+        }
+
+        // Analyze WHERE clause for filter-based shard routing
+        if (query.where_clause) |where| {
+            try self.analyzeWhereClause(&analysis, where);
         }
 
         return analysis;
@@ -150,6 +177,9 @@ pub const DistributedQueryPlanner = struct {
     fn planCoordinatorOperations(self: *DistributedQueryPlanner, query: *const ast.Query, shard_plans: []const ShardPlan) !CoordinatorPlan {
         var coordinator_plan = CoordinatorPlan.init(self.allocator);
 
+        // Store shard plans for downstream data flow analysis
+        coordinator_plan.shard_plans = shard_plans;
+
         // Plan distributed joins
         if (self.requiresDistributedJoin(query)) {
             coordinator_plan.join_strategy = try self.planDistributedJoin(query, shard_plans);
@@ -198,14 +228,18 @@ pub const DistributedQueryPlanner = struct {
     }
 
     // Analyze WHERE clause for shard-specific filtering
-    fn analyzeWhereClause(self: *DistributedQueryPlanner, analysis: *DistributionAnalysis, where: ast.Expression) !void {
-        _ = self;
-
+    fn analyzeWhereClause(self: *DistributedQueryPlanner, analysis: *DistributionAnalysis, where: ast.Expr) !void {
         switch (where) {
-            .BinaryOp => |binop| {
-                // Analyze comparison operations for shard filtering
-                if (binop.op == .Eq or binop.op == .In) {
-                    try analysis.addFilterCondition(binop);
+            .Binary => |bin| {
+                // Recurse into AND conjuncts to extract all filter conditions
+                if (bin.op == .And) {
+                    try self.analyzeWhereClause(analysis, bin.left.*);
+                    try self.analyzeWhereClause(analysis, bin.right.*);
+                } else if (bin.op == .Eq or bin.op == .Ne or bin.op == .Lt or
+                    bin.op == .Le or bin.op == .Gt or bin.op == .Ge)
+                {
+                    // Analyze comparison operations for shard filtering
+                    try analysis.addFilterCondition(bin);
                 }
             },
             .Call => |call| {
@@ -462,13 +496,67 @@ pub const DistributedQueryPlanner = struct {
         return .streaming_merge;
     }
 
-    /// Analyze data flow across shards. Estimates total data transfer from shard count.
-    fn analyzeDataFlow(self: *DistributedQueryPlanner, plan: CoordinatorPlan) !DataFlow {
-        _ = self;
-        // Estimate total transfer proportional to participating shards
-        const shard_count = @max(1, plan.target_shards.items.len);
-        const estimated_per_shard: usize = 1024 * 1024; // 1MB per shard baseline
-        return DataFlow{ .total_transfer = shard_count * estimated_per_shard, .bottlenecks = &.{} };
+    /// Analyze data flow across shards using actual shard plan estimates.
+    /// Sums data_transfer_size from all shard plans and identifies bottleneck
+    /// shards (those with the highest transfer size).
+    // CANARY: REQ=REQ-DIST-PLAN-010; FEATURE="DataFlowAnalysis"; ASPECT=TransferEstimation; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    pub fn analyzeDataFlow(self: *DistributedQueryPlanner, plan: CoordinatorPlan) !DataFlow {
+        const shard_plans = plan.shard_plans;
+
+        // If no shard plans available, fall back to per-shard baseline
+        if (shard_plans.len == 0) {
+            const shard_count = @max(1, plan.target_shards.items.len);
+            const estimated_per_shard: usize = 1024 * 1024; // 1MB per shard baseline
+            return DataFlow{ .total_transfer = shard_count * estimated_per_shard, .bottlenecks = &.{} };
+        }
+
+        // Sum actual data_transfer_size from all shard plans
+        var total_transfer: usize = 0;
+        var max_transfer: usize = 0;
+        var max_shard_id: u32 = 0;
+
+        for (shard_plans) |sp| {
+            total_transfer += sp.data_transfer_size;
+            if (sp.data_transfer_size > max_transfer) {
+                max_transfer = sp.data_transfer_size;
+                max_shard_id = sp.shard_id;
+            }
+        }
+
+        // Identify bottleneck shards: any shard transferring > 2x the average
+        var bottleneck_list = std.ArrayList(DataFlow.Bottleneck).initCapacity(self.allocator, 0) catch return error.OutOfMemory;
+        const avg_transfer = total_transfer / @max(1, shard_plans.len);
+
+        for (shard_plans) |sp| {
+            if (sp.data_transfer_size > avg_transfer * 2) {
+                // Severity: ratio of this shard's transfer to the average
+                const severity: f64 = @as(f64, @floatFromInt(sp.data_transfer_size)) /
+                    @as(f64, @floatFromInt(@max(1, avg_transfer)));
+                try bottleneck_list.append(self.allocator, DataFlow.Bottleneck{
+                    .shard_id = sp.shard_id,
+                    .operation = "data_transfer",
+                    .severity = severity,
+                });
+            }
+        }
+
+        // If no shard exceeds 2x average but there is a clear max, still flag it
+        // when it accounts for more than 60% of total transfer
+        if (bottleneck_list.items.len == 0 and shard_plans.len > 1 and
+            max_transfer * 10 > total_transfer * 6)
+        {
+            try bottleneck_list.append(self.allocator, DataFlow.Bottleneck{
+                .shard_id = max_shard_id,
+                .operation = "data_transfer",
+                .severity = @as(f64, @floatFromInt(max_transfer)) /
+                    @as(f64, @floatFromInt(@max(1, avg_transfer))),
+            });
+        }
+
+        return DataFlow{
+            .total_transfer = total_transfer,
+            .bottlenecks = try bottleneck_list.toOwnedSlice(self.allocator),
+        };
     }
 
     /// Choose transfer optimization strategy based on data flow volume.
@@ -491,16 +579,131 @@ pub const DistributedQueryPlanner = struct {
         };
     }
 
-    /// Plan execution phases. Currently returns empty phases -- full phase
-    /// construction requires allocating PhaseOperation arrays per shard which
-    /// needs the coordinator context wired to shard executors.
-    /// Transfer duration estimate: compressed ~5ms, uncompressed ~10ms.
-    /// Merge duration estimate: batched ~3ms, unbatched ~8ms.
-    fn planExecutionPhases(self: *DistributedQueryPlanner, plan: CoordinatorPlan, optimization: TransferOptimization) ![]ExecutionPhase {
-        _ = self;
-        _ = plan;
-        _ = optimization;
-        return &.{};
+    /// Plan execution phases for distributed query execution.
+    /// Phase 1: Parallel shard execution (send queries to all participating shards)
+    /// Phase 2: Data transfer (collect results from shards to coordinator)
+    /// Phase 3: Coordinator merge (joins, aggregations, sorts on collected data)
+    /// Each phase has estimated duration based on the coordinator plan and transfer optimization.
+    // CANARY: REQ=REQ-DIST-PLAN-011; FEATURE="ExecutionPhases"; ASPECT=PhasePlanning; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    pub fn planExecutionPhases(self: *DistributedQueryPlanner, plan: CoordinatorPlan, optimization: TransferOptimization) ![]ExecutionPhase {
+        var phases = std.ArrayList(ExecutionPhase).initCapacity(self.allocator, 3) catch return error.OutOfMemory;
+
+        const shard_plans = plan.shard_plans;
+
+        // Phase 1: Parallel shard execution
+        // Each participating shard executes its local plan in parallel
+        {
+            var ops = std.ArrayList(ExecutionPhase.PhaseOperation).initCapacity(self.allocator, 4) catch return error.OutOfMemory;
+            for (shard_plans) |sp| {
+                try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                    .shard_id = sp.shard_id,
+                    .operation_type = .local_scan,
+                    .parameters = "",
+                });
+                // If the shard plan includes a filter, add it
+                for (sp.local_plan.operations) |op| {
+                    if (op == .filter) {
+                        try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                            .shard_id = sp.shard_id,
+                            .operation_type = .local_filter,
+                            .parameters = "",
+                        });
+                        break;
+                    }
+                }
+            }
+
+            // Estimate duration: max shard cost (parallel execution = slowest shard)
+            var max_shard_cost: f64 = 0;
+            for (shard_plans) |sp| {
+                if (sp.local_plan.estimated_cost > max_shard_cost) {
+                    max_shard_cost = sp.local_plan.estimated_cost;
+                }
+            }
+            // Convert cost units to estimated ms (1 cost unit ~ 0.1ms)
+            const phase1_duration = @max(1.0, max_shard_cost * 0.1);
+
+            try phases.append(self.allocator, ExecutionPhase{
+                .phase_id = 1,
+                .operations = try ops.toOwnedSlice(self.allocator),
+                .dependencies = &.{}, // No dependencies; this is the first phase
+                .estimated_duration = phase1_duration,
+            });
+        }
+
+        // Phase 2: Data transfer (collect results from shards)
+        {
+            var ops = std.ArrayList(ExecutionPhase.PhaseOperation).initCapacity(self.allocator, 4) catch return error.OutOfMemory;
+            for (shard_plans) |sp| {
+                try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                    .shard_id = sp.shard_id,
+                    .operation_type = .data_transfer,
+                    .parameters = "",
+                });
+            }
+
+            // Transfer duration depends on compression and total data volume
+            const base_transfer_ms: f64 = if (optimization.compression) 5.0 else 10.0;
+            // Scale with number of shards (parallel transfers, but coordinator receives serially)
+            const shard_count: f64 = @floatFromInt(@max(1, shard_plans.len));
+            const phase2_duration = base_transfer_ms * @log2(shard_count + 1.0);
+
+            const phase1_dep: []const u32 = try self.allocator.alloc(u32, 1);
+            @constCast(phase1_dep)[0] = 1;
+
+            try phases.append(self.allocator, ExecutionPhase{
+                .phase_id = 2,
+                .operations = try ops.toOwnedSlice(self.allocator),
+                .dependencies = phase1_dep,
+                .estimated_duration = phase2_duration,
+            });
+        }
+
+        // Phase 3: Coordinator merge (joins, aggregations, sorts)
+        {
+            var ops = std.ArrayList(ExecutionPhase.PhaseOperation).initCapacity(self.allocator, 4) catch return error.OutOfMemory;
+
+            // Add coordinator operations based on the selected strategies
+            if (plan.join_strategy != .none) {
+                try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                    .shard_id = 0, // coordinator
+                    .operation_type = .coordinator_join,
+                    .parameters = "",
+                });
+            }
+            if (plan.aggregation_strategy != .none) {
+                try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                    .shard_id = 0,
+                    .operation_type = .coordinator_aggregate,
+                    .parameters = "",
+                });
+            }
+
+            // Always add result merge (even without explicit strategies, results must be merged)
+            try ops.append(self.allocator, ExecutionPhase.PhaseOperation{
+                .shard_id = 0,
+                .operation_type = .result_merge,
+                .parameters = "",
+            });
+
+            // Merge duration depends on batching and coordinator strategies
+            var merge_duration: f64 = if (optimization.batching) 3.0 else 8.0;
+            if (plan.join_strategy != .none) merge_duration += 15.0;
+            if (plan.aggregation_strategy != .none) merge_duration += 8.0;
+            if (plan.sort_strategy != .none) merge_duration += 10.0;
+
+            const phase2_dep: []const u32 = try self.allocator.alloc(u32, 1);
+            @constCast(phase2_dep)[0] = 2;
+
+            try phases.append(self.allocator, ExecutionPhase{
+                .phase_id = 3,
+                .operations = try ops.toOwnedSlice(self.allocator),
+                .dependencies = phase2_dep,
+                .estimated_duration = merge_duration,
+            });
+        }
+
+        return phases.toOwnedSlice(self.allocator);
     }
 };
 
@@ -545,6 +748,10 @@ pub const DistributionAnalysis = struct {
     label_affinities: std.StringHashMap(u32),
     property_filters: std.ArrayList(PropertyFilter),
     cross_shard_joins: std.ArrayList(CrossShardJoin),
+    /// Edge/relationship type labels for cross-shard join detection and routing
+    edge_type_affinities: std.StringHashMap(u32),
+    /// Function names encountered in WHERE clause for hash/geographic shard routing
+    function_filters: std.ArrayList(FunctionFilter),
 
     pub fn init(allocator: std.mem.Allocator) DistributionAnalysis {
         return .{
@@ -553,6 +760,8 @@ pub const DistributionAnalysis = struct {
             .label_affinities = std.StringHashMap(u32).init(allocator),
             .property_filters = std.ArrayList(PropertyFilter).initCapacity(allocator, 0) catch std.ArrayList(PropertyFilter){},
             .cross_shard_joins = std.ArrayList(CrossShardJoin).initCapacity(allocator, 0) catch std.ArrayList(CrossShardJoin){},
+            .edge_type_affinities = std.StringHashMap(u32).init(allocator),
+            .function_filters = std.ArrayList(FunctionFilter).initCapacity(allocator, 0) catch std.ArrayList(FunctionFilter){},
         };
     }
 
@@ -561,34 +770,105 @@ pub const DistributionAnalysis = struct {
         self.label_affinities.deinit();
         self.property_filters.deinit(self.allocator);
         self.cross_shard_joins.deinit(self.allocator);
+        self.edge_type_affinities.deinit();
+        self.function_filters.deinit(self.allocator);
     }
 
     pub fn addLabelAffinity(self: *DistributionAnalysis, label: []const u8) !void {
         try self.label_affinities.put(label, 1);
     }
 
+    /// Track property-based filter conditions from node patterns in the MATCH clause.
+    /// Stores property key and literal value for shard-routing decisions.
+    /// Enables property-based shard pruning (e.g., if shard_key = property value).
+    // CANARY: REQ=REQ-DIST-PLAN-012; FEATURE="PropertyFilterTracking"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     pub fn addPropertyFilters(self: *DistributionAnalysis, properties: []const ast.Property) !void {
-        _ = self;
-        _ = properties;
-        // Simplified implementation
+        for (properties) |prop| {
+            // Extract literal value from the property expression for shard routing
+            const value_str = extractLiteralValue(prop.value);
+            try self.property_filters.append(self.allocator, PropertyFilter{
+                .property = prop.key,
+                .operator = .eq, // Pattern properties imply equality matching
+                .value = value_str,
+            });
+        }
     }
 
-    pub fn addEdgePattern(self: *DistributionAnalysis, edge: ast.EdgePattern) !void {
-        _ = self;
-        _ = edge;
-        // Simplified implementation
+    /// Track relationship type patterns for cross-shard join detection and routing.
+    /// Stores edge type labels so the shard pruner can route queries involving
+    /// specific relationship types to shards that host those edges.
+    // CANARY: REQ=REQ-DIST-PLAN-013; FEATURE="EdgePatternTracking"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    pub fn addEdgePattern(self: *DistributionAnalysis, rel: ast.RelPattern) !void {
+        for (rel.types) |edge_type| {
+            // Track the edge type as an affinity (count occurrences)
+            const existing = self.edge_type_affinities.get(edge_type);
+            try self.edge_type_affinities.put(edge_type, (existing orelse 0) + 1);
+        }
     }
 
-    pub fn addFilterCondition(self: *DistributionAnalysis, binop: ast.BinaryOp) !void {
-        _ = self;
-        _ = binop;
-        // Simplified implementation
+    /// Process binary comparison expressions from WHERE clause for shard filtering.
+    /// Extracts property name from LHS (PropertyAccess or Ident) and literal value
+    /// from RHS, storing as property filters for shard selection.
+    // CANARY: REQ=REQ-DIST-PLAN-014; FEATURE="FilterConditionExtraction"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    pub fn addFilterCondition(self: *DistributionAnalysis, bin: struct { op: ast.BinOp, left: *ast.Expr, right: *ast.Expr }) !void {
+        // Extract property name from LHS
+        const prop_name: ?[]const u8 = switch (bin.left.*) {
+            .PropertyAccess => |pa| pa.property,
+            .Ident => |ident| ident.cnf,
+            else => null,
+        };
+
+        if (prop_name) |name| {
+            // Extract literal value from RHS
+            const value_str = extractLiteralValue(bin.right);
+            const filter_op: PropertyFilter.FilterOperator = switch (bin.op) {
+                .Eq => .eq,
+                .Ne => .ne,
+                .Lt => .lt,
+                .Le => .le,
+                .Gt => .gt,
+                .Ge => .ge,
+                else => .eq,
+            };
+            try self.property_filters.append(self.allocator, PropertyFilter{
+                .property = name,
+                .operator = filter_op,
+                .value = value_str,
+            });
+        }
     }
 
-    pub fn addFunctionFilter(self: *DistributionAnalysis, call: ast.CallExpression) !void {
-        _ = self;
-        _ = call;
-        // Simplified implementation
+    /// Process function calls (e.g., geographic hash functions) for shard routing.
+    /// Extracts function name and argument count, storing for hash-based or
+    /// geographic shard selection strategies.
+    // CANARY: REQ=REQ-DIST-PLAN-015; FEATURE="FunctionFilterExtraction"; ASPECT=ShardRouting; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
+    pub fn addFunctionFilter(self: *DistributionAnalysis, call: struct { callee: *ast.Expr, args: []*ast.Expr }) !void {
+        // Extract function name from callee
+        const func_name: ?[]const u8 = switch (call.callee.*) {
+            .Ident => |ident| ident.cnf,
+            else => null,
+        };
+
+        if (func_name) |name| {
+            try self.function_filters.append(self.allocator, FunctionFilter{
+                .function_name = name,
+                .arg_count = call.args.len,
+            });
+        }
+    }
+
+    /// Extract a string representation of a literal Expr value for filter storage.
+    /// Returns the raw literal text for strings/idents, or a fixed placeholder
+    /// for non-literal expressions.
+    fn extractLiteralValue(expr: *const ast.Expr) []const u8 {
+        return switch (expr.*) {
+            .String => |s| s,
+            .Ident => |ident| ident.orig,
+            .Int => "<<int>>",
+            .Bool => "<<bool>>",
+            .Null => "<<null>>",
+            else => "<<expr>>",
+        };
     }
 };
 
@@ -622,6 +902,8 @@ pub const CoordinatorPlan = struct {
     aggregation_strategy: AggregationStrategy = .none,
     sort_strategy: SortStrategy = .none,
     union_strategy: UnionStrategy = .none,
+    /// Shard plans for data flow analysis and execution phase planning
+    shard_plans: []const ShardPlan = &.{},
 
     pub fn init(allocator: std.mem.Allocator) CoordinatorPlan {
         return .{
@@ -809,6 +1091,13 @@ pub const CrossShardJoin = struct {
     right_shard: u32,
     join_key: []const u8,
     estimated_cardinality: usize,
+};
+
+/// Filter entry for function calls in WHERE clauses that may influence shard routing
+/// (e.g., geographic hash functions, partition functions).
+pub const FunctionFilter = struct {
+    function_name: []const u8,
+    arg_count: usize,
 };
 
 // --- Tests ---

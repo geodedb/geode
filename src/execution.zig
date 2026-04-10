@@ -1755,6 +1755,12 @@ pub const PathIterator = struct {
     // Multiple edges from one node can each produce a qualifying path; we yield
     // them one at a time across successive next() calls.
     pending_results: std.ArrayList(VariableLengthPath),
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1FrontIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    // Front-index offsets for O(1) dequeue. Instead of orderedRemove(0) which
+    // shifts all elements (O(n)), we advance a front index and compact when
+    // the consumed portion exceeds half the backing array.
+    queue_front: usize,
+    pending_front: usize,
 
     const max_iterations: u64 = 10_000;
     const max_queue_size: usize = 5000;
@@ -1795,17 +1801,75 @@ pub const PathIterator = struct {
             .pending_zero_path = (min_len == 0),
             .done = false,
             .pending_results = std.ArrayList(VariableLengthPath).empty,
+            .queue_front = 0,
+            .pending_front = 0,
         };
     }
 
     pub fn deinit(self: *PathIterator) void {
-        for (self.pending_results.items) |*p| p.deinit(self.allocator);
+        // Only free unconsumed items (those at or past the front index).
+        for (self.pending_results.items[self.pending_front..]) |*p| p.deinit(self.allocator);
         self.pending_results.deinit(self.allocator);
-        for (self.queue.items) |*item| {
+        for (self.queue.items[self.queue_front..]) |*item| {
             item.path.deinit(self.allocator);
         }
         self.queue.deinit(self.allocator);
         self.visited_states.deinit();
+    }
+
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1QueueDequeue; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    /// O(1) dequeue from the BFS queue. Returns the front item and advances the
+    /// front index. Compacts the backing array when the consumed portion exceeds
+    /// half the total length, keeping amortized cost O(1).
+    fn queueDequeue(self: *PathIterator) QueueItem {
+        const item = self.queue.items[self.queue_front];
+        self.queue_front += 1;
+        // Compact when consumed portion exceeds half the backing array
+        if (self.queue_front > self.queue.items.len / 2) {
+            const remaining = self.queue.items.len - self.queue_front;
+            if (remaining > 0) {
+                std.mem.copyForwards(
+                    QueueItem,
+                    self.queue.items[0..remaining],
+                    self.queue.items[self.queue_front..self.queue.items.len],
+                );
+            }
+            self.queue.items.len = remaining;
+            self.queue_front = 0;
+        }
+        return item;
+    }
+
+    /// Number of unconsumed items in the BFS queue.
+    fn queueLen(self: *const PathIterator) usize {
+        return self.queue.items.len - self.queue_front;
+    }
+
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDequeue; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    /// O(1) dequeue from the pending results buffer. Same front-index strategy
+    /// as queueDequeue.
+    fn pendingDequeue(self: *PathIterator) VariableLengthPath {
+        const item = self.pending_results.items[self.pending_front];
+        self.pending_front += 1;
+        // Compact when consumed portion exceeds half the backing array
+        if (self.pending_front > self.pending_results.items.len / 2) {
+            const remaining = self.pending_results.items.len - self.pending_front;
+            if (remaining > 0) {
+                std.mem.copyForwards(
+                    VariableLengthPath,
+                    self.pending_results.items[0..remaining],
+                    self.pending_results.items[self.pending_front..self.pending_results.items.len],
+                );
+            }
+            self.pending_results.items.len = remaining;
+            self.pending_front = 0;
+        }
+        return item;
+    }
+
+    /// Number of unconsumed items in the pending results buffer.
+    fn pendingLen(self: *const PathIterator) usize {
+        return self.pending_results.items.len - self.pending_front;
     }
 
     // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathModeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
@@ -1887,26 +1951,28 @@ pub const PathIterator = struct {
             return zero_path;
         }
 
-        // Drain any buffered results from a previous expansion step
-        if (self.pending_results.items.len > 0) {
-            return self.pending_results.orderedRemove(0);
+        // Drain any buffered results from a previous expansion step (O(1) dequeue)
+        // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDrain; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+        if (self.pendingLen() > 0) {
+            return self.pendingDequeue();
         }
 
-        while (self.queue.items.len > 0) {
+        while (self.queueLen() > 0) {
             // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
             self.iteration_count += 1;
-            if (self.iteration_count > max_iterations or self.queue.items.len > max_queue_size) {
+            if (self.iteration_count > max_iterations or self.queueLen() > max_queue_size) {
                 // Clean up remaining paths in queue when hitting limits
-                for (self.queue.items) |*item| {
+                for (self.queue.items[self.queue_front..]) |*item| {
                     item.path.deinit(self.allocator);
                 }
                 self.queue.items.len = 0;
+                self.queue_front = 0;
                 self.done = true;
                 return null;
             }
 
-            // Dequeue first item (BFS order)
-            const current = self.queue.orderedRemove(0);
+            // Dequeue first item (BFS order) - O(1) via front-index
+            const current = self.queueDequeue();
             var current_path = current.path;
             const depth = current.depth;
 
@@ -1965,9 +2031,9 @@ pub const PathIterator = struct {
             // Clean up the current path (we've cloned it for any expansions)
             current_path.deinit(self.allocator);
 
-            // If we found qualifying paths this expansion, yield the first one
-            if (self.pending_results.items.len > 0) {
-                return self.pending_results.orderedRemove(0);
+            // If we found qualifying paths this expansion, yield the first one (O(1) dequeue)
+            if (self.pendingLen() > 0) {
+                return self.pendingDequeue();
             }
         }
 

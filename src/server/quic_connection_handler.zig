@@ -68,6 +68,25 @@ var g_auth_rate_limiter: ?*auth_rate_limiter.AuthRateLimiter = null;
 const rls_filter = @import("rls_filter.zig");
 const index_manager = geode.index_manager;
 
+// PERF-P1-004: Global stream thread throttle — caps OS thread spawning across
+// all QUIC connections to prevent thread exhaustion under high concurrency.
+// CANARY: REQ=PERF-P1-004; FEATURE="GlobalStreamThrottle"; ASPECT=QUICWiring; STATUS=TESTED; OWNER=server; UPDATED=2026-04-10
+var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.GlobalStreamThrottle.init(
+    stream_registry.default_max_global_stream_threads,
+);
+
+/// Override the global stream thread limit (called from server startup).
+/// A value of 0 resets to the default.
+pub fn setMaxGlobalStreamThreads(max: u32) void {
+    const effective = if (max == 0) stream_registry.default_max_global_stream_threads else max;
+    g_stream_throttle = stream_registry.GlobalStreamThrottle.init(effective);
+}
+
+/// Return the current number of active stream handler threads globally.
+pub fn getGlobalStreamThreadCount() u32 {
+    return g_stream_throttle.count();
+}
+
 /// Set the global mTLS provider (called from server/main.zig during startup)
 pub fn setMtlsProvider(provider: ?*mtls_provider.MtlsProvider) void {
     g_mtls_provider = provider;
@@ -585,6 +604,9 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         _ = cs.active_streams.fetchSub(1, .release);
         // GAP-0274: Signal the drain waiter that a stream closed
         cs.streams_cv.broadcast();
+        // PERF-P1-004: Release the global stream thread slot so another
+        // connection's stream can proceed.
+        g_stream_throttle.release();
         gpa.destroy(ctx);
     }
 
@@ -714,6 +736,21 @@ fn streamAcceptorLoop(
             }
 
             log.debug("Accepted additional multiplexed stream", &.{});
+
+            // PERF-P1-004: Enforce the global stream thread cap before
+            // spawning. Wait up to 10 ms for a slot; if still full, apply
+            // backpressure by closing this stream so the peer retries.
+            g_stream_throttle.acquire(10 * std.time.ns_per_ms) catch {
+                log.warn("Global stream thread limit reached, rejecting stream", &.{
+                    Attr.int("active_global", @intCast(g_stream_throttle.count())),
+                    Attr.int("max_global", @intCast(g_stream_throttle.max)),
+                });
+                new_stream.close();
+                conn_state.unregisterActiveStream(new_stream.stream_id);
+                conn.destroyStream(new_stream);
+                continue;
+            };
+
             _ = conn_state.active_streams.fetchAdd(1, .release);
 
             // Allocate context for the handler thread
@@ -723,6 +760,7 @@ fn streamAcceptorLoop(
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
                 conn_state.streams_cv.broadcast();
+                g_stream_throttle.release();
                 continue;
             };
             ctx.* = .{
@@ -743,6 +781,7 @@ fn streamAcceptorLoop(
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
                 conn_state.streams_cv.broadcast();
+                g_stream_throttle.release();
                 gpa.destroy(ctx);
                 continue;
             };
@@ -2133,6 +2172,11 @@ fn handleClientMessage(
             defer {
                 if (!lock_released) {
                     if (graph_lock_handle) |h| {
+                        // GAP-0511: Release the write lock BEFORE rebuilding indexes.
+                        // rebuildAdvancedIndex acquires its own rebuild_mutex and only
+                        // reads the store, so it does not need the graph write lock.
+                        // This prevents MERGE stalls under sustained ingest.
+                        graph_store.releaseGraphLock(h);
                         if (pending_index_rebuilds.count() > 0) {
                             if (index_manager.getGlobalIndexManager()) |manager| {
                                 const store = graph_store.getGlobalStore(gpa);
@@ -2140,7 +2184,6 @@ fn handleClientMessage(
                                 while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
                             }
                         }
-                        graph_store.releaseGraphLock(h);
                     }
                 }
             }
@@ -2204,6 +2247,8 @@ fn handleClientMessage(
 
                             if (needs_store_lock) {
                                 if (graph_lock_handle) |h| {
+                                    // GAP-0511: Release lock before index rebuild
+                                    graph_store.releaseGraphLock(h);
                                     if (pending_index_rebuilds.count() > 0) {
                                         if (index_manager.getGlobalIndexManager()) |manager| {
                                             const idx_store = graph_store.getGlobalStore(gpa);
@@ -2211,7 +2256,6 @@ fn handleClientMessage(
                                             while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                         }
                                     }
-                                    graph_store.releaseGraphLock(h);
                                 }
                                 lock_released = true;
                             }
@@ -2278,6 +2322,8 @@ fn handleClientMessage(
                     // exec_result is a thread-local copy; store stats are captured above.
                     if (needs_store_lock) {
                         if (graph_lock_handle) |h| {
+                            // GAP-0511: Release lock before index rebuild
+                            graph_store.releaseGraphLock(h);
                             if (pending_index_rebuilds.count() > 0) {
                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                     const idx_store = graph_store.getGlobalStore(gpa);
@@ -2285,7 +2331,6 @@ fn handleClientMessage(
                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                 }
                             }
-                            graph_store.releaseGraphLock(h);
                         }
                         lock_released = true;
                     }
@@ -2335,6 +2380,8 @@ fn handleClientMessage(
 
                                     if (needs_store_lock) {
                                         if (graph_lock_handle) |h| {
+                                            // GAP-0511: Release lock before index rebuild
+                                            graph_store.releaseGraphLock(h);
                                             if (pending_index_rebuilds.count() > 0) {
                                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                                     const idx_store = graph_store.getGlobalStore(gpa);
@@ -2342,7 +2389,6 @@ fn handleClientMessage(
                                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                                 }
                                             }
-                                            graph_store.releaseGraphLock(h);
                                         }
                                         lock_released = true;
                                     }
@@ -2441,6 +2487,8 @@ fn handleClientMessage(
                     // does not access the store and does not need the lock.
                     if (needs_store_lock) {
                         if (graph_lock_handle) |h| {
+                            // GAP-0511: Release lock before index rebuild
+                            graph_store.releaseGraphLock(h);
                             if (pending_index_rebuilds.count() > 0) {
                                 if (index_manager.getGlobalIndexManager()) |manager| {
                                     const idx_store = graph_store.getGlobalStore(gpa);
@@ -2448,7 +2496,6 @@ fn handleClientMessage(
                                     while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
                                 }
                             }
-                            graph_store.releaseGraphLock(h);
                         }
                         lock_released = true;
                     }
@@ -2704,13 +2751,19 @@ fn handleClientMessage(
                 },
             }
             if (state.in_txn) {
-                // GAP-0511: COMMIT must acquire the write lock to safely rebuild indexes and sync state
+                // GAP-0511: COMMIT acquires the write lock for state cleanup only.
+                // Index rebuilds are deferred to after lock release to prevent
+                // the O(N) populateAdvancedIndex scan from blocking other connections.
                 const commit_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
-                defer graph_store.releaseGraphLock(commit_lock);
-
+                const undo = txn_undo_log.getGlobalUndoLog(gpa);
+                {
+                    const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
+                    defer graph_store.releaseGraphLock(commit_lock);
+                    undo.commitDeferRebuilds();
+                }
+                // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);
-                txn_undo_log.getGlobalUndoLog(gpa).commit(store);
+                undo.flushPendingRebuilds(store);
 
                 state.global_commit_ts += 1;
                 state.in_txn = false;
@@ -3096,4 +3149,53 @@ test "isIdleStreamReadError treats timeout as idle shutdown" {
     try std.testing.expect(isIdleStreamReadError(error.EndOfStream));
     try std.testing.expect(isIdleStreamReadError(error.Timeout));
     try std.testing.expect(!isIdleStreamReadError(error.WouldBlock));
+}
+
+// PERF-P1-004: Verify the global stream throttle is wired and configurable.
+test "setMaxGlobalStreamThreads updates global throttle limit" {
+    // The default should be the constant from active_stream_registry.
+    try std.testing.expectEqual(
+        stream_registry.default_max_global_stream_threads,
+        g_stream_throttle.max,
+    );
+
+    // Override with a custom value.
+    setMaxGlobalStreamThreads(128);
+    try std.testing.expectEqual(@as(u32, 128), g_stream_throttle.max);
+
+    // Zero resets to the default.
+    setMaxGlobalStreamThreads(0);
+    try std.testing.expectEqual(
+        stream_registry.default_max_global_stream_threads,
+        g_stream_throttle.max,
+    );
+
+    // Verify the counter API.
+    try std.testing.expectEqual(@as(u32, 0), getGlobalStreamThreadCount());
+}
+
+test "global stream throttle acquire and release are symmetric" {
+    // Use a small limit so the test is fast and deterministic.
+    setMaxGlobalStreamThreads(2);
+    defer setMaxGlobalStreamThreads(0); // restore default
+
+    try g_stream_throttle.acquire(0);
+    try g_stream_throttle.acquire(0);
+    try std.testing.expectEqual(@as(u32, 2), getGlobalStreamThreadCount());
+
+    // Third acquire must fail (limit = 2).
+    try std.testing.expectError(
+        stream_registry.ThrottleError.GlobalStreamLimitExceeded,
+        g_stream_throttle.acquire(0),
+    );
+
+    // Release one, then acquire succeeds.
+    g_stream_throttle.release();
+    try g_stream_throttle.acquire(0);
+    try std.testing.expectEqual(@as(u32, 2), getGlobalStreamThreadCount());
+
+    // Cleanup.
+    g_stream_throttle.release();
+    g_stream_throttle.release();
+    try std.testing.expectEqual(@as(u32, 0), getGlobalStreamThreadCount());
 }

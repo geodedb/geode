@@ -5,30 +5,32 @@
 
 ## Summary
 
-| PerfSeverity | Count |
-|-------------|-------|
-| P0 (Critical) | 2 |
-| P1 (High) | 5 |
-| P2 (Medium) | 10 |
-| P3 (Low) | 5 |
+| PerfSeverity | Open | Closed | Total |
+|-------------|------|--------|-------|
+| P0 (Critical) | 0 | 2 | 2 |
+| P1 (High) | 5 | 0 | 5 |
+| P2 (Medium) | 10 | 0 | 10 |
+| P3 (Low) | 5 | 0 | 5 |
 
 ## P0 -- Critical
 
-### PERF-D001: Mutex held during network I/O + 350ms retry sleep
+### PERF-D001: Mutex held during network I/O + 350ms retry sleep -- **CLOSED (2026-04-10)**
 
-- **File:** `network_transport.zig:65-119`
+- **File:** `network_transport.zig:64-134`
 - **Pattern:** `self.mutex.lock(); defer self.mutex.unlock();` held through QUIC connect, send, and 3 retries with 50/100/200ms sleep
 - **Impact:** All inter-node cluster communication (heartbeats, replication, Raft messages) serializes behind one lock. One slow/unreachable peer blocks all healthy peer communication for up to 350ms.
 - **Fix:** Lock only for peer-map lookup/update. Release before I/O. Clone peer info under lock, then send lock-free.
 - **Expected improvement:** Eliminates cascading latency under network instability.
+- **Resolution:** Lock-free I/O pattern implemented at `network_transport.zig:64-134`. Mutex is now held only for peer-map lookup, released before network operations.
 
-### PERF-D002: Mutex held during 5s QUIC handshake
+### PERF-D002: Mutex held during 5s QUIC handshake -- **CLOSED (2026-04-10)**
 
-- **File:** `twophase.zig:141-201`
+- **File:** `twophase.zig:170-245`
 - **Pattern:** `self.mutex.lock(); defer self.mutex.unlock();` held through `client.waitForHandshake(5)` on cache miss
 - **Impact:** First 2PC connection to a new endpoint blocks ALL other 2PC traffic for up to 5 seconds.
 - **Fix:** Use per-endpoint connection-in-progress flag. Release global mutex before handshake.
 - **Expected improvement:** Prevents 5s cascading 2PC timeouts during cluster expansion.
+- **Resolution:** Narrow mutex window implemented at `twophase.zig:170-245`. Global mutex released before QUIC handshake.
 
 ## P1 -- High
 
@@ -90,4 +92,4 @@
 
 ---
 
-*Generated 2026-04-01*
+*Generated 2026-04-01, updated 2026-04-10*

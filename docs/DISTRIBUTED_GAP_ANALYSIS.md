@@ -11,22 +11,16 @@
 | EXEMPT | 34 | 37.8% |
 | BENCHED | 1 | 1.1% |
 
-## Open Gaps (28 total)
+## Open Gaps (23 total)
 
-### Critical (4)
+### Critical (0)
 
-| Gap-ID | Category | Description | File:Line | Req ID |
-|--------|----------|-------------|-----------|--------|
-| GAP-D001 | Incomplete Impl | Cluster replication sends empty 0-byte snapshots | `cluster.zig:635-637` | REQ-DIST-CLUSTER-002 |
-| GAP-D002 | Incomplete Impl | Raft handleMessage zeroes out AppendEntries/InstallSnapshot fields | `raft_consensus.zig:615-643` | -- |
-| GAP-D003 | Incomplete Impl | Raft proposeCommand discards Command, proposes empty bytes | `raft_consensus.zig:650-653` | -- |
-| GAP-D026 | Incomplete Impl | Raft protobuf conversion drops entries and snapshot data at wire level | `raft_consensus.zig:413-476` | -- |
+All critical gaps have been closed. See Closed Gaps section below.
 
-### High (5)
+### High (4)
 
 | Gap-ID | Category | Description | File:Line | Req ID |
 |--------|----------|-------------|-----------|--------|
-| GAP-D004 | Incomplete Impl | 2PC applyUndoOperation is a no-op -- abort does not roll back | `twophase.zig:394-396` | REQ-DIST-2PC-003 |
 | GAP-D005 | Incomplete Impl | union_distinct merge is a placeholder (calls union_all) | `federation.zig:856-859` | -- |
 | GAP-D006 | Incomplete Impl | hash_aggregate merge has hardcoded sum=0 | `enhanced_query_coordinator.zig:465-523` | -- |
 | GAP-D007 | Missing Impl | query_planner.zig entirely scaffolded (15+ stub methods) | `query_planner.zig` (entire) | -- |
@@ -74,6 +68,23 @@
 | Value conversion | `value_convert.zig` | Implemented, 0 tests |
 | Distributed metrics | `mod.zig:299-323` | Implemented |
 
+## Closed Gaps
+
+### Critical (Closed 2026-04-10)
+
+| Gap-ID | Category | Description | File:Line | Req ID | Resolution |
+|--------|----------|-------------|-----------|--------|------------|
+| GAP-D001 | Incomplete Impl | Cluster replication sends empty 0-byte snapshots | `cluster.zig:707-729` | REQ-DIST-CLUSTER-002 | Real snapshot serialization via `serializeSnapshot` now produces actual shard data |
+| GAP-D002 | Incomplete Impl | Raft handleMessage zeroes out AppendEntries/InstallSnapshot fields | `raft_consensus.zig:886-960` | -- | Proper field conversion with serialized entries in handleMessage |
+| GAP-D003 | Incomplete Impl | Raft proposeCommand discards Command, proposes empty bytes | `raft_consensus.zig:962-972` | -- | `serializeCommand` with tag-prefixed format now preserves command data |
+| GAP-D026 | Incomplete Impl | Raft protobuf conversion drops entries and snapshot data at wire level | `raft_consensus.zig:418-468` | -- | Proper protobuf conversion with `messageToProto`/`protoToMessage` |
+
+### High (Closed 2026-04-10)
+
+| Gap-ID | Category | Description | File:Line | Req ID | Resolution |
+|--------|----------|-------------|-----------|--------|------------|
+| GAP-D004 | Incomplete Impl | 2PC applyUndoOperation is a no-op -- abort does not roll back | `twophase.zig:491-550` | REQ-DIST-2PC-003 | Real undo implemented: CREATE->deleteNode, UPDATE->restore pre-image, DELETE->re-create |
+
 ---
 
-*Generated 2026-04-01*
+*Generated 2026-04-01, updated 2026-04-10*

@@ -5,42 +5,46 @@
 
 ## Summary
 
-| Risk Level | Count |
-|-----------|-------|
-| Critical | 2 |
-| High | 5 |
-| Medium | 5 |
-| Low | 2 |
+| Risk Level | Open | Closed | Total |
+|-----------|------|--------|-------|
+| Critical | 0 | 2 | 2 |
+| High | 1 | 4 | 5 |
+| Medium | 5 | 0 | 5 |
+| Low | 2 | 0 | 2 |
 
 ## Critical
 
-### SEC-D001: Unauthenticated Raft QUIC Listener (CWE-306)
+### SEC-D001: Unauthenticated Raft QUIC Listener (CWE-306) -- **CLOSED (2026-04-10)**
 
-- **File:** `cluster.zig:430-492`
+- **File:** `cluster.zig:531-538`
 - **Description:** `networkLoop` accepts any QUIC connection. `handleQuicConnection` reads and dispatches Raft frames with zero authentication -- no HELLO, no token, no certificate check.
 - **Attack:** Connect to cluster QUIC port, send `RequestVote` with `term=999999` to force leader stepdown. Send fabricated `AppendEntries` to corrupt graph data.
 - **Mitigation:** Require mTLS with cluster-issued certificates, or implement GEODE_CLUSTER_TOKEN pre-auth handshake on accepted connections before processing Raft frames.
+- **Resolution:** Cluster token validation + nonce replay protection implemented at `cluster.zig:531-538`. Connections are rejected before Raft frame processing if token is invalid.
 
-### SEC-D002: Unauthenticated JOIN_CLUSTER + Data Exfiltration (CWE-306, CWE-862)
+### SEC-D002: Unauthenticated JOIN_CLUSTER + Data Exfiltration (CWE-306, CWE-862) -- **CLOSED (2026-04-10)**
 
-- **File:** `cluster.zig:499-517`
+- **File:** `cluster.zig:562-567`
 - **Description:** `handleJoinCluster` parses `NodeInfo` from message data and directly appends to `cluster_state.nodes` with no auth. Then triggers `rebalanceShards()` which assigns shards to the rogue node, and `performReplication()` which sends shard snapshots to all replicas including the attacker.
 - **Attack:** Send JOIN_CLUSTER message with rogue endpoint. Receive full cluster topology in response. Wait for replication to receive data snapshots.
 - **Mitigation:** Authenticate join requests. Add node allowlisting. Never return topology to unauthenticated joiners.
+- **Resolution:** Auth token validation before join processing at `cluster.zig:562-567`. JOIN_CLUSTER requests are rejected if cluster token is missing or invalid.
 
 ## High
 
-### SEC-D003: 2PC Has No Application-Layer Auth (CWE-306, CWE-345)
+### SEC-D003: 2PC Has No Application-Layer Auth (CWE-306, CWE-345) -- **CLOSED (2026-04-10)**
 
-- **File:** `twophase.zig:140-391`
+- **File:** `twophase.zig:22-26,758,791,900,1223-1228`
 - **Description:** `TwoPhaseTransport` sends/receives raw protobuf `TwoPhaseMessage` with no HELLO, no auth token. An attacker can send COMMIT for a known transaction_id to force premature commit.
 - **Mitigation:** Add HELLO handshake with GEODE_CLUSTER_TOKEN (same pattern as `federation.zig:174-207`).
+- **Resolution:** GEODE_CLUSTER_TOKEN used for outbound 2PC messages, `validateClusterToken` for inbound. Auth enforced at `twophase.zig:22-26,758,791,900,1223-1228`.
 
-### SEC-D004: query_transport Sends Empty Credentials (CWE-287)
+### SEC-D004: query_transport Sends Empty Credentials (CWE-287) -- **CLOSED (2026-04-10)**
 
-- **File:** `query_transport.zig:609-617`
+- **File:** `query_transport.zig:527-537`
 - **Description:** `Connection.connect()` sends `username=""`, `password=""` in HELLO. In no-auth mode: full query access. In auth mode: distributed queries silently fail.
 - **Mitigation:** Use `buildFederationHelloRequest()` pattern from `federation.zig`.
+- **Resolution:** `buildClusterHelloRequest` implemented for HELLO handshake at `query_transport.zig:527-537`, sending proper credentials for distributed query connections.
 
 ### SEC-D005: Debug Build Auto-Bypasses TLS (CWE-295, CWE-319) -- **CLOSED (2026-04-05)**
 
@@ -101,4 +105,4 @@
 
 ---
 
-*Generated 2026-04-01*
+*Generated 2026-04-01, updated 2026-04-10*

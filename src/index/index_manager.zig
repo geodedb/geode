@@ -21,6 +21,7 @@ var global_index_manager: ?*IndexManager = null;
 var global_index_manager_mutex = std.Thread.Mutex{};
 
 // Comprehensive index management for graph database
+// CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="IndexRebuild"; ASPECT=DeferredRebuild; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
 pub const IndexManager = struct {
     allocator: Allocator,
     property_indexes: std.StringHashMap(PropertyIndex),
@@ -39,6 +40,9 @@ pub const IndexManager = struct {
     advanced_domain_indexes: std.StringHashMap(*domain_trie.DomainTrie),
     advanced_property_indexes: std.StringHashMap(AdvancedPropertyIndex),
     statistics: IndexStatistics,
+    /// GAP-0511: Mutex protecting rebuild operations so they can safely run
+    /// outside the graph write lock without racing with concurrent rebuilds.
+    rebuild_mutex: std.Thread.Mutex = .{},
 
     pub const IndexType = enum {
         btree,
@@ -1249,11 +1253,18 @@ pub const IndexManager = struct {
         }
     }
 
+    /// GAP-0511: Rebuild an advanced index. Acquires rebuild_mutex internally
+    /// so callers do NOT need to hold the graph write lock during rebuild.
+    /// The rebuild drops the old index, creates a new empty one, re-registers
+    /// it, then populates from the store. The rebuild_mutex prevents concurrent
+    /// rebuilds from racing on the index manager's data structures.
     pub fn rebuildAdvancedIndex(
         self: *IndexManager,
         store: *graph_store.GraphStore,
         index_name: []const u8,
     ) !void {
+        self.rebuild_mutex.lock();
+        defer self.rebuild_mutex.unlock();
         const meta = self.advanced_property_indexes.get(index_name) orelse return;
         const index_name_copy = try self.allocator.dupe(u8, index_name);
         defer self.allocator.free(index_name_copy);
