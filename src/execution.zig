@@ -1711,23 +1711,46 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 pub const VariableLengthPath = struct {
     nodes: std.ArrayList(u64),
     edges: std.ArrayList(u64),
+    // PERF-P2-001: O(1) membership sets for shouldSkipByPathMode.
+    // Maintained alongside the node/edge lists during clone + expand.
+    node_set: std.AutoHashMapUnmanaged(u64, void),
+    edge_set: std.AutoHashMapUnmanaged(u64, void),
 
     pub fn init(_: std.mem.Allocator) VariableLengthPath {
         return .{
             .nodes = std.ArrayList(u64).empty,
             .edges = std.ArrayList(u64).empty,
+            .node_set = .empty,
+            .edge_set = .empty,
         };
     }
 
     pub fn deinit(self: *VariableLengthPath, allocator: std.mem.Allocator) void {
         self.nodes.deinit(allocator);
         self.edges.deinit(allocator);
+        self.node_set.deinit(allocator);
+        self.edge_set.deinit(allocator);
     }
 
     fn clone(self: *const VariableLengthPath, allocator: std.mem.Allocator) !VariableLengthPath {
         var new_path = VariableLengthPath.init(allocator);
         try new_path.nodes.appendSlice(allocator, self.nodes.items);
         try new_path.edges.appendSlice(allocator, self.edges.items);
+        // Clone the membership sets
+        if (self.node_set.count() > 0) {
+            try new_path.node_set.ensureTotalCapacity(allocator, @intCast(self.node_set.count()));
+            var nit = self.node_set.keyIterator();
+            while (nit.next()) |k| {
+                new_path.node_set.putAssumeCapacity(k.*, {});
+            }
+        }
+        if (self.edge_set.count() > 0) {
+            try new_path.edge_set.ensureTotalCapacity(allocator, @intCast(self.edge_set.count()));
+            var eit = self.edge_set.keyIterator();
+            while (eit.next()) |k| {
+                new_path.edge_set.putAssumeCapacity(k.*, {});
+            }
+        }
         return new_path;
     }
 };
@@ -1784,6 +1807,7 @@ pub const PathIterator = struct {
         // Seed the BFS queue with the start node
         var initial_path = VariableLengthPath.init(allocator);
         try initial_path.nodes.append(allocator, start_node_id);
+        try initial_path.node_set.put(allocator, start_node_id, {});
         try queue.append(allocator, .{ .path = initial_path, .depth = 0 });
 
         return .{
@@ -1873,6 +1897,7 @@ pub const PathIterator = struct {
     }
 
     // CANARY: REQ=REQ-GQL-PATH-MODES-004; FEATURE="GQL Path Mode Execution"; ASPECT=PathModeFilter; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    // PERF-P2-001: O(1) hash set lookups instead of O(d) linear scans.
     fn shouldSkipByPathMode(self: *const PathIterator, current_path: *const VariableLengthPath, edge_id: u64, next_node_id: u64) bool {
         switch (self.path_mode) {
             .walk => {
@@ -1881,25 +1906,16 @@ pub const PathIterator = struct {
             },
             .trail => {
                 // TRAIL: Cannot revisit edges (edges must be unique)
-                for (current_path.edges.items) |visited_edge| {
-                    if (visited_edge == edge_id) return true;
-                }
-                return false;
+                return current_path.edge_set.contains(edge_id);
             },
             .acyclic => {
                 // ACYCLIC: Cannot revisit any node (no cycles at all)
-                for (current_path.nodes.items) |visited_node| {
-                    if (visited_node == next_node_id) return true;
-                }
-                return false;
+                return current_path.node_set.contains(next_node_id);
             },
             .simple => {
                 // SIMPLE: Cannot revisit nodes except start can equal end
                 if (next_node_id == self.start_node_id) return false;
-                for (current_path.nodes.items) |visited_node| {
-                    if (visited_node == next_node_id) return true;
-                }
-                return false;
+                return current_path.node_set.contains(next_node_id);
             },
         }
     }
@@ -1915,7 +1931,9 @@ pub const PathIterator = struct {
     ) !void {
         var new_path = try current_path.clone(self.allocator);
         try new_path.edges.append(self.allocator, edge_id);
+        try new_path.edge_set.put(self.allocator, edge_id, {});
         try new_path.nodes.append(self.allocator, next_node_id);
+        try new_path.node_set.put(self.allocator, next_node_id, {});
 
         const new_depth = depth + 1;
         const meets_min = new_depth >= self.min_len;
@@ -1948,6 +1966,7 @@ pub const PathIterator = struct {
             self.pending_zero_path = false;
             var zero_path = VariableLengthPath.init(self.allocator);
             try zero_path.nodes.append(self.allocator, self.start_node_id);
+            try zero_path.node_set.put(self.allocator, self.start_node_id, {});
             return zero_path;
         }
 
