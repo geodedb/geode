@@ -60,6 +60,10 @@ pub const LockHandle = struct {
 pub const MigrationPlan = struct {
     up: []const []const u8 = &.{},
     down: []const []const u8 = &.{},
+    /// Whether this plan owns heap-allocated slices that freePlan must release.
+    /// Only true for plans returned by planDryRun; default-initialized plans
+    /// use comptime empty slices and must NOT be freed.
+    owned: bool = false,
 };
 
 pub const StatusRow = struct {
@@ -896,11 +900,13 @@ pub fn planDryRun(alloc: std.mem.Allocator, cfg: MigrationConfig, names: []const
         alloc.free(up_slice);
     }
     const down_slice = pending_down.toOwnedSlice(alloc) catch return error.OutOfMemory;
-    return MigrationPlan{ .up = up_slice, .down = down_slice };
+    return MigrationPlan{ .up = up_slice, .down = down_slice, .owned = true };
 }
 
 /// Frees all heap-allocated slices within a MigrationPlan returned by planDryRun.
+/// Safe to call on default-initialized plans (owned=false is a no-op).
 pub fn freePlan(alloc: std.mem.Allocator, plan: *const MigrationPlan) void {
+    if (!plan.owned) return;
     for (plan.up) |name| alloc.free(name);
     alloc.free(plan.up);
     for (plan.down) |name| alloc.free(name);
@@ -1273,6 +1279,14 @@ test "MigrationPlan has empty defaults" {
     const plan = MigrationPlan{};
     try std.testing.expectEqual(@as(usize, 0), plan.up.len);
     try std.testing.expectEqual(@as(usize, 0), plan.down.len);
+    try std.testing.expect(!plan.owned);
+}
+
+test "freePlan is safe on default-initialized MigrationPlan (Q19 regression)" {
+    const alloc = std.testing.allocator;
+    const plan = MigrationPlan{};
+    // Must not crash — default plan has comptime slices, not heap-allocated.
+    freePlan(alloc, &plan);
 }
 
 test "computeFingerprint with single applied row" {
