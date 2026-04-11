@@ -2600,6 +2600,13 @@ pub fn build(b: *std.Build) void {
     const run_gap0514_bfs_tests = b.addRunArtifact(gap0514_bfs_tests);
     test_step.dependOn(&run_gap0514_bfs_tests.step);
 
+    // GAP-0514 Phase 1A: graph_store.zig regression tests
+    const gap0514_gs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap0514_graph_store_regression.zig"), .target = target, .optimize = optimize });
+    gap0514_gs_test_mod.addImport("geode", root_mod);
+    const gap0514_gs_tests = b.addTest(.{ .root_module = gap0514_gs_test_mod });
+    const run_gap0514_gs_tests = b.addRunArtifact(gap0514_gs_tests);
+    test_step.dependOn(&run_gap0514_gs_tests.step);
+
     // GAP-0516: MCP server handler behaviour tests are colocated with
     // the source in `src/mcp/server.zig`. Wiring them into `zig build
     // test` requires making the whole `src/mcp/` tree test-root, which
