@@ -49,3 +49,23 @@ const GsHarness = struct {
         self.tmp.cleanup();
     }
 };
+
+// REQ-BINARY-PERSIST-DIRTY-001: GraphStore tracks "dirty" state so
+// the background persistence loop knows whether there's anything
+// to save. A fresh store is clean; the first mutation must flip it
+// to dirty.
+test "GAP-0514 REQ-BINARY-PERSIST-DIRTY-001: createNode marks store dirty" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    // Fresh store must be clean.
+    try testing.expect(!h.store.isDirty());
+
+    const labels = [_][]const u8{"Widget"};
+    _ = try h.store.createNode(&labels);
+
+    // After creating a node, dirty flag must be set. A regression
+    // that forgets to mark the store dirty would prevent the
+    // background persist loop from ever checkpointing the node.
+    try testing.expect(h.store.isDirty());
+}

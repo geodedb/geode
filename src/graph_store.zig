@@ -420,7 +420,7 @@ pub const GraphStore = struct {
     id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
     csr: ?*const anyopaque = null,
-    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-27
+    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     // Track if store has unsaved changes - avoids O(n²) persistence during batch operations.
     // Atomic because the persistence thread reads this without holding the store write lock
     // while mutation threads write it under the write lock (data race fix).

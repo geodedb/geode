@@ -395,7 +395,7 @@ REQ-BENCHMARK-EVIDENCE-001,Performance Evidence,Documentation,EXEMPT,,,monitorin
 REQ-BENCHMARK-TDE-001,TDE Overhead Benchmark,Documentation,EXEMPT,,,security,2026-01-14,BENCHMARK_REPORT.md
 REQ-BINARY-PERSIST-001,BinaryPersistence,ServerInit,IMPL,,,server,2026-02-02,src/server/server_init.zig
 REQ-BINARY-PERSIST-003,BinaryPersistence,MainImports,IMPL,,,server,2026-02-02,src/server/main.zig
-REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-03-27,src/graph_store.zig
+REQ-BINARY-PERSIST-DIRTY-001,BinaryPersistence,DirtyTracking,TESTED,,,storage,2026-04-11,src/graph_store.zig
 REQ-BINARY-PERSIST-DIRTY-002,BinaryPersistence,ConditionalSave,IMPL,,,storage,2026-03-28,src/graph_store.zig
 REQ-BINARY-PERSIST-EDGE-001,BinaryPersistence,DirtyTracking,IMPL,,,storage,2026-02-02,src/graph_store.zig
 REQ-BINARY-PERSIST-PATH-001,BinaryPersistence,PathResolution,EXEMPT,,,storage,2026-03-28,src/graph_store.zig
