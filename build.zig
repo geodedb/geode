@@ -1443,6 +1443,15 @@ pub fn build(b: *std.Build) void {
     const run_cli_tests = b.addRunArtifact(cli_tests);
     test_e2e_step.dependOn(&run_cli_tests.step);
 
+    // Server RSS regression test — spawns the built geode binary and samples
+    // /proc/<pid>/status VmRSS across 60 sequential QUIC connections to detect
+    // allocator page-retention regressions (e.g. GPA default never_unmap=true).
+    // Uses only std + libc mkdtemp, so no geode module imports are needed.
+    const server_mem_pressure_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/integration/test_server_memory_pressure.zig"), .target = target, .optimize = optimize }) });
+    server_mem_pressure_tests.linkLibC();
+    const run_server_mem_pressure_tests = b.addRunArtifact(server_mem_pressure_tests);
+    test_e2e_step.dependOn(&run_server_mem_pressure_tests.step);
+
     // Protobuf wire protocol compatibility tests (Phase 6 validation)
     const protobuf_wire_protocol_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/protobuf_wire_protocol_compatibility.zig"), .target = target, .optimize = optimize }) });
     protobuf_wire_protocol_tests.root_module.addImport("protobuf", protobuf_mod);
