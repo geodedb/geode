@@ -2570,6 +2570,14 @@ pub fn build(b: *std.Build) void {
     const run_audit_tenant_tests = b.addRunArtifact(audit_tenant_tests);
     test_step.dependOn(&run_audit_tenant_tests.step);
 
+    // GAP-0510 regression: RLS expression engine wiring + compiled policy enforcement
+    const rls_expr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_expr_engine_wiring.zig"), .target = target, .optimize = optimize });
+    rls_expr_test_mod.addImport("rls", rls_mod);
+    rls_expr_test_mod.addImport("rls_types", rls_types_mod);
+    const rls_expr_tests = b.addTest(.{ .root_module = rls_expr_test_mod });
+    const run_rls_expr_tests = b.addRunArtifact(rls_expr_tests);
+    test_step.dependOn(&run_rls_expr_tests.step);
+
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
     // TODO: Fix File I/O API usage in REPL modules
     // const repl_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_repl.zig"), .target = target, .optimize = optimize }) });
