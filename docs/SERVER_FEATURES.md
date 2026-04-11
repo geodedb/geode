@@ -2,12 +2,12 @@
 
 ## Overview
 
-Geode is an enterprise-ready graph database server with industry-leading compliance and performance. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
+Geode is a feature-complete single-tenant graph database server with industry-leading GQL compliance. This document provides comprehensive technical details on the server's core features, architecture, and capabilities.
 
-**Status**: Production Ready
+**Status**: Development Ready (single-tenant). Multi-tenant and distributed deployments require operator review of [Known Limitations](../CLAUDE.md#known-limitations) before production.
 **GQL Compliance**: 100% (70/70 ISO/IEC 39075:2024 tests)
 **Test Coverage**: 97.4% (1644/1688 geodetestlab tests)
-**CANARY Markers**: 1,735 governance markers tracking 2,190+ requirements
+**CANARY Markers**: 2,200+ governance markers tracking 2,190+ requirements
 
 ---
 

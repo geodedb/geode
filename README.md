@@ -1,13 +1,15 @@
 # Geode Graph Database
 
-**Enterprise-ready graph database with industry-leading compliance and performance**
+**Feature-complete single-tenant graph database with industry-leading GQL compliance**
 
 [![GQL Compliance](https://img.shields.io/badge/GQL%20Compliance-100%25-brightgreen)](docs/GQL_COMPLIANCE.md)
 [![Test Coverage](https://img.shields.io/badge/Test%20Coverage-97.4%25-green)](docs/KNOWN_TEST_ISSUES.md)
-[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-1735-blue)](docs/TODO.md)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](docs/FEATURES_OVERVIEW.md)
+[![CANARY Tracking](https://img.shields.io/badge/CANARY%20Markers-2200%2B-blue)](docs/TODO.md)
+[![Status](https://img.shields.io/badge/Status-Development%20Ready%20%28Single--Tenant%29-yellow)](docs/FEATURES_OVERVIEW.md)
 
-Geode is a production-ready graph database implementing the **ISO/IEC 39075:2024 Graph Query Language (GQL)** standard. Built in Zig for performance and reliability, Geode provides enterprise-grade features including advanced security, machine learning integration, and distributed query processing.
+Geode is a feature-complete single-tenant graph database implementing the **ISO/IEC 39075:2024 Graph Query Language (GQL)** standard. Built in Zig for performance and reliability, Geode provides enterprise-grade features including advanced security, machine learning integration, and distributed query processing.
+
+> **Deployment status:** single-tenant deployments are development-ready. Multi-tenant and distributed cluster deployments require operator review of the [Known Limitations section](CLAUDE.md#known-limitations) before production use. See [`docs/FULL_AUDIT_2026_04_06.md`](docs/FULL_AUDIT_2026_04_06.md) for the current audit state.
 
 ## 🏆 Key Features
 

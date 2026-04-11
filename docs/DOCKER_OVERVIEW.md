@@ -1,6 +1,6 @@
 # Geode Docker Overview
 
-Geode is an enterprise-ready graph database implementing the ISO/IEC 39075:2024 Graph Query Language (GQL) standard. This document provides Docker-specific guidance for deploying and running Geode containers.
+Geode is a feature-complete single-tenant graph database implementing the ISO/IEC 39075:2024 Graph Query Language (GQL) standard. This document provides Docker-specific guidance for deploying and running Geode containers. **Deployment status:** development-ready for single-tenant workloads — see [Known Limitations](../CLAUDE.md#known-limitations) before enabling multi-tenancy or cluster mode.
 
 ## Quick Start
 

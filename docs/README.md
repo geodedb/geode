@@ -4,7 +4,7 @@
 
 ## Overview
 
-Geode is an enterprise-ready graph database with 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests).
+Geode is a feature-complete single-tenant graph database with 100% ISO/IEC 39075:2024 GQL compliance (70/70 tests). **Deployment status:** development-ready for single-tenant workloads. Multi-tenant and distributed deployments require operator review of the Known Limitations in [`../CLAUDE.md`](../CLAUDE.md) before production use.
 
 ## Directory Structure
 

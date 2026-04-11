@@ -4,22 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 🏆 Project Status (April 2026)
 
-Geode is a **feature-complete graph database** with strong compliance and active development:
+**DEVELOPMENT READY (single-tenant).** Geode is a feature-complete **single-tenant** graph database with strong compliance and active development. Multi-tenant deployments, distributed clusters, and the full RLS expression engine require additional review and test coverage before production use — see Known Limitations below.
 
 - **✅ 97.4% Test Coverage** (1644/1688 tests - see [KNOWN_TEST_ISSUES.md](docs/KNOWN_TEST_ISSUES.md) for details)
 - **✅ 100% GQL Compliance** (70/70 ISO/IEC 39075:2024 tests)
-- **✅ 2,178 CANARY Markers** tracking requirements (71.0% TESTED, 14.2% IMPL, 11.6% EXEMPT, 3.1% BENCHED)
-- **✅ Enterprise Features** implemented (TDE, audit, vector search, cloud backup, enhanced RLS) -- multi-tenancy is partial
+- **✅ ~2,224 CANARY Markers** tracking requirements (~71% TESTED, ~15% IMPL, ~11% EXEMPT, ~3% BENCHED; run `make status-generate` for current counts)
+- **✅ Enterprise Features** implemented (TDE, audit, vector search, cloud backup, enhanced RLS) — see limitations below for multi-tenant caveats
 - **✅ ALL TODO.md PHASES COMPLETE** - All 7 development phases implemented (Phases 2-7)
 
 ### Known Limitations
 
-- **Multi-tenancy query isolation implemented (GAP-0509, Closed 2026-04-06)**: `getNodesByLabels`, `getEdgesByType`, and all edge traversal paths now accept an optional `tenant_id` parameter and filter accordingly. ML algorithms (`Node2Vec`, GraphSAGE, `pageRank`) use `getAllNodesForTenant(allocator, null)` — `null` means cross-tenant/admin-level and is backward compatible. Per-tenant quotas and full RLS expression coverage are still in progress.
-- **RLS expression engine partially wired (GAP-0510, Closed 2026-04-06)**: The RLS label-deny engine is now wired into all MATCH node iteration paths via `passesRLSFilter()` in `match_operations.zig`. Label-based RLS policies are enforced during query execution (not just post-filter). The full expression-based engine (`rls_core.zig` bytecode VM) is available via `ExecutionContext.rls_engine` but expression evaluation requires the `rls_core.Value` ↔ `value_types.Value` bridge (`rls_value_bridge.zig`), which is implemented but not yet called from the match loop. Property-based and temporal RLS policies require further wiring.
-- **Distributed module has partial test coverage (GAP-0513, High)**: 10 of ~20 distributed files (3,540 lines including sharding.zig, query_transport.zig, merge_strategies.zig) have zero unit tests. Activates when `GEODE_CLUSTER_TOKEN` is set.
-- **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment
-- **CANARY coverage gap**: ~15% of CANARY markers remain at IMPL status (implemented but not yet fully tested)
-- **Full audit report**: See [docs/FULL_AUDIT_2026_04_06.md](docs/FULL_AUDIT_2026_04_06.md) for comprehensive findings
+- **Single-tenant recommended for production.** Multi-tenant deployments require operator review of GAP-0514 (CANARY IMPL coverage) before enabling. The storage-level tenant isolation primitives (`getAllNodesForTenant`, `getNodesByLabels(..., tenant)`, `getEdgesByType(..., tenant, graph)`) are correct and regression-tested, but the full cross-cutting concern has not been end-to-end audited against a multi-tenant benchmark suite.
+- **Multi-tenancy query isolation (GAP-0509, Closed 2026-04-11)**: all 17 full-scan sites and 7 label-indexed sites in `match_operations.zig` apply `passesTenantFilter`/`getNodesByLabels(..., tenant)`. `listNodeLabels`/`SHOW TABLES` now takes a `filter_tenant` parameter pulled from `ExecutionContext`. Regression cover in `tests/test_gap0509_tenant_isolation.zig`. Residual: `evaluateAggregation`/`evaluateAggregationWithLabels` in `aggregation_evaluation.zig` are currently dead code but would iterate `store.nodes` without a tenant filter if wired up — annotated with a `GAP-0509 WARNING` comment; delete or add a tenant parameter before wiring.
+- **RLS expression engine (GAP-0510, Closed 2026-04-11)**: wired at server startup (`setGlobalExprRLSEngine` in `src/server/main.zig:638`) and read from the match loop (`passesRLSExprFilter` in `src/execution/match_operations.zig:125`). Compiled bytecode policies enforce property-based row-level filtering via `checkRowAccessByUsername`. Regression cover in `tests/test_rls_expr_engine_wiring.zig`. Residual: the GQL → bytecode pipeline for policy compilation is still manual — policies must be pinned with a pre-compiled `CompiledExpression` until the parser path lands. Temporal policies (`TemporalConstraint`) evaluate but have no end-to-end tests.
+- **Distributed module (GAP-0513, Closed 2026-04-10)**: per `docs/DISTRIBUTED_GAP_ANALYSIS.md`, all distributed gaps closed via commit `68ff42c4`. NodeRegistry covered by `src/distributed/test_query_transport_node_registry.zig` (inline copy — see that file's note about drift risk). Activates only when `GEODE_CLUSTER_TOKEN` is set; `--no-cluster` (default) bypasses this path entirely.
+- **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment.
+- **CANARY coverage gap (GAP-0514, Open)**: ~15% of CANARY markers remain at `IMPL` status (implemented but not yet verified by a named test). This is governance/hygiene, not functional defect — all 1036 existing Zig tests pass. Tracked for a follow-up test-writing sprint targeting `execution.zig` and `graph_store.zig` first (27% of IMPL markers).
+- **MCP server (GAP-0516, Partial)**: the `src/mcp/server.zig` handlers for resource subscriptions (`subscribeResource`/`unsubscribeResource`) are intentionally not implemented — Geode does not yet produce streaming resource-change notifications. Clients should poll via `readResource` instead. `completeHandler` forwards to the LSP completion path; `setLogLevelHandler` is a safe no-op that acknowledges the request without changing runtime verbosity.
+- **Full audit report**: See [docs/FULL_AUDIT_2026_04_06.md](docs/FULL_AUDIT_2026_04_06.md) (with 2026-04-11 closure-notes footer) for the comprehensive audit and per-gap resolution details.
 
 ## 📚 Documentation Structure
 
