@@ -2984,17 +2984,42 @@ pub const GraphStore = struct {
     // GAP-0509: tenant_id filters edges to a specific tenant when non-null.
     // PERF-P2-003: Return edge IDs (8 bytes each) instead of full Edge structs
     // (~96+ bytes each). Callers use store.edges.getPtr(id) for read-only access.
-    pub fn getEdgesByType(self: *GraphStore, allocator: std.mem.Allocator, edge_type: []const u8, tenant_id: ?[]const u8) []u64 {
-        // Collect matching edge IDs from the edge-type index across all graphs.
+    //
+    // GAP-0512: When `graph_name` is non-null, restrict the posting-list
+    // scan to that single graph. When null, the function returns the
+    // union across every graph — an admin / diagnostic path that must
+    // stay available (e.g. for cross-graph metrics and ML training
+    // pipelines that explicitly pass null). Callers executing a
+    // user-scoped query (MATCH, algorithms) must pass the active graph
+    // so edges from other graphs cannot leak into the result set.
+    // CANARY: REQ=REQ-MULTI-GRAPH-EDGE-ISOLATION; FEATURE="GraphIsolationEdgeScan"; ASPECT=GetEdgesByType; STATUS=TESTED; TEST=tests/test_graph_isolation_edge_iteration.zig:1; OWNER=engine; UPDATED=2026-04-11
+    pub fn getEdgesByType(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        edge_type: []const u8,
+        tenant_id: ?[]const u8,
+        graph_name: ?[]const u8,
+    ) []u64 {
+        // Collect matching edge IDs from the edge-type index. When
+        // graph_name is set, do a single keyed lookup; when it is null,
+        // iterate every graph (legacy admin path).
         var id_list = std.ArrayList(u64).empty;
         defer id_list.deinit(allocator);
 
-        var graph_iter = self.graphs.keyIterator();
-        while (graph_iter.next()) |graph_key| {
+        if (graph_name) |gn| {
             var key_buf: [512]u8 = undefined;
-            const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key.*, edge_type }) catch continue;
+            const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ gn, edge_type }) catch return &.{};
             if (self.edge_type_index.get(probe)) |posting| {
-                id_list.appendSlice(allocator, posting.items) catch continue;
+                id_list.appendSlice(allocator, posting.items) catch return &.{};
+            }
+        } else {
+            var graph_iter = self.graphs.keyIterator();
+            while (graph_iter.next()) |graph_key| {
+                var key_buf: [512]u8 = undefined;
+                const probe = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_key.*, edge_type }) catch continue;
+                if (self.edge_type_index.get(probe)) |posting| {
+                    id_list.appendSlice(allocator, posting.items) catch continue;
+                }
             }
         }
 
@@ -6033,14 +6058,14 @@ test "GAP-0509: getNodesByLabels filters by tenant_id" {
     const edge_b = try store.createEdgeWithGraphAndTenant(nb1, na1, "LINKED", "default", "tenant_b");
     _ = edge_b;
 
-    const edges_a = store.getEdgesByType(testing.allocator, "LINKED", "tenant_a");
+    const edges_a = store.getEdgesByType(testing.allocator, "LINKED", "tenant_a", null);
     defer testing.allocator.free(edges_a);
     try testing.expectEqual(@as(usize, 1), edges_a.len);
     // Verify the returned ID resolves to the correct tenant
     const edge_a_ptr = store.edges.getPtr(edges_a[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("tenant_a", edge_a_ptr.tenant_id);
 
-    const edges_all = store.getEdgesByType(testing.allocator, "LINKED", null);
+    const edges_all = store.getEdgesByType(testing.allocator, "LINKED", null, null);
     defer testing.allocator.free(edges_all);
     try testing.expectEqual(@as(usize, 2), edges_all.len);
 }
@@ -6335,23 +6360,23 @@ test "PERF-P0-001: edge-type index provides O(1) lookup for getEdgesByType" {
     try testing.expectEqual(e3, likes_ids.?[0]);
 
     // Verify getEdgesByType uses the index and returns correct edges
-    const knows_edges = store.getEdgesByType(testing.allocator, "KNOWS", null);
+    const knows_edges = store.getEdgesByType(testing.allocator, "KNOWS", null, null);
     defer testing.allocator.free(knows_edges);
     try testing.expectEqual(@as(usize, 2), knows_edges.len);
 
-    const likes_edges = store.getEdgesByType(testing.allocator, "LIKES", null);
+    const likes_edges = store.getEdgesByType(testing.allocator, "LIKES", null, null);
     defer testing.allocator.free(likes_edges);
     try testing.expectEqual(@as(usize, 1), likes_edges.len);
     const likes_ptr = store.edges.getPtr(likes_edges[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("LIKES", likes_ptr.label);
 
     // Nonexistent type returns empty
-    const none_edges = store.getEdgesByType(testing.allocator, "HATES", null);
+    const none_edges = store.getEdgesByType(testing.allocator, "HATES", null, null);
     try testing.expectEqual(@as(usize, 0), none_edges.len);
 
     // Delete an edge and verify index is updated
     store.deleteEdge(e1);
-    const knows_after_delete = store.getEdgesByType(testing.allocator, "KNOWS", null);
+    const knows_after_delete = store.getEdgesByType(testing.allocator, "KNOWS", null, null);
     defer testing.allocator.free(knows_after_delete);
     try testing.expectEqual(@as(usize, 1), knows_after_delete.len);
     try testing.expectEqual(e2, knows_after_delete[0]);
@@ -6375,19 +6400,19 @@ test "PERF-P0-001: edge-type index works with tenant filtering" {
     _ = try store.createEdgeWithGraphAndTenant(n3, n1, "FRIEND", "default", "t2");
 
     // All FRIEND edges across tenants
-    const all = store.getEdgesByType(testing.allocator, "FRIEND", null);
+    const all = store.getEdgesByType(testing.allocator, "FRIEND", null, null);
     defer testing.allocator.free(all);
     try testing.expectEqual(@as(usize, 2), all.len);
 
     // Filtered to tenant t1
-    const t1_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t1");
+    const t1_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t1", null);
     defer testing.allocator.free(t1_edges);
     try testing.expectEqual(@as(usize, 1), t1_edges.len);
     const t1_ptr = store.edges.getPtr(t1_edges[0]) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("t1", t1_ptr.tenant_id);
 
     // Filtered to tenant t2
-    const t2_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t2");
+    const t2_edges = store.getEdgesByType(testing.allocator, "FRIEND", "t2", null);
     defer testing.allocator.free(t2_edges);
     try testing.expectEqual(@as(usize, 1), t2_edges.len);
     const t2_ptr = store.edges.getPtr(t2_edges[0]) orelse return error.TestUnexpectedResult;
@@ -6417,7 +6442,7 @@ test "PERF-P0-001: edge-type index across multiple graphs" {
     try testing.expectEqual(@as(usize, 1), rel_b.?.len);
 
     // Cross-graph getEdgesByType returns both
-    const all_rel = store.getEdgesByType(testing.allocator, "REL", null);
+    const all_rel = store.getEdgesByType(testing.allocator, "REL", null, null);
     defer testing.allocator.free(all_rel);
     try testing.expectEqual(@as(usize, 2), all_rel.len);
 }
@@ -6441,7 +6466,7 @@ test "PERF-P0-001: edge-type index survives clearNodes" {
     try testing.expect(store.getEdgeIdsByType("default", "LINK") == null);
 
     // getEdgesByType should return empty
-    const result = store.getEdgesByType(testing.allocator, "LINK", null);
+    const result = store.getEdgesByType(testing.allocator, "LINK", null, null);
     try testing.expectEqual(@as(usize, 0), result.len);
 }
 

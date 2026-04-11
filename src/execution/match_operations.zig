@@ -1628,7 +1628,13 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
             // #558: No labels at all but relationship type present — use edge type scan
             // PERF-P2-003: getEdgesByType now returns []u64 (edge IDs) to
             // avoid copying ~96+ byte Edge structs. Use getPtr for read-only access.
-            const typed_edge_ids = store.getEdgesByType(allocator, rt, filter_tenant);
+            // GAP-0512: pass filter_graph so the scan is scoped to the
+            // active graph. Previously this returned edges across every
+            // graph and relied on per-edge graph_name comparisons below
+            // to reject cross-graph edges; that works but is wasteful
+            // and any future caller that forgets the post-filter would
+            // leak. The storage layer now enforces isolation directly.
+            const typed_edge_ids = store.getEdgesByType(allocator, rt, filter_tenant, filter_graph);
             defer if (typed_edge_ids.len > 0) allocator.free(typed_edge_ids);
 
             for (typed_edge_ids) |edge_id| {

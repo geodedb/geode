@@ -2578,6 +2578,13 @@ pub fn build(b: *std.Build) void {
     const run_rls_expr_tests = b.addRunArtifact(rls_expr_tests);
     test_step.dependOn(&run_rls_expr_tests.step);
 
+    // GAP-0512 regression: graph isolation in edge iteration
+    const graph_isolation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_isolation_edge_iteration.zig"), .target = target, .optimize = optimize });
+    graph_isolation_test_mod.addImport("geode", root_mod);
+    const graph_isolation_tests = b.addTest(.{ .root_module = graph_isolation_test_mod });
+    const run_graph_isolation_tests = b.addRunArtifact(graph_isolation_tests);
+    test_step.dependOn(&run_graph_isolation_tests.step);
+
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
     // TODO: Fix File I/O API usage in REPL modules
     // const repl_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_repl.zig"), .target = target, .optimize = optimize }) });
