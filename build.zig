@@ -2559,7 +2559,16 @@ pub fn build(b: *std.Build) void {
     audit_chain_test_mod.addImport("audit", audit_security_mod);
     audit_chain_test_mod.addImport("rls", rls_mod);
     const audit_chain_tests = b.addTest(.{ .root_module = audit_chain_test_mod });
-    test_step.dependOn(&audit_chain_tests.step);
+    const run_audit_chain_tests = b.addRunArtifact(audit_chain_tests);
+    test_step.dependOn(&run_audit_chain_tests.step);
+
+    // GAP-0511 regression: audit tenant_id enrichment + adapter propagation
+    const audit_tenant_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_tenant_enrichment.zig"), .target = target, .optimize = optimize });
+    audit_tenant_test_mod.addImport("audit", audit_security_mod);
+    audit_tenant_test_mod.addImport("rls", rls_mod);
+    const audit_tenant_tests = b.addTest(.{ .root_module = audit_tenant_test_mod });
+    const run_audit_tenant_tests = b.addRunArtifact(audit_tenant_tests);
+    test_step.dependOn(&run_audit_tenant_tests.step);
 
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
     // TODO: Fix File I/O API usage in REPL modules

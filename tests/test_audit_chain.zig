@@ -49,8 +49,14 @@ test "AuditLogger initialization and basic logging" {
     const content = try file.readToEndAlloc(allocator, 1024);
     defer allocator.free(content);
 
-    try testing.expect(std.mem.indexOf(u8, content, "\"user_id\":101") != null);
-    try testing.expect(std.mem.indexOf(u8, content, "\"prev_hash\":\"0000000000000000000000000000000000000000000000000000000000000000\"") != null);
+    // GAP-0511: assertions updated to match the canonical JSON format emitted
+    // by rls_core.writeCanonicalJson — actor is rendered as "user:<id>" and
+    // prev_hash is serialized as a hex string. The original assertions
+    // assumed an older schema and were dead (this test file was compile-
+    // checked but never actually executed in CI until the build.zig fix).
+    try testing.expect(std.mem.indexOf(u8, content, "\"actor\":\"user:101\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "\"tenant\":\"test_tenant\"") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "\"action\":\"login\"") != null);
 }
 
 test "AuditLogger chaining verification" {
