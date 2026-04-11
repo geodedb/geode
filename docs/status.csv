@@ -2946,6 +2946,10 @@ REQ-MATVIEW-SYSTEM-006,MaterializedViews,MemoryManagement,TESTED,,,storage,2026-
 REQ-MATVIEW-SYSTEM-007,MaterializedViews,TestCoverage,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-MATVIEW-SYSTEM-008,MaterializedViews,Documentation,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,EXEMPT,,,query,2025-10-05,tests/test_materialized_views_enhanced.zig
+REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
 REQ-MEM-001,MemorySafety,AllocatorUsage,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MEM-002,MemorySafety,DeferCleanup,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MEM-003,MemorySafety,BoundsChecking,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig

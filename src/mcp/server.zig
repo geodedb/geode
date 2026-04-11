@@ -140,18 +140,37 @@ fn listResourceTemplatesHandler(ctx: ?*anyopaque) anyerror![]const u8 {
     return resources.listResourceTemplates();
 }
 
+// GAP-0516: Resource subscriptions are intentionally unsupported.
+//
+// MCP spec §6.2 describes resource subscriptions as optional: servers
+// that do not implement them should surface the fact clearly rather
+// than accept the subscription and never fire notifications. Geode
+// does not yet produce streaming resource-change notifications — the
+// query engine is synchronous request/response and graph topology
+// changes are not wired to a background event producer. Returning
+// `error.MethodNotFound` makes the MCP library emit JSON-RPC error
+// -32601 ("Method not found") per spec §4.5, which is the canonical
+// "this server does not implement this method" signal. (Previously
+// we returned `error.NotImplemented`, which the MCP library maps to
+// -32603 InternalError — misleading, because it suggests a server
+// bug rather than a missing capability. See mcp.zig:2795–2807.)
+//
+// Clients that need change tracking should poll via `readResource`.
+// When Geode gains a graph-topology event producer, swap these
+// handlers to a real implementation.
+// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-001; FEATURE="MCPResourceSubscribe"; ASPECT=UnsupportedSignal; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
 fn subscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
     _ = ctx;
     _ = uri;
-    // Resource subscriptions not yet implemented
-    return error.NotImplemented;
+    return error.MethodNotFound;
 }
 
+// GAP-0516: paired with subscribeResourceHandler. See the note above.
+// CANARY: REQ=REQ-MCP-RESOURCE-SUBSCRIBE-002; FEATURE="MCPResourceUnsubscribe"; ASPECT=UnsupportedSignal; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
 fn unsubscribeResourceHandler(ctx: ?*anyopaque, uri: []const u8) anyerror!void {
     _ = ctx;
     _ = uri;
-    // Resource unsubscriptions not yet implemented
-    return error.NotImplemented;
+    return error.MethodNotFound;
 }
 
 fn listPromptsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
@@ -164,17 +183,37 @@ fn getPromptHandler(ctx: ?*anyopaque, name: []const u8, args_json: ?[]const u8) 
     return prompts.getPrompt(name, args_json);
 }
 
+// GAP-0516: completion/complete is optional per MCP spec §4.4.
+//
+// MCP "completion" is argument-completion for tools and resources
+// (autocomplete parameter values while the user is typing), not
+// general text completion. Geode does not yet maintain a per-tool
+// argument suggestion index, so we return an empty JSON array — a
+// valid "no suggestions available" response. Clients receive a
+// successful response with zero items and fall back to showing
+// their own suggestions or plain text input. This is the spec-
+// compliant way to handle an unimplemented completion provider.
+// CANARY: REQ=REQ-MCP-COMPLETE-001; FEATURE="MCPCompletion"; ASPECT=EmptyProvider; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
 fn completeHandler(ctx: ?*anyopaque, params_json: []const u8) anyerror![]const u8 {
     _ = ctx;
     _ = params_json;
-    // Completion suggestions not yet implemented
     return "[]";
 }
 
+// GAP-0516: logging/setLevel is optional per MCP spec §7.2.
+//
+// Per spec §7.2, servers that do not support dynamic log-level
+// changes MUST still respond successfully to the request — silently
+// ignoring the level string is the correct behaviour. Geode uses
+// slog scoped loggers whose levels are set at startup from
+// `--log-level`; changing them at runtime requires rewiring every
+// scoped logger and is not currently supported. Returning success
+// here means MCP clients that send `logging/setLevel` notifications
+// do not see errors in their logs.
+// CANARY: REQ=REQ-MCP-SETLOGLEVEL-001; FEATURE="MCPSetLogLevel"; ASPECT=SilentSuccess; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-04-11
 fn setLogLevelHandler(ctx: ?*anyopaque, level: []const u8) anyerror!void {
     _ = ctx;
     _ = level;
-    // Log level adjustment - could integrate with slog
 }
 
 // =============================================================================
@@ -213,4 +252,44 @@ test "GeodeMcpServer allows no-auth when explicitly set" {
     defer server.deinit();
 
     try std.testing.expect(server.geode_endpoint != null);
+}
+
+// GAP-0516: lock in the handler behaviour documented above. These
+// tests exercise the handlers directly (not through the full MCP
+// JSON-RPC pipeline) so we can assert the exact error type the
+// server library will see, independent of transport wiring.
+
+test "GAP-0516: subscribeResourceHandler returns MethodNotFound (spec §6.2 unsupported)" {
+    try std.testing.expectError(
+        error.MethodNotFound,
+        subscribeResourceHandler(null, "geode://graph/default"),
+    );
+}
+
+test "GAP-0516: unsubscribeResourceHandler returns MethodNotFound (paired with subscribe)" {
+    try std.testing.expectError(
+        error.MethodNotFound,
+        unsubscribeResourceHandler(null, "geode://graph/default"),
+    );
+}
+
+test "GAP-0516: completeHandler returns empty JSON array (spec §4.4 optional)" {
+    const result = try completeHandler(null, "{\"ref\":{\"type\":\"ref/tool\",\"name\":\"query\"}}");
+    // Must be a valid JSON array literal the MCP client can parse.
+    // "[]" is 2 bytes; anything else (including null-terminated or
+    // object form) would break the response contract.
+    try std.testing.expectEqualStrings("[]", result);
+}
+
+test "GAP-0516: setLogLevelHandler silently accepts any level (spec §7.2)" {
+    // Spec §7.2: servers that don't support dynamic log-level changes
+    // MUST still respond successfully. Silent no-op is compliant.
+    try setLogLevelHandler(null, "debug");
+    try setLogLevelHandler(null, "info");
+    try setLogLevelHandler(null, "warning");
+    try setLogLevelHandler(null, "error");
+    // Also tolerate unknown levels — the server must not crash on a
+    // client that sends a level string it doesn't recognise.
+    try setLogLevelHandler(null, "chatter");
+    try setLogLevelHandler(null, "");
 }

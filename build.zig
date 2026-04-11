@@ -2592,6 +2592,23 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // GAP-0516: MCP server handler behaviour tests are colocated with
+    // the source in `src/mcp/server.zig`. Wiring them into `zig build
+    // test` requires making the whole `src/mcp/` tree test-root, which
+    // surfaces 5+ pre-existing dead-test failures in `lsp.zig` and
+    // `client.zig` (leaks from `getCompletions`/`validateQuery`, an
+    // assertion drift in `getHover`, and a bearer-token conflict in
+    // `client.test.GeodeClient endpoint parsing with IPv6`). Fixing
+    // those is out of scope for GAP-0516; tracked under the GAP-0514
+    // test-hygiene sprint (see `docs/FULL_AUDIT_2026_04_06.md`).
+    //
+    // The functional fix IS in place: handlers return spec-compliant
+    // responses (`error.MethodNotFound` → JSON-RPC -32601, empty JSON
+    // array for completion, silent success for setLogLevel). Inline
+    // regression tests at `src/mcp/server.zig` document the contract
+    // and will activate automatically when the MCP test tree is
+    // rewired during the GAP-0514 sprint.
+
     // REPL tests - temporarily disabled for Zig 0.15.1 migration
     // TODO: Fix File I/O API usage in REPL modules
     // const repl_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_repl.zig"), .target = target, .optimize = optimize }) });
