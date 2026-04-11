@@ -30,14 +30,14 @@
 | GAP-0256 | Unsigned release artifacts, no SBOM | Critical | Blocked |
 | GAP-0510 | RLS expression engine (3,924 lines) is dead code (reopened GAP-0280) | High | Closed |
 | GAP-0513 | Distributed module: 3,540 lines / 10 files with zero tests | High | Closed (2026-04-10) |
-| GAP-0517 | "DEVELOPMENT READY" claim overstated | High | Open |
+| GAP-0517 | "DEVELOPMENT READY" claim overstated | High | Closed (2026-04-11) |
 | GAP-0246 | LDAP/AD authentication | High | Blocked |
 | GAP-0247 | OAuth2/OIDC authentication | Medium | Blocked |
 | GAP-0511 | Audit events hardcode tenant_id=null in production | Medium | Closed (2026-04-11) |
 | GAP-0512 | getAllNodes() returns cross-graph data | Medium | Closed (2026-04-11) |
-| GAP-0514 | 322 CANARY IMPL markers (14.7% untested) | Medium | Open |
+| GAP-0514 | 322 CANARY IMPL markers (14.7% untested) | Medium | Partial (2026-04-11) |
 | GAP-0515 | FLE per-thread tenant/role not cleaned on connection close | Medium | Closed (2026-04-11) |
-| GAP-0516 | MCP server functions return NotImplemented | Low | Open |
+| GAP-0516 | MCP server functions return NotImplemented | Low | Closed (2026-04-11) |
 
 ## Closure Notes (2026-04-11 update)
 
@@ -92,9 +92,53 @@ Six gaps from the 04-06 snapshot were closed between 04-07 and 04-11:
   double-clear idempotency).
 
 Remaining open gaps (from the 04-06 snapshot, still open today):
-GAP-0514 (322 CANARY IMPL markers — broader coverage work),
-GAP-0517 (development-ready claim), GAP-0516 (MCP NotImplemented stubs).
+GAP-0514 (CANARY IMPL coverage — Partial; 9 markers flipped
+2026-04-11, ~358 remain, deferred to multi-session sprint).
 Blocked gaps unchanged: GAP-0256, GAP-0246, GAP-0247.
+
+## Closure Notes (2026-04-11 second pass)
+
+A second pass on 2026-04-11 closed three more gaps from the 04-06
+snapshot:
+
+- **GAP-0517** (High): The "DEVELOPMENT READY" / "production-ready"
+  claim drift across public-facing docs was corrected. `README.md`
+  tagline, status badge, and opening sentence now say
+  "feature-complete single-tenant" and "Development Ready
+  (Single-Tenant)" with an explicit link to the Known Limitations.
+  `CLAUDE.md` project-status header was rewritten to lead with the
+  single-tenant qualifier. Stale limitations (GAP-0509/0510/0513
+  marked as "still open") were updated to reflect current closure
+  state. `docs/README.md`, `docs/SERVER_FEATURES.md`,
+  `docs/DOCKER_OVERVIEW.md`, and `docs/FEATURES_OVERVIEW.md`
+  updated to the same qualifier. Historical audit snapshots
+  (AUDIT_REPORT_*) are left untouched as point-in-time records.
+
+- **GAP-0516** (Low): The four `NotImplemented` / stub handlers in
+  `src/mcp/server.zig` now return spec-compliant responses:
+  `subscribeResourceHandler`/`unsubscribeResourceHandler` return
+  `error.MethodNotFound` (JSON-RPC -32601 per MCP spec §6.2 and
+  §4.5), `completeHandler` returns an empty JSON array (spec §4.4),
+  and `setLogLevelHandler` silently succeeds (spec §7.2). Each
+  handler gained a CANARY EXEMPT marker with a spec-reference
+  rationale. Inline regression tests are included in
+  `src/mcp/server.zig` but will not actually execute until the MCP
+  source tree is rooted for test discovery — rooting surfaces 5+
+  pre-existing dead-test failures in `lsp.zig` and `client.zig`
+  which are out of scope. Tracked for activation in the GAP-0514
+  sprint.
+
+- **GAP-0514** (Medium): Partial closure — flipped 9 CANARY IMPL
+  markers to TESTED by adding a new regression test
+  (`tests/test_path_iterator_bfs_dequeue.zig`, two tests covering
+  BFS O(1) dequeue and zero-length path branches) and by adding
+  `TEST=` references on markers that are already covered by tests
+  landed earlier in this session. IMPL count went from 367 → 358
+  in `tools/canaryscan/status.csv`. The remaining 358 markers are
+  deferred to a multi-session test-writing sprint; CLAUDE.md's
+  Known Limitations now tracks this explicitly with a priority
+  ordering for the sprint (execution.zig + graph_store.zig first,
+  then distributed/server/client).
 
 ### Code Quality
 
