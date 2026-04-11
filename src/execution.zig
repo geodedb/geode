@@ -796,18 +796,15 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
     // Only track data results separately if we have multiple statements
     const track_data_results = program.statements.len > 1;
 
-    for (program.statements) |stmt| {
+    for (program.statements, 0..) |stmt, stmt_idx| {
+        // Determine if this statement is transaction control
+        const is_transaction_control = switch (stmt) {
+            .StartTransaction, .Commit, .Rollback => true,
+            else => false,
+        };
+
         // Free previous result if any
         if (last_result) |*result| {
-            // Transfer entity ownership to the duplicate before freeing
-            // so that shallow-copied Node/Edge pointers in
-            // last_data_result don't become dangling.
-            if (last_data_result) |*dup| {
-                if (dup.owned_graph_entities == null) {
-                    dup.owned_graph_entities = result.owned_graph_entities;
-                    result.owned_graph_entities = null;
-                }
-            }
             result.deinit(allocator);
         }
 
@@ -826,27 +823,37 @@ pub fn executeProgramWithContext(allocator: std.mem.Allocator, program: *const a
             return err;
         };
 
-        // Track last data-bearing result (not transaction control) only for multi-statement programs
-        if (track_data_results) {
-            const is_transaction_control = switch (stmt) {
-                .StartTransaction, .Commit, .Rollback => true,
-                else => false,
-            };
-
-            if (!is_transaction_control) {
-                // Free previous data result if any
-                if (last_data_result) |*result| {
-                    result.deinit(allocator);
+        // Track last data-bearing result (not transaction control) only for multi-statement programs.
+        // Optimization: instead of duplicating every intermediate result, only duplicate
+        // when we actually need to preserve a data result across a transaction control
+        // statement.  For sequences of data statements (CREATE, SET, DELETE, ...) we just
+        // update last_data_result to point at last_result and avoid copying.
+        if (track_data_results and !is_transaction_control) {
+            // Check if the NEXT statement is transaction control (or this is the last statement)
+            const next_is_tx_control = if (stmt_idx + 1 < program.statements.len)
+                switch (program.statements[stmt_idx + 1]) {
+                    .StartTransaction, .Commit, .Rollback => true,
+                    else => false,
                 }
-                // Duplicate the result since we're tracking two pointers
+            else
+                true; // last statement — treat as needing preservation
+
+            if (next_is_tx_control) {
+                // Need to preserve this result because the next statement (COMMIT/ROLLBACK)
+                // will overwrite last_result.  Duplicate it.
+                if (last_data_result) |*prev| {
+                    prev.deinit(allocator);
+                }
                 if (last_result) |res| {
                     last_data_result = try duplicateResult(allocator, res);
                 }
             }
+            // Otherwise: no need to duplicate — if we need a data result later,
+            // we'll duplicate at the boundary.  This avoids O(n) duplications
+            // for programs with hundreds of sequential data statements.
         }
 
         // Propagate transaction state changes to next statement
-        // Check if this statement was a transaction control statement
         switch (stmt) {
             .StartTransaction => |txn| {
                 // Only set Active if no body (no auto-commit)

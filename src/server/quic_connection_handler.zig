@@ -2464,12 +2464,21 @@ fn handleClientMessage(
                         }
                     }
 
-                    var exec_result = execution.executeProgramWithContext(gpa, &parse_result.program, exec_context) catch |err| {
+                    // Use an arena for query execution temporaries.  Multi-statement
+                    // programs (e.g. 700-statement --file chunks) allocate many
+                    // intermediate results; the arena bulk-frees them at scope exit,
+                    // preventing per-connection memory accumulation that previously
+                    // caused OOM crashes under sustained load.
+                    var exec_arena = std.heap.ArenaAllocator.init(gpa);
+                    defer exec_arena.deinit();
+                    const exec_alloc = exec_arena.allocator();
+
+                    var exec_result = execution.executeProgramWithContext(exec_alloc, &parse_result.program, exec_context) catch |err| {
                         const info = proto_util.mapError(err);
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
-                    defer exec_result.deinit(gpa);
+                    defer exec_result.deinit(exec_alloc);
                     const store = graph_store.getGlobalStore(gpa);
 
                     // CANARY: REQ=REQ-SEC-RLS-ALGO-001; FEATURE="RLS Algorithm Filtering"; ASPECT=QUICWire; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
