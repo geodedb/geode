@@ -357,6 +357,12 @@ pub fn build(b: *std.Build) void {
 
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "version", version);
+    const enable_gpa_debug = b.option(
+        bool,
+        "enable-gpa-debug",
+        "Use GeneralPurposeAllocator(.{}){} for the server main allocator (leak detection; default: smp_allocator)",
+    ) orelse false;
+    build_opts.addOption(bool, "enable_gpa_debug", enable_gpa_debug);
     const build_options_mod = build_opts.createModule();
 
     const lib = b.addLibrary(.{
