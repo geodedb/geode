@@ -6623,10 +6623,41 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
         } else {
-            // Handle simple node patterns (no relationships)
-            var iter = store.nodes.iterator();
-            while (iter.next()) |entry| {
-                const node = entry.value_ptr;
+            // Handle simple node patterns (no relationships).
+            // GAP-0528 PERF: Use the label index to enumerate candidates when
+            // labels are present. Previously this path did a full store scan,
+            // causing per-mutation query time to grow linearly with the number
+            // of nodes ever created in the store (even after deletes, the
+            // MATCH candidate loop still scanned all live nodes). That turned
+            // the `txn-complex-operations-chunked` spec from a fast test into
+            // a 120 s timeout once earlier tests had populated ~6 000 nodes.
+            // Label-indexed lookup restores the O(|label posting list|)
+            // complexity that executeMultiNodeMatch already uses.
+            var simple_node_candidates: std.ArrayList(u64) = .empty;
+            defer simple_node_candidates.deinit(allocator);
+            var use_label_candidates = false;
+            if (match_labels.len > 0) {
+                var label_ids = try store.getNodesByLabels(allocator, filter_graph, match_labels, filter_tenant);
+                defer label_ids.deinit(allocator);
+                try simple_node_candidates.ensureTotalCapacity(allocator, label_ids.items.len);
+                for (label_ids.items) |nid| {
+                    simple_node_candidates.appendAssumeCapacity(nid);
+                }
+                use_label_candidates = true;
+            }
+
+            var full_iter = store.nodes.iterator();
+            var cand_idx: usize = 0;
+            while (true) {
+                const node: *graph_store.Node = if (use_label_candidates) blk: {
+                    if (cand_idx >= simple_node_candidates.items.len) break;
+                    const nid = simple_node_candidates.items[cand_idx];
+                    cand_idx += 1;
+                    break :blk store.nodes.getPtr(nid) orelse continue;
+                } else blk: {
+                    const entry = full_iter.next() orelse break;
+                    break :blk entry.value_ptr;
+                };
 
                 // CANARY: REQ=REQ-MULTI-GRAPH-023; FEATURE="MultiGraphIsolation"; ASPECT=SimpleNodeFilter; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
                 // Filter by graph - only include nodes from the current graph
@@ -6634,8 +6665,11 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(allocator, node.*)) continue;
 
-                // Filter by labels if specified
-                if (match_labels.len > 0) {
+                // Filter by labels if specified.
+                // When label-indexed candidates are used, the posting list is
+                // already filtered by label so this check is redundant; keep
+                // it only for the full-scan fallback to preserve behaviour.
+                if (!use_label_candidates and match_labels.len > 0) {
                     var has_all_labels = true;
                     for (match_labels) |required_label| {
                         var found = false;

@@ -80,7 +80,14 @@ pub const Pool = struct {
     chunk_size_estimator: AdaptiveChunkEstimator,
 
     pub fn init(allocator: std.mem.Allocator, worker_count: usize) !Pool {
-        const count = if (worker_count == 0) std.Thread.getCpuCount() catch 4 else worker_count;
+        // Cap auto-detected worker count at 16 to bound per-thread memory
+        // growth (~10MB per warmed worker on Zig 0.15.2).  Callers that
+        // truly need more parallelism can pass an explicit worker_count.
+        const auto_max: usize = 16;
+        const count = if (worker_count == 0)
+            @min(std.Thread.getCpuCount() catch 4, auto_max)
+        else
+            worker_count;
         var pool = Pool{
             .allocator = allocator,
             .spice_pool = SpicePool.init(allocator, count),

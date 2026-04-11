@@ -791,6 +791,13 @@ pub fn build(b: *std.Build) void {
     multihop_tests.root_module.addImport("json", json_mod);
     const run_multihop_tests = b.addRunArtifact(multihop_tests);
 
+    // REGRESSION: MATCH+SET/REMOVE label-indexed candidate enumeration
+    // (txn-complex-operations-chunked 120 s timeout regression guard)
+    const match_set_label_scan_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_match_set_label_scan_regression.zig"), .target = target, .optimize = optimize }) });
+    match_set_label_scan_tests.root_module.addImport("geode", root_mod);
+    match_set_label_scan_tests.root_module.addImport("json", json_mod);
+    const run_match_set_label_scan_tests = b.addRunArtifact(match_set_label_scan_tests);
+
     // GAP-0426: InitContext self-referential pointer regression tests
     const init_ctx_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_init_context_regression.zig"), .target = target, .optimize = optimize }) });
     init_ctx_tests.root_module.addImport("geode", root_mod);
@@ -1156,6 +1163,7 @@ pub fn build(b: *std.Build) void {
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
     test_step.dependOn(&run_multihop_tests.step);
+    test_step.dependOn(&run_match_set_label_scan_tests.step);
     test_step.dependOn(&run_init_ctx_tests.step);
     test_step.dependOn(&run_proc_case_tests.step);
     test_step.dependOn(&run_confusable_tests.step);

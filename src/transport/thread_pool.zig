@@ -172,7 +172,15 @@ pub const ThreadPool = struct {
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
         const num = if (config.num_threads == 0) blk: {
             const cpus = std.Thread.getCpuCount() catch 4;
-            break :blk @max(cpus, 2);
+            // Cap auto-detected worker count.  Each worker warms thread-local
+            // state on first use (~10MB), so scaling linearly with CPU count
+            // causes RSS to balloon on large-core-count machines and pushes
+            // the server past process memory limits under sustained load.
+            // 16 workers is plenty for a query-routing front-end; CPU-bound
+            // work is dispatched to the separate parallel execution pool.
+            // Callers needing more can set num_threads explicitly.
+            const auto_max: usize = 16;
+            break :blk @max(@min(cpus, auto_max), 2);
         } else config.num_threads;
 
         const queue = try allocator.create(Queue);

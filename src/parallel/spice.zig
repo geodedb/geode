@@ -22,14 +22,27 @@ pub const SpicePool = struct {
     started: bool = false,
     config: ThreadPoolConfig,
 
-    /// Initialize a SpicePool with the given allocator
-    /// Use worker_count = null for automatic detection based on CPU count
+    /// Initialize a SpicePool with the given allocator.
+    /// Use `worker_count = null` for automatic detection.
+    /// Auto-detect is capped at 16 workers — each spice worker allocates
+    /// ~16 MB of thread stack via std.Thread.spawn's default, so scaling
+    /// linearly with CPU count wastes hundreds of MB of address space on
+    /// large-core-count machines without proportional throughput gain for
+    /// geode's workload.  Callers needing more parallelism can pass an
+    /// explicit count.
     pub fn init(allocator: std.mem.Allocator, worker_count: ?usize) SpicePool {
+        const auto_max: usize = 16;
+        const effective_count: ?usize = if (worker_count) |c|
+            c
+        else blk: {
+            const cpus = std.Thread.getCpuCount() catch 4;
+            break :blk @min(cpus, auto_max);
+        };
         return .{
             .allocator = allocator,
             .pool = ThreadPool.init(allocator),
             .config = .{
-                .background_worker_count = worker_count,
+                .background_worker_count = effective_count,
                 .heartbeat_interval = 100 * std.time.ns_per_us,
             },
         };
