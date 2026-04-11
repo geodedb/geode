@@ -702,3 +702,73 @@ test "clearCurrentThreadState removes per-thread role and tenant" {
         try testing.expect(per_thread_tenants.get(std.Thread.getCurrentId()) == null);
     }
 }
+
+// GAP-0515: Thread reuse isolation regression test.
+//
+// The earlier test covers the single direction (set → clear → empty). The
+// attack surface GAP-0515 flagged is specifically the thread-pool reuse
+// case: connection handler thread T runs for tenant A, cleanup fires,
+// then the same thread T is immediately reused for tenant B. Nothing
+// from tenant A's FLE context must survive into tenant B's execution
+// — including after B's own cleanup, a hypothetical C must likewise
+// see a clean slate. Also verifies that a redundant second clear is
+// idempotent (defer blocks can fire twice in some error paths).
+test "GAP-0515: thread reuse isolates FLE context across connections" {
+    const testing = std.testing;
+    const tid = std.Thread.getCurrentId();
+
+    // --- Connection 1 (tenant "alpha", role "admin") ---
+    setCurrentUserRole("admin");
+    setCurrentTenantId("alpha");
+    try testing.expectEqualStrings("alpha", getCurrentTenantId());
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        const r = per_thread_roles.get(tid) orelse return error.RoleNotSet;
+        try testing.expectEqualStrings("admin", r);
+    }
+
+    // Simulated defer block: clear state on connection close.
+    clearCurrentThreadState();
+
+    // --- Connection 2 reuses the same thread (tenant "beta", role "user") ---
+    // On entry the state MUST be clean — no leak from connection 1.
+    try testing.expectEqualStrings("default", getCurrentTenantId());
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        try testing.expect(per_thread_roles.get(tid) == null);
+    }
+
+    setCurrentUserRole("user");
+    setCurrentTenantId("beta");
+
+    // Reading back must return connection 2's values, not connection 1's.
+    try testing.expectEqualStrings("beta", getCurrentTenantId());
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        const r = per_thread_roles.get(tid) orelse return error.RoleNotSet;
+        try testing.expectEqualStrings("user", r);
+        // And crucially: the old "admin" / "alpha" values are gone.
+        try testing.expect(!std.mem.eql(u8, r, "admin"));
+    }
+
+    // --- Connection 2 cleanup ---
+    clearCurrentThreadState();
+
+    // Idempotency: double-clear must not panic or leave state in a bad
+    // shape. The QUIC handler's errdefer path can fire in addition to the
+    // defer, so the function must tolerate being called twice.
+    clearCurrentThreadState();
+
+    // After the double-clear, state is empty. A fresh connection 3 on
+    // the same thread starts from the same clean slate.
+    try testing.expectEqualStrings("default", getCurrentTenantId());
+    {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+        try testing.expect(per_thread_roles.get(tid) == null);
+        try testing.expect(per_thread_tenants.get(tid) == null);
+    }
+}
