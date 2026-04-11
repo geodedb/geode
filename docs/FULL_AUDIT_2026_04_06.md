@@ -26,18 +26,75 @@
 
 | Gap-ID | Title | Severity | Status |
 |--------|-------|----------|--------|
-| GAP-0509 | Cross-tenant query isolation NOT enforced (reopened GAP-0279) | Critical | Open |
+| GAP-0509 | Cross-tenant query isolation NOT enforced (reopened GAP-0279) | Critical | Closed (2026-04-11) |
 | GAP-0256 | Unsigned release artifacts, no SBOM | Critical | Blocked |
 | GAP-0510 | RLS expression engine (3,924 lines) is dead code (reopened GAP-0280) | High | Closed |
-| GAP-0513 | Distributed module: 3,540 lines / 10 files with zero tests | High | Open |
+| GAP-0513 | Distributed module: 3,540 lines / 10 files with zero tests | High | Closed (2026-04-10) |
 | GAP-0517 | "DEVELOPMENT READY" claim overstated | High | Open |
 | GAP-0246 | LDAP/AD authentication | High | Blocked |
 | GAP-0247 | OAuth2/OIDC authentication | Medium | Blocked |
-| GAP-0511 | Audit events hardcode tenant_id=null in production | Medium | Open |
-| GAP-0512 | getAllNodes() returns cross-graph data | Medium | Open |
+| GAP-0511 | Audit events hardcode tenant_id=null in production | Medium | Closed (2026-04-11) |
+| GAP-0512 | getAllNodes() returns cross-graph data | Medium | Closed (2026-04-11) |
 | GAP-0514 | 322 CANARY IMPL markers (14.7% untested) | Medium | Open |
-| GAP-0515 | FLE per-thread tenant/role not cleaned on connection close | Medium | Open |
+| GAP-0515 | FLE per-thread tenant/role not cleaned on connection close | Medium | Closed (2026-04-11) |
 | GAP-0516 | MCP server functions return NotImplemented | Low | Open |
+
+## Closure Notes (2026-04-11 update)
+
+Six gaps from the 04-06 snapshot were closed between 04-07 and 04-11:
+
+- **GAP-0509** (Critical): tenant filter verified present in all 17 full-
+  scan sites and 7 label-indexed sites in `match_operations.zig`. Live
+  leak in `listNodeLabels`/`SHOW TABLES` fixed with a `filter_tenant`
+  parameter pulled from `ExecutionContext`. Dead-code warning added to
+  `evaluateAggregation*` functions. Regression cover in
+  `tests/test_gap0509_tenant_isolation.zig` (4 tests, mutation-tested).
+
+- **GAP-0510** (High): wiring landed in commit `555d4414` on 2026-04-07
+  (`setGlobalExprRLSEngine` is called during server startup and
+  `passesRLSExprFilter` reads it from the match loop). Regression cover
+  in `tests/test_rls_expr_engine_wiring.zig` (3 tests, mutation-tested).
+
+- **GAP-0511** (Medium): enrichment fallback in `audit.zig:401-403`
+  (from commit `61d51df28`, 2026-04-05) pulls `tenant_id` from the
+  per-thread audit context when the caller passes null. Regression
+  cover in `tests/test_audit_tenant_enrichment.zig` (3 tests, mutation-
+  tested). Side effect: `tests/test_audit_chain.zig` was compile-checked
+  only (never actually run) due to a missing `b.addRunArtifact` call in
+  `build.zig`; wired up and its stale assertions updated to match the
+  current canonical JSON format.
+
+- **GAP-0512** (Medium): `getEdgesByType` now takes a
+  `graph_name: ?[]const u8` parameter. When set, it does a single keyed
+  lookup on `edge_type_index` instead of iterating every graph;
+  `match_operations.zig` passes the active `filter_graph`. Regression
+  cover in `tests/test_graph_isolation_edge_iteration.zig` (3 tests).
+
+- **GAP-0513** (High): closed by the 2026-04-10 gap closure pass (see
+  `docs/DISTRIBUTED_GAP_ANALYSIS.md` — "all gaps closed as of 2026-04-10").
+  The 04-07 audit noted the file count had already dropped from 10 to 1
+  (`query_transport.zig`), and that remaining file received coverage
+  via `src/distributed/test_query_transport_node_registry.zig` (2 tests
+  wired into `build.zig`). Commit `68ff42c4` closed all 49 distributed
+  module gaps including 22 EXEMPT→IMPL CANARY updates and 10 phantom
+  TEST reference fixes. Residual risk: the existing registry test
+  uses an inline copy of `NodeRegistry` rather than importing the real
+  module, so a structural change to the source would not be caught
+  automatically. Tracked as low-risk (the sub-struct is a pure data
+  container with no evolving surface area).
+
+- **GAP-0515** (Medium): `clearCurrentThreadState` in
+  `fle_integration.zig` (added in the GAP-0285 work) was already wired
+  into the QUIC handler's defer block (`quic_connection_handler.zig:944`)
+  and the gRPC server cleanup path (`grpc_server.zig:248`). Thread
+  reuse isolation regression test added in `fle_integration.zig:705`
+  (single-thread sequential: tenant A → clear → tenant B, including
+  double-clear idempotency).
+
+Remaining open gaps (from the 04-06 snapshot, still open today):
+GAP-0514 (322 CANARY IMPL markers — broader coverage work),
+GAP-0517 (development-ready claim), GAP-0516 (MCP NotImplemented stubs).
+Blocked gaps unchanged: GAP-0256, GAP-0246, GAP-0247.
 
 ### Code Quality
 
