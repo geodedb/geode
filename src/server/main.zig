@@ -699,6 +699,7 @@ pub fn main() !void {
         phase_start = std.time.milliTimestamp();
         const pool = thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 0, // Auto-detect based on CPU count
+            .stack_size = 2 * 1024 * 1024, // 2MB per thread (default 16MB causes ~19MB RSS growth per faulted stack)
         }) catch |err| {
             log.err("Failed to initialize connection thread pool, falling back to sync mode", &.{
                 Attr.string("error", @errorName(err)),
