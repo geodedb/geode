@@ -400,7 +400,7 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
     // Track known graph names (including empty graphs)
     graphs: std.StringHashMap(void),
-    // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
     // Issue #391: Label-based index for O(1) node lookups instead of O(n) full table scans
     // Maps "graph_name:label" composite key to list of node IDs
     label_index: std.StringHashMap(std.ArrayList(u64)),
@@ -1063,7 +1063,7 @@ pub const GraphStore = struct {
         };
 
         try self.nodes.put(id, node);
-        // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, id);
         }
@@ -1349,7 +1349,7 @@ pub const GraphStore = struct {
         return .not_found;
     }
 
-    // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
     // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
     pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
         // Create composite key "graph_name:label"

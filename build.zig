@@ -2592,6 +2592,14 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // GAP-0514 partial: flip 4 BFS PERF-P1-001 CANARY markers (execution.zig)
+    // from IMPL → TESTED by exercising PathIterator via variable-length MATCH.
+    const gap0514_bfs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_path_iterator_bfs_dequeue.zig"), .target = target, .optimize = optimize });
+    gap0514_bfs_test_mod.addImport("geode", root_mod);
+    const gap0514_bfs_tests = b.addTest(.{ .root_module = gap0514_bfs_test_mod });
+    const run_gap0514_bfs_tests = b.addRunArtifact(gap0514_bfs_tests);
+    test_step.dependOn(&run_gap0514_bfs_tests.step);
+
     // GAP-0516: MCP server handler behaviour tests are colocated with
     // the source in `src/mcp/server.zig`. Wiring them into `zig build
     // test` requires making the whole `src/mcp/` tree test-root, which

@@ -408,18 +408,20 @@ pub const ExecutionContext = struct {
     // S1: Opaque pointer to the RLS filter engine for label-based row filtering.
     // Currently used by the post-execution filter in quic_connection_handler; included
     // here for future in-execution RLS integration (e.g., predicate push-down).
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-006; FEATURE="RLS Query Enforcement"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-04-11
     rls_engine: ?*anyopaque = null,
     // GAP-0510: Security context for in-execution RLS expression evaluation.
     // Contains user identity, roles, and session attributes needed by checkRowAccess().
-    // CANARY: REQ=REQ-SEC-RLS-WIRE-007; FEATURE="RLS Query Enforcement"; ASPECT=SecurityContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-06
+    // CANARY: REQ=REQ-SEC-RLS-WIRE-007; FEATURE="RLS Query Enforcement"; ASPECT=SecurityContext; STATUS=TESTED; TEST=tests/test_rls_expr_engine_wiring.zig; OWNER=security; UPDATED=2026-04-11
     security_context: ?*anyopaque = null,
     // GAP-0280: Pointer to the shared timeseries Store for timeseries.value() lookups.
     // Set at server startup and shared across all connections (read-only during queries).
     // CANARY: REQ=REQ-TIMESERIES-WIRE-002; FEATURE="TimeseriesServerWiring"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/eval.zig; OWNER=engine; UPDATED=2026-04-01
     timeseries_store: ?*@import("timeseries/timeseries.zig").Store = null,
-    // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
-    // GAP-0281: Session tenant_id threaded through to FLE encryption hooks
+    // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-04-11
+    // GAP-0281: Session tenant_id threaded through to FLE encryption hooks.
+    // Covered by the GAP-0515 thread-reuse regression test in fle_integration.zig
+    // and the GAP-0509 tenant isolation tests in tests/test_gap0509_tenant_isolation.zig.
     tenant_id: ?[]const u8 = null,
     // GAP-0511: Queued advanced index rebuilds to be flushed at the end of statement execution
     pending_index_rebuilds: ?*std.StringHashMap(void) = null,
@@ -1788,7 +1790,7 @@ pub const PathIterator = struct {
     // Multiple edges from one node can each produce a qualifying path; we yield
     // them one at a time across successive next() calls.
     pending_results: std.ArrayList(VariableLengthPath),
-    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1FrontIndex; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1FrontIndex; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
     // Front-index offsets for O(1) dequeue. Instead of orderedRemove(0) which
     // shifts all elements (O(n)), we advance a front index and compact when
     // the consumed portion exceeds half the backing array.
@@ -1851,7 +1853,7 @@ pub const PathIterator = struct {
         self.visited_states.deinit();
     }
 
-    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1QueueDequeue; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1QueueDequeue; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
     /// O(1) dequeue from the BFS queue. Returns the front item and advances the
     /// front index. Compacts the backing array when the consumed portion exceeds
     /// half the total length, keeping amortized cost O(1).
@@ -1879,7 +1881,7 @@ pub const PathIterator = struct {
         return self.queue.items.len - self.queue_front;
     }
 
-    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDequeue; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+    // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDequeue; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
     /// O(1) dequeue from the pending results buffer. Same front-index strategy
     /// as queueDequeue.
     fn pendingDequeue(self: *PathIterator) VariableLengthPath {
@@ -1965,12 +1967,12 @@ pub const PathIterator = struct {
 
     /// Advance BFS until a qualifying path is found, return it.
     /// Caller owns the returned VariableLengthPath. Returns null when exhausted.
-    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+    // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=BFSExpansion; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
     // CANARY: REQ=REQ-GQL-VARLEN-REVERSE-001; FEATURE="VariableLengthPaths"; ASPECT=ReverseTraversal; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
     pub fn next(self: *PathIterator) !?VariableLengthPath {
         if (self.done) return null;
 
-        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+        // CANARY: REQ=REQ-GQL-ZERO-LEN-PATH-001; FEATURE="ZeroLengthPaths"; ASPECT=SelfMatch; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
         // B07 Fix: When min_len=0, the start node itself is a valid 0-length path (self-match)
         if (self.pending_zero_path) {
             self.pending_zero_path = false;
@@ -1981,13 +1983,13 @@ pub const PathIterator = struct {
         }
 
         // Drain any buffered results from a previous expansion step (O(1) dequeue)
-        // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDrain; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
+        // CANARY: REQ=PERF-P1-001; FEATURE="BFSDequeue"; ASPECT=O1PendingDrain; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
         if (self.pendingLen() > 0) {
             return self.pendingDequeue();
         }
 
         while (self.queueLen() > 0) {
-            // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-09
+            // CANARY: REQ=REQ-GQL-080; FEATURE="VariableLengthPaths"; ASPECT=SafetyGuard; STATUS=TESTED; TEST=tests/test_path_iterator_bfs_dequeue.zig; OWNER=engine; UPDATED=2026-04-11
             self.iteration_count += 1;
             if (self.iteration_count > max_iterations or self.queueLen() > max_queue_size) {
                 // Clean up remaining paths in queue when hitting limits
