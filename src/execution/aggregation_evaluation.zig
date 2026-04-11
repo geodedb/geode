@@ -626,6 +626,17 @@ pub fn evaluateNodeExpression(allocator: std.mem.Allocator, expr: ast.Expr, node
     }
 }
 
+// GAP-0509 WARNING: `evaluateAggregation` and `evaluateAggregationWithLabels`
+// iterate `store.nodes` directly without applying any tenant filter. These
+// functions are currently unreferenced in the live execution path
+// (`evaluateGroupAggregation` is the live entry point — it takes a
+// pre-filtered `[]*Node` and relies on the MATCH loop to have already
+// applied `passesTenantFilter`). Do NOT wire them into the query execution
+// path without adding a `filter_tenant` argument and filtering node
+// visits by `node.tenant_id` first, or aggregations will silently cross
+// tenant boundaries. A future refactor should either delete these or
+// take the tenant filter as a parameter.
+// CANARY: REQ=REQ-GAP-0509-AGG-TENANT-WARNING; FEATURE="AggregationTenantWarning"; ASPECT=DeadCodeGuard; STATUS=IMPL; OWNER=security; UPDATED=2026-04-11
 pub fn evaluateAggregationWithLabels(allocator: std.mem.Allocator, expr: ast.Expr, store: *graph_store.GraphStore, match_labels: [][]const u8) !Value {
     switch (expr) {
         .Call => |call| {

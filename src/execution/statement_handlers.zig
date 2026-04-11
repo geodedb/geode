@@ -19,13 +19,36 @@ const executeStatementWithContext = execution.executeStatementWithContext;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
-fn listNodeLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) ![][]const u8 {
+// GAP-0509: SHOW TABLES previously leaked label metadata across tenants.
+// `listNodeLabels` walked every node in the store and accumulated labels
+// into a single de-duplicated set, so a tenant running `SHOW TABLES` on
+// graph X saw labels contributed by every other tenant on the same graph
+// — a useful reconnaissance primitive for discovering the existence of
+// unrelated entity types. Filtering nodes by tenant_id before collecting
+// labels restores the tenant isolation property.
+//
+// `filter_tenant == null` preserves the admin / cross-tenant listing
+// (for SHOW TABLES without a session, or explicit admin tooling).
+// CANARY: REQ=REQ-GAP-0509-SHOW-TABLES-TENANT; FEATURE="ShowTablesTenantIsolation"; ASPECT=LabelEnumeration; STATUS=TESTED; TEST=tests/test_gap0509_tenant_isolation.zig:1; OWNER=security; UPDATED=2026-04-11
+fn listNodeLabels(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    filter_tenant: ?[]const u8,
+) ![][]const u8 {
     var label_set = std.StringHashMap(void).init(allocator);
     defer label_set.deinit();
 
     var node_it = store.nodes.iterator();
     while (node_it.next()) |entry| {
         const node = entry.value_ptr.*;
+
+        // Apply tenant isolation when a tenant filter is active. Without
+        // this, SHOW TABLES leaks the existence of labels used by other
+        // tenants sharing the same graph.
+        if (filter_tenant) |tid| {
+            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+        }
+
         for (node.labels) |label| {
             const label_copy = try allocator.dupe(u8, label);
             errdefer allocator.free(label_copy);
@@ -155,7 +178,13 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // CANARY: REQ=REQ-SHOW-TABLES-001; FEATURE="SHOW TABLES"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
             // In a graph database, node labels act as "tables"
             // Return unique node labels from the graph storage
-            const labels = listNodeLabels(allocator, read_store) catch &.{};
+            // GAP-0509: pass the session tenant filter so SHOW TABLES
+            // only returns labels the current tenant actually uses.
+            const session_tenant: ?[]const u8 = if (context.tenant_id) |tid|
+                (if (std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) null else tid)
+            else
+                null;
+            const labels = listNodeLabels(allocator, read_store, session_tenant) catch &.{};
             defer {
                 for (labels) |label| {
                     allocator.free(label);
