@@ -42,6 +42,7 @@ def find_canary_markers(repo_path: Path) -> list[dict[str, str]]:
             or "/.worktrees" in root
             or "/.claude/worktrees" in root
             or "/zig-out" in root
+            or "/docs/superpowers/plans" in root
         ):
             continue
 
