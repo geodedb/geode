@@ -121,3 +121,46 @@ test "GAP-0514 REQ-BINARY-PERSIST-EDGE-001: createEdge marks store dirty" {
 
     try testing.expect(h.store.isDirty());
 }
+
+// REQ-PERF-EDGE-ADJ-001 (field) + REQ-PERF-EDGE-ADJ-002 (maintenance):
+// The adjacency indexes (outgoing_edges, incoming_edges) are kept
+// in sync with the primary edge store so that DELETE DETACH and
+// traversal queries don't need to scan every edge. The field and
+// its maintenance are separate markers but share one test.
+test "GAP-0514 REQ-PERF-EDGE-ADJ: createEdge populates outgoing and incoming indexes" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    const labels = [_][]const u8{"N"};
+    const a = try h.store.createNode(&labels);
+    const b = try h.store.createNode(&labels);
+    const c = try h.store.createNode(&labels);
+
+    const e_ab = try h.store.createEdge(a, b, "LINK");
+    const e_ac = try h.store.createEdge(a, c, "LINK");
+
+    // a has two outgoing edges (→b and →c), no incoming edges.
+    const a_out = h.store.getOutgoingEdgeIds(a) orelse return error.MissingOutgoing;
+    try testing.expectEqual(@as(usize, 2), a_out.len);
+    // Both edge IDs must be present (order-independent).
+    var saw_ab = false;
+    var saw_ac = false;
+    for (a_out) |eid| {
+        if (eid == e_ab) saw_ab = true;
+        if (eid == e_ac) saw_ac = true;
+    }
+    try testing.expect(saw_ab);
+    try testing.expect(saw_ac);
+    try testing.expect(h.store.getIncomingEdgeIds(a) == null);
+
+    // b has one incoming edge (from a), no outgoing.
+    const b_in = h.store.getIncomingEdgeIds(b) orelse return error.MissingIncoming;
+    try testing.expectEqual(@as(usize, 1), b_in.len);
+    try testing.expectEqual(e_ab, b_in[0]);
+    try testing.expect(h.store.getOutgoingEdgeIds(b) == null);
+
+    // c symmetric to b.
+    const c_in = h.store.getIncomingEdgeIds(c) orelse return error.MissingIncoming;
+    try testing.expectEqual(@as(usize, 1), c_in.len);
+    try testing.expectEqual(e_ac, c_in[0]);
+}

@@ -412,7 +412,7 @@ pub const GraphStore = struct {
     // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
     edge_type_index: std.StringHashMap(std.ArrayList(u64)),
-    // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+    // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
     outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
     incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
@@ -2549,7 +2549,7 @@ pub const GraphStore = struct {
 
         try self.edges.put(id, edge);
 
-        // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-28
+        // CANARY: REQ=REQ-PERF-EDGE-ADJ-002; FEATURE="EdgeAdjacencyIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
         // Issue #392: Maintain adjacency indexes for fast DELETE DETACH
         try self.addToAdjacencyIndex(from_id, to_id, id);
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
