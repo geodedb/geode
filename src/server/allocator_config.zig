@@ -17,11 +17,12 @@
 // `zig build -Denable-gpa-debug`.
 //
 // LIFETIME NOTE:
-// The `.gpa_debug` branch heap-allocates the GeneralPurposeAllocator so that
-// `Handle.allocator` can keep a stable pointer to it.  Stack-allocating the
-// GPA inside init() and returning the Handle by value would leave the
-// caller's `allocator` field pointing at a defunct stack frame.  Because
-// heap allocation can fail, `Handle.init()` returns `!Handle`.
+// The `.gpa_debug` branch heap-allocates the GeneralPurposeAllocator from the
+// process-wide `smp_allocator` so that `Handle.allocator` can keep a stable
+// pointer to it. Stack-allocating the GPA inside init() and returning the
+// Handle by value would leave the caller's `allocator` field pointing at a
+// defunct stack frame. Because heap allocation can fail, `Handle.init()`
+// returns `!Handle`.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -50,7 +51,7 @@ pub const Handle = struct {
         switch (mode) {
             .smp => return .{ .allocator = std.heap.smp_allocator },
             .gpa_debug => {
-                const gpa_ptr = try std.heap.page_allocator.create(std.heap.GeneralPurposeAllocator(.{}));
+                const gpa_ptr = try std.heap.smp_allocator.create(std.heap.GeneralPurposeAllocator(.{}));
                 gpa_ptr.* = std.heap.GeneralPurposeAllocator(.{}){};
                 return .{
                     .gpa_ptr = gpa_ptr,
@@ -65,7 +66,7 @@ pub const Handle = struct {
             if (gpa_ptr.deinit() == .leak) {
                 std.log.warn("allocator_config: GeneralPurposeAllocator reported memory leaks at shutdown", .{});
             }
-            std.heap.page_allocator.destroy(gpa_ptr);
+            std.heap.smp_allocator.destroy(gpa_ptr);
         }
     }
 };
