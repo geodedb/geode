@@ -93,7 +93,8 @@ Six gaps from the 04-06 snapshot were closed between 04-07 and 04-11:
 
 Remaining open gaps (from the 04-06 snapshot, still open today):
 GAP-0514 (CANARY IMPL coverage — Partial; 9 markers flipped
-2026-04-11, ~358 remain, deferred to multi-session sprint).
+2026-04-11, then +8 via Phase 1A (graph_store.zig), ~350 remain,
+deferred to multi-session sprint for the remaining phases).
 Blocked gaps unchanged: GAP-0256, GAP-0246, GAP-0247.
 
 ## Closure Notes (2026-04-11 second pass)
@@ -139,6 +140,21 @@ snapshot:
   Known Limitations now tracks this explicitly with a priority
   ordering for the sprint (execution.zig + graph_store.zig first,
   then distributed/server/client).
+
+  - **GAP-0514 Phase 1A** (2026-04-11): Flipped 8 additional
+    `graph_store.zig` markers (`REQ-BINARY-PERSIST-DIRTY-001`,
+    `-002`, `REQ-BINARY-PERSIST-EDGE-001`, `REQ-PERF-EDGE-ADJ-001`,
+    `-002`, `REQ-MULTI-GRAPH-008` ×2, `REQ-STORAGE-ENGINE-PHASE2-002`)
+    to TESTED via `tests/test_gap0514_graph_store_regression.zig`
+    (6 tests, each mutation-tested during development to prove the
+    assertion is load-bearing). IMPL count dropped 358 → 350.
+    Related infrastructure fix: `tools/status_generate.py` now
+    skips `docs/superpowers/plans/` so literal CANARY examples
+    embedded in plan markdown don't pollute `docs/status.csv`
+    (commit `86e2a8ca`). Next phase: `execution.zig` markers
+    (catalog fastpath, DSN graph binding, path modes, varlen
+    reverse, graph stats, CTE) — needs catalog-singleton /
+    execution-context test infrastructure.
 
 ### Code Quality
 
