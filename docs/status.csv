@@ -3863,7 +3863,7 @@ REQ-STORAGE-COMPACT-001,Storage,Compaction,TESTED,,,storage,2026-01-16,tests/tes
 REQ-STORAGE-EDGE-001,Storage,EdgeStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-STORAGE-EDGE-001,Storage,EdgeStorage,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-STORAGE-ENGINE-PHASE2-001,EngineBackedPersistence,LegacyRemoval,IMPL,,,storage,2026-03-28,src/graph_store.zig
-REQ-STORAGE-ENGINE-PHASE2-002,EngineBackedPersistence,SaveToFile,IMPL,,,storage,2026-04-02,src/graph_store.zig
+REQ-STORAGE-ENGINE-PHASE2-002,EngineBackedPersistence,SaveToFile,TESTED,,,storage,2026-04-11,src/graph_store.zig
 REQ-STORAGE-ENGINE-PHASE2-003,EngineBackedPersistence,LegacyCleanup,IMPL,,,storage,2026-04-02,src/graph_store.zig
 REQ-STORAGE-ENGINE-PHASE2-004,EngineBackedPersistence,LoadFromAdapter,IMPL,,,storage,2026-03-28,src/graph_store.zig
 REQ-STORAGE-ENGINE-PHASE2-005,EngineBackedPersistence,LoadFromFile,IMPL,,,storage,2026-03-28,src/graph_store.zig

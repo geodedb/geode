@@ -3840,7 +3840,7 @@ pub const GraphStore = struct {
         _ = self;
     }
 
-    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-002; FEATURE="EngineBackedPersistence"; ASPECT=SaveToFile; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-02
+    // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-002; FEATURE="EngineBackedPersistence"; ASPECT=SaveToFile; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     // Save delegates to adapter checkpoint. Public ID mappings are now stored
     // inside graph-storage properties rather than a sidecar id_map.dat file.
     pub fn saveToFile(self: *GraphStore) !void {

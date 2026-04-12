@@ -202,3 +202,35 @@ test "GAP-0514 REQ-MULTI-GRAPH-008: createNodeWithGraph registers graph name" {
     try testing.expect(h.store.graphs.contains("beta"));
     try testing.expectEqual(baseline + 2, h.store.graphs.count());
 }
+
+// REQ-STORAGE-ENGINE-PHASE2-002: saveToFile is the public save
+// entry point. Even when the storage adapter is unavailable (unit
+// test context with no global_adapter wired), saveToFile must
+// still clear the dirty flag and clean up legacy sidecar files so
+// the next persistence-loop tick doesn't redundantly re-save.
+test "GAP-0514 REQ-STORAGE-ENGINE-PHASE2-002: saveToFile clears dirty flag" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    // Dirty the store.
+    const labels = [_][]const u8{"N"};
+    _ = try h.store.createNode(&labels);
+    try testing.expect(h.store.isDirty());
+
+    // Save. No adapter is wired in this harness, so saveToFile
+    // takes the "no-op checkpoint + clear dirty + cleanup stale
+    // sidecars" path. This is the exact behaviour the persistence
+    // loop relies on when running ahead of any configured
+    // adapter (early startup, tests).
+    try h.store.saveToFile();
+
+    // Post-save: dirty must be cleared.
+    try testing.expect(!h.store.isDirty());
+
+    // Calling saveToFile again on a clean store is also safe
+    // (idempotent). This pins down the invariant that the
+    // persistence loop can call saveToFile in a loop without
+    // thrashing state.
+    try h.store.saveToFile();
+    try testing.expect(!h.store.isDirty());
+}
