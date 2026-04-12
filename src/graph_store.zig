@@ -397,7 +397,7 @@ pub const GraphStore = struct {
     // Retained for FLE encryption context backward compatibility.
     tenant_id: []const u8,
     schema_name: []const u8,
-    // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     // Track known graph names (including empty graphs)
     graphs: std.StringHashMap(void),
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
@@ -708,7 +708,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphHelpers; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-03
+    // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphHelpers; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     fn ensureGraph(self: *GraphStore, graph_name: []const u8) !void {
         try self.ensureGraphNoDirty(graph_name);
         self.dirty.store(true, .release);

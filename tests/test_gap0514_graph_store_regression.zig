@@ -164,3 +164,41 @@ test "GAP-0514 REQ-PERF-EDGE-ADJ: createEdge populates outgoing and incoming ind
     try testing.expectEqual(@as(usize, 1), c_in.len);
     try testing.expectEqual(e_ac, c_in[0]);
 }
+
+// REQ-MULTI-GRAPH-008 (GraphNames field + GraphHelpers fn): the
+// graph registry must track every named graph that has been
+// touched (including via createNodeWithGraph and
+// createEdgeWithGraph), so SHOW GRAPHS and cross-graph
+// bookkeeping see them. Both markers share one REQ-ID and one
+// test.
+//
+// Note: GraphStore.init() pre-registers a "default" graph in
+// initWithTenant (src/graph_store.zig:455-457), so a fresh
+// harness starts with graphs.count() == 1. The test asserts
+// that createNodeWithGraph *grows* the registry past that
+// baseline and does not duplicate on re-create.
+test "GAP-0514 REQ-MULTI-GRAPH-008: createNodeWithGraph registers graph name" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    // Fresh store: only "default" is pre-registered.
+    try testing.expect(h.store.graphs.contains("default"));
+    const baseline = h.store.graphs.count();
+    try testing.expectEqual(@as(u32, 1), baseline);
+
+    const labels = [_][]const u8{"N"};
+    _ = try h.store.createNodeWithGraph(&labels, "alpha");
+
+    // After creating a node in "alpha", the registry grew by one.
+    try testing.expect(h.store.graphs.contains("alpha"));
+    try testing.expectEqual(baseline + 1, h.store.graphs.count());
+
+    // Creating a second node in the same graph does not duplicate.
+    _ = try h.store.createNodeWithGraph(&labels, "alpha");
+    try testing.expectEqual(baseline + 1, h.store.graphs.count());
+
+    // Creating a node in a new graph adds one more entry.
+    _ = try h.store.createNodeWithGraph(&labels, "beta");
+    try testing.expect(h.store.graphs.contains("beta"));
+    try testing.expectEqual(baseline + 2, h.store.graphs.count());
+}
