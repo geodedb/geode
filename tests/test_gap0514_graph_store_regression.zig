@@ -69,3 +69,33 @@ test "GAP-0514 REQ-BINARY-PERSIST-DIRTY-001: createNode marks store dirty" {
     // background persist loop from ever checkpointing the node.
     try testing.expect(h.store.isDirty());
 }
+
+// REQ-BINARY-PERSIST-DIRTY-002: `saveIfDirty` is the persistence
+// loop's cheap-check entry point. When the store is clean it must
+// return without doing any work — otherwise the persistence loop
+// burns CPU and disk I/O every tick.
+test "GAP-0514 REQ-BINARY-PERSIST-DIRTY-002: saveIfDirty on clean store is a no-op" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    // Fresh store is clean — saveIfDirty must not touch anything.
+    try testing.expect(!h.store.isDirty());
+    h.store.saveIfDirty();
+    // Still clean after the no-op call.
+    try testing.expect(!h.store.isDirty());
+
+    // Make it dirty via a mutation, then save. Post-save the
+    // store should be clean again (saveToFile clears dirty —
+    // covered by the REQ-STORAGE-ENGINE-PHASE2-002 test below).
+    const labels = [_][]const u8{"Widget"};
+    _ = try h.store.createNode(&labels);
+    try testing.expect(h.store.isDirty());
+    // Note: saveIfDirty calls saveToFile which requires a
+    // global_adapter in production. In this unit-level harness we
+    // don't wire an adapter, so saveToFile becomes effectively a
+    // "clear dirty" operation. That's exactly what this test
+    // wants: verify the dirty-flag state machine, not the disk
+    // write itself (that's the PHASE2-002 test's job).
+    h.store.saveIfDirty();
+    try testing.expect(!h.store.isDirty());
+}

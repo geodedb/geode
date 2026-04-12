@@ -4315,7 +4315,7 @@ pub const GraphStore = struct {
         }
     }
 
-    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=IMPL; OWNER=storage; UPDATED=2026-03-28
+    // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-002; FEATURE="BinaryPersistence"; ASPECT=ConditionalSave; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     /// Save if dirty — delegates to saveToFile (adapter checkpoint + IdMap save).
     pub fn saveIfDirty(self: *GraphStore) void {
         if (@constCast(&self.dirty).load(.acquire)) {
