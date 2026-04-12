@@ -7,9 +7,10 @@ const planner = @import("../planner.zig");
 // functions are stubbed out.
 // const storage = @import("../storage/interface.zig");
 
-// CANARY: REQ=REQ-PERF-SPICE-018; FEATURE="CBOSpiceIntegration"; ASPECT=PlannerParallelism; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-// Spice fork/join parallelism for join enumeration can be enabled by caller
-// The parallel enumeration methods accept spice pool via anytype to avoid module conflicts
+// CANARY: REQ=REQ-PERF-SPICE-018; FEATURE="CBOParallelIntegration"; ASPECT=PlannerParallelism; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+// Parallel join enumeration can be enabled by the caller.
+// The parallel enumeration methods accept an external pool via `anytype`
+// to avoid module conflicts.
 
 // CANARY: REQ=REQ-GQL-CBO; FEATURE="Cost Based Optimizer"; ASPECT=CoreEngine; STATUS=TESTED; TEST=e2e_cbo_toggle; OWNER=planner; UPDATED=2025-09-25
 
@@ -21,8 +22,9 @@ pub const CostBasedOptimizer = struct {
     cardinality_estimator: *CardinalityEstimator,
     cost_model: *CostModel,
     enabled: bool = true,
-    // CANARY: REQ=REQ-PERF-SPICE-019; FEATURE="CBOSpicePool"; ASPECT=PlannerField; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    // Note: Spice pool integration is available via external caller passing a pool to parallel methods
+    // CANARY: REQ=REQ-PERF-SPICE-019; FEATURE="CBOParallelPool"; ASPECT=PlannerField; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // Note: Parallel pool integration is available via external callers
+    // passing a pool to the parallel methods.
     enable_parallel: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !CostBasedOptimizer {
@@ -204,7 +206,7 @@ pub const CostBasedOptimizer = struct {
     }
 
     /// Enhanced DP join enumeration with optional parallel flag
-    /// Sequential by default, parallel spice integration can be done externally
+    /// Sequential by default; parallel execution can be provided externally.
     /// CANARY: REQ=REQ-PERF-SPICE-020; FEATURE="ParallelDPJoinEnum"; ASPECT=JoinOrderingParallel; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     pub fn dpEnumerateJoinOrdersEnhanced(
         self: *CostBasedOptimizer,
@@ -212,7 +214,7 @@ pub const CostBasedOptimizer = struct {
         relations: []const *planner.PlanNode,
     ) !?*planner.PlanNode {
         // Delegates to the standard DP implementation
-        // For parallel execution, the caller can use spice wrapper externally
+        // For parallel execution, the caller can use the shared parallel wrapper externally.
         return self.dpEnumerateJoinOrders(ctx, relations);
     }
 

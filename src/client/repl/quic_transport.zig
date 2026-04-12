@@ -1,6 +1,7 @@
 const std = @import("std");
 const repl_dispatch = @import("repl_dispatch.zig");
 const quic = @import("transport/quic");
+const pooled = @import("transport/thread_pool");
 
 // TLS configuration for REPL QUIC transport.
 pub const TlsConfig = struct {
@@ -38,17 +39,29 @@ const QuicTransportConnection = struct {
     client_mu: std.Thread.Mutex = .{},
     // Background keepalive thread state
     keepalive_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    keepalive_thread: ?std.Thread = null,
+    keepalive_pool: ?*pooled.ThreadPool = null,
 
     fn startKeepalive(self: *QuicTransportConnection) void {
-        self.keepalive_thread = std.Thread.spawn(.{}, keepaliveWorker, .{self}) catch null;
+        const pool = pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        }) catch return;
+        errdefer pool.deinit();
+        pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runKeepaliveWorker,
+        }) catch {
+            pool.deinit();
+            return;
+        };
+        self.keepalive_pool = pool;
     }
 
     fn stopKeepalive(self: *QuicTransportConnection) void {
         self.keepalive_stop.store(true, .release);
-        if (self.keepalive_thread) |t| {
-            t.join();
-            self.keepalive_thread = null;
+        if (self.keepalive_pool) |pool| {
+            pool.deinit();
+            self.keepalive_pool = null;
         }
     }
 
@@ -63,6 +76,11 @@ const QuicTransportConnection = struct {
             // GAP-0276: Reduced from 500ms to 100ms for faster keepalive response
             std.Thread.sleep(100 * std.time.ns_per_ms);
         }
+    }
+
+    fn runKeepaliveWorker(ctx: *anyopaque) void {
+        const self: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
+        self.keepaliveWorker();
     }
 };
 

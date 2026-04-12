@@ -6,7 +6,7 @@ const build_options = @import("build_options");
 
 const protobuf = @import("protobuf");
 const schema = @import("schema");
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 const geode = @import("geode");
 const query_runner = geode.query_runner;
 
@@ -385,11 +385,11 @@ pub const GeodeClient = struct {
         var arr = std.json.Array.init(allocator);
         if (rows.len == 0) return arr;
 
-        // Use a higher threshold to avoid spice parallelMap memory corruption
-        // on smaller result sets (see proto_util.zig buildDataPage fix)
+        // Keep small result sets on the sequential path; the per-row JSON work
+        // is cheap and pool setup dominates below this threshold.
         const parallel_threshold: usize = 512;
-        if (spice_wrapper.shouldUseParallelism(rows.len, parallel_threshold)) {
-            var pool = spice_wrapper.SpicePool.init(allocator, null);
+        if (parallel_wrapper.shouldUseParallelism(rows.len, parallel_threshold)) {
+            var pool = parallel_wrapper.ParallelPool.init(allocator, null);
             pool.start();
             defer pool.deinit();
 
@@ -404,7 +404,7 @@ pub const GeodeClient = struct {
             for (rows, 0..) |*row, i| inputs[i] = .{ .row = row, .allocator = safe_alloc, .columns = columns };
 
             const mapFn = struct {
-                fn map(_: *spice_wrapper.Task, input: RowInput) RowResult {
+                fn map(_: *parallel_wrapper.Task, input: RowInput) RowResult {
                     const value = rowToJsonObject(input.allocator, input.row.*, input.columns) catch |err| {
                         return .{ .value = std.json.Value.null, .err = err };
                     };
@@ -412,7 +412,7 @@ pub const GeodeClient = struct {
                 }
             }.map;
 
-            const results = try spice_wrapper.parallelMap(RowInput, RowResult, &pool, inputs, mapFn, spice_wrapper.Thresholds.map);
+            const results = try parallel_wrapper.parallelMap(RowInput, RowResult, &pool, inputs, mapFn, parallel_wrapper.Thresholds.map);
             defer allocator.free(results);
 
             for (results) |r| {

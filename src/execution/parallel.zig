@@ -1,10 +1,10 @@
 const std = @import("std");
 
-// CANARY: REQ=REQ-PERF-SPICE-009; FEATURE="SpiceIntegration"; ASPECT=ExecutionPool; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-const spice_wrapper = @import("parallel/spice");
-const SpicePool = spice_wrapper.SpicePool;
+// CANARY: REQ=REQ-PERF-SPICE-009; FEATURE="ParallelWrapperIntegration"; ASPECT=ExecutionPool; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
+const ParallelPool = parallel_wrapper.ParallelPool;
 
-// Parallel execution pool backed by spice fork/join
+// Parallel execution pool backed by the shared thread-pool wrapper.
 // CANARY: REQ=REQ-GQL-PARALLEL-001; FEATURE="Parallel Exec"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/e2e_parallel_execution.zig:1; BENCH=tests/benchmark_parallel_expand_mem_perf.zig:1; OWNER=engine; UPDATED=2026-02-04
 
 pub const JobFn = *const fn (ctx: ?*anyopaque) void;
@@ -31,7 +31,7 @@ pub fn parallelMap(
     const total_bytes = elem_size * src_count;
     var out = try allocator.alloc(u8, total_bytes);
 
-    if (!pool.enabled or !spice_wrapper.shouldUseParallelism(src_count, spice_wrapper.Thresholds.map)) {
+    if (!pool.enabled or !parallel_wrapper.shouldUseParallelism(src_count, parallel_wrapper.Thresholds.map)) {
         var i: usize = 0;
         while (i < src_count) : (i += 1) {
             worker_fn(i, out[i * elem_size .. i * elem_size + elem_size], user_ctx);
@@ -53,18 +53,18 @@ pub fn parallelMap(
         .user_ctx = user_ctx,
     };
 
-    spice_wrapper.parallelForEach(
-        &pool.spice_pool,
+    parallel_wrapper.parallelForEach(
+        &pool.parallel_pool,
         0,
         src_count,
         ctx,
         struct {
-            fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+            fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                 const start = idx * c.elem_size;
                 c.worker_fn(idx, c.out[start .. start + c.elem_size], c.user_ctx);
             }
         }.work,
-        spice_wrapper.Thresholds.map,
+        parallel_wrapper.Thresholds.map,
     );
 
     return MapResult{ .items = out };
@@ -72,7 +72,7 @@ pub fn parallelMap(
 
 pub const Pool = struct {
     allocator: std.mem.Allocator,
-    spice_pool: SpicePool,
+    parallel_pool: ParallelPool,
     enabled: bool = true,
     worker_count: usize,
     queued_jobs: std.ArrayList(Job),
@@ -90,41 +90,41 @@ pub const Pool = struct {
             worker_count;
         var pool = Pool{
             .allocator = allocator,
-            .spice_pool = SpicePool.init(allocator, count),
+            .parallel_pool = ParallelPool.init(allocator, count),
             .enabled = true,
             .worker_count = count,
             .queued_jobs = std.ArrayList(Job).empty,
             .chunk_size_estimator = AdaptiveChunkEstimator.init(),
         };
-        pool.spice_pool.start();
+        pool.parallel_pool.start();
         return pool;
     }
 
-    /// Initialize spice pool if not already started (idempotent)
-    pub fn initSpicePool(self: *Pool) !void {
-        self.spice_pool.start();
+    /// Initialize the shared parallel pool if not already started (idempotent).
+    pub fn initParallelPool(self: *Pool) !void {
+        self.parallel_pool.start();
     }
 
-    /// Execute a fork/join computation using spice
+    /// Execute a computation using the shared parallel wrapper.
     pub fn forkJoin(
         self: *Pool,
         comptime T: type,
         func: anytype,
         arg: anytype,
     ) T {
-        return self.spice_pool.call(T, func, arg);
+        return self.parallel_pool.call(T, func, arg);
     }
 
-    /// Parallel map using spice fork/join (for recursive divide-and-conquer workloads)
-    pub fn spiceMap(
+    /// Parallel map using the shared thread-pool wrapper.
+    pub fn parallelPoolMap(
         self: *Pool,
         comptime T: type,
         comptime R: type,
         items: []const T,
-        comptime mapFn: fn (*spice_wrapper.Task, T) R,
+        comptime mapFn: fn (*parallel_wrapper.Task, T) R,
         threshold: usize,
     ) ![]R {
-        return spice_wrapper.parallelMap(T, R, &self.spice_pool, items, mapFn, threshold);
+        return parallel_wrapper.parallelMap(T, R, &self.parallel_pool, items, mapFn, threshold);
     }
 
     pub fn submit(self: *Pool, job: Job) !void {
@@ -164,18 +164,18 @@ pub const Pool = struct {
                 jobs: []Job,
             };
 
-            spice_wrapper.parallelForEach(
-                &self.spice_pool,
+            parallel_wrapper.parallelForEach(
+                &self.parallel_pool,
                 0,
                 jobs.len,
                 Context{ .jobs = jobs },
                 struct {
-                    fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                    fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                         const j = c.jobs[idx];
                         j.func(j.ctx);
                     }
                 }.work,
-                spice_wrapper.Thresholds.forEach,
+                parallel_wrapper.Thresholds.forEach,
             );
 
             self.allocator.free(jobs);
@@ -183,7 +183,7 @@ pub const Pool = struct {
     }
 
     pub fn deinit(self: *Pool) void {
-        self.spice_pool.deinit();
+        self.parallel_pool.deinit();
         self.queued_jobs.deinit(self.allocator);
     }
 };
@@ -255,13 +255,13 @@ pub const ParallelPipeline = struct {
                 chunk_size: usize,
             };
 
-            spice_wrapper.parallelForEach(
-                &self.pool.spice_pool,
+            parallel_wrapper.parallelForEach(
+                &self.pool.parallel_pool,
                 0,
                 chunk_count,
                 Context{ .items = current_batch, .stage = stage, .chunk_size = chunk_size },
                 struct {
-                    fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                    fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                         const start = idx * c.chunk_size;
                         const end = @min(start + c.chunk_size, c.items.len);
                         for (c.items[start..end]) |item| {
@@ -269,7 +269,7 @@ pub const ParallelPipeline = struct {
                         }
                     }
                 }.work,
-                spice_wrapper.Thresholds.forEach,
+                parallel_wrapper.Thresholds.forEach,
             );
         }
     }

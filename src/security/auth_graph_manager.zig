@@ -17,6 +17,7 @@ const audit_mod = geode.security.audit;
 const auth_hmac = @import("auth_lib").hmac;
 const geode_auth = @import("geode_auth");
 const user_storage = @import("user_storage");
+const pooled = @import("transport/thread_pool");
 const UserStorageBackend = user_storage.UserStorageBackend;
 const logging = @import("logging");
 const log = logging.scoped("auth_graph_manager");
@@ -48,11 +49,12 @@ pub const AuthGraphManager = struct {
     next_user_id: u64, // track next available user ID
     // CANARY: REQ=REQ-AUTH-HMAC-PERIODIC-001; FEATURE="PeriodicHmacVerification"; ASPECT=BackgroundThread; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
     shutdown: std.atomic.Value(bool),
-    verify_thread: ?std.Thread = null,
+    verify_pool: ?*pooled.ThreadPool = null,
     /// Owned copy of the HMAC key for the periodic verification thread.
     /// Stored in-struct so the thread can reference it without dangling pointers
     /// (the struct is moved by value during server initialization).
     hmac_key: [32]u8 = [_]u8{0} ** 32,
+    verify_interval_minutes: u32 = 0,
 
     const Self = @This();
 
@@ -71,7 +73,7 @@ pub const AuthGraphManager = struct {
             .storage = storage,
             .next_user_id = max_id + 1,
             .shutdown = std.atomic.Value(bool).init(false),
-            .verify_thread = null,
+            .verify_pool = null,
         };
     }
 
@@ -94,22 +96,38 @@ pub const AuthGraphManager = struct {
         // Copy the key into the struct so the thread references owned memory
         // instead of a caller-provided pointer that may go out of scope.
         self.hmac_key = hmac_key.*;
-        self.verify_thread = std.Thread.spawn(.{}, periodicVerifyLoop, .{ self, &self.hmac_key, interval_minutes }) catch |err| {
+        self.verify_interval_minutes = interval_minutes;
+        const pool = pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        }) catch |err| {
+            log.err("Failed to initialize periodic HMAC verification pool", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        errdefer pool.deinit();
+        pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runPeriodicVerifyLoop,
+        }) catch |err| {
+            pool.deinit();
             log.err("Failed to spawn periodic HMAC verification thread", &.{
                 Attr.string("error", @errorName(err)),
             });
             return;
         };
+        self.verify_pool = pool;
         log.info("Periodic HMAC verification thread started", &.{
             Attr.uint("interval_minutes", @intCast(interval_minutes)),
         });
     }
 
-    fn periodicVerifyLoop(self: *Self, hmac_key: *const [32]u8, interval_minutes: u32) void {
+    fn periodicVerifyLoop(self: *Self) void {
         while (!self.shutdown.load(.acquire)) {
             // Sleep in small increments so we can check shutdown flag
             var elapsed: u64 = 0;
-            const target_ns = @as(u64, interval_minutes) * 60 * std.time.ns_per_s;
+            const target_ns = @as(u64, self.verify_interval_minutes) * 60 * std.time.ns_per_s;
             while (elapsed < target_ns and !self.shutdown.load(.acquire)) {
                 std.Thread.sleep(1 * std.time.ns_per_s); // 1 second increments
                 elapsed += std.time.ns_per_s;
@@ -132,7 +150,7 @@ pub const AuthGraphManager = struct {
             // acquired while it is held.  This fully serialises the verify
             // read against any concurrent MERGE writes.
             graph_store.acquireStoreWriteLock();
-            const verify_result = self.verifyChain(hmac_key);
+            const verify_result = self.verifyChain(&self.hmac_key);
             graph_store.releaseStoreWriteLock();
             verify_result catch |err| {
                 log.err("PERIODIC HMAC CHECK FAILED - POSSIBLE TAMPERING", &.{Attr.string("error", @errorName(err))});
@@ -145,10 +163,15 @@ pub const AuthGraphManager = struct {
     /// Signal the periodic verification thread to stop and wait for it to finish.
     pub fn requestShutdown(self: *Self) void {
         self.shutdown.store(true, .release);
-        if (self.verify_thread) |t| {
-            t.join();
-            self.verify_thread = null;
+        if (self.verify_pool) |pool| {
+            pool.deinit();
+            self.verify_pool = null;
         }
+    }
+
+    fn runPeriodicVerifyLoop(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.periodicVerifyLoop();
     }
 
     // -- HMAC Key Resolution --

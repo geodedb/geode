@@ -1,5 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="AsynchronousIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_AsynchronousIO; OWNER=performance; UPDATED=2025-10-04
 
@@ -71,7 +72,7 @@ pub const CompletionEntry = struct {
 /// High-performance asynchronous I/O manager with completion queues
 pub const AsyncIOManager = struct {
     allocator: Allocator,
-    thread_pool: ThreadPool,
+    thread_pool: *pooled.ThreadPool,
     completion_queue: std.ArrayList(CompletionEntry),
     pending_operations: std.HashMap(u64, *CompletionEntry, std.hash_map.AutoContext(u64), 80),
     next_operation_id: std.atomic.Value(u64),
@@ -79,104 +80,18 @@ pub const AsyncIOManager = struct {
     mutex: std.Thread.Mutex,
 
     const Self = @This();
-
-    /// Thread pool for asynchronous operations
-    const ThreadPool = struct {
-        threads: []std.Thread,
-        work_queue: std.ArrayList(WorkItem),
-        shutdown: std.atomic.Value(bool),
-        mutex: std.Thread.Mutex,
-        condition: std.Thread.Condition,
-        allocator: Allocator,
-
-        const WorkItem = struct {
-            operation_entry: *CompletionEntry,
-            manager: *AsyncIOManager,
-        };
-
-        fn init(allocator: Allocator, thread_count: usize) !ThreadPool {
-            const threads = try allocator.alloc(std.Thread, thread_count);
-            errdefer allocator.free(threads);
-
-            var pool = ThreadPool{
-                .threads = threads,
-                .work_queue = std.ArrayList(WorkItem).init(allocator),
-                .shutdown = std.atomic.Value(bool).init(false),
-                .mutex = .{},
-                .condition = .{},
-                .allocator = allocator,
-            };
-
-            // Start worker threads
-            for (threads, 0..) |*thread, i| {
-                thread.* = try std.Thread.spawn(.{}, workerThread, .{ &pool, i });
-            }
-
-            return pool;
-        }
-
-        fn deinit(self: *ThreadPool) void {
-            // Signal shutdown
-            self.shutdown.store(true, .release);
-
-            // Wake all worker threads
-            self.mutex.lock();
-            self.condition.broadcast();
-            self.mutex.unlock();
-
-            // Wait for threads to finish
-            for (self.threads) |thread| {
-                thread.join();
-            }
-
-            self.allocator.free(self.threads);
-            self.work_queue.deinit();
-        }
-
-        fn submit(self: *ThreadPool, work_item: WorkItem) !void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            try self.work_queue.append(work_item);
-            self.condition.signal();
-        }
-
-        fn workerThread(pool: *ThreadPool, worker_id: usize) void {
-            _ = worker_id; // Suppress unused parameter warning
-
-            while (!pool.shutdown.load(.acquire)) {
-                pool.mutex.lock();
-
-                while (pool.work_queue.items.len > 0) {
-                    const work_item = pool.work_queue.orderedRemove(0);
-                    pool.mutex.unlock();
-
-                    // Execute the I/O operation
-                    const result = executeIOOperation(work_item.operation_entry.operation);
-
-                    // Update completion entry
-                    work_item.operation_entry.result = result;
-
-                    // Notify manager of completion
-                    work_item.manager.notifyCompletion(work_item.operation_entry.*) catch {};
-
-                    pool.mutex.lock();
-                }
-
-                // Wait for more work
-                if (!pool.shutdown.load(.acquire)) {
-                    pool.condition.wait(&pool.mutex);
-                }
-
-                pool.mutex.unlock();
-            }
-        }
+    const WorkItem = struct {
+        operation_entry: *CompletionEntry,
+        manager: *AsyncIOManager,
     };
 
     pub fn init(allocator: Allocator, thread_count: usize) !Self {
         return Self{
             .allocator = allocator,
-            .thread_pool = try ThreadPool.init(allocator, thread_count),
+            .thread_pool = try pooled.ThreadPool.init(allocator, .{
+                .num_threads = thread_count,
+                .queue_capacity = @max(thread_count * 64, 256),
+            }),
             .completion_queue = std.ArrayList(CompletionEntry).init(allocator),
             .pending_operations = std.HashMap(u64, *CompletionEntry, std.hash_map.DefaultContext(u64), 80).init(allocator),
             .next_operation_id = std.atomic.Value(u64).init(1),
@@ -240,10 +155,18 @@ pub const AsyncIOManager = struct {
             try self.pending_operations.put(operation_id, completion_entry);
         }
 
-        // Submit to thread pool
-        try self.thread_pool.submit(.{
+        const work_item = try self.allocator.create(WorkItem);
+        errdefer self.allocator.destroy(work_item);
+        work_item.* = .{
             .operation_entry = completion_entry,
             .manager = self,
+        };
+
+        // Submit to the shared thread-pool dependency instead of managing a
+        // dedicated worker queue in-process.
+        _ = try self.thread_pool.submitTask(runWorkItem, @ptrCast(work_item), .{
+            .backpressure = .block,
+            .lane = .blocking,
         });
 
         return operation_id;
@@ -336,6 +259,16 @@ pub const AsyncIOManager = struct {
 
         // Add to completion queue
         try self.completion_queue.append(completion);
+    }
+
+    fn runWorkItem(ctx: *anyopaque, runtime: *pooled.TaskContext) void {
+        _ = runtime;
+        const work_item: *WorkItem = @ptrCast(@alignCast(ctx));
+        defer work_item.manager.allocator.destroy(work_item);
+
+        const result = executeIOOperation(work_item.operation_entry.operation);
+        work_item.operation_entry.result = result;
+        work_item.manager.notifyCompletion(work_item.operation_entry.*) catch {};
     }
 };
 

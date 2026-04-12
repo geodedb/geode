@@ -1,5 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
+const thread_pool = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-QUIC-MUX-005; FEATURE="ActiveStreamRegistryTests"; ASPECT=ParallelCorrectness; STATUS=IMPL; OWNER=test; UPDATED=2026-04-08
 const registry_mod = @import("server/active_stream_registry");
@@ -37,7 +38,6 @@ test "ActiveStreamRegistry: concurrent duplicate registrations have a single own
     var duplicate_count = std.atomic.Value(u32).init(0);
     var stream_registry_full_count = std.atomic.Value(u32).init(0);
 
-    var threads: [worker_count]std.Thread = undefined;
     var contexts: [worker_count]WorkerContext = undefined;
 
     for (&contexts, 0..) |*context, worker_index| {
@@ -57,12 +57,7 @@ test "ActiveStreamRegistry: concurrent duplicate registrations have a single own
         };
     }
 
-    for (&threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, workerMain, .{&contexts[worker_index]});
-    }
-
-    ready.store(true, .release);
-    for (&threads) |*thread| thread.join();
+    try runWorkers(contexts[0..]);
 
     try testing.expectEqual(@as(u32, 1), success_count.load(.acquire));
     try testing.expectEqual(@as(u32, worker_count - 1), duplicate_count.load(.acquire));
@@ -87,7 +82,6 @@ test "ActiveStreamRegistry: duplicate storms stay duplicate-only under parallel 
     var unexpected_success_count = std.atomic.Value(u32).init(0);
     var stream_registry_full_count = std.atomic.Value(u32).init(0);
 
-    var threads: [worker_count]std.Thread = undefined;
     var contexts: [worker_count]WorkerContext = undefined;
 
     for (&contexts, 0..) |*context, worker_index| {
@@ -107,12 +101,7 @@ test "ActiveStreamRegistry: duplicate storms stay duplicate-only under parallel 
         };
     }
 
-    for (&threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, workerMain, .{&contexts[worker_index]});
-    }
-
-    ready.store(true, .release);
-    for (&threads) |*thread| thread.join();
+    try runWorkers(contexts[0..]);
 
     try testing.expectEqual(@as(u32, worker_count * iterations), duplicate_count.load(.acquire));
     try testing.expectEqual(@as(u32, 0), unexpected_success_count.load(.acquire));
@@ -131,7 +120,6 @@ test "ActiveStreamRegistry: parallel register/unregister churn leaves no leaked 
     var failed_unregister_count = std.atomic.Value(u32).init(0);
     var stream_registry_full_count = std.atomic.Value(u32).init(0);
 
-    var threads: [worker_count]std.Thread = undefined;
     var contexts: [worker_count]WorkerContext = undefined;
 
     for (&contexts, 0..) |*context, worker_index| {
@@ -151,12 +139,7 @@ test "ActiveStreamRegistry: parallel register/unregister churn leaves no leaked 
         };
     }
 
-    for (&threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, workerMain, .{&contexts[worker_index]});
-    }
-
-    ready.store(true, .release);
-    for (&threads) |*thread| thread.join();
+    try runWorkers(contexts[0..]);
 
     try testing.expectEqual(@as(u32, worker_count * iterations), success_count.load(.acquire));
     try testing.expectEqual(@as(u32, 0), duplicate_count.load(.acquire));
@@ -179,6 +162,46 @@ const WorkerContext = struct {
     failed_unregister_count: ?*std.atomic.Value(u32),
     stream_registry_full_count: ?*std.atomic.Value(u32),
 };
+
+const WorkerTaskContext = struct {
+    context: *WorkerContext,
+};
+
+fn runWorkers(contexts: []WorkerContext) !void {
+    if (contexts.len == 0) return;
+
+    const pool = try thread_pool.ThreadPool.init(testing.allocator, .{
+        .num_threads = contexts.len,
+        .queue_capacity = contexts.len,
+    });
+    defer pool.deinit();
+
+    var task_contexts = try testing.allocator.alloc(WorkerTaskContext, contexts.len);
+    defer testing.allocator.free(task_contexts);
+
+    var handles = try testing.allocator.alloc(thread_pool.TaskHandle, contexts.len);
+    defer testing.allocator.free(handles);
+
+    for (contexts, 0..) |*context, idx| {
+        task_contexts[idx] = .{ .context = context };
+        handles[idx] = try pool.submitTask(runWorkerTask, @ptrCast(&task_contexts[idx]), .{
+            .lane = .blocking,
+            .backpressure = .block,
+            .waitable = true,
+        });
+    }
+
+    contexts[0].ready.store(true, .release);
+    for (handles) |handle| {
+        try pool.wait(handle);
+    }
+}
+
+fn runWorkerTask(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+    _ = runtime;
+    const task_context: *WorkerTaskContext = @ptrCast(@alignCast(ctx));
+    workerMain(task_context.context);
+}
 
 fn workerMain(context: *WorkerContext) void {
     while (!context.ready.load(.acquire)) {

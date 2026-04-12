@@ -8,7 +8,7 @@ const dist_schema = @import("distributed_schema");
 const schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 
 const logging = @import("logging");
 const log = logging.scoped("txn_coordinator");
@@ -38,7 +38,7 @@ pub const TxnCoordinator = struct {
     prepared_txns: std.AutoHashMap(u64, PreparedTxn),
     lock_table: std.AutoHashMap(u64, Lock),
     timeout_ms: u64 = 10_000, // Default 10 seconds
-    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across calls
+    pool: parallel_wrapper.ParallelPool, // PERF-D007: Reuse pool across calls
 
     pub fn init(allocator: Allocator, store: *graph_store.GraphStore) !TxnCoordinator {
         return TxnCoordinator{
@@ -46,7 +46,7 @@ pub const TxnCoordinator = struct {
             .store = store,
             .prepared_txns = std.AutoHashMap(u64, PreparedTxn).init(allocator),
             .lock_table = std.AutoHashMap(u64, Lock).init(allocator),
-            .pool = spice_wrapper.SpicePool.init(allocator, null),
+            .pool = parallel_wrapper.ParallelPool.init(allocator, null),
         };
     }
 
@@ -182,7 +182,7 @@ pub const TxnCoordinator = struct {
         const ids = try self.allocator.alloc(u64, operations.len);
         if (operations.len == 0) return ids;
 
-        if (spice_wrapper.shouldUseParallelism(operations.len, spice_wrapper.Thresholds.forEach)) {
+        if (parallel_wrapper.shouldUseParallelism(operations.len, parallel_wrapper.Thresholds.forEach)) {
             // PERF-D007: Reuse struct-level pool instead of creating per-call
             const Context = struct {
                 ops: []const dist_schema.TwoPhaseOperation,
@@ -190,15 +190,15 @@ pub const TxnCoordinator = struct {
             };
             const ctx = Context{ .ops = operations, .out = ids };
 
-            spice_wrapper.parallelForEach(&self.pool, 0, operations.len, ctx, struct {
-                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+            parallel_wrapper.parallelForEach(&self.pool, 0, operations.len, ctx, struct {
+                fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                     const op = c.ops[idx];
                     c.out[idx] = switch (op) {
                         .node_op => |node_op| node_op.node_id,
                         .edge_op => |edge_op| edge_op.edge_id,
                     };
                 }
-            }.work, spice_wrapper.Thresholds.forEach);
+            }.work, parallel_wrapper.Thresholds.forEach);
         } else {
             for (operations, 0..) |op, idx| {
                 ids[idx] = switch (op) {

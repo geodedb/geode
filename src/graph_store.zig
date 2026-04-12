@@ -1,6 +1,7 @@
 const std = @import("std");
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28
 // TDE at-rest encryption is now handled at the engine level, not in graph_store serialization.
@@ -5084,21 +5085,33 @@ var global_allocator_init = false;
 /// Start a background thread that periodically flushes dirty data to disk.
 /// Needed for cross-process visibility (CLI user commands → server).
 var g_persist_shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
-var g_persist_thread: ?std.Thread = null;
+var g_persist_pool: ?*pooled.ThreadPool = null;
 var g_persist_interval_ms: u64 = 5000;
 
 pub fn startPersistenceThread(interval_ms: u64) void {
     g_persist_interval_ms = interval_ms;
     g_persist_shutdown.store(false, .release);
-    g_persist_thread = std.Thread.spawn(.{}, persistenceLoop, .{}) catch return;
+    const pool = pooled.ThreadPool.init(global_gpa.allocator(), .{
+        .num_threads = 1,
+        .queue_capacity = 4,
+    }) catch return;
+    errdefer pool.deinit();
+    pool.submitBlocking(.{
+        .context = @ptrCast(&g_persist_shutdown),
+        .callback = runPersistenceLoop,
+    }) catch {
+        pool.deinit();
+        return;
+    };
+    g_persist_pool = pool;
 }
 
 pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
     _ = allocator;
     g_persist_shutdown.store(true, .release);
-    if (g_persist_thread) |t| {
-        t.join();
-        g_persist_thread = null;
+    if (g_persist_pool) |pool| {
+        pool.deinit();
+        g_persist_pool = null;
     }
     // Final flush — no worker threads should be running at this point
     // but take the lock for safety. Use split-phase for consistency with
@@ -5174,6 +5187,10 @@ fn persistenceLoop() void {
             }
         }
     }
+}
+
+fn runPersistenceLoop(_: *anyopaque) void {
+    persistenceLoop();
 }
 
 // CANARY: REQ=REQ-STORAGE-ENGINE-PHASE2-006; FEATURE="EngineBackedPersistence"; ASPECT=PersistSplitPhase; STATUS=IMPL; OWNER=storage; UPDATED=2026-04-06

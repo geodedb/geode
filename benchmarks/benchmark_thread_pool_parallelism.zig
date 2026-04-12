@@ -1,14 +1,14 @@
-// Spice Fork/Join Parallelism Benchmarks
-// Validates performance of spice-based parallel operations vs sequential
+// Thread-Pool Parallel Wrapper Benchmarks
+// Validates performance of the shared parallel wrapper vs sequential execution.
 //
-// CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="SpiceBenchmarks"; ASPECT=Performance; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
+// CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperBenchmarks"; ASPECT=Performance; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
 
 const std = @import("std");
 const testing = std.testing;
-const spice_wrapper = @import("parallel/spice");
-const SpicePool = spice_wrapper.SpicePool;
-const Task = spice_wrapper.Task;
-const Thresholds = spice_wrapper.Thresholds;
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
+const ParallelPool = parallel_wrapper.ParallelPool;
+const Task = parallel_wrapper.Task;
+const Thresholds = parallel_wrapper.Thresholds;
 
 // =============================================================================
 // Benchmark Configuration
@@ -94,13 +94,13 @@ fn sequentialVectorDot(a: []const f32, b: []const f32) f32 {
 // Benchmark: Parallel Map
 // =============================================================================
 
-var global_pool: ?SpicePool = null;
+var global_pool: ?ParallelPool = null;
 var global_items: []u32 = &[_]u32{};
 var global_results: []u64 = &[_]u64{};
 
 fn initGlobalMapBenchmark(allocator: std.mem.Allocator, size: usize) !void {
     if (global_pool == null) {
-        global_pool = SpicePool.init(allocator, null);
+        global_pool = ParallelPool.init(allocator, null);
         global_pool.?.start();
     }
 
@@ -124,7 +124,7 @@ fn benchmarkSequentialMap(size: usize) u64 {
     return @intCast(end - start);
 }
 
-fn benchmarkSpiceMap(size: usize) u64 {
+fn benchmarkParallelMap(size: usize) u64 {
     const mapSquare = struct {
         fn map(_: *Task, x: u32) u64 {
             return @as(u64, x) * x;
@@ -132,7 +132,7 @@ fn benchmarkSpiceMap(size: usize) u64 {
     }.map;
 
     const start = std.time.nanoTimestamp();
-    const results = spice_wrapper.parallelMap(u32, u64, &global_pool.?, global_items[0..size], mapSquare, Thresholds.map) catch return 0;
+    const results = parallel_wrapper.parallelMap(u32, u64, &global_pool.?, global_items[0..size], mapSquare, Thresholds.map) catch return 0;
     const end = std.time.nanoTimestamp();
 
     global_pool.?.allocator.free(results);
@@ -147,7 +147,7 @@ var global_sum_items: []u64 = &[_]u64{};
 
 fn initGlobalReduceBenchmark(allocator: std.mem.Allocator, size: usize) !void {
     if (global_pool == null) {
-        global_pool = SpicePool.init(allocator, null);
+        global_pool = ParallelPool.init(allocator, null);
         global_pool.?.start();
     }
 
@@ -169,7 +169,7 @@ fn benchmarkSequentialReduce(size: usize) u64 {
     return @intCast(end - start);
 }
 
-fn benchmarkSpiceReduce(size: usize) u64 {
+fn benchmarkParallelReduce(size: usize) u64 {
     const add = struct {
         fn reduce(_: *Task, a: u64, b: u64) u64 {
             return a + b;
@@ -177,7 +177,7 @@ fn benchmarkSpiceReduce(size: usize) u64 {
     }.reduce;
 
     const start = std.time.nanoTimestamp();
-    _ = spice_wrapper.parallelReduce(u64, &global_pool.?, global_sum_items[0..size], 0, add, Thresholds.reduce);
+    _ = parallel_wrapper.parallelReduce(u64, &global_pool.?, global_sum_items[0..size], 0, add, Thresholds.reduce);
     const end = std.time.nanoTimestamp();
     return @intCast(end - start);
 }
@@ -192,7 +192,7 @@ const VECTOR_DIM: usize = 128;
 
 fn initGlobalVectorBenchmark(allocator: std.mem.Allocator, num_vectors: usize) !void {
     if (global_pool == null) {
-        global_pool = SpicePool.init(allocator, null);
+        global_pool = ParallelPool.init(allocator, null);
         global_pool.?.start();
     }
 
@@ -240,7 +240,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("\n=== Spice Fork/Join Parallelism Benchmarks ===\n\n", .{});
+    std.debug.print("\n=== Thread-Pool Parallel Wrapper Benchmarks ===\n\n", .{});
 
     // Map Benchmarks
     std.debug.print("--- Parallel Map (squaring integers) ---\n", .{});
@@ -249,7 +249,7 @@ pub fn main() !void {
         try initGlobalMapBenchmark(allocator, size);
 
         const seq_result = runBenchmark("sequential_map", benchmarkSequentialMap, size, 10);
-        const par_result = runBenchmark("parallel_map", benchmarkSpiceMap, size, 10);
+        const par_result = runBenchmark("parallel_map", benchmarkParallelMap, size, 10);
 
         const speedup = if (par_result.mean_ns > 0)
             @as(f64, @floatFromInt(seq_result.mean_ns)) / @as(f64, @floatFromInt(par_result.mean_ns))
@@ -271,7 +271,7 @@ pub fn main() !void {
         try initGlobalReduceBenchmark(allocator, size);
 
         const seq_result = runBenchmark("sequential_reduce", benchmarkSequentialReduce, size, 10);
-        const par_result = runBenchmark("parallel_reduce", benchmarkSpiceReduce, size, 10);
+        const par_result = runBenchmark("parallel_reduce", benchmarkParallelReduce, size, 10);
 
         const speedup = if (par_result.mean_ns > 0)
             @as(f64, @floatFromInt(seq_result.mean_ns)) / @as(f64, @floatFromInt(par_result.mean_ns))

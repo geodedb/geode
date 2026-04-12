@@ -23,6 +23,7 @@ const schema = @import("schema");
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;
+const pooled = @import("transport/thread_pool");
 const stdio_util = @import("../utils/stdio.zig");
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
@@ -30,6 +31,8 @@ const stdio_util = @import("../utils/stdio.zig");
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 const default_stream_page_size: u32 = query_runner.default_page_size;
+var g_cli_background_pool_mu: std.Thread.Mutex = .{};
+var g_cli_background_pool: ?*pooled.ThreadPool = null;
 
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -736,6 +739,41 @@ fn finishActiveQueryDeadlineWatchdog() void {
     }
 }
 
+const DeadlineWatchdogCtx = struct {
+    allocator: std.mem.Allocator,
+    timeout_secs: u32,
+    state: *QueryDeadlineState,
+};
+
+fn getCliBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
+    g_cli_background_pool_mu.lock();
+    defer g_cli_background_pool_mu.unlock();
+
+    if (g_cli_background_pool == null) {
+        g_cli_background_pool = try pooled.ThreadPool.init(allocator, .{
+            .num_threads = 2,
+            .queue_capacity = 8,
+        });
+    }
+    return g_cli_background_pool.?;
+}
+
+fn startDeadlineWatchdogTask(allocator: std.mem.Allocator, timeout_secs: u32, state: *QueryDeadlineState) void {
+    const pool = getCliBackgroundPool(allocator) catch return;
+    const ctx = allocator.create(DeadlineWatchdogCtx) catch return;
+    ctx.* = .{
+        .allocator = allocator,
+        .timeout_secs = timeout_secs,
+        .state = state,
+    };
+    if (!pool.submit(.{
+        .context = @ptrCast(ctx),
+        .callback = runDeadlineWatchdogTask,
+    })) {
+        allocator.destroy(ctx);
+    }
+}
+
 /// Issue #424: Process-level deadline watchdog for the query command.
 /// Fires only when no transport-level progress has been observed for
 /// `timeout_secs`, instead of enforcing a hard wall-clock deadline.
@@ -759,6 +797,12 @@ fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         _ = stderr.writeAll(" seconds\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
+}
+
+fn runDeadlineWatchdogTask(context: *anyopaque) void {
+    const ctx: *DeadlineWatchdogCtx = @ptrCast(@alignCast(context));
+    defer ctx.allocator.destroy(ctx);
+    deadlineWatchdog(ctx.timeout_secs, ctx.state);
 }
 
 // Issue #417: DSN (Data Source Name) parsing for --dsn flag
@@ -1376,7 +1420,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             chunked_deadline_state.finish();
             active_query_deadline_state = null;
         }
-        _ = std.Thread.spawn(.{}, deadlineWatchdog, .{ chunked_deadline, &chunked_deadline_state }) catch {};
+        startDeadlineWatchdogTask(allocator, chunked_deadline, &chunked_deadline_state);
         try executeChunkedQueries(allocator, .{
             .server_addr = server_addr,
             .statements = statements.items,
@@ -1426,7 +1470,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         query_deadline_state.finish();
         active_query_deadline_state = null;
     }
-    _ = std.Thread.spawn(.{}, deadlineWatchdog, .{ timeout_secs, &query_deadline_state }) catch {};
+    startDeadlineWatchdogTask(allocator, timeout_secs, &query_deadline_state);
 
     // Execute query via QUIC or gRPC connection
     params_owned = false;

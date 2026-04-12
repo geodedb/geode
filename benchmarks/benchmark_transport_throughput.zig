@@ -214,49 +214,86 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
 
     const num_producers = 4;
     const num_consumers = 4;
+    const pool = try thread_pool.ThreadPool.init(allocator, .{
+        .num_threads = num_producers + num_consumers,
+        .queue_capacity = num_producers + num_consumers,
+    });
+    defer pool.deinit();
     const items_per_producer = config.benchmark_iterations / num_producers;
 
     var produced = std.atomic.Value(usize).init(0);
     var consumed = std.atomic.Value(usize).init(0);
     const target: usize = items_per_producer * num_producers;
-
-    var threads: [num_producers + num_consumers]std.Thread = undefined;
+    var handles: [num_producers + num_consumers]thread_pool.TaskHandle = undefined;
+    const ProducerContext = struct {
+        q: *Queue,
+        produced: *std.atomic.Value(usize),
+        count: usize,
+    };
+    const ConsumerContext = struct {
+        q: *Queue,
+        consumed: *std.atomic.Value(usize),
+        target: usize,
+    };
+    var producer_contexts: [num_producers]ProducerContext = undefined;
+    var consumer_contexts: [num_consumers]ConsumerContext = undefined;
 
     std.debug.print("Starting {} producers and {} consumers...\n", .{ num_producers, num_consumers });
     const start = std.time.nanoTimestamp();
 
     // Start producers
     for (0..num_producers) |i| {
-        threads[i] = try std.Thread.spawn(.{}, struct {
-            fn run(q: *Queue, p: *std.atomic.Value(usize), count: usize) void {
-                for (0..count) |_| {
-                    while (!q.tryPush(1)) {
+        producer_contexts[i] = .{
+            .q = &queue,
+            .produced = &produced,
+            .count = items_per_producer,
+        };
+        handles[i] = try pool.submitTask(struct {
+            fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+                _ = runtime;
+                const context: *ProducerContext = @ptrCast(@alignCast(ctx));
+                for (0..context.count) |_| {
+                    while (!context.q.tryPush(1)) {
                         std.Thread.sleep(1 * std.time.ns_per_us);
                     }
-                    _ = p.fetchAdd(1, .release);
+                    _ = context.produced.fetchAdd(1, .release);
                 }
             }
-        }.run, .{ &queue, &produced, items_per_producer });
+        }.run, @ptrCast(&producer_contexts[i]), .{
+            .lane = .blocking,
+            .backpressure = .block,
+            .waitable = true,
+        });
     }
 
     // Start consumers
     for (0..num_consumers) |i| {
-        threads[num_producers + i] = try std.Thread.spawn(.{}, struct {
-            fn run(q: *Queue, c: *std.atomic.Value(usize), t: usize) void {
-                while (c.load(.acquire) < t) {
-                    if (q.tryPop()) |_| {
-                        _ = c.fetchAdd(1, .release);
+        consumer_contexts[i] = .{
+            .q = &queue,
+            .consumed = &consumed,
+            .target = target,
+        };
+        handles[num_producers + i] = try pool.submitTask(struct {
+            fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+                _ = runtime;
+                const context: *ConsumerContext = @ptrCast(@alignCast(ctx));
+                while (context.consumed.load(.acquire) < context.target) {
+                    if (context.q.tryPop()) |_| {
+                        _ = context.consumed.fetchAdd(1, .release);
                     } else {
                         std.Thread.sleep(1 * std.time.ns_per_us);
                     }
                 }
             }
-        }.run, .{ &queue, &consumed, target });
+        }.run, @ptrCast(&consumer_contexts[i]), .{
+            .lane = .blocking,
+            .backpressure = .block,
+            .waitable = true,
+        });
     }
 
-    // Wait for all threads
-    for (&threads) |*t| {
-        t.join();
+    for (handles) |handle| {
+        try pool.wait(handle);
     }
 
     const end = std.time.nanoTimestamp();
@@ -264,8 +301,6 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     const total_ops = target * 2; // push + pop
     const avg_time = @divFloor(total_time, @as(i128, total_ops));
     const throughput = @as(u64, total_ops) * std.time.ns_per_s / @as(u64, @intCast(total_time));
-
-    _ = allocator;
 
     return BenchResults{
         .name = "Concurrent Queue Throughput (4P/4C)",

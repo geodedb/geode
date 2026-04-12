@@ -568,11 +568,11 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 
 **Description:**
 
-The `spice` fork/join parallelism library is declared as a dependency (`build.zig.zon:122`), wrapped in `src/parallel/spice.zig` (449 lines) and `src/execution/parallel.zig` (275 lines), with tests and benchmarks. However, the wrapper is not invoked from any production hot path. The 18 import sites are limited to:
-
-- The wrapper files themselves (`spice.zig`, `parallel.zig`)
-- Test/benchmark files (`test_spice_integration.zig`, `benchmark_spice_parallelism.zig`, `test_feature_completion.zig`)
-- Files that import but never call spice functions (`hnsw.zig`, `cbo.zig`, `index_optimizer.zig`, `proto_util.zig`, `txn_coordinator.zig`, `query_coordinator.zig`)
+The historical fork/join wrapper has been migrated onto the external `thread_pool`
+dependency and now lives in `src/parallel/thread_pool_parallel.zig`, with
+`src/execution/parallel.zig` providing the execution-facing adapter. Earlier
+imports that referenced `parallel/spice` were only hitting the wrapper and test
+surface, not distinct production hot paths.
 
 **Impact:**
 
@@ -587,7 +587,7 @@ CPU-bound operations that would benefit from fork/join parallelism run single-th
 
 - `src/index/hnsw.zig` imports `parallel` but uses sequential loops for distance computation
 - `src/planner/cbo.zig` imports `parallel` but enumerates plans sequentially
-- `src/execution/parallel.zig:Pool` wraps `SpicePool` but `forkJoin` / `spiceMap` are never called from the execution engine
+- `src/execution/parallel.zig:Pool` wraps `ParallelPool` but `forkJoin` / `parallelPoolMap` are never called from the execution engine
 - Benchmarks show 2-4x speedup potential on 4+ cores for vector operations
 
 **Recommended fix:**
@@ -597,7 +597,7 @@ CPU-bound operations that would benefit from fork/join parallelism run single-th
 3. Wire `parallel.forEach` into batch node/edge creation during MERGE
 4. Add parallel plan enumeration in CBO for plans exceeding threshold
 
-**Acceptance criteria:** At least 3 hot paths using spice parallelism with measurable throughput improvement on 4+ cores.
+**Acceptance criteria:** At least 3 hot paths using the shared parallel wrapper with measurable throughput improvement on 4+ cores.
 
 ---
 
@@ -638,7 +638,7 @@ Add a `streams_cv: std.Thread.Condition` to `SharedConnState`. Handler threads b
 
 ---
 
-### GAP-0275: Duplicate concurrency libraries — spice AND concurrency-0.1.0 — **CLOSED (2026-04-01)**
+### GAP-0275: Duplicate concurrency libraries — resolved on thread_pool — **CLOSED (2026-04-01)**
 
 - **Category:** Architecture / Dependencies
 - **Severity:** High
@@ -647,10 +647,9 @@ Add a `streams_cv: std.Thread.Condition` to `SharedConnState`. Handler threads b
 
 **Resolution:**
 
-Removed the `concurrency-0.1.0` external dependency entirely. The `thread_pool.zig` module
-is now self-contained, implementing its own Vyukov MPMC bounded queue and worker thread
-management using `std.Thread` primitives. The `spice` library remains as the single
-external concurrency library for fork/join parallelism (map/reduce/forEach).
+Removed the `concurrency-0.1.0` external dependency entirely. Geode now uses the
+external `thread_pool` dependency plus a local `thread_pool_parallel` wrapper for
+map/reduce/forEach helpers.
 
 **Changes:**
 
@@ -757,7 +756,7 @@ No deadlocks have been reported in production, but the lack of ordering policy m
 - **GitLab issue:** *(open — to be filed)*
 - **Category:** Correctness / Query Engine
 - **Severity:** High
-- **Resolution (2026-03-21):** Root cause was memory corruption in spice thread pool's fork/join parallel map during data page serialization (`proto_util.zig:buildDataPage`). When result sets exceeded 512 rows, the parallel path corrupted memory, causing the catch-all error handler to emit `58000: Internal Server Error`. Fix: replaced parallel serialization with sequential loop (per-row protobuf conversion is lightweight — no measurable throughput impact). Also increased `writeServerPacket` initial protobuf buffer from 4KB to 64KB to reduce reallocations for large pages. Regression test: `gap_0257_orderby_large_resultset.yml` (42 tests, 1000 and 2500 node ORDER BY verified).
+- **Resolution (2026-03-21):** Root cause was memory corruption in the old parallel serialization path during data page serialization (`proto_util.zig:buildDataPage`). When result sets exceeded 512 rows, the parallel path corrupted memory, causing the catch-all error handler to emit `58000: Internal Server Error`. Fix: replaced parallel serialization with a sequential loop (per-row protobuf conversion is lightweight — no measurable throughput impact). Also increased `writeServerPacket` initial protobuf buffer from 4KB to 64KB to reduce reallocations for large pages. Regression test: `gap_0257_orderby_large_resultset.yml` (42 tests, 1000 and 2500 node ORDER BY verified).
 - **Requirement source:** ISO/IEC 39075:2024 §9 (GQL query execution); REQ-0003 Query Correctness
 - **Discovered:** 2026-03-21 via `geode-client-go` load tests (`TestLoad_LargeDataset`, `TestLoad_MultiPageResults`)
 - **Server version:** `geodedb/geode:latest` (v0.1.30 at time of discovery)

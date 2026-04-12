@@ -148,6 +148,11 @@ const ConnectionContext = struct {
     env_config: *const server_init.EnvironmentConfig = undefined,
 };
 
+const PollLoopContext = struct {
+    transport: *quic_transport.QuicTransport,
+    shutdown: *std.atomic.Value(bool),
+};
+
 // GAP-0202: Callback wrapper for thread pool execution
 fn handleConnectionAsync(context: *anyopaque) void {
     const ctx: *ConnectionContext = @ptrCast(@alignCast(context));
@@ -172,6 +177,20 @@ fn handleConnectionAsync(context: *anyopaque) void {
     };
     // Free the context after handling
     ctx.allocator.destroy(ctx);
+}
+
+fn runGrpcServerTask(context: *anyopaque) void {
+    const server: *grpc_transport.GeodeGrpcServer = @ptrCast(@alignCast(context));
+    server.start() catch |err| {
+        log.err("Failed to start gRPC server", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
+fn runPollLoopTask(context: *anyopaque) void {
+    const ctx: *PollLoopContext = @ptrCast(@alignCast(context));
+    quic_transport.QuicTransport.pollLoop(ctx.transport, ctx.shutdown);
 }
 
 // Distributed query planner accessed via geode module to avoid import path issues
@@ -526,12 +545,21 @@ pub fn main() !void {
             try grpc_server.start();
             return;
         } else {
-            _ = std.Thread.spawn(.{}, grpc_transport.GeodeGrpcServer.start, .{grpc_server}) catch |err| {
-                log.err("Failed to start gRPC server", &.{
+            const grpc_pool = thread_pool.ThreadPool.init(gpa, .{
+                .num_threads = 1,
+                .queue_capacity = 4,
+            }) catch |err| {
+                log.err("Failed to initialize gRPC server pool", &.{
                     Attr.string("error", @errorName(err)),
                     Attr.int("port", grpc_port),
                 });
+                return err;
             };
+            defer grpc_pool.deinit();
+            try grpc_pool.submitBlocking(.{
+                .context = @ptrCast(grpc_server),
+                .callback = runGrpcServerTask,
+            });
 
             log.info("gRPC server started", &.{
                 Attr.string("address", grpc_address),
@@ -732,13 +760,24 @@ pub fn main() !void {
         // eliminating the c=8+ contention bottleneck where handler threads starve
         // waiting for data that only arrives when the main thread calls poll().
         var poll_shutdown = std.atomic.Value(bool).init(false);
-        const poll_thread = std.Thread.spawn(.{}, quic_transport.QuicTransport.pollLoop, .{ &transport, &poll_shutdown }) catch |err| {
-            log.err("Failed to spawn poll thread", &.{Attr.string("error", @errorName(err))});
+        var poll_ctx = PollLoopContext{
+            .transport = &transport,
+            .shutdown = &poll_shutdown,
+        };
+        const poll_pool = thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        }) catch |err| {
+            log.err("Failed to initialize poll loop pool", &.{Attr.string("error", @errorName(err))});
             return;
         };
+        try poll_pool.submitBlocking(.{
+            .context = @ptrCast(&poll_ctx),
+            .callback = runPollLoopTask,
+        });
         defer {
             poll_shutdown.store(true, .release);
-            poll_thread.join();
+            poll_pool.deinit();
         }
 
         // Install SIGTERM/SIGINT handlers so the accept loop exits cleanly

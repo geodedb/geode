@@ -1,5 +1,6 @@
 const std = @import("std");
 const active_stream_registry = @import("server/active_stream_registry");
+const thread_pool = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-QUIC-MUX-007; FEATURE="ActiveStreamRegistryBenchmarks"; ASPECT=ParallelThroughput; STATUS=BENCHED; BENCH=benchmark_quic_stream_registry; OWNER=server; UPDATED=2026-04-08
 
@@ -31,12 +32,17 @@ fn waitForStart(start: *std.atomic.Value(bool)) void {
     }
 }
 
-fn runDuplicateRequeueBenchmark(config: BenchmarkConfig) !BenchmarkResult {
+fn runDuplicateRequeueBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !BenchmarkResult {
     if (config.workers == 0 or config.workers > max_benchmark_workers) {
         return error.InvalidWorkerCount;
     }
 
     var registry = active_stream_registry.ActiveStreamRegistry{};
+    const pool = try thread_pool.ThreadPool.init(allocator, .{
+        .num_threads = config.workers,
+        .queue_capacity = config.workers,
+    });
+    defer pool.deinit();
     const active_window = active_stream_registry.max_total_streams_per_connection;
 
     for (0..active_window) |i| {
@@ -49,44 +55,52 @@ fn runDuplicateRequeueBenchmark(config: BenchmarkConfig) !BenchmarkResult {
     var ready = std.atomic.Value(u32).init(0);
     var duplicate_rejections = std.atomic.Value(u64).init(0);
     var failure = std.atomic.Value(bool).init(false);
-    var thread_storage: [max_benchmark_workers]std.Thread = undefined;
-    const threads = thread_storage[0..config.workers];
+    const WorkerContext = struct {
+        registry: *active_stream_registry.ActiveStreamRegistry,
+        start: *std.atomic.Value(bool),
+        ready: *std.atomic.Value(u32),
+        duplicate_rejections: *std.atomic.Value(u64),
+        failure: *std.atomic.Value(bool),
+        rounds: usize,
+    };
+    var worker_contexts: [max_benchmark_workers]WorkerContext = undefined;
+    var handles: [max_benchmark_workers]thread_pool.TaskHandle = undefined;
 
-    for (threads) |*thread| {
-        thread.* = try std.Thread.spawn(.{}, struct {
-            fn run(
-                registry_ptr: *active_stream_registry.ActiveStreamRegistry,
-                start_ptr: *std.atomic.Value(bool),
-                ready_ptr: *std.atomic.Value(u32),
-                duplicate_rejections_ptr: *std.atomic.Value(u64),
-                failure_ptr: *std.atomic.Value(bool),
-                rounds: usize,
-            ) void {
-                _ = ready_ptr.fetchAdd(1, .acq_rel);
-                waitForStart(start_ptr);
+    for (0..config.workers) |idx| {
+        worker_contexts[idx] = .{
+            .registry = &registry,
+            .start = &start,
+            .ready = &ready,
+            .duplicate_rejections = &duplicate_rejections,
+            .failure = &failure,
+            .rounds = config.duplicate_rounds_per_worker,
+        };
+        handles[idx] = try pool.submitTask(struct {
+            fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+                _ = runtime;
+                const context: *WorkerContext = @ptrCast(@alignCast(ctx));
+                _ = context.ready.fetchAdd(1, .acq_rel);
+                waitForStart(context.start);
 
-                for (0..rounds) |_| {
+                for (0..context.rounds) |_| {
                     for (0..active_stream_registry.max_total_streams_per_connection) |i| {
                         const stream_id: u64 = @intCast(i + 1);
-                        const is_new = registry_ptr.register(stream_id) catch {
-                            failure_ptr.store(true, .release);
+                        const is_new = context.registry.register(stream_id) catch {
+                            context.failure.store(true, .release);
                             return;
                         };
                         if (is_new) {
-                            failure_ptr.store(true, .release);
+                            context.failure.store(true, .release);
                             return;
                         }
-                        _ = duplicate_rejections_ptr.fetchAdd(1, .acq_rel);
+                        _ = context.duplicate_rejections.fetchAdd(1, .acq_rel);
                     }
                 }
             }
-        }.run, .{
-            &registry,
-            &start,
-            &ready,
-            &duplicate_rejections,
-            &failure,
-            config.duplicate_rounds_per_worker,
+        }.run, @ptrCast(&worker_contexts[idx]), .{
+            .lane = .blocking,
+            .backpressure = .block,
+            .waitable = true,
         });
     }
 
@@ -97,8 +111,8 @@ fn runDuplicateRequeueBenchmark(config: BenchmarkConfig) !BenchmarkResult {
     var timer = try std.time.Timer.start();
     start.store(true, .release);
 
-    for (threads) |thread| {
-        thread.join();
+    for (handles[0..config.workers]) |handle| {
+        try pool.wait(handle);
     }
 
     if (failure.load(.acquire)) return error.DuplicateBenchmarkInvariantFailed;
@@ -113,64 +127,77 @@ fn runDuplicateRequeueBenchmark(config: BenchmarkConfig) !BenchmarkResult {
     };
 }
 
-fn runUniqueChurnBenchmark(config: BenchmarkConfig) !BenchmarkResult {
+fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) !BenchmarkResult {
     if (config.workers == 0 or config.workers > max_benchmark_workers) {
         return error.InvalidWorkerCount;
     }
 
     var registry = active_stream_registry.ActiveStreamRegistry{};
+    const pool = try thread_pool.ThreadPool.init(allocator, .{
+        .num_threads = config.workers,
+        .queue_capacity = config.workers,
+    });
+    defer pool.deinit();
     var start = std.atomic.Value(bool).init(false);
     var ready = std.atomic.Value(u32).init(0);
     var completed_cycles = std.atomic.Value(u64).init(0);
     var failure = std.atomic.Value(bool).init(false);
-    var thread_storage: [max_benchmark_workers]std.Thread = undefined;
-    const threads = thread_storage[0..config.workers];
+    const WorkerContext = struct {
+        registry: *active_stream_registry.ActiveStreamRegistry,
+        start: *std.atomic.Value(bool),
+        ready: *std.atomic.Value(u32),
+        completed_cycles: *std.atomic.Value(u64),
+        failure: *std.atomic.Value(bool),
+        worker_index: usize,
+        iterations: usize,
+    };
+    var worker_contexts: [max_benchmark_workers]WorkerContext = undefined;
+    var handles: [max_benchmark_workers]thread_pool.TaskHandle = undefined;
 
-    for (threads, 0..) |*thread, worker_index| {
-        thread.* = try std.Thread.spawn(.{}, struct {
-            fn run(
-                registry_ptr: *active_stream_registry.ActiveStreamRegistry,
-                start_ptr: *std.atomic.Value(bool),
-                ready_ptr: *std.atomic.Value(u32),
-                completed_cycles_ptr: *std.atomic.Value(u64),
-                failure_ptr: *std.atomic.Value(bool),
-                worker_index_value: usize,
-                iterations: usize,
-            ) void {
-                _ = ready_ptr.fetchAdd(1, .acq_rel);
-                waitForStart(start_ptr);
+    for (0..config.workers) |worker_index| {
+        worker_contexts[worker_index] = .{
+            .registry = &registry,
+            .start = &start,
+            .ready = &ready,
+            .completed_cycles = &completed_cycles,
+            .failure = &failure,
+            .worker_index = worker_index,
+            .iterations = config.unique_iterations_per_worker,
+        };
+        handles[worker_index] = try pool.submitTask(struct {
+            fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+                _ = runtime;
+                const context: *WorkerContext = @ptrCast(@alignCast(ctx));
+                _ = context.ready.fetchAdd(1, .acq_rel);
+                waitForStart(context.start);
 
-                const base_stream_id = @as(u64, @intCast(worker_index_value)) << 32;
-                for (0..iterations) |i| {
+                const base_stream_id = @as(u64, @intCast(context.worker_index)) << 32;
+                for (0..context.iterations) |i| {
                     const stream_id = base_stream_id | @as(u64, @intCast(i + 1));
 
-                    const is_new = registry_ptr.register(stream_id) catch {
-                        failure_ptr.store(true, .release);
+                    const is_new = context.registry.register(stream_id) catch {
+                        context.failure.store(true, .release);
                         return;
                     };
                     if (!is_new) {
-                        failure_ptr.store(true, .release);
+                        context.failure.store(true, .release);
                         return;
                     }
-                    if (!registry_ptr.unregister(stream_id)) {
-                        failure_ptr.store(true, .release);
+                    if (!context.registry.unregister(stream_id)) {
+                        context.failure.store(true, .release);
                         return;
                     }
 
-                    _ = completed_cycles_ptr.fetchAdd(1, .acq_rel);
+                    _ = context.completed_cycles.fetchAdd(1, .acq_rel);
                     if ((i & 255) == 0) {
                         std.Thread.sleep(1 * std.time.ns_per_us);
                     }
                 }
             }
-        }.run, .{
-            &registry,
-            &start,
-            &ready,
-            &completed_cycles,
-            &failure,
-            worker_index,
-            config.unique_iterations_per_worker,
+        }.run, @ptrCast(&worker_contexts[worker_index]), .{
+            .lane = .blocking,
+            .backpressure = .block,
+            .waitable = true,
         });
     }
 
@@ -181,8 +208,8 @@ fn runUniqueChurnBenchmark(config: BenchmarkConfig) !BenchmarkResult {
     var timer = try std.time.Timer.start();
     start.store(true, .release);
 
-    for (threads) |thread| {
-        thread.join();
+    for (handles[0..config.workers]) |handle| {
+        try pool.wait(handle);
     }
 
     if (failure.load(.acquire)) return error.UniqueBenchmarkInvariantFailed;
@@ -224,6 +251,9 @@ fn reportResult(config: BenchmarkConfig, result: BenchmarkResult) void {
 }
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
     const config = BenchmarkConfig{};
 
     std.debug.print(
@@ -235,9 +265,9 @@ pub fn main() !void {
         },
     );
 
-    const duplicate_result = try runDuplicateRequeueBenchmark(config);
+    const duplicate_result = try runDuplicateRequeueBenchmark(allocator, config);
     reportResult(config, duplicate_result);
 
-    const unique_result = try runUniqueChurnBenchmark(config);
+    const unique_result = try runUniqueChurnBenchmark(allocator, config);
     reportResult(config, unique_result);
 }

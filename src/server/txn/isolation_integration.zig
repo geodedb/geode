@@ -5,6 +5,7 @@ const std = @import("std");
 const mvcc = @import("mvcc.zig");
 const enhanced_isolation = @import("enhanced_isolation.zig");
 const geode = @import("geode");
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-017; FEATURE="Structured Logging"; ASPECT=IsolationIntegration; STATUS=EXEMPT; OWNER=server; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -22,8 +23,8 @@ pub const IsolationIntegration = struct {
     enable_deadlock_detection: bool = true,
     detection_interval_ms: u32 = 1000,
 
-    // Background deadlock detection thread
-    deadlock_thread: ?std.Thread = null,
+    // Background deadlock detection worker
+    deadlock_pool: ?*pooled.ThreadPool = null,
     shutdown_deadlock_detection: std.atomic.Atomic(bool) = std.atomic.Atomic(bool).init(false),
 
     pub fn init(allocator: std.mem.Allocator, mvcc_manager: *mvcc.MVCCManager) !IsolationIntegration {
@@ -38,9 +39,10 @@ pub const IsolationIntegration = struct {
 
     pub fn deinit(self: *IsolationIntegration) void {
         // Shutdown deadlock detection
-        if (self.deadlock_thread) |thread| {
+        if (self.deadlock_pool) |pool| {
             self.shutdown_deadlock_detection.store(true, .Monotonic);
-            thread.join();
+            pool.deinit();
+            self.deadlock_pool = null;
         }
 
         self.enhanced_manager.deinit();
@@ -48,11 +50,20 @@ pub const IsolationIntegration = struct {
 
     /// Start the background deadlock detection thread
     pub fn startDeadlockDetection(self: *IsolationIntegration) !void {
-        if (!self.enable_deadlock_detection or self.deadlock_thread != null) {
+        if (!self.enable_deadlock_detection or self.deadlock_pool != null) {
             return;
         }
 
-        self.deadlock_thread = try std.Thread.spawn(.{}, deadlockDetectionLoop, .{self});
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        });
+        errdefer pool.deinit();
+        try pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runDeadlockDetectionLoop,
+        });
+        self.deadlock_pool = pool;
     }
 
     /// Background deadlock detection loop
@@ -67,6 +78,11 @@ pub const IsolationIntegration = struct {
             // Sleep for the configured interval
             std.time.sleep(self.detection_interval_ms * std.time.ns_per_ms);
         }
+    }
+
+    fn runDeadlockDetectionLoop(ctx: *anyopaque) void {
+        const self: *IsolationIntegration = @ptrCast(@alignCast(ctx));
+        self.deadlockDetectionLoop();
     }
 
     /// Begin transaction with specified isolation level

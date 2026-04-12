@@ -23,6 +23,7 @@ const diagnostics = geode.diagnostics;
 const user_mgmt = geode.user_management;
 const planned_read_runtime = geode.planned_read_runtime;
 const node_scan_stream = geode.node_scan_stream;
+const pooled = @import("transport/thread_pool");
 // Issue #444: Import AST cache to wire into parse hot path
 const query_ast_cache = @import("query_ast_cache.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
@@ -578,6 +579,15 @@ const StreamHandlerContext = struct {
     conn_state: *SharedConnState,
 };
 
+const StreamAcceptorContext = struct {
+    allocator: std.mem.Allocator,
+    transport: *quic_transport.QuicTransport,
+    conn: *quic_transport.QuicConnection,
+    conn_state: *SharedConnState,
+    shutdown: *std.atomic.Value(bool),
+    stream_pool: *pooled.ThreadPool,
+};
+
 const SessionAuthStatus = enum {
     ok,
     missing,
@@ -696,13 +706,13 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
 /// HELLO succeeds. Polls the connection for new peer-initiated streams and
 /// spawns a handler thread for each one.
 // CANARY: REQ=REQ-QUIC-MUX-003; FEATURE="StreamMultiplexing"; ASPECT=StreamAcceptor; STATUS=IMPL; OWNER=server; UPDATED=2026-03-27
-fn streamAcceptorLoop(
-    gpa: std.mem.Allocator,
-    transport: *quic_transport.QuicTransport,
-    conn: *quic_transport.QuicConnection,
-    conn_state: *SharedConnState,
-    shutdown: *std.atomic.Value(bool),
-) void {
+fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
+    const gpa = ctx.allocator;
+    const transport = ctx.transport;
+    const conn = ctx.conn;
+    const conn_state = ctx.conn_state;
+    const shutdown = ctx.shutdown;
+    const stream_pool = ctx.stream_pool;
     while (!shutdown.load(.acquire)) {
         // Check if connection is still alive
         if (conn.isDrained()) break;
@@ -772,12 +782,15 @@ fn streamAcceptorLoop(
                 .conn_state = conn_state,
             };
 
-            // Use a dedicated OS thread per active stream here, not Spice.
-            // Spice is Geode's fork/join engine for bounded CPU work; these
+            // Use a dedicated OS thread per active stream here, not the
+            // shared parallel wrapper. The wrapper targets bounded CPU work; these
             // handlers are long-lived, blocking I/O loops whose lifetime is not
-            // naturally expressed as fork/join. Reusing Spice workers for them
+            // naturally expressed as fork/join. Reusing wrapper workers for them
             // would tie heartbeat-scheduled tasks to socket waits.
-            _ = std.Thread.spawn(.{}, handleAdditionalStream, .{@as(*anyopaque, @ptrCast(ctx))}) catch {
+            if (!stream_pool.submit(.{
+                .context = @ptrCast(ctx),
+                .callback = handleAdditionalStream,
+            })) {
                 log.warn("Failed to spawn stream handler thread", &.{});
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
@@ -786,13 +799,18 @@ fn streamAcceptorLoop(
                 g_stream_throttle.release();
                 gpa.destroy(ctx);
                 continue;
-            };
+            }
         } else {
             // No stream pending — poll and back off
             transport.poll(0) catch {};
             std.Thread.sleep(1 * std.time.ns_per_ms);
         }
     }
+}
+
+fn runStreamAcceptorLoop(ctx: *anyopaque) void {
+    const acceptor_ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ctx));
+    streamAcceptorLoop(acceptor_ctx);
 }
 
 /// Run the protobuf message loop for a single QUIC stream.
@@ -1139,9 +1157,22 @@ pub fn handleQuicConnection(
         conn_state.deinit();
     }
 
+    const stream_pool = pooled.ThreadPool.init(gpa, .{
+        .num_threads = 4,
+        .queue_capacity = 64,
+    }) catch |err| {
+        log.warn("Failed to initialize stream worker pool, single-stream mode", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        return;
+    };
+    defer stream_pool.deinit();
+
     var acceptor_shutdown = std.atomic.Value(bool).init(false);
-    const acceptor_thread = std.Thread.spawn(.{}, streamAcceptorLoop, .{
-        gpa, transport, conn, &conn_state, &acceptor_shutdown,
+    const acceptor_pool = pooled.ThreadPool.init(gpa, .{
+        .num_threads = 1,
+        .queue_capacity = 4,
     }) catch |err| {
         // If we can't spawn the acceptor, fall back to single-stream mode.
         // The first stream still works fine — just no multiplexing.
@@ -1151,9 +1182,27 @@ pub fn handleQuicConnection(
         runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
         return;
     };
+    defer acceptor_pool.deinit();
+    var acceptor_ctx = StreamAcceptorContext{
+        .allocator = gpa,
+        .transport = transport,
+        .conn = conn,
+        .conn_state = &conn_state,
+        .shutdown = &acceptor_shutdown,
+        .stream_pool = stream_pool,
+    };
+    acceptor_pool.submitBlocking(.{
+        .context = @ptrCast(&acceptor_ctx),
+        .callback = runStreamAcceptorLoop,
+    }) catch |err| {
+        log.warn("Failed to start stream acceptor, single-stream mode", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        return;
+    };
     defer {
         acceptor_shutdown.store(true, .release);
-        acceptor_thread.join();
     }
 
     // ── Phase 3: First stream query loop (inline) ────────────────────────

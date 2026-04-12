@@ -1,21 +1,21 @@
 const std = @import("std");
 const testing = std.testing;
 
-// CANARY: REQ=REQ-PERF-SPICE-026; FEATURE="SpiceIntegrationTests"; ASPECT=Testing; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-// Integration tests for spice fork/join parallelism in Geode
+// CANARY: REQ=REQ-PERF-SPICE-026; FEATURE="ParallelWrapperTests"; ASPECT=Testing; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+// Integration tests for the thread-pool-backed parallel wrapper in Geode.
 
-const spice_wrapper = @import("parallel/spice");
-const SpicePool = spice_wrapper.SpicePool;
-const Thresholds = spice_wrapper.Thresholds;
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
+const ParallelPool = parallel_wrapper.ParallelPool;
+const Thresholds = parallel_wrapper.Thresholds;
 
 // Note: HNSW tests moved to dedicated test file due to pre-existing memory leaks
 
 // ============================================================================
-// SpicePool Tests
+// ParallelPool Tests
 // ============================================================================
 
-test "SpicePool: initialization and cleanup" {
-    var pool = SpicePool.init(testing.allocator, 2);
+test "ParallelPool: initialization and cleanup" {
+    var pool = ParallelPool.init(testing.allocator, 2);
     pool.start();
     defer pool.deinit();
 
@@ -23,8 +23,8 @@ test "SpicePool: initialization and cleanup" {
     try testing.expect(pool.started);
 }
 
-test "SpicePool: multiple start calls are idempotent" {
-    var pool = SpicePool.init(testing.allocator, 2);
+test "ParallelPool: multiple start calls are idempotent" {
+    var pool = ParallelPool.init(testing.allocator, 2);
     pool.start();
     pool.start(); // Should be no-op
     pool.start(); // Should be no-op
@@ -38,19 +38,19 @@ test "SpicePool: multiple start calls are idempotent" {
 // ============================================================================
 
 test "parallelMap: small input uses sequential fallback" {
-    var pool = SpicePool.init(testing.allocator, 2);
+    var pool = ParallelPool.init(testing.allocator, 2);
     pool.start();
     defer pool.deinit();
 
     const items = [_]u32{ 1, 2, 3, 4, 5 };
 
     const mapSquare = struct {
-        fn map(_: *spice_wrapper.Task, x: u32) u64 {
+        fn map(_: *parallel_wrapper.Task, x: u32) u64 {
             return @as(u64, x) * x;
         }
     }.map;
 
-    const results = try spice_wrapper.parallelMap(u32, u64, &pool, &items, mapSquare, 10);
+    const results = try parallel_wrapper.parallelMap(u32, u64, &pool, &items, mapSquare, 10);
     defer pool.allocator.free(results);
 
     try testing.expectEqual(@as(u64, 1), results[0]);
@@ -61,7 +61,7 @@ test "parallelMap: small input uses sequential fallback" {
 }
 
 test "parallelMap: larger input uses sequential when threshold exceeds size" {
-    var pool = SpicePool.init(testing.allocator, 4);
+    var pool = ParallelPool.init(testing.allocator, 4);
     pool.start();
     defer pool.deinit();
 
@@ -72,13 +72,13 @@ test "parallelMap: larger input uses sequential when threshold exceeds size" {
     }
 
     const mapSquare = struct {
-        fn map(_: *spice_wrapper.Task, x: u32) u64 {
+        fn map(_: *parallel_wrapper.Task, x: u32) u64 {
             return @as(u64, x) * x;
         }
     }.map;
 
     // Use threshold larger than items to trigger sequential fallback
-    const results = try spice_wrapper.parallelMap(u32, u64, &pool, &items, mapSquare, 200);
+    const results = try parallel_wrapper.parallelMap(u32, u64, &pool, &items, mapSquare, 200);
     defer pool.allocator.free(results);
 
     // Verify results
@@ -89,18 +89,18 @@ test "parallelMap: larger input uses sequential when threshold exceeds size" {
 }
 
 // ============================================================================
-// Pool with SpicePool Tests
+// Pool with ParallelPool Tests
 // Note: Full Pool integration tests are skipped due to race conditions in
 // the work-stealing deque. These will be addressed separately.
 // ============================================================================
 
-test "SpicePool: direct call execution" {
-    var sp = SpicePool.init(testing.allocator, 2);
+test "ParallelPool: direct call execution" {
+    var sp = ParallelPool.init(testing.allocator, 2);
     sp.start();
     defer sp.deinit();
 
     const worker = struct {
-        fn work(_: *spice_wrapper.Task, x: u32) u64 {
+        fn work(_: *parallel_wrapper.Task, x: u32) u64 {
             return @as(u64, x) * 3;
         }
     }.work;
@@ -126,11 +126,11 @@ test "Thresholds: values are reasonable" {
 }
 
 test "shouldUseParallelism: correct behavior" {
-    try testing.expect(!spice_wrapper.shouldUseParallelism(10, 32));
-    try testing.expect(spice_wrapper.shouldUseParallelism(100, 32));
-    try testing.expect(spice_wrapper.shouldUseParallelism(33, 32));
-    try testing.expect(!spice_wrapper.shouldUseParallelism(32, 32));
-    try testing.expect(!spice_wrapper.shouldUseParallelism(0, 32));
+    try testing.expect(!parallel_wrapper.shouldUseParallelism(10, 32));
+    try testing.expect(parallel_wrapper.shouldUseParallelism(100, 32));
+    try testing.expect(parallel_wrapper.shouldUseParallelism(33, 32));
+    try testing.expect(!parallel_wrapper.shouldUseParallelism(32, 32));
+    try testing.expect(!parallel_wrapper.shouldUseParallelism(0, 32));
 }
 
 // ============================================================================
@@ -138,38 +138,38 @@ test "shouldUseParallelism: correct behavior" {
 // ============================================================================
 
 test "parallelMap: empty input" {
-    var pool = SpicePool.init(testing.allocator, 2);
+    var pool = ParallelPool.init(testing.allocator, 2);
     pool.start();
     defer pool.deinit();
 
     const items = [_]u32{};
 
     const identity = struct {
-        fn map(_: *spice_wrapper.Task, x: u32) u32 {
+        fn map(_: *parallel_wrapper.Task, x: u32) u32 {
             return x;
         }
     }.map;
 
-    const results = try spice_wrapper.parallelMap(u32, u32, &pool, &items, identity, 10);
+    const results = try parallel_wrapper.parallelMap(u32, u32, &pool, &items, identity, 10);
     defer pool.allocator.free(results);
 
     try testing.expectEqual(@as(usize, 0), results.len);
 }
 
 test "parallelMap: single element" {
-    var pool = SpicePool.init(testing.allocator, 2);
+    var pool = ParallelPool.init(testing.allocator, 2);
     pool.start();
     defer pool.deinit();
 
     const items = [_]u32{42};
 
     const double = struct {
-        fn map(_: *spice_wrapper.Task, x: u32) u64 {
+        fn map(_: *parallel_wrapper.Task, x: u32) u64 {
             return @as(u64, x) * 2;
         }
     }.map;
 
-    const results = try spice_wrapper.parallelMap(u32, u64, &pool, &items, double, 10);
+    const results = try parallel_wrapper.parallelMap(u32, u64, &pool, &items, double, 10);
     defer pool.allocator.free(results);
 
     try testing.expectEqual(@as(usize, 1), results.len);
