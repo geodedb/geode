@@ -2107,3 +2107,79 @@ Three changes eliminate the write-lock stall during MERGE:
 - `src/txn_undo_log.zig` -- added `commitDeferRebuilds()` for split commit
 
 **Tests:** `tests/test_gap_0511_regression.zig` (6 tests covering deferred rebuild, adapter-backed MERGE/DELETE snapshot elision, relationship endpoint lookup, startup metadata repair)
+
+---
+
+## GAP-0514: CANARY IMPL Coverage Sprint
+
+- **Category:** Test Hygiene / Governance
+- **Severity:** Medium (hygiene, not functional defect — all existing tests pass)
+- **Component:** `tools/canaryscan`, `tests/`, CANARY-marked source files across the repo
+- **Date opened:** 2026-04-06 (in `docs/FULL_AUDIT_2026_04_06.md`)
+
+### Summary
+
+At the time of the April 2026 audit, ~367 CANARY markers in the source tree were at `STATUS=IMPL` (implemented but not yet verified by a named test). All 1036+ Zig tests were passing; the gap is purely governance/hygiene — the code works, but the markers don't point at specific tests that prove each invariant. Closing the gap requires writing regression tests, mutation-testing them to prove they are load-bearing, then flipping `STATUS=IMPL` → `STATUS=TESTED` with a `TEST=` reference.
+
+This work is broken into phases because the test-infrastructure requirements differ by subsystem (unit-level harness vs. catalog singleton vs. cluster activation vs. integration test).
+
+### Phase 1A — `graph_store.zig` unit-level invariants — **CLOSED (2026-04-11)**
+
+- **Scope:** 8 markers in `src/graph_store.zig` covering dirty-flag tracking, adjacency index maintenance, graph registry helpers, and `saveToFile` behavior.
+- **Test file:** `tests/test_gap0514_graph_store_regression.zig` (6 tests, shared `GsHarness` struct backed by a temp data dir for per-test isolation).
+- **Markers flipped:** `REQ-BINARY-PERSIST-DIRTY-001`, `-002`, `REQ-BINARY-PERSIST-EDGE-001`, `REQ-PERF-EDGE-ADJ-001`, `-002`, `REQ-MULTI-GRAPH-008` ×2, `REQ-STORAGE-ENGINE-PHASE2-002`.
+- **IMPL count:** 358 → 350 (per `canaryscan`).
+- **Mutation-test discipline:** Every test was mutation-tested during development — the feature was temporarily broken in `src/graph_store.zig`, the test was run to confirm failure, then the break was restored. Two tasks (DIRTY-001, EDGE-001) required compound mutations because dirty-setting is intentionally distributed across `ensureGraph` + the create-function bodies (defence in depth).
+- **Plan:** `docs/superpowers/plans/2026-04-11-gap0514-phase1a-graph-store-tests.md`.
+- **Infrastructure fix (commit `86e2a8ca`):** `tools/status_generate.py` now skips `docs/superpowers/plans/` so literal CANARY examples embedded in plan markdown don't pollute `docs/status.csv`. This also cleaned up pre-existing bogus rows from older plan docs.
+
+### Phase 1B — `execution.zig` IMPL markers — **OPEN**
+
+- **Scope:** ~15 markers in `src/execution.zig` and the `src/execution/` subtree covering catalog fastpath, DSN graph binding, GQL path modes, variable-length reverse traversal, graph statistics re-export, and CTE handling.
+- **Target markers (non-exhaustive):** `REQ-PERF-CATALOG-FASTPATH-001`, `REQ-DSN-GRAPH-BIND-001/002`, `REQ-GQL-PATH-MODES-004`, `REQ-GQL-VARLEN-REVERSE-001`, `REQ-GQL-GRAPH-STATS-001`, `REQ-GQL-CTE-004`.
+- **Blocker:** Each marker needs a catalog-singleton / `ExecutionContext` test harness (`GsHarness` alone is insufficient). The tests must exercise the query planner + execution path, not just the storage layer.
+- **Estimated work:** One or two plan documents, 8-12 tasks, similar shape to Phase 1A.
+
+### Phase 1C — remaining `graph_store.zig` storage-engine markers — **OPEN**
+
+- **Scope:** 5 markers in `src/graph_store.zig` that Phase 1A deferred: `REQ-STORAGE-ENGINE-PHASE2-001`, `-003`, `-004`, `-005`, `-006`.
+- **Blocker:** These exercise the `loadFromAdapter`, sidecar cleanup, and `persistSplitPhase` paths and require a wired `global_adapter` (heavier setup than the Phase 1A `GsHarness` provides). One option is to extend `GsHarness` with an optional in-memory storage adapter; the other is to write them as integration tests under the existing `graph_storage_adapter` test module.
+
+### Phase 2 — distributed module — **OPEN**
+
+- **Scope:** ~80 CANARY IMPL markers in `src/distributed/` covering replication, 2PC, cluster membership, federation, and enhanced query coordination.
+- **Blocker:** Most of this code only activates when `GEODE_CLUSTER_TOKEN` is set. The existing `src/distributed/test_query_transport_node_registry.zig` is an inline copy that works around this; the broader distributed tests need a multi-node harness or an integration test framework that spins up several Geode processes.
+- **Note:** GAP-0513 closed the distributed *audit* (all functional gaps resolved via commit `68ff42c4`). Phase 2 of GAP-0514 is specifically about test coverage for the already-correct code.
+
+### Phase 3 — server + client — **OPEN**
+
+- **Scope:** ~94 CANARY IMPL markers combined across `src/server/` and `src/client/`, covering QUIC connection lifecycle, request routing, CLI flag handling, and wire-protocol edge cases.
+- **Blocker:** Server tests need a real QUIC listener + client loop; client tests need a real server to talk to. These are integration-test flavor (similar to `geodetestlab`) rather than unit-level.
+- **Synergy:** Many of these can be covered by expanding the existing `geodetestlab` integration suite rather than writing new Zig tests. That also helps close the documentation claim in GAP-0517 about "development ready" coverage.
+
+### Phase 4 — MCP test rooting + GAP-0516 activation — **OPEN**
+
+- **Scope:** Root `src/mcp/` for Zig test discovery, which currently fails because the `lsp.zig` and `client.zig` files contain 5+ pre-existing dead-test failures (memory leaks in `getCompletions`/`validateQuery`, assertion drift in `getHover`, bearer-token IPv6 endpoint parsing conflict). Once those are fixed, activate the 4 inline GAP-0516 regression tests that currently live in `src/mcp/server.zig` as dead code (they exist but are not wired into any test target).
+- **Blocker:** The 5 pre-existing test failures must be fixed first. Each is a small, targeted code fix (freeing a hash-map on a failed branch, updating an expectation to match current struct output, etc.) but they touch security-sensitive code paths and need careful review.
+- **Cross-reference:** GAP-0516 (MCP NotImplemented stubs) was closed in principle — the handlers return spec-compliant `MethodNotFound`/`"[]"`/silent success. Phase 4 is about the test activation hygiene, not the handler behavior.
+
+### Not in the Phase plan
+
+The following CANARY-related work is out of scope for GAP-0514 phases as currently scoped:
+
+- **Markers in `.py` / `.sh` / `.yaml` files** — `tools/status_generate.py` counts these, but they represent non-Zig subsystems (build scripts, CI hooks, Python tools) and should be tracked separately if they need coverage.
+- **`docs/status.csv` vs. `tools/canaryscan/status.csv` divergence** — the Python tool and the Go tool have different scanning rules (file-type filters, promotion logic). The Python tool is the canonical pre-commit gate; the Go tool is used for `canaryscan --verify` against `GAP_ANALYSIS.md`. Phase 1A uncovered and fixed one divergence (plan-doc scanning); more may exist.
+- **Benched-vs-Tested upgrades** — some markers should be `STATUS=BENCHED` (performance-sensitive paths with regression benchmarks) rather than plain `TESTED`. That is a separate governance question deferred to a future sprint.
+
+### Tracking
+
+| Phase | IMPL start | IMPL end | Status | Plan doc |
+|-------|-----------|----------|--------|----------|
+| 1A (graph_store) | 358 | 350 | **Closed 2026-04-11** | `docs/superpowers/plans/2026-04-11-gap0514-phase1a-graph-store-tests.md` |
+| 1B (execution) | 350 | — | Open | — |
+| 1C (graph_store storage-engine) | — | — | Open | — |
+| 2 (distributed) | — | — | Open | — |
+| 3 (server + client) | — | — | Open | — |
+| 4 (MCP activation) | — | — | Open (blocked on pre-existing LSP/client dead-test fixes) | — |
+
+Each open phase should get its own plan document under `docs/superpowers/plans/` before execution begins. Phase 1A's plan is the template.
