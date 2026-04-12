@@ -7,6 +7,7 @@ const dist_schema = @import("distributed_schema");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 const quic = @import("transport/quic");
+const pooled = @import("transport/thread_pool");
 const NonceTracker = @import("nonce_tracker.zig").NonceTracker;
 
 const cluster_auth = @import("cluster_auth.zig");
@@ -259,12 +260,13 @@ pub const ClusterCoordinator = struct {
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     max_connections: u32 = 100,
 
-    // QUAL-D004: Shutdown signal and thread handles for graceful stop.
+    // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
-    raft_thread: ?std.Thread = null,
-    network_thread: ?std.Thread = null,
-    health_thread: ?std.Thread = null,
-    replication_thread: ?std.Thread = null,
+    raft_pool: ?*pooled.ThreadPool = null,
+    network_pool: ?*pooled.ThreadPool = null,
+    health_pool: ?*pooled.ThreadPool = null,
+    replication_pool: ?*pooled.ThreadPool = null,
+    connection_pool: ?*pooled.ThreadPool = null,
 
     // Helper to access replication map
     fn replication_map(self: *ClusterCoordinator) std.AutoHashMap(u64, []u64) {
@@ -480,31 +482,63 @@ pub const ClusterCoordinator = struct {
     // Call stop() (or deinit()) to signal shutdown and join all threads.
     pub fn start(self: *ClusterCoordinator) !void {
         self.shutdown.store(false, .release);
-        self.raft_thread = try std.Thread.spawn(.{}, raftLoop, .{self});
-        self.network_thread = try std.Thread.spawn(.{}, networkLoop, .{self});
-        self.health_thread = try std.Thread.spawn(.{}, healthLoop, .{self});
-        self.replication_thread = try std.Thread.spawn(.{}, replicationLoop, .{self});
+        self.connection_pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 4,
+            .queue_capacity = 128,
+        });
+        errdefer {
+            self.connection_pool.?.deinit();
+            self.connection_pool = null;
+        }
+        self.raft_pool = try startLoopPool(self, runRaftLoop);
+        errdefer {
+            self.raft_pool.?.deinit();
+            self.raft_pool = null;
+        }
+        self.network_pool = try startLoopPool(self, runNetworkLoop);
+        errdefer {
+            self.network_pool.?.deinit();
+            self.network_pool = null;
+        }
+        self.health_pool = try startLoopPool(self, runHealthLoop);
+        errdefer {
+            self.health_pool.?.deinit();
+            self.health_pool = null;
+        }
+        self.replication_pool = try startLoopPool(self, runReplicationLoop);
+        errdefer {
+            self.replication_pool.?.deinit();
+            self.replication_pool = null;
+        }
     }
 
     pub fn stop(self: *ClusterCoordinator) void {
         self.shutdown.store(true, .release);
         // networkLoop's accept() has a 50ms internal timeout so it will
         // observe the shutdown flag within one polling cycle.
-        if (self.raft_thread) |t| {
-            t.join();
-            self.raft_thread = null;
+        if (self.network_transport.quic_server) |*server| {
+            server.deinit();
+            self.network_transport.quic_server = null;
         }
-        if (self.network_thread) |t| {
-            t.join();
-            self.network_thread = null;
+        if (self.raft_pool) |pool| {
+            pool.deinit();
+            self.raft_pool = null;
         }
-        if (self.health_thread) |t| {
-            t.join();
-            self.health_thread = null;
+        if (self.network_pool) |pool| {
+            pool.deinit();
+            self.network_pool = null;
         }
-        if (self.replication_thread) |t| {
-            t.join();
-            self.replication_thread = null;
+        if (self.health_pool) |pool| {
+            pool.deinit();
+            self.health_pool = null;
+        }
+        if (self.replication_pool) |pool| {
+            pool.deinit();
+            self.replication_pool = null;
+        }
+        if (self.connection_pool) |pool| {
+            pool.deinit();
+            self.connection_pool = null;
         }
     }
 
@@ -543,8 +577,22 @@ pub const ClusterCoordinator = struct {
                 continue;
             }
 
-            const t = try std.Thread.spawn(.{}, handleQuicConnection, .{ self, conn });
-            t.detach();
+            if (self.connection_pool) |pool| {
+                const ctx = try self.allocator.create(ConnectionTaskCtx);
+                errdefer self.allocator.destroy(ctx);
+                ctx.* = .{
+                    .allocator = self.allocator,
+                    .coordinator = self,
+                    .conn = conn,
+                };
+                if (!pool.submit(.{
+                    .context = @ptrCast(ctx),
+                    .callback = runConnectionTask,
+                })) {
+                    self.allocator.destroy(ctx);
+                    log.warn("Connection pool saturated, dropping cluster connection", &.{});
+                }
+            }
         }
     }
 
@@ -572,6 +620,61 @@ pub const ClusterCoordinator = struct {
             }
             std.time.sleep(100 * std.time.ns_per_ms);
         }
+    }
+
+    const ConnectionTaskCtx = struct {
+        allocator: Allocator,
+        coordinator: *ClusterCoordinator,
+        conn: *quic.QuicConnection,
+    };
+
+    fn startLoopPool(self: *ClusterCoordinator, callback: *const fn (*anyopaque) void) !*pooled.ThreadPool {
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        });
+        errdefer pool.deinit();
+        try pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = callback,
+        });
+        return pool;
+    }
+
+    fn runRaftLoop(ctx: *anyopaque) void {
+        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
+        self.raftLoop() catch |err| {
+            log.err("Raft loop failed", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    fn runNetworkLoop(ctx: *anyopaque) void {
+        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
+        self.networkLoop() catch |err| {
+            log.err("Network loop failed", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    fn runHealthLoop(ctx: *anyopaque) void {
+        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
+        self.healthLoop() catch |err| {
+            log.err("Health loop failed", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    fn runReplicationLoop(ctx: *anyopaque) void {
+        const self: *ClusterCoordinator = @ptrCast(@alignCast(ctx));
+        self.replicationLoop() catch |err| {
+            log.err("Replication loop failed", &.{Attr.string("error", @errorName(err))});
+        };
+    }
+
+    fn runConnectionTask(ctx: *anyopaque) void {
+        const task_ctx: *ConnectionTaskCtx = @ptrCast(@alignCast(ctx));
+        defer task_ctx.allocator.destroy(task_ctx);
+        task_ctx.coordinator.handleQuicConnection(task_ctx.conn) catch |err| {
+            log.err("Cluster connection handler failed", &.{Attr.string("error", @errorName(err))});
+        };
     }
 
     fn handleQuicConnection(self: *ClusterCoordinator, conn: *quic.QuicConnection) !void {

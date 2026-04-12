@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const platform = @import("platform.zig");
+const pooled = @import("transport/thread_pool");
 
 /// CANARY: REQ=REQ-SHELL-SPINNER-001; FEATURE="ShellProcessingIndicator"; ASPECT=Module; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
 /// Cross-platform spinner/activity indicator for long-running shell operations.
@@ -123,8 +124,8 @@ pub const Spinner = struct {
     allocator: std.mem.Allocator,
     /// Width of last rendered line (for clearing)
     last_line_width: usize,
-    /// Background animation thread (null if not using background mode)
-    animation_thread: ?std.Thread,
+    /// Background animation worker pool (null if not using background mode)
+    animation_pool: ?*pooled.ThreadPool,
     /// Atomic flag to signal thread to stop
     stop_flag: std.atomic.Value(bool),
     /// Mutex for thread-safe message updates
@@ -145,7 +146,7 @@ pub const Spinner = struct {
             .started = false,
             .allocator = allocator,
             .last_line_width = 0,
-            .animation_thread = null,
+            .animation_pool = null,
             .stop_flag = std.atomic.Value(bool).init(false),
             .message_mutex = .{},
             .message_buffer = undefined,
@@ -169,7 +170,7 @@ pub const Spinner = struct {
             .started = false,
             .allocator = allocator,
             .last_line_width = 0,
-            .animation_thread = null,
+            .animation_pool = null,
             .stop_flag = std.atomic.Value(bool).init(false),
             .message_mutex = .{},
             .message_buffer = undefined,
@@ -210,11 +211,21 @@ pub const Spinner = struct {
         self.last_update = std.time.milliTimestamp();
         self.render();
 
-        // Spawn animation thread
-        self.animation_thread = std.Thread.spawn(.{}, animationLoop, .{self}) catch {
-            // If thread spawn fails, fall back to non-animated mode
+        const pool = pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        }) catch {
             return;
         };
+        errdefer pool.deinit();
+        pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runAnimationLoop,
+        }) catch {
+            pool.deinit();
+            return;
+        };
+        self.animation_pool = pool;
     }
 
     /// Animation loop for background thread
@@ -284,7 +295,7 @@ pub const Spinner = struct {
         self.message = message;
         self.message_mutex.unlock();
 
-        if (self.started and self.animation_thread == null) {
+        if (self.started and self.animation_pool == null) {
             self.render();
         }
     }
@@ -319,10 +330,10 @@ pub const Spinner = struct {
         if (!self.started) return;
 
         // Signal background thread to stop and wait for it
-        if (self.animation_thread) |thread| {
+        if (self.animation_pool) |pool| {
             self.stop_flag.store(true, .seq_cst);
-            thread.join();
-            self.animation_thread = null;
+            pool.deinit();
+            self.animation_pool = null;
         }
 
         const stdout = platform.getStdoutHandle();
@@ -351,6 +362,11 @@ pub const Spinner = struct {
         }
 
         self.started = false;
+    }
+
+    fn runAnimationLoop(ctx: *anyopaque) void {
+        const self: *Spinner = @ptrCast(@alignCast(ctx));
+        self.animationLoop();
     }
 
     /// Stop with success indicator

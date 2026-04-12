@@ -13,6 +13,7 @@ const transport_response = @import("../../cli/transport_response.zig");
 const query_result_accumulator = @import("../query_result_accumulator.zig");
 const query_runner = @import("../query_runner.zig");
 const query_scope = @import("../query_scope.zig");
+const pooled = @import("transport/thread_pool");
 
 const spice_wrapper = @import("parallel/spice");
 
@@ -21,6 +22,22 @@ const ColumnInfo = query_result_accumulator.ColumnInfo;
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
 // Output write failures are non-critical — the query result is correct
 // even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+
+var g_repl_background_pool_mu: std.Thread.Mutex = .{};
+var g_repl_background_pool: ?*pooled.ThreadPool = null;
+
+fn getBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
+    g_repl_background_pool_mu.lock();
+    defer g_repl_background_pool_mu.unlock();
+
+    if (g_repl_background_pool == null) {
+        g_repl_background_pool = try pooled.ThreadPool.init(allocator, .{
+            .num_threads = 2,
+            .queue_capacity = 32,
+        });
+    }
+    return g_repl_background_pool.?;
+}
 
 /// Validate a graph name to prevent GQL injection (S5).
 /// Graph names must match [a-zA-Z_][a-zA-Z0-9_]*.
@@ -1303,34 +1320,7 @@ pub const ClientSession = struct {
             .allocator = self.allocator,
         };
 
-        // Spawn worker thread to do the blocking read
-        const worker = std.Thread.spawn(.{}, struct {
-            fn run(c: *ReadContext) void {
-                const result = c.connection.readLine(c.allocator, 0) catch |err| {
-                    // Check if we were abandoned before storing error
-                    if (c.abandoned.load(.acquire)) {
-                        // Main thread abandoned us, clean up and exit
-                        c.allocator.destroy(c);
-                        return;
-                    }
-                    c.err = err;
-                    c.done.store(true, .release);
-                    return;
-                };
-
-                // Check if we were abandoned before storing result
-                if (c.abandoned.load(.acquire)) {
-                    // Main thread abandoned us, free the result and context
-                    c.allocator.free(result);
-                    c.allocator.destroy(c);
-                    return;
-                }
-
-                c.result = result;
-                c.done.store(true, .release);
-            }
-        }.run, .{ctx}) catch {
-            // Thread spawn failed, free context and fall back to blocking read
+        const bg_pool = getBackgroundPool(self.allocator) catch {
             self.allocator.destroy(ctx);
             const response = self.connection.?.readLine(self.allocator, 0) catch |read_err| {
                 return read_err;
@@ -1340,6 +1330,41 @@ pub const ClientSession = struct {
             self.consumeInlinePageIfNeeded();
             return;
         };
+        if (!bg_pool.submit(.{
+            .context = @ptrCast(ctx),
+            .callback = struct {
+                fn run(context: *anyopaque) void {
+                    const c: *ReadContext = @ptrCast(@alignCast(context));
+                    const result = c.connection.readLine(c.allocator, 0) catch |err| {
+                        if (c.abandoned.load(.acquire)) {
+                            c.allocator.destroy(c);
+                            return;
+                        }
+                        c.err = err;
+                        c.done.store(true, .release);
+                        return;
+                    };
+
+                    if (c.abandoned.load(.acquire)) {
+                        c.allocator.free(result);
+                        c.allocator.destroy(c);
+                        return;
+                    }
+
+                    c.result = result;
+                    c.done.store(true, .release);
+                }
+            }.run,
+        })) {
+            // Pool submission failed, free context and fall back to blocking read
+            self.allocator.destroy(ctx);
+            const response = self.connection.?.readLine(self.allocator, 0) catch |read_err| {
+                return read_err;
+            };
+            try ResponseHandler.handle(self, response);
+            self.consumeInlinePageIfNeeded();
+            return;
+        }
 
         // Main thread: wait for completion while checking for interrupts
         const max_wait_ms: usize = 300000; // 5 minutes max
@@ -1349,7 +1374,6 @@ pub const ClientSession = struct {
         while (waited_ms < max_wait_ms) {
             // Check if worker is done
             if (ctx.done.load(.acquire)) {
-                worker.join();
                 const err_val = ctx.err;
                 const result_val = ctx.result;
                 // Worker completed normally, we own the context now
@@ -1368,7 +1392,6 @@ pub const ClientSession = struct {
             if (checkForInterrupt()) {
                 // Interrupt detected - signal worker to clean up and detach
                 ctx.abandoned.store(true, .release);
-                worker.detach();
                 return error.Interrupted;
             }
 
@@ -1379,7 +1402,6 @@ pub const ClientSession = struct {
 
         // Timeout - signal worker to clean up and detach
         ctx.abandoned.store(true, .release);
-        worker.detach();
         return error.WouldBlock;
     }
 

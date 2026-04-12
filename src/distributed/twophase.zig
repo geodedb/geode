@@ -6,6 +6,7 @@ const dist_schema = @import("distributed_schema");
 const proto_schema = @import("schema");
 const graph_store = @import("../graph_store.zig");
 const value_convert = @import("value_convert.zig");
+const pooled = @import("transport/thread_pool");
 
 const cluster_auth = @import("cluster_auth.zig");
 // SEC-D009: Import nonce tracker for replay protection on 2PC messages.
@@ -774,6 +775,12 @@ pub const Transaction = struct {
         }
     }
 
+    fn runPrepareWorker(ctx: *anyopaque, runtime: *pooled.TaskContext) void {
+        _ = runtime;
+        const worker_ctx: *PrepareWorkerCtx = @ptrCast(@alignCast(ctx));
+        prepareWorker(worker_ctx.*);
+    }
+
     // PERF-D004: Worker context for parallel commit
     const CommitWorkerCtx = struct {
         txn: *Transaction,
@@ -811,6 +818,12 @@ pub const Transaction = struct {
         participant.last_message_time = std.time.timestamp();
     }
 
+    fn runCommitWorker(ctx: *anyopaque, runtime: *pooled.TaskContext) void {
+        _ = runtime;
+        const worker_ctx: *CommitWorkerCtx = @ptrCast(@alignCast(ctx));
+        commitWorker(worker_ctx.*);
+    }
+
     // PERF-D003: Parallel prepare -- contact all participants concurrently
     pub fn prepare(self: *Transaction) !bool {
         self.state = .preparing;
@@ -826,18 +839,28 @@ pub const Transaction = struct {
         for (self.participants.items) |*participant| {
             participant.state = .preparing;
         }
-        var threads = try self.allocator.alloc(?std.Thread, participant_count);
-        defer self.allocator.free(threads);
+        const worker_count = @max(@min(participant_count, @as(usize, 16)), 1);
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = worker_count,
+            .queue_capacity = @max(participant_count * 2, 4),
+        });
+        defer pool.deinit();
+        var wg = pool.waitGroup();
+        const worker_ctxs = try self.allocator.alloc(PrepareWorkerCtx, participant_count);
+        defer self.allocator.free(worker_ctxs);
         for (0..participant_count) |idx| {
-            threads[idx] = std.Thread.spawn(.{}, prepareWorker, .{PrepareWorkerCtx{
+            worker_ctxs[idx] = .{
                 .txn = self,
                 .idx = idx,
                 .votes = vote_results,
-            }}) catch null;
+            };
+            _ = try pool.submitTask(runPrepareWorker, @ptrCast(&worker_ctxs[idx]), .{
+                .wait_group = &wg,
+                .backpressure = .block,
+                .lane = .blocking,
+            });
         }
-        for (threads) |maybe_thread| {
-            if (maybe_thread) |t| t.join();
-        }
+        wg.wait();
         var all_voted_commit = true;
         for (vote_results) |v| {
             if (!v) {
@@ -868,17 +891,27 @@ pub const Transaction = struct {
         for (self.participants.items) |*participant| {
             participant.state = .committing;
         }
-        var threads = try self.allocator.alloc(?std.Thread, participant_count);
-        defer self.allocator.free(threads);
+        const worker_count = @max(@min(participant_count, @as(usize, 16)), 1);
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = worker_count,
+            .queue_capacity = @max(participant_count * 2, 4),
+        });
+        defer pool.deinit();
+        var wg = pool.waitGroup();
+        const worker_ctxs = try self.allocator.alloc(CommitWorkerCtx, participant_count);
+        defer self.allocator.free(worker_ctxs);
         for (0..participant_count) |idx| {
-            threads[idx] = std.Thread.spawn(.{}, commitWorker, .{CommitWorkerCtx{
+            worker_ctxs[idx] = .{
                 .txn = self,
                 .idx = idx,
-            }}) catch null;
+            };
+            _ = try pool.submitTask(runCommitWorker, @ptrCast(&worker_ctxs[idx]), .{
+                .wait_group = &wg,
+                .backpressure = .block,
+                .lane = .blocking,
+            });
         }
-        for (threads) |maybe_thread| {
-            if (maybe_thread) |t| t.join();
-        }
+        wg.wait();
         self.state = .committed;
     }
 

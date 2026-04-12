@@ -10,6 +10,7 @@ const AutoHashMap = std.AutoHashMap;
 // Import core Geode modules
 const geode = @import("../lib.zig");
 const ml_embeddings = @import("../ml/graph_embeddings.zig");
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Analytics; STATUS=EXEMPT; OWNER=analytics; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -499,7 +500,7 @@ pub const RealTimeAnalyticsEngine = struct {
     ml_manager: ?*ml_embeddings.GraphEmbeddingsManager,
     pattern_detector: PatternDetector,
     anomaly_detector: AnomalyDetector,
-    processing_thread: ?std.Thread = null,
+    processing_pool: ?*pooled.ThreadPool = null,
     should_stop: bool = false,
     mutex: std.Thread.Mutex = .{},
 
@@ -531,18 +532,27 @@ pub const RealTimeAnalyticsEngine = struct {
     }
 
     pub fn start(self: *RealTimeAnalyticsEngine) !void {
-        if (self.processing_thread == null) {
+        if (self.processing_pool == null) {
             self.should_stop = false;
-            self.processing_thread = try std.Thread.spawn(.{}, processEvents, .{self});
+            const pool = try pooled.ThreadPool.init(self.allocator, .{
+                .num_threads = 1,
+                .queue_capacity = 4,
+            });
+            errdefer pool.deinit();
+            try pool.submitBlocking(.{
+                .context = @ptrCast(self),
+                .callback = runProcessEventsLoop,
+            });
+            self.processing_pool = pool;
             log.info("Real-time analytics engine started", .{});
         }
     }
 
     pub fn stop(self: *RealTimeAnalyticsEngine) void {
-        if (self.processing_thread) |thread| {
+        if (self.processing_pool) |pool| {
             self.should_stop = true;
-            thread.join();
-            self.processing_thread = null;
+            pool.deinit();
+            self.processing_pool = null;
             log.info("Real-time analytics engine stopped", .{});
         }
     }
@@ -703,6 +713,11 @@ pub const RealTimeAnalyticsEngine = struct {
             // Sleep for configured interval
             std.time.sleep(self.config.processing_interval_ms * std.time.ns_per_ms);
         }
+    }
+
+    fn runProcessEventsLoop(ctx: *anyopaque) void {
+        const self: *RealTimeAnalyticsEngine = @ptrCast(@alignCast(ctx));
+        self.processEvents();
     }
 };
 

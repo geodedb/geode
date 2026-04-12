@@ -1,4 +1,5 @@
 const std = @import("std");
+const ext_pool = @import("thread_pool");
 
 // CANARY: REQ=REQ-PERF-THREAD-POOL-001; FEATURE="ThreadPool"; ASPECT=QueryExecution; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-04-01
 // GAP-0201: High-performance thread pool for parallel query execution
@@ -140,174 +141,143 @@ pub const Stats = struct {
     total_completed: u64,
 };
 
+pub const WaitGroup = ext_pool.WaitGroup;
+pub const TaskHandle = ext_pool.TaskHandle;
+pub const TaskContext = ext_pool.TaskContext;
+pub const TaskFn = ext_pool.TaskFn;
+pub const SubmitOptions = ext_pool.SubmitOptions;
+pub const ShutdownMode = ext_pool.ShutdownMode;
+
 /// High-performance thread pool for query execution.
 /// CANARY: REQ=REQ-PERF-THREAD-POOL-002; FEATURE="ThreadPool"; ASPECT=WorkerManagement; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-04-01
 ///
-/// Self-contained implementation using std.Thread primitives.
-/// The external concurrency library has been removed (GAP-0275).
+/// Compatibility wrapper over the external `thread_pool` dependency.
 pub const ThreadPool = struct {
     const Self = @This();
-
-    /// Fixed-size work queue (4096 slots, power of two).
-    const QueueSize = 4096;
-    const Queue = BoundedQueue(WorkItem, QueueSize);
+    const WorkerStub = struct {};
+    const SubmittedTask = struct {
+        allocator: std.mem.Allocator,
+        item: WorkItem,
+    };
 
     allocator: std.mem.Allocator,
-    queue: *Queue,
-    worker_threads: []std.Thread,
-    shutdown: std.atomic.Value(bool),
-    pending: std.atomic.Value(usize),
-    total_submitted: std.atomic.Value(u64),
-    total_completed: std.atomic.Value(u64),
-    active: std.atomic.Value(usize),
-
-    // Condition variable to wake sleeping workers when new work arrives.
-    cond_mutex: std.Thread.Mutex,
-    cond: std.Thread.Condition,
+    inner: ext_pool.ThreadPool,
 
     /// Exposed so callers can read `pool.workers.len` for observability.
-    workers: []std.Thread,
+    workers: []WorkerStub,
 
     /// Initialize the thread pool.
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
-        const num = if (config.num_threads == 0) blk: {
-            const cpus = std.Thread.getCpuCount() catch 4;
-            // Cap auto-detected worker count.  Each worker warms thread-local
-            // state on first use (~10MB), so scaling linearly with CPU count
-            // causes RSS to balloon on large-core-count machines and pushes
-            // the server past process memory limits under sustained load.
-            // 16 workers is plenty for a query-routing front-end; CPU-bound
-            // work is dispatched to the separate parallel execution pool.
-            // Callers needing more can set num_threads explicitly.
-            const auto_max: usize = 16;
-            break :blk @max(@min(cpus, auto_max), 2);
-        } else config.num_threads;
-
-        const queue = try allocator.create(Queue);
-        queue.* = Queue.init();
-
-        const threads = try allocator.alloc(std.Thread, num);
-
+        const num = effectiveThreadCount(config);
+        const workers = try allocator.alloc(WorkerStub, num);
+        errdefer allocator.free(workers);
+        var inner = try ext_pool.ThreadPool.init(allocator, .{
+            .min_threads = num,
+            .max_threads = num,
+            .queue_capacity = @max(config.queue_capacity, 64),
+            .local_queue_capacity = @max(@min(config.queue_capacity, 256), 1),
+            .scheduler_variant = .work_stealing,
+            .allow_blocking_lane = true,
+        });
+        errdefer inner.deinit();
         const self = try allocator.create(Self);
         self.* = .{
             .allocator = allocator,
-            .queue = queue,
-            .worker_threads = threads,
-            .shutdown = std.atomic.Value(bool).init(false),
-            .pending = std.atomic.Value(usize).init(0),
-            .total_submitted = std.atomic.Value(u64).init(0),
-            .total_completed = std.atomic.Value(u64).init(0),
-            .active = std.atomic.Value(usize).init(0),
-            .cond_mutex = .{},
-            .cond = .{},
-            .workers = threads,
+            .inner = inner,
+            .workers = workers,
         };
-
-        // Spawn worker threads.
-        for (threads, 0..) |*t, i| {
-            _ = i;
-            const spawn_config: std.Thread.SpawnConfig = if (config.stack_size > 0) .{ .stack_size = config.stack_size } else .{};
-            t.* = try std.Thread.spawn(spawn_config, workerLoop, .{self});
-        }
-
         return self;
     }
 
     /// Shutdown the thread pool and wait for all workers to finish.
     pub fn deinit(self: *Self) void {
-        self.shutdown.store(true, .release);
-
-        // Wake all sleeping workers.
-        self.cond_mutex.lock();
-        self.cond.broadcast();
-        self.cond_mutex.unlock();
-
-        for (self.worker_threads) |t| {
-            t.join();
-        }
-
-        const allocator = self.allocator;
-        allocator.free(self.worker_threads);
-        allocator.destroy(self.queue);
-        allocator.destroy(self);
+        self.inner.deinit();
+        self.allocator.free(self.workers);
+        self.allocator.destroy(self);
     }
 
     /// Submit a work item to the thread pool.
     /// Returns true if submitted, false if queue is full.
     pub fn submit(self: *Self, item: WorkItem) bool {
-        if (!self.queue.tryPush(item)) {
-            return false;
-        }
-        _ = self.pending.fetchAdd(1, .release);
-        _ = self.total_submitted.fetchAdd(1, .release);
-
-        // Signal one worker.
-        self.cond_mutex.lock();
-        self.cond.signal();
-        self.cond_mutex.unlock();
-
+        _ = self.submitInternal(item, .{ .lane = .blocking }) catch return false;
         return true;
     }
 
     /// Submit a work item, blocking if queue is full.
     pub fn submitBlocking(self: *Self, item: WorkItem) !void {
-        while (true) {
-            if (self.shutdown.load(.acquire)) return error.PoolShutdown;
-            if (self.submit(item)) return;
-            // Brief back-off before retry.
-            std.Thread.sleep(100 * std.time.ns_per_us);
-        }
+        _ = try self.submitInternal(item, .{
+            .lane = .blocking,
+            .backpressure = .block,
+        });
     }
 
     /// Get the number of pending tasks in the queue.
     pub fn pendingTasks(self: *Self) usize {
-        return self.pending.load(.acquire);
+        const stats = self.inner.statsSnapshot();
+        return @intCast(stats.queue_depth_current);
     }
 
     /// Get the number of active workers currently processing tasks.
     pub fn activeWorkers(self: *Self) usize {
-        return self.active.load(.acquire);
+        const stats = self.inner.statsSnapshot();
+        return @intCast(stats.active_tasks);
     }
 
     /// Get statistics about the thread pool.
     pub fn getStats(self: *Self) Stats {
+        const stats = self.inner.statsSnapshot();
         return .{
-            .num_workers = self.worker_threads.len,
-            .pending_tasks = self.pending.load(.acquire),
-            .total_submitted = self.total_submitted.load(.acquire),
-            .total_completed = self.total_completed.load(.acquire),
+            .num_workers = self.workers.len,
+            .pending_tasks = @intCast(stats.queue_depth_current),
+            .total_submitted = stats.submitted,
+            .total_completed = stats.completed,
         };
     }
 
-    fn workerLoop(self: *Self) void {
-        while (true) {
-            if (self.queue.tryPop()) |item| {
-                _ = self.active.fetchAdd(1, .release);
-                item.callback(item.context);
-                if (item.completion) |completion| {
-                    completion(item.context);
-                }
-                _ = self.active.fetchSub(1, .release);
-                _ = self.pending.fetchSub(1, .release);
-                _ = self.total_completed.fetchAdd(1, .release);
-                continue;
-            }
+    pub fn waitGroup(self: *Self) WaitGroup {
+        return self.inner.waitGroup();
+    }
 
-            if (self.shutdown.load(.acquire)) break;
+    pub fn wait(self: *Self, handle: TaskHandle) !void {
+        try self.inner.wait(handle);
+    }
 
-            // No work available — wait on condition variable.
-            self.cond_mutex.lock();
-            // Double-check after acquiring mutex.
-            if (!self.queue.isEmpty()) {
-                self.cond_mutex.unlock();
-                continue;
-            }
-            if (self.shutdown.load(.acquire)) {
-                self.cond_mutex.unlock();
-                break;
-            }
-            self.cond.wait(&self.cond_mutex);
-            self.cond_mutex.unlock();
+    pub fn submitTask(self: *Self, task_fn: TaskFn, ctx: *anyopaque, options: SubmitOptions) !TaskHandle {
+        return self.inner.submit(task_fn, ctx, options);
+    }
+
+    pub fn shutdown(self: *Self, mode: ShutdownMode, timeout_ns: ?u64) !void {
+        try self.inner.shutdown(mode, timeout_ns);
+    }
+
+    fn effectiveThreadCount(config: ThreadPoolConfig) usize {
+        if (config.num_threads != 0) return config.num_threads;
+        const cpus = std.Thread.getCpuCount() catch 4;
+        const auto_max: usize = 16;
+        return @max(@min(cpus, auto_max), 2);
+    }
+
+    fn submitInternal(self: *Self, item: WorkItem, options: SubmitOptions) !TaskHandle {
+        const submitted = try self.allocator.create(SubmittedTask);
+        errdefer self.allocator.destroy(submitted);
+        submitted.* = .{
+            .allocator = self.allocator,
+            .item = item,
+        };
+
+        return self.inner.submit(runSubmittedTask, @ptrCast(submitted), options) catch |err| {
+            self.allocator.destroy(submitted);
+            return err;
+        };
+    }
+
+    fn runSubmittedTask(ctx: *anyopaque, runtime: *TaskContext) void {
+        _ = runtime;
+        const submitted: *SubmittedTask = @ptrCast(@alignCast(ctx));
+        defer submitted.allocator.destroy(submitted);
+        submitted.item.callback(submitted.item.context);
+        if (submitted.item.completion) |completion| {
+            completion(submitted.item.context);
         }
     }
 };

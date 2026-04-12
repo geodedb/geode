@@ -10,6 +10,7 @@ const KafkaSink = @import("sinks/kafka_sink.zig").KafkaSink;
 const logging = @import("logging");
 const log = logging.scoped("streaming");
 const Attr = logging.Attr;
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-052; FEATURE="JSON Library Migration"; ASPECT=CDCStreaming; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
 const json_lib = @import("json");
@@ -205,7 +206,7 @@ pub const CDCEngine = struct {
     last_flush: i64,
     total_events: u64,
     is_running: bool,
-    thread: ?std.Thread,
+    worker_pool: ?*pooled.ThreadPool,
     mutex: std.Thread.Mutex,
     diag_events: std.ArrayList(DiagEvent), // lifecycle diagnostics (START/STOP)
     current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
@@ -288,7 +289,7 @@ pub const CDCEngine = struct {
             .last_flush = std.time.milliTimestamp(),
             .total_events = 0,
             .is_running = false,
-            .thread = null,
+            .worker_pool = null,
             .mutex = .{},
             .diag_events = std.ArrayList(DiagEvent).empty,
             .adapt_events_accum = 0,
@@ -414,7 +415,16 @@ pub const CDCEngine = struct {
         self.start_time_ms = std.time.milliTimestamp();
         // record lifecycle diagnostic
         self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
-        self.thread = try std.Thread.spawn(.{}, processingLoop, .{self});
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        });
+        errdefer pool.deinit();
+        try pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runProcessingLoop,
+        });
+        self.worker_pool = pool;
     }
 
     pub fn stop(self: *Self) void {
@@ -423,9 +433,9 @@ pub const CDCEngine = struct {
         self.is_running = false;
         self.mutex.unlock();
 
-        if (self.thread) |thread| {
-            thread.join();
-            self.thread = null;
+        if (self.worker_pool) |pool| {
+            pool.deinit();
+            self.worker_pool = null;
         }
 
         if (was_running) { // only record a stop once per active run
@@ -558,6 +568,11 @@ pub const CDCEngine = struct {
                 i += 1;
             }
         }
+    }
+
+    fn runProcessingLoop(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.processingLoop();
     }
 
     pub fn getStatus(self: *Self) CDCStatus {
@@ -997,7 +1012,7 @@ pub const StreamingEngine = struct {
     windows: std.StringHashMap(Window),
     cdc_engine: *CDCEngine,
     is_running: bool,
-    thread: ?std.Thread,
+    worker_pool: ?*pooled.ThreadPool,
 
     const Self = @This();
 
@@ -1008,7 +1023,7 @@ pub const StreamingEngine = struct {
             .windows = std.StringHashMap(Window).init(allocator),
             .cdc_engine = cdc_engine,
             .is_running = false,
-            .thread = null,
+            .worker_pool = null,
         };
     }
 
@@ -1059,7 +1074,16 @@ pub const StreamingEngine = struct {
         }
 
         self.is_running = true;
-        self.thread = try std.Thread.spawn(.{}, streamProcessingLoop, .{self});
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        });
+        errdefer pool.deinit();
+        try pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runStreamProcessingLoop,
+        });
+        self.worker_pool = pool;
 
         // Update query states
         var it = self.queries.iterator();
@@ -1071,9 +1095,9 @@ pub const StreamingEngine = struct {
     pub fn stop(self: *Self) void {
         self.is_running = false;
 
-        if (self.thread) |thread| {
-            thread.join();
-            self.thread = null;
+        if (self.worker_pool) |pool| {
+            pool.deinit();
+            self.worker_pool = null;
         }
 
         // Update query states
@@ -1099,6 +1123,11 @@ pub const StreamingEngine = struct {
                 while (std.time.milliTimestamp() < target) {}
             }
         }
+    }
+
+    fn runStreamProcessingLoop(ctx: *anyopaque) void {
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.streamProcessingLoop();
     }
 
     fn processEvents(self: *Self) !void {

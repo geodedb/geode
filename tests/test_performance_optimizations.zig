@@ -205,37 +205,71 @@ test "ThreadPool: completion callback" {
 test "BoundedQueue: concurrent push/pop" {
     const Queue = thread_pool.BoundedQueue(u32, 256);
     var queue = Queue.init();
+    const pool = try thread_pool.ThreadPool.init(testing.allocator, .{
+        .num_threads = 2,
+        .queue_capacity = 2,
+    });
+    defer pool.deinit();
 
-    // Create producer and consumer threads
     var produced = std.atomic.Value(u32).init(0);
     var consumed = std.atomic.Value(u32).init(0);
     const num_items = 10000;
 
-    const producer = try std.Thread.spawn(.{}, struct {
-        fn run(q: *Queue, p: *std.atomic.Value(u32)) void {
+    const ProducerContext = struct {
+        q: *Queue,
+        produced: *std.atomic.Value(u32),
+    };
+    const ConsumerContext = struct {
+        q: *Queue,
+        consumed: *std.atomic.Value(u32),
+    };
+
+    var producer_ctx = ProducerContext{
+        .q = &queue,
+        .produced = &produced,
+    };
+    var consumer_ctx = ConsumerContext{
+        .q = &queue,
+        .consumed = &consumed,
+    };
+
+    const producer = try pool.submitTask(struct {
+        fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+            _ = runtime;
+            const context: *ProducerContext = @ptrCast(@alignCast(ctx));
             for (0..num_items) |_| {
-                while (!q.tryPush(1)) {
+                while (!context.q.tryPush(1)) {
                     std.Thread.sleep(1 * std.time.ns_per_us);
                 }
-                _ = p.fetchAdd(1, .release);
+                _ = context.produced.fetchAdd(1, .release);
             }
         }
-    }.run, .{ &queue, &produced });
+    }.run, @ptrCast(&producer_ctx), .{
+        .lane = .blocking,
+        .backpressure = .block,
+        .waitable = true,
+    });
 
-    const consumer = try std.Thread.spawn(.{}, struct {
-        fn run(q: *Queue, c: *std.atomic.Value(u32)) void {
-            while (c.load(.acquire) < num_items) {
-                if (q.tryPop()) |_| {
-                    _ = c.fetchAdd(1, .release);
+    const consumer = try pool.submitTask(struct {
+        fn run(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
+            _ = runtime;
+            const context: *ConsumerContext = @ptrCast(@alignCast(ctx));
+            while (context.consumed.load(.acquire) < num_items) {
+                if (context.q.tryPop()) |_| {
+                    _ = context.consumed.fetchAdd(1, .release);
                 } else {
                     std.Thread.sleep(1 * std.time.ns_per_us);
                 }
             }
         }
-    }.run, .{ &queue, &consumed });
+    }.run, @ptrCast(&consumer_ctx), .{
+        .lane = .blocking,
+        .backpressure = .block,
+        .waitable = true,
+    });
 
-    producer.join();
-    consumer.join();
+    try pool.wait(producer);
+    try pool.wait(consumer);
 
     try testing.expectEqual(@as(u32, num_items), produced.load(.acquire));
     try testing.expectEqual(@as(u32, num_items), consumed.load(.acquire));

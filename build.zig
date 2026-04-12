@@ -261,6 +261,13 @@ pub fn build(b: *std.Build) void {
     const grpc_server_mod = grpc_dep.module("grpc-server");
     const grpc_client_mod = grpc_dep.module("grpc-client");
 
+    // Thread Pool - Bounded, lock-free thread pool with work-stealing
+    const thread_pool_dep = b.dependency("thread_pool", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
+
     // CANARY: REQ=REQ-PERF-SPICE-002; FEATURE="SpiceParallelism"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
     const spice_dep = b.dependency("spice", .{
@@ -344,6 +351,7 @@ pub fn build(b: *std.Build) void {
     // GAP-0275: thread_pool is now self-contained (no external concurrency dep)
     // CANARY: REQ=REQ-PERF-THREAD-POOL-BUILD-001; FEATURE="ThreadPool"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-04-01
     const thread_pool_mod = b.createModule(.{ .root_source_file = b.path("src/transport/thread_pool.zig"), .target = target, .optimize = optimize });
+    thread_pool_mod.addImport("thread_pool", thread_pool_ext_mod);
     const query_work_item_mod = b.createModule(.{ .root_source_file = b.path("src/transport/query_work_item.zig"), .target = target, .optimize = optimize });
 
     // Stream Scheduler Module - DRR-based fair stream scheduling (GAP-0201)
@@ -404,6 +412,7 @@ pub fn build(b: *std.Build) void {
     // Phase 4 External Library Imports (application libraries)
     root_mod.addImport("cli", cli_mod);
     root_mod.addImport("dns", dns_mod);
+    root_mod.addImport("thread_pool", thread_pool_ext_mod);
 
     // Build options (version from git tags)
     root_mod.addImport("build_options", build_options_mod);
@@ -745,6 +754,7 @@ pub fn build(b: *std.Build) void {
     graph_store_mod.addImport("fle_blind_index", fle_blind_index_mod);
     graph_store_mod.addImport("rtree_lib", rtree_ext_mod);
     graph_store_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    graph_store_mod.addImport("transport/thread_pool", thread_pool_mod);
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     graph_algo_tests.linkLibC();
@@ -768,6 +778,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("schema", schema_mod);
     graph_store_unit_tests.root_module.addImport("rtree_lib", rtree_ext_mod);
     graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
+    graph_store_unit_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     graph_store_unit_tests.linkLibC();
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
@@ -1677,6 +1688,7 @@ pub fn build(b: *std.Build) void {
     // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
     const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
     quic_stream_registry_tests.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = optimize }));
+    quic_stream_registry_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_quic_stream_registry_tests = b.addRunArtifact(quic_stream_registry_tests);
     const quic_stream_registry_test_step = b.step("test-quic-streams", "Run QUIC stream dedupe and churn regression tests");
     quic_stream_registry_test_step.dependOn(&run_quic_stream_registry_tests.step);
@@ -1704,6 +1716,7 @@ pub fn build(b: *std.Build) void {
     // CANARY: REQ=REQ-QUIC-MUX-009; FEATURE="StreamRegistryBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
     const quic_stream_registry_bench = b.addExecutable(.{ .name = "bench_quic_stream_registry", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_quic_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }) });
     quic_stream_registry_bench.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = .ReleaseFast }));
+    quic_stream_registry_bench.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_quic_stream_registry_bench = b.addRunArtifact(quic_stream_registry_bench);
     const quic_stream_registry_bench_step = b.step("bench-quic-streams", "Run QUIC stream registry parallel contention benchmarks");
     quic_stream_registry_bench_step.dependOn(&run_quic_stream_registry_bench.step);
@@ -1725,6 +1738,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("schema", schema_mod);
     merge_bench_gs_mod.addImport("rtree_lib", rtree_ext_mod);
     merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
+    merge_bench_gs_mod.addImport("transport/thread_pool", thread_pool_mod);
     const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
     merge_throughput_bench.root_module.addImport("graph_store", merge_bench_gs_mod);
     merge_throughput_bench.linkLibC();
@@ -1777,6 +1791,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
     geode_exe.root_module.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
+    geode_exe.root_module.addImport("thread_pool", thread_pool_ext_mod); // External thread-pool library
     geode_exe.root_module.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
@@ -1993,6 +2008,7 @@ pub fn build(b: *std.Build) void {
     audit_security_mod.addImport("rls", rls_mod);
     audit_security_mod.addImport("logging", logging_mod);
     audit_security_mod.addImport("json", json_mod);
+    audit_security_mod.addImport("transport/thread_pool", thread_pool_mod);
 
     // Create user storage module (GraphStore-backed)
     const user_storage_mod = b.createModule(.{ .root_source_file = b.path("src/storage/user_storage.zig"), .target = target, .optimize = optimize });
@@ -2008,6 +2024,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_mod.addImport("geode_auth", auth_mod);
     auth_graph_manager_mod.addImport("user_storage", user_storage_mod);
     auth_graph_manager_mod.addImport("logging", logging_mod);
+    auth_graph_manager_mod.addImport("transport/thread_pool", thread_pool_mod);
     // Note: auth_graph_manager imports geode (root_mod), so it cannot be added back to
     // root_mod (would create a file-in-two-modules error). Instead, consumers import it
     // directly via their own build module imports.
@@ -2026,6 +2043,7 @@ pub fn build(b: *std.Build) void {
     auth_graph_manager_tests.root_module.addImport("geode_auth", auth_mod);
     auth_graph_manager_tests.root_module.addImport("user_storage", user_storage_mod);
     auth_graph_manager_tests.root_module.addImport("logging", logging_mod);
+    auth_graph_manager_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_auth_graph_manager_tests = b.addRunArtifact(auth_graph_manager_tests);
     test_step.dependOn(&run_auth_graph_manager_tests.step);
 
@@ -2300,6 +2318,7 @@ pub fn build(b: *std.Build) void {
     });
     streaming_test.root_module.addImport("logging", logging_mod);
     streaming_test.root_module.addImport("json", json_mod);
+    streaming_test.root_module.addImport("transport/thread_pool", thread_pool_mod);
     test_step.dependOn(&streaming_test.step);
 
     const temporal_test = b.addTest(.{

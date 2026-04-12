@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const prometheus = @import("prometheus.zig");
+const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
 // GAP-0166: Wire Prometheus metrics exporter to runtime endpoint
@@ -13,6 +14,7 @@ pub const MetricsServer = struct {
     port: u16,
     server: ?std.net.Server,
     running: bool,
+    accept_pool: ?*pooled.ThreadPool,
 
     pub fn init(allocator: Allocator, collector: *prometheus.MetricsCollector, port: u16) MetricsServer {
         return .{
@@ -21,6 +23,7 @@ pub const MetricsServer = struct {
             .port = port,
             .server = null,
             .running = false,
+            .accept_pool = null,
         };
     }
 
@@ -39,6 +42,16 @@ pub const MetricsServer = struct {
             .reuse_address = true,
         });
         self.running = true;
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+        });
+        errdefer pool.deinit();
+        try pool.submitBlocking(.{
+            .context = @ptrCast(self),
+            .callback = runAcceptLoop,
+        });
+        self.accept_pool = pool;
     }
 
     /// Stop the metrics HTTP server
@@ -47,6 +60,10 @@ pub const MetricsServer = struct {
         if (self.server) |*s| {
             s.deinit();
             self.server = null;
+        }
+        if (self.accept_pool) |pool| {
+            pool.deinit();
+            self.accept_pool = null;
         }
     }
 
@@ -136,6 +153,11 @@ pub const MetricsServer = struct {
             }
         }
     }
+
+    fn runAcceptLoop(ctx: *anyopaque) void {
+        const self: *MetricsServer = @ptrCast(@alignCast(ctx));
+        self.acceptLoop();
+    }
 };
 
 /// Resolve the metrics bind address from GEODE_METRICS_BIND env var,
@@ -189,13 +211,6 @@ pub fn initGlobalMetrics(allocator: Allocator, port: ?u16) !*prometheus.MetricsC
         server.* = MetricsServer.init(allocator, collector, p);
         try server.start();
         g_metrics_server = server;
-
-        // Start accept loop in a new thread
-        _ = std.Thread.spawn(.{}, struct {
-            fn run(s: *MetricsServer) void {
-                s.acceptLoop();
-            }
-        }.run, .{server}) catch {};
     }
 
     return collector;

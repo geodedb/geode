@@ -5,6 +5,7 @@ const audit_sink = @import("audit_sink.zig");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 const Ed25519 = std.crypto.sign.Ed25519;
+const pooled = @import("transport/thread_pool");
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -1282,28 +1283,40 @@ pub const AuditLogger = struct {
                 }
             }
         }.run;
+        const runThreadWorker = struct {
+            fn run(ctx_ptr: *anyopaque, runtime: *pooled.TaskContext) void {
+                _ = runtime;
+                const ctx: *ThreadContext = @ptrCast(@alignCast(ctx_ptr));
+                threadWorker(ctx.*);
+            }
+        }.run;
 
         // Create and run threads
         const num_threads: u32 = 4;
         const iterations_per_thread: u32 = 25;
-        var threads: [4]std.Thread = undefined;
+        const pool = try pooled.ThreadPool.init(self.allocator, .{
+            .num_threads = num_threads,
+            .queue_capacity = 16,
+        });
+        defer pool.deinit();
+        var wg = pool.waitGroup();
+        var contexts: [4]ThreadContext = undefined;
 
         for (0..num_threads) |i| {
-            const ctx = ThreadContext{
+            contexts[i] = .{
                 .logger = self,
                 .thread_id = @intCast(i),
                 .iterations = iterations_per_thread,
                 .success_count = &success_count,
                 .race_count = &race_count,
             };
-
-            threads[i] = try std.Thread.spawn(.{}, threadWorker, .{ctx});
+            _ = try pool.submitTask(runThreadWorker, @ptrCast(&contexts[i]), .{
+                .wait_group = &wg,
+                .backpressure = .block,
+                .lane = .blocking,
+            });
         }
-
-        // Wait for all threads to complete
-        for (threads) |thread| {
-            thread.join();
-        }
+        wg.wait();
 
         const successful_ops = success_count.load(.monotonic);
         const race_conditions = race_count.load(.monotonic);
