@@ -97,6 +97,12 @@
             .hash = "dns-0.1.0-x4U-zWZXEAD9KqyMwESwwKEuMcRD0yrP6E8zMkEHwkvt",
         },
 
+        // Thread Pool - Bounded, lock-free thread pool with work-stealing
+        .thread_pool = .{
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#eab3de8bc3b8be2fa7c69d2adba01e9f8584fbb6",
+            .hash = "thread_pool-0.2.0-11B1Bt_DBACJcRTYAhhadVdIlEF0xz7EHzKzaIEcEHAe",
+        },
+
         // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
         // CANARY: REQ=REQ-PERF-SPICE-001; FEATURE="SpiceParallelism"; ASPECT=Dependency; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
         // Updated 2026-03: freestanding target support

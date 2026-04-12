@@ -261,6 +261,13 @@ pub fn build(b: *std.Build) void {
     const grpc_server_mod = grpc_dep.module("grpc-server");
     const grpc_client_mod = grpc_dep.module("grpc-client");
 
+    // Thread Pool - Bounded, lock-free thread pool with work-stealing
+    const thread_pool_dep = b.dependency("thread_pool", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
+
     // CANARY: REQ=REQ-PERF-SPICE-002; FEATURE="SpiceParallelism"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
     // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
     const spice_dep = b.dependency("spice", .{
@@ -404,6 +411,7 @@ pub fn build(b: *std.Build) void {
     // Phase 4 External Library Imports (application libraries)
     root_mod.addImport("cli", cli_mod);
     root_mod.addImport("dns", dns_mod);
+    root_mod.addImport("thread_pool", thread_pool_ext_mod);
 
     // Build options (version from git tags)
     root_mod.addImport("build_options", build_options_mod);
@@ -1777,6 +1785,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("transport/quic", transport_quic_mod);
     geode_exe.root_module.addImport("vendor_quic", quic_ext_mod);
     geode_exe.root_module.addImport("transport/thread_pool", thread_pool_mod); // GAP-0201: Thread pool
+    geode_exe.root_module.addImport("thread_pool", thread_pool_ext_mod); // External thread-pool library
     geode_exe.root_module.addImport("transport/query_work_item", query_work_item_mod); // GAP-0201: Query work item lifecycle
     geode_exe.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod); // GAP-0201: DRR scheduling
 
