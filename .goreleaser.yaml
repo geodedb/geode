@@ -135,6 +135,8 @@ dockers:
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-amd64'
   dockerfile: Dockerfile.release
+  extra_files:
+  - docker
   use: buildx
   build_flag_templates:
   - --pull
@@ -155,6 +157,8 @@ dockers:
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-arm64'
   dockerfile: Dockerfile.release
+  extra_files:
+  - docker
   use: buildx
   build_flag_templates:
   - --pull
@@ -173,6 +177,8 @@ dockers:
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-amd64'
   dockerfile: Dockerfile.release.alpine
+  extra_files:
+  - docker
   use: buildx
   build_flag_templates:
   - --pull
@@ -190,6 +196,8 @@ dockers:
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-alpine-arm64'
   dockerfile: Dockerfile.release.alpine
+  extra_files:
+  - docker
   use: buildx
   build_flag_templates:
   - --pull
@@ -209,6 +217,8 @@ dockers:
   image_templates:
   - docker.io/geodedb/geode:{{ .Version }}-amd64
   dockerfile: Dockerfile.release
+  extra_files:
+  - docker
   use: buildx
   skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
   build_flag_templates:
@@ -230,6 +240,8 @@ dockers:
   image_templates:
   - docker.io/geodedb/geode:{{ .Version }}-arm64
   dockerfile: Dockerfile.release
+  extra_files:
+  - docker
   use: buildx
   skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
   build_flag_templates:
@@ -249,6 +261,8 @@ dockers:
   image_templates:
   - docker.io/geodedb/geode:{{ .Version }}-alpine-amd64
   dockerfile: Dockerfile.release.alpine
+  extra_files:
+  - docker
   use: buildx
   skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
   build_flag_templates:
@@ -267,6 +281,8 @@ dockers:
   image_templates:
   - docker.io/geodedb/geode:{{ .Version }}-alpine-arm64
   dockerfile: Dockerfile.release.alpine
+  extra_files:
+  - docker
   use: buildx
   skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
   build_flag_templates:
@@ -287,6 +303,8 @@ dockers:
   image_templates:
   - '{{ .Env.CI_REGISTRY_IMAGE }}:{{ .Version }}-gpu'
   dockerfile: Dockerfile.release.gpu
+  extra_files:
+  - docker
   use: buildx
   build_flag_templates:
   - --pull
@@ -307,6 +325,8 @@ dockers:
   image_templates:
   - docker.io/geodedb/geode:{{ .Version }}-gpu
   dockerfile: Dockerfile.release.gpu
+  extra_files:
+  - docker
   use: buildx
   skip_push: '{{ if or .IsSnapshot (eq .Env.SKIP_DOCKERHUB "true") }}true{{ end }}'
   build_flag_templates:
