@@ -218,7 +218,8 @@ echo ""
 log_info "APT repository generated successfully!"
 echo ""
 echo "Repository structure:"
-find "$OUTPUT_DIR" -type f | sort | head -30
+# Avoid a SIGPIPE here under `set -o pipefail`; this is only a preview.
+find "$OUTPUT_DIR" -type f | sort | sed -n '1,30p'
 echo ""
 echo "To use this repository:"
 echo ""
