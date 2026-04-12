@@ -175,7 +175,10 @@ pub const ThreadPool = struct {
             .max_threads = num,
             .queue_capacity = @max(config.queue_capacity, 64),
             .local_queue_capacity = @max(@min(config.queue_capacity, 256), 1),
-            .scheduler_variant = .work_stealing,
+            // Use global_queue to avoid TLS worker-index cross-contamination
+            // when a worker thread from one pool submits to a different pool
+            // (e.g. main pool worker → per-connection acceptor_pool).
+            .scheduler_variant = .global_queue,
             .allow_blocking_lane = true,
         });
         errdefer inner.deinit();
