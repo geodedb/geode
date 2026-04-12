@@ -12,7 +12,7 @@ const proto_util = @import("../server/proto_util.zig");
 const value_utilities = @import("../execution/value_utilities.zig");
 const query_runner = @import("../client/query_runner.zig");
 const result_utils = @import("result_utils.zig");
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 
 const logging = @import("logging");
 const log = logging.scoped("query_transport");
@@ -63,14 +63,14 @@ pub const QueryTransport = struct {
     timeout_ms: u32 = 30000, // 30 second default timeout
     retry_attempts: u32 = 3,
     page_size: u32 = 1000,
-    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
+    pool: parallel_wrapper.ParallelPool, // PERF-D007: Reuse pool across queries
 
     pub fn init(allocator: std.mem.Allocator, net_transport: *network_transport.NetworkTransport) !QueryTransport {
         return QueryTransport{
             .allocator = allocator,
             .network_transport = net_transport,
             .connection_pool = try ConnectionPool.init(allocator),
-            .pool = spice_wrapper.SpicePool.init(allocator, null),
+            .pool = parallel_wrapper.ParallelPool.init(allocator, null),
         };
     }
 
@@ -109,7 +109,7 @@ pub const QueryTransport = struct {
             return results;
         }
 
-        if (!spice_wrapper.shouldUseParallelism(queries.len, spice_wrapper.Thresholds.forEach)) {
+        if (!parallel_wrapper.shouldUseParallelism(queries.len, parallel_wrapper.Thresholds.forEach)) {
             for (queries, 0..) |query, i| {
                 results[i] = self.executeRemoteQuery(query.node_id, query.query) catch |err| {
                     for (results[0..i]) |*res| res.deinit(self.allocator);
@@ -138,13 +138,13 @@ pub const QueryTransport = struct {
             .errors = errors,
         };
 
-        spice_wrapper.parallelForEach(
+        parallel_wrapper.parallelForEach(
             &self.pool,
             0,
             queries.len,
             ctx,
             struct {
-                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                     c.results[idx] = c.transport.executeRemoteQuery(
                         c.queries[idx].node_id,
                         c.queries[idx].query,
@@ -154,7 +154,7 @@ pub const QueryTransport = struct {
                     };
                 }
             }.work,
-            spice_wrapper.Thresholds.forEach,
+            parallel_wrapper.Thresholds.forEach,
         );
 
         for (errors, 0..) |err, idx| {

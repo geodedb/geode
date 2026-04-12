@@ -5,7 +5,7 @@ const federation = @import("federation.zig");
 const raft = @import("raft.zig");
 // GAP-0077: Import CBO for statistics integration
 const cbo = @import("../planner/cbo.zig");
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 const value_utilities = @import("../execution/value_utilities.zig");
 const result_utils = @import("result_utils.zig");
 
@@ -27,7 +27,7 @@ pub const QueryCoordinator = struct {
     node_registry: NodeRegistry,
     metrics: CoordinatorMetrics,
     stats_registry: ?*cbo.StatsRegistry = null, // GAP-0077: Optional statistics registry
-    pool: spice_wrapper.SpicePool, // PERF-D007: Reuse pool across queries
+    pool: parallel_wrapper.ParallelPool, // PERF-D007: Reuse pool across queries
 
     const Self = @This();
 
@@ -39,7 +39,7 @@ pub const QueryCoordinator = struct {
             .shard_map = try ShardMap.init(allocator),
             .node_registry = try NodeRegistry.init(allocator),
             .metrics = CoordinatorMetrics.init(),
-            .pool = spice_wrapper.SpicePool.init(allocator, null),
+            .pool = parallel_wrapper.ParallelPool.init(allocator, null),
         };
     }
 
@@ -193,13 +193,13 @@ pub const QueryCoordinator = struct {
             .errors = errors,
         };
 
-        spice_wrapper.parallelForEach(
+        parallel_wrapper.parallelForEach(
             &self.pool,
             0,
             fragment_count,
             ctx,
             struct {
-                fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+                fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                     const fragment = c.fragments[idx];
                     const node = c.coordinator.node_registry.getNode(fragment.shard_id) catch |err| {
                         c.errors[idx] = err;
@@ -219,7 +219,7 @@ pub const QueryCoordinator = struct {
                     }
                 }
             }.work,
-            spice_wrapper.Thresholds.forEach,
+            parallel_wrapper.Thresholds.forEach,
         );
 
         for (errors, 0..) |err, i| {

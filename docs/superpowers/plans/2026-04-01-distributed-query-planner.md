@@ -4,7 +4,7 @@
 
 **Goal:** Wire the scaffolded `query_planner.zig` stubs to real CBO stats and query rewriting logic, add CANARY tokens, and parallelize federation remote operations.
 **Architecture:** The `DistributedQueryPlanner` in `query_planner.zig` has 15+ stub methods. The existing `QueryCoordinator` in `query_coordinator.zig` has real implementations for shard-aware planning with CBO stats integration. This plan wires the planner stubs to the coordinator's real logic where possible, and implements new logic for the remaining gaps. Federation remote ops switch from sequential to parallel via SpicePool.
-**Tech Stack:** Zig 0.15.1, `src/distributed/query_planner.zig`, `src/distributed/query_coordinator.zig`, `src/distributed/federation.zig`, `src/planner/cbo.zig`, `@import("parallel/spice")`
+**Tech Stack:** Zig 0.15.1, `src/distributed/query_planner.zig`, `src/distributed/query_coordinator.zig`, `src/distributed/federation.zig`, `src/planner/cbo.zig`, `@import("parallel/thread_pool_parallel")`
 
 ---
 
@@ -285,14 +285,14 @@ Closes GAP-D027.
 
 ### Steps
 
-- [ ] **5.1** Add the spice import at the top of `federation.zig`:
+- [ ] **5.1** Add the parallel wrapper import at the top of `federation.zig`:
 
 ```zig
 // After existing imports (line ~7):
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 ```
 
-- [ ] **5.2** Replace the sequential loop in `executeRemoteOperations` with SpicePool parallel dispatch:
+- [ ] **5.2** Replace the sequential loop in `executeRemoteOperations` with ParallelPool dispatch:
 
 ```zig
 // CANARY: REQ=REQ-DIST-FED-PARALLEL-001; FEATURE="Parallel Federation Ops"; ASPECT=RemoteExecution; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
@@ -326,12 +326,12 @@ fn executeRemoteOperations(
         return results;
     }
 
-    // Parallel execution via SpicePool
+    // Parallel execution via ParallelPool
     var errors = try allocator.alloc(?anyerror, operations.len);
     defer allocator.free(errors);
     for (errors) |*e| e.* = null;
 
-    var pool = spice_wrapper.SpicePool.init(allocator, null);
+    var pool = parallel_wrapper.ParallelPool.init(allocator, null);
     defer pool.deinit();
 
     const Context = struct {
@@ -350,13 +350,13 @@ fn executeRemoteOperations(
         .allocator = allocator,
     };
 
-    spice_wrapper.parallelForEach(
+    parallel_wrapper.parallelForEach(
         &pool,
         0,
         operations.len,
         ctx,
         struct {
-            fn work(_: *spice_wrapper.Task, idx: usize, c: Context) void {
+            fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
                 c.results[idx] = c.fm.executeSingleRemoteOp(c.ops[idx], c.allocator) catch |err| {
                     c.errors[idx] = err;
                     return;
@@ -417,7 +417,7 @@ cd /home/benji/src/devnw/codepros/geode/geode/.worktrees/session-20260401 && zig
 ### Commit message
 
 ```
-perf(distributed): parallelize federation remote operations via SpicePool
+perf(distributed): parallelize federation remote operations via ParallelPool
 
 Remote shard queries now execute concurrently instead of
 sequentially. Closes PERF-D018.

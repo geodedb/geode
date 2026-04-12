@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Eliminate per-call SpicePool allocation, parallelize 2PC messaging, add connection limits, use atomic counters, add cache eviction, and optimize ConsistentHash lookup.
-**Architecture:** SpicePool becomes a long-lived struct field on coordinators instead of per-call allocation. 2PC prepare/commit loops dispatch to shards in parallel via SpicePool. TransportStatistics counters become atomic. QueryCache gains a max-size eviction policy. ConsistentHash.getNodes reuses the existing binary search from getNode.
-**Tech Stack:** Zig 0.15.1, `@import("parallel/spice")`, `std.atomic.Value`, `std.AutoHashMap`
+**Goal:** Eliminate per-call parallel-pool allocation, parallelize 2PC messaging, add connection limits, use atomic counters, add cache eviction, and optimize ConsistentHash lookup.
+**Architecture:** `ParallelPool` becomes a long-lived struct field on coordinators instead of per-call allocation. 2PC prepare/commit loops dispatch to shards in parallel via the shared thread-pool wrapper. TransportStatistics counters become atomic. QueryCache gains a max-size eviction policy. ConsistentHash.getNodes reuses the existing binary search from getNode.
+**Tech Stack:** Zig 0.15.1, `@import("parallel/thread_pool_parallel")`, `std.atomic.Value`, `std.AutoHashMap`
 
 ---
 
-## Task 1: Store SpicePool as struct field (PERF-D007)
+## Task 1: Store ParallelPool as struct field (PERF-D007)
 
 **Files:**
 
@@ -21,14 +21,14 @@
 
 ```zig
 // In QueryCoordinator struct (line ~19), add field:
-pool: spice_wrapper.SpicePool,
+pool: parallel_wrapper.ParallelPool,
 ```
 
 - [ ] **1.2** Initialize the pool in `QueryCoordinator.init` and deinit in `deinit`:
 
 ```zig
 // In init (line ~30), add to the return struct:
-.pool = spice_wrapper.SpicePool.init(allocator, null),
+.pool = parallel_wrapper.ParallelPool.init(allocator, null),
 
 // In deinit (line ~40), add before existing deinit calls:
 self.pool.deinit();
@@ -38,7 +38,7 @@ self.pool.deinit();
 
 ```zig
 // Replace lines 148-149:
-//     var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+//     var pool = parallel_wrapper.ParallelPool.init(self.allocator, null);
 //     defer pool.deinit();
 // With:
 // Reuse coordinator-owned pool (no per-call allocation)
@@ -50,10 +50,10 @@ Update the `parallelForEach` call (line ~167) to use `&self.pool` instead of `&p
 
 ```zig
 // In TxnCoordinator struct:
-pool: spice_wrapper.SpicePool,
+pool: parallel_wrapper.ParallelPool,
 
 // In init:
-.pool = spice_wrapper.SpicePool.init(allocator, null),
+.pool = parallel_wrapper.ParallelPool.init(allocator, null),
 
 // In deinit:
 self.pool.deinit();
@@ -68,9 +68,9 @@ cd /home/benji/src/devnw/codepros/geode/geode/.worktrees/session-20260401 && zig
 ### Commit message
 
 ```
-perf(distributed): reuse SpicePool as struct field instead of per-call allocation
+perf(distributed): reuse ParallelPool as struct field instead of per-call allocation
 
-QueryCoordinator and TxnCoordinator now hold a long-lived SpicePool,
+QueryCoordinator and TxnCoordinator now hold a long-lived ParallelPool,
 avoiding repeated init/deinit overhead. Closes PERF-D007.
 ```
 
@@ -84,11 +84,11 @@ avoiding repeated init/deinit overhead. Closes PERF-D007.
 
 ### Steps
 
-- [ ] **2.1** Add SpicePool import and field. At the top of `twophase.zig`, the `spice_wrapper` is not yet imported. Add:
+- [ ] **2.1** Add the parallel wrapper import and field. At the top of `twophase.zig`, add:
 
 ```zig
 // After line 7 (value_convert import):
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 ```
 
 - [ ] **2.2** Parallelize the prepare phase. Replace the sequential loop in `Transaction.prepare()` (lines 523-551) with parallel dispatch:
@@ -109,7 +109,7 @@ pub fn prepare(self: *Transaction) !bool {
     defer self.allocator.free(vote_results);
     for (vote_results) |*v| v.* = false;
 
-    var pool = spice_wrapper.SpicePool.init(self.allocator, null);
+    var pool = parallel_wrapper.ParallelPool.init(self.allocator, null);
     defer pool.deinit();
 
     const PrepareCtx = struct {
@@ -118,13 +118,13 @@ pub fn prepare(self: *Transaction) !bool {
     };
     const ctx = PrepareCtx{ .txn = self, .votes = vote_results };
 
-    spice_wrapper.parallelForEach(
+    parallel_wrapper.parallelForEach(
         &pool,
         0,
         participant_count,
         ctx,
         struct {
-            fn work(_: *spice_wrapper.Task, idx: usize, c: PrepareCtx) void {
+            fn work(_: *parallel_wrapper.Task, idx: usize, c: PrepareCtx) void {
                 const participant = &c.txn.participants.items[idx];
                 participant.state = .preparing;
 
@@ -183,7 +183,7 @@ cd /home/benji/src/devnw/codepros/geode/geode/.worktrees/session-20260401 && zig
 ```
 perf(distributed): parallelize 2PC prepare and commit phases
 
-Participants are now contacted concurrently via SpicePool instead
+Participants are now contacted concurrently via ParallelPool instead
 of sequentially. Closes PERF-D003, PERF-D004.
 ```
 

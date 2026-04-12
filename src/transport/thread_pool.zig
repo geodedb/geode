@@ -3,11 +3,10 @@ const ext_pool = @import("thread_pool");
 
 // CANARY: REQ=REQ-PERF-THREAD-POOL-001; FEATURE="ThreadPool"; ASPECT=QueryExecution; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=transport; UPDATED=2026-04-01
 // GAP-0201: High-performance thread pool for parallel query execution
-// GAP-0275: Consolidated on spice — removed external concurrency dependency.
-//           This module now uses std.Thread primitives directly for the
-//           fire-and-forget dispatch pattern that spice's fork/join API does
-//           not naturally support.  spice remains the single external
-//           concurrency library for map/reduce/forEach parallelism.
+// GAP-0275: Consolidated on the external thread_pool dependency.
+//           This module keeps the fire-and-forget dispatch semantics Geode
+//           needs for long-lived worker queues, while the higher-level
+//           parallel wrapper builds map/reduce/forEach helpers on top.
 
 /// Work item representing a task to be executed by the thread pool.
 pub const WorkItem = struct {

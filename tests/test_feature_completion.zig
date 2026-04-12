@@ -5,7 +5,7 @@ const bm25 = @import("../src/fts/bm25.zig");
 const cbo = @import("../src/planner/cbo.zig");
 const builtin_algos = @import("../src/graph/builtin_algorithms.zig");
 
-test "multi-threading: spice-backed pool" {
+test "multi-threading: thread-pool-backed parallel pool" {
     const allocator = std.testing.allocator;
 
     var pool = try parallel.Pool.init(allocator, 4);

@@ -782,10 +782,10 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 .conn_state = conn_state,
             };
 
-            // Use a dedicated OS thread per active stream here, not Spice.
-            // Spice is Geode's fork/join engine for bounded CPU work; these
+            // Use a dedicated OS thread per active stream here, not the
+            // shared parallel wrapper. The wrapper targets bounded CPU work; these
             // handlers are long-lived, blocking I/O loops whose lifetime is not
-            // naturally expressed as fork/join. Reusing Spice workers for them
+            // naturally expressed as fork/join. Reusing wrapper workers for them
             // would tie heartbeat-scheduled tasks to socket waits.
             if (!stream_pool.submit(.{
                 .context = @ptrCast(ctx),

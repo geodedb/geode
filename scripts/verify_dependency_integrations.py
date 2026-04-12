@@ -24,7 +24,11 @@ IMPORT_PATTERNS = {
     "config": ['@import("config")'],
     "cli": ['@import("cli")'],
     "dns": ['@import("dns")'],
-    "spice": ['@import("spice")', '@import("parallel/spice")'],
+    "thread_pool": [
+        '@import("thread_pool")',
+        '@import("transport/thread_pool")',
+        '@import("parallel/thread_pool_parallel")',
+    ],
     "mcp": ['@import("mcp")'],
     "protobuf": ['@import("protobuf")'],
     "grpc_zig": ['@import("grpc_server")', '@import("grpc_client")', '@import("grpc")'],
@@ -44,7 +48,6 @@ IMPORT_PATTERNS = {
 }
 
 REMOVED_FILES = [
-    REPO_ROOT / "src/transport/thread_pool.zig",
     REPO_ROOT / "src/monitoring/metrics.zig",
     REPO_ROOT / "src/index/hnsw.zig",
     REPO_ROOT / "src/index/rtree.zig",

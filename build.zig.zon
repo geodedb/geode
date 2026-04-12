@@ -103,14 +103,6 @@
             .hash = "thread_pool-0.2.0-11B1BvXHBABcj5THVk7y7jrSM-IV4IdUWZljo-UNCp0W",
         },
 
-        // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
-        // CANARY: REQ=REQ-PERF-SPICE-001; FEATURE="SpiceParallelism"; ASPECT=Dependency; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-        // Updated 2026-03: freestanding target support
-        .spice = .{
-            .url = "git+https://gitlab.com/devnw/zig/spice.git#79a291ee55789160f9aa4af2ddf526fa38e15dc2",
-            .hash = "spice-0.0.0-HnDb5-nKAABohkh8SemVSOtpb7nZestAanVGqrY2fuvC",
-        },
-
         // =======================================================================
         // Phase 5: Optional Enhancements
         // =======================================================================

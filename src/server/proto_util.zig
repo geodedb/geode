@@ -223,7 +223,7 @@ pub fn buildDataPageFromRows(
     try rows.resize(allocator, row_count);
 
     // GAP-0257 fix: Use sequential serialization for all data page sizes.
-    // The spice thread pool fork/join path caused memory corruption on large
+    // The old parallel serialization path caused memory corruption on large
     // result sets (1000+ rows), producing "58000: Internal Server Error".
     // Sequential serialization is safe and fast enough — per-row protobuf
     // conversion is lightweight (mostly string duplication), and the cost of

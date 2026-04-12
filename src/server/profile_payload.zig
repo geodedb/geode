@@ -1,5 +1,5 @@
 const std = @import("std");
-const spice_wrapper = @import("parallel/spice");
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
 const planned_read_runtime = @import("../execution/planned_read_runtime.zig");
 const query_traits = @import("../query/query_traits.zig");
 const schema = @import("schema");
@@ -99,12 +99,12 @@ pub fn buildProfilePayload(
         .disable_estimates = opts.disable_estimates,
     };
 
-    if (spice_wrapper.shouldUseParallelism(op_count, spice_wrapper.Thresholds.forEach)) {
-        var pool = spice_wrapper.SpicePool.init(allocator, null);
+    if (parallel_wrapper.shouldUseParallelism(op_count, parallel_wrapper.Thresholds.forEach)) {
+        var pool = parallel_wrapper.ParallelPool.init(allocator, null);
         pool.start();
         defer pool.deinit();
-        spice_wrapper.parallelForEach(&pool, 0, op_count, ctx, struct {
-            fn work(_: *spice_wrapper.Task, idx: usize, c: MetricsContext) void {
+        parallel_wrapper.parallelForEach(&pool, 0, op_count, ctx, struct {
+            fn work(_: *parallel_wrapper.Task, idx: usize, c: MetricsContext) void {
                 const base_alloc: u64 = if (idx == 0 and c.row_count > 0) 0 else 64;
                 c.bytes_alloc[idx] = base_alloc;
                 c.time_ns[idx] = 10 * @as(u64, @intCast(idx + 1));
@@ -119,7 +119,7 @@ pub fn buildProfilePayload(
                     c.estimate_vs_actual[idx] = if (est >= c.bytes_out[idx]) est - c.bytes_out[idx] else c.bytes_out[idx] - est;
                 }
             }
-        }.work, spice_wrapper.Thresholds.forEach);
+        }.work, parallel_wrapper.Thresholds.forEach);
     } else {
         for (ops.items, 0..) |_, idx| {
             const base_alloc: u64 = if (idx == 0 and row_count > 0) 0 else 64;

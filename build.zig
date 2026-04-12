@@ -268,14 +268,6 @@ pub fn build(b: *std.Build) void {
     });
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
-    // CANARY: REQ=REQ-PERF-SPICE-002; FEATURE="SpiceParallelism"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    // Spice - Fork/join parallelism for recursive divide-and-conquer algorithms
-    const spice_dep = b.dependency("spice", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const spice_mod = spice_dep.module("spice");
-
     // ==========================================================================
     // Phase 6 External Library Dependencies (Extracted Core Libraries)
     // ==========================================================================
@@ -358,10 +350,10 @@ pub fn build(b: *std.Build) void {
     // CANARY: REQ=REQ-PERF-DRR-BUILD-001; FEATURE="DRRScheduler"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26
     const stream_scheduler_mod = b.createModule(.{ .root_source_file = b.path("src/transport/stream_scheduler.zig"), .target = target, .optimize = optimize });
 
-    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="SpiceParallelModule"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    // Spice wrapper module - provides unified fork/join parallelism interface
-    const spice_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/parallel/spice.zig"), .target = target, .optimize = optimize });
-    spice_wrapper_mod.addImport("spice", spice_mod);
+    // CANARY: REQ=REQ-PERF-SPICE-008; FEATURE="ParallelWrapperModule"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // Shared parallel wrapper module backed by thread_pool.
+    const parallel_wrapper_mod = b.createModule(.{ .root_source_file = b.path("src/parallel/thread_pool_parallel.zig"), .target = target, .optimize = optimize });
+    parallel_wrapper_mod.addImport("transport/thread_pool", thread_pool_mod);
 
     const build_opts = b.addOptions();
     build_opts.addOption([]const u8, "version", version);
@@ -424,8 +416,7 @@ pub fn build(b: *std.Build) void {
     // The TAR says "gRPC over HTTP/2". Let's use 'grpc_server' and 'grpc_client' for clarity.
     root_mod.addImport("grpc_server", grpc_server_mod);
     root_mod.addImport("grpc_client", grpc_client_mod);
-    root_mod.addImport("spice", spice_mod);
-    root_mod.addImport("parallel/spice", spice_wrapper_mod);
+    root_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
 
     // Phase 6 External Library Imports (extracted core libraries)
     root_mod.addImport("uuid", uuid_ext_mod);
@@ -480,8 +471,7 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("protobuf", protobuf_mod);
     geode_exe.root_module.addImport("grpc_server", grpc_server_mod);
     geode_exe.root_module.addImport("grpc_client", grpc_client_mod);
-    geode_exe.root_module.addImport("spice", spice_mod);
-    geode_exe.root_module.addImport("parallel/spice", spice_wrapper_mod);
+    geode_exe.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
 
     // Phase 6 External Library Imports for CLI (extracted core libraries)
     geode_exe.root_module.addImport("uuid", uuid_ext_mod);
@@ -570,7 +560,7 @@ pub fn build(b: *std.Build) void {
     mcp_cli_mod.addImport("schema", schema_mod);
     mcp_cli_mod.addImport("protobuf", protobuf_mod);
     // Parallel processing for row mapping
-    mcp_cli_mod.addImport("parallel/spice", spice_wrapper_mod);
+    mcp_cli_mod.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
     mcp_cli_mod.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode_mcp", mcp_cli_mod);
 
@@ -1670,20 +1660,18 @@ pub fn build(b: *std.Build) void {
     perf_opt_tests.root_module.addImport("transport/stream_scheduler", stream_scheduler_mod);
     test_step.dependOn(&perf_opt_tests.step);
 
-    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="SpiceIntegrationTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    // Spice fork/join parallelism integration tests
-    const spice_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_spice_integration.zig"), .target = target, .optimize = optimize }) });
-    spice_integration_tests.root_module.addImport("geode", root_mod);
-    spice_integration_tests.root_module.addImport("spice", spice_mod);
-    spice_integration_tests.root_module.addImport("parallel/spice", spice_wrapper_mod);
-    const run_spice_integration_tests = b.addRunArtifact(spice_integration_tests);
+    // CANARY: REQ=REQ-PERF-SPICE-027; FEATURE="ParallelWrapperTests"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // Dedicated tests for the thread-pool-backed parallel wrapper.
+    const parallel_wrapper_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_parallel.zig"), .target = target, .optimize = optimize }) });
+    parallel_wrapper_tests.root_module.addImport("geode", root_mod);
+    parallel_wrapper_tests.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    const run_parallel_wrapper_tests = b.addRunArtifact(parallel_wrapper_tests);
 
-    // Create dedicated test-spice step for spice tests
-    const spice_test_step = b.step("test-spice", "Run spice parallelism integration tests");
-    spice_test_step.dependOn(&run_spice_integration_tests.step);
+    const parallel_wrapper_test_step = b.step("test-thread-pool-parallel", "Run thread-pool parallel wrapper integration tests");
+    parallel_wrapper_test_step.dependOn(&run_parallel_wrapper_tests.step);
 
     // Also add to main test step
-    test_step.dependOn(&spice_integration_tests.step);
+    test_step.dependOn(&parallel_wrapper_tests.step);
 
     // CANARY: REQ=REQ-QUIC-MUX-008; FEATURE="StreamRegistryBuildIntegration"; ASPECT=ParallelRegression; STATUS=IMPL; OWNER=build; UPDATED=2026-04-08
     const quic_stream_registry_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_quic_stream_registry.zig"), .target = target, .optimize = optimize }) });
@@ -1694,14 +1682,13 @@ pub fn build(b: *std.Build) void {
     quic_stream_registry_test_step.dependOn(&run_quic_stream_registry_tests.step);
     test_step.dependOn(&quic_stream_registry_tests.step);
 
-    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="SpiceBenchmarkBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-02-02
-    // Spice parallelism benchmarks
-    const spice_bench = b.addExecutable(.{ .name = "bench_spice_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_spice_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
-    spice_bench.root_module.addImport("spice", spice_mod);
-    spice_bench.root_module.addImport("parallel/spice", spice_wrapper_mod);
-    const run_spice_bench = b.addRunArtifact(spice_bench);
-    const spice_bench_step = b.step("bench-spice", "Run spice fork/join parallelism benchmarks");
-    spice_bench_step.dependOn(&run_spice_bench.step);
+    // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
+    // Thread-pool parallel wrapper benchmarks.
+    const parallel_wrapper_bench = b.addExecutable(.{ .name = "bench_thread_pool_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_thread_pool_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
+    parallel_wrapper_bench.root_module.addImport("parallel/thread_pool_parallel", parallel_wrapper_mod);
+    const run_parallel_wrapper_bench = b.addRunArtifact(parallel_wrapper_bench);
+    const parallel_wrapper_bench_step = b.step("bench-thread-pool-parallel", "Run thread-pool parallel wrapper benchmarks");
+    parallel_wrapper_bench_step.dependOn(&run_parallel_wrapper_bench.step);
 
     // GAP-0201: Transport throughput benchmark for performance optimization validation
     // CANARY: REQ=REQ-PERF-BENCH-BUILD-001; FEATURE="ThroughputBenchmark"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=build; UPDATED=2026-01-26

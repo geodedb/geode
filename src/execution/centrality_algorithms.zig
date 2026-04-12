@@ -7,9 +7,9 @@ const value_types = @import("../value_types.zig");
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 
-// GAP-0273: Spice parallelism for graph algorithm hot paths
-const spice_wrapper = @import("parallel/spice");
-const SpicePool = spice_wrapper.SpicePool;
+// GAP-0273: Thread-pool-backed parallelism for graph algorithm hot paths.
+const parallel_wrapper = @import("parallel/thread_pool_parallel");
+const ParallelPool = parallel_wrapper.ParallelPool;
 
 // Local type aliases
 const Value = value_types.Value;
@@ -65,19 +65,19 @@ fn multiResult(columns: [][]const u8, rows: [][]Value) ExecutionResult {
     };
 }
 
-// GAP-0273: Global spice pool for graph algorithm parallelism.
+// GAP-0273: Global parallel pool for graph algorithm parallelism.
 // Initialized lazily on first use, shared across all algorithm calls.
-var g_spice_pool: ?SpicePool = null;
-var g_spice_pool_mu: std.Thread.Mutex = .{};
+var g_parallel_pool: ?ParallelPool = null;
+var g_parallel_pool_mu: std.Thread.Mutex = .{};
 
-fn getSpicePool(allocator: std.mem.Allocator) *SpicePool {
-    g_spice_pool_mu.lock();
-    defer g_spice_pool_mu.unlock();
-    if (g_spice_pool == null) {
-        g_spice_pool = SpicePool.init(allocator, null);
-        g_spice_pool.?.start();
+fn getParallelPool(allocator: std.mem.Allocator) *ParallelPool {
+    g_parallel_pool_mu.lock();
+    defer g_parallel_pool_mu.unlock();
+    if (g_parallel_pool == null) {
+        g_parallel_pool = ParallelPool.init(allocator, null);
+        g_parallel_pool.?.start();
     }
-    return &g_spice_pool.?;
+    return &g_parallel_pool.?;
 }
 
 // CANARY: REQ=REQ-EXEC-REFACTOR-003; FEATURE="ExecutionRefactoring"; ASPECT=CENTRALITY_ALGORITHMS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
@@ -171,7 +171,7 @@ pub fn deinitNeighborSets(sets: *std.AutoHashMap(u64, NeighborSet)) void {
 }
 
 /// Degree Centrality - count edges for each node
-/// GAP-0273: Uses spice parallelForEach for concurrent degree computation on large graphs.
+/// GAP-0273: Uses the shared parallel wrapper for concurrent degree computation on large graphs.
 pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store.GraphStore, columns: [][]const u8) !ExecutionResult {
     var node_list = try collectNodeIds(store, allocator);
     defer node_list.deinit(allocator);
@@ -196,14 +196,14 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
     };
 
     // GAP-0273: Parallel degree computation — each node's degree is independent
-    const pool = getSpicePool(allocator);
-    spice_wrapper.parallelForEach(
+    const pool = getParallelPool(allocator);
+    parallel_wrapper.parallelForEach(
         pool,
         0,
         n,
         ctx,
         struct {
-            fn compute(_: *spice_wrapper.Task, idx: usize, c: DegreeCtx) void {
+            fn compute(_: *parallel_wrapper.Task, idx: usize, c: DegreeCtx) void {
                 const node_id = c.nodes[idx];
                 const out_degree: u64 = if (c.store_ptr.getOutgoingEdgeIds(node_id)) |ids| ids.len else 0;
                 const in_degree: u64 = if (c.store_ptr.getIncomingEdgeIds(node_id)) |ids| ids.len else 0;
@@ -211,7 +211,7 @@ pub fn executeDegreeCentrality(allocator: std.mem.Allocator, store: *graph_store
                 c.rows[idx][1] = safeU64ToValue(out_degree + in_degree);
             }
         }.compute,
-        spice_wrapper.Thresholds.forEach,
+        parallel_wrapper.Thresholds.forEach,
     );
 
     return ExecutionResult{
