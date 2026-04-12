@@ -766,7 +766,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
             _ = conn_state.active_streams.fetchAdd(1, .release);
 
             // Allocate context for the handler thread
-            const ctx = gpa.create(StreamHandlerContext) catch {
+            const handler_ctx = gpa.create(StreamHandlerContext) catch {
                 log.warn("Failed to allocate stream handler context", &.{});
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
@@ -775,7 +775,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 g_stream_throttle.release();
                 continue;
             };
-            ctx.* = .{
+            handler_ctx.* = .{
                 .allocator = gpa,
                 .transport = transport,
                 .stream = new_stream,
@@ -788,7 +788,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
             // naturally expressed as fork/join. Reusing wrapper workers for them
             // would tie heartbeat-scheduled tasks to socket waits.
             if (!stream_pool.submit(.{
-                .context = @ptrCast(ctx),
+                .context = @ptrCast(handler_ctx),
                 .callback = handleAdditionalStream,
             })) {
                 log.warn("Failed to spawn stream handler thread", &.{});
@@ -797,7 +797,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 _ = conn_state.active_streams.fetchSub(1, .release);
                 conn_state.streams_cv.signal(); // PERF-P1-001: signal, not broadcast
                 g_stream_throttle.release();
-                gpa.destroy(ctx);
+                gpa.destroy(handler_ctx);
                 continue;
             }
         } else {
