@@ -1758,6 +1758,11 @@ pub const GraphStore = struct {
         if (self.nodes.get(node_id)) |node| {
             const value = node.properties.get(key) orelse return null;
 
+            // Fast path: skip FLE decryption when no encryption is configured.
+            // This avoids allocPrint on self.allocator from concurrent threads
+            // (e.g. parallel auth lookups) which would alias without a lock.
+            if (!fle_integration.hasEncryptedFields()) return value;
+
             // Field-Level Encryption: decrypt string values if encrypted
             switch (value) {
                 .String => |s| {
