@@ -2555,7 +2555,7 @@ pub const GraphStore = struct {
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, id);
 
-        // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-02
+        // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
         // Mark store as dirty - persistence happens at query completion, not per-edge
         self.dirty.store(true, .release);
         incrementMutationEpoch();

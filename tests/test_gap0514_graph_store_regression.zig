@@ -99,3 +99,25 @@ test "GAP-0514 REQ-BINARY-PERSIST-DIRTY-002: saveIfDirty on clean store is a no-
     h.store.saveIfDirty();
     try testing.expect(!h.store.isDirty());
 }
+
+// REQ-BINARY-PERSIST-EDGE-001: Same invariant as DIRTY-001 but
+// on the edge-create path. An edge insertion must dirty the
+// store so the background loop persists it.
+test "GAP-0514 REQ-BINARY-PERSIST-EDGE-001: createEdge marks store dirty" {
+    var h = try GsHarness.init(testing.allocator);
+    defer h.deinit();
+
+    // Create two nodes first (edges need endpoints).
+    const labels = [_][]const u8{"Widget"};
+    const a = try h.store.createNode(&labels);
+    const b = try h.store.createNode(&labels);
+
+    // After createNode calls above the store is already dirty,
+    // so clear it manually to isolate the edge-create effect.
+    h.store.saveIfDirty();
+    try testing.expect(!h.store.isDirty());
+
+    _ = try h.store.createEdge(a, b, "KNOWS");
+
+    try testing.expect(h.store.isDirty());
+}
