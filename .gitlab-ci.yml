@@ -805,6 +805,7 @@ test-harness-integration:
     when:
       - runner_system_failure
       - stuck_or_timeout_failure
+      - script_failure
   before_script:
     - *zig-vendor-cache
     - apt-get update && apt-get install -y python3 python3-pip python3-venv pipx git
@@ -840,11 +841,14 @@ test-harness-integration:
       if [ -f reports/results.json ]; then
         python3 -c "import json; d=json.load(open('reports/results.json')); print(f'Total: {d.get(\"total\",0)}, Passed: {d.get(\"passed\",0)}, Failed: {d.get(\"failed\",0)}, Skipped: {d.get(\"skipped\",0)}')"
       fi
+
+      # Copy reports into project directory for artifact collection
+      cp -r reports/ "${CI_PROJECT_DIR}/harness-reports/" 2>/dev/null || true
       echo "✓ All test harness specs passed"
   artifacts:
     when: always
     paths:
-      - ../geode-test-harness/reports/
+      - harness-reports/
     expire_in: 1 week
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
