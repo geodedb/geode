@@ -41,6 +41,37 @@ pub fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
     return Ledger{ .rows = rows, .baseline_fingerprint = 0, .metrics = .{}, .alloc = alloc };
 }
 
+/// Read-only variant of loadLedger that returns an empty ledger when the
+/// ledger file is missing instead of calling initLedger (which creates
+/// directories via ensureDir). Used by statusReport to avoid side effects.
+pub fn loadLedgerReadOnly(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
+    const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
+    defer alloc.free(path);
+    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+        if (err == error.FileNotFound) {
+            const rows = std.ArrayList(StatusRow).initCapacity(alloc, 4) catch return error.OutOfMemory;
+            return Ledger{ .rows = rows, .baseline_fingerprint = 0, .metrics = .{}, .alloc = alloc };
+        }
+        return error.FileSystemError;
+    };
+    defer file.close();
+    const data = file.readToEndAlloc(alloc, max_ledger_bytes) catch return error.OutOfMemory;
+    defer alloc.free(data);
+    var parsed = std.json.parseFromSlice(LedgerFile, alloc, data, .{ .duplicate_field_behavior = .@"error" }) catch return error.LedgerCorrupt;
+    defer parsed.deinit();
+    var rows = std.ArrayList(StatusRow).initCapacity(alloc, parsed.value.rows.len) catch return error.OutOfMemory;
+    errdefer {
+        for (rows.items) |row| alloc.free(row.name);
+        rows.deinit(alloc);
+    }
+    for (parsed.value.rows) |row| {
+        const name_copy = alloc.dupe(u8, row.name) catch return error.OutOfMemory;
+        errdefer alloc.free(name_copy);
+        rows.append(alloc, .{ .version = row.version, .name = name_copy, .applied = row.applied, .checksum_prefix = row.checksum_prefix, .content_sha256 = row.content_sha256 }) catch return error.OutOfMemory;
+    }
+    return Ledger{ .rows = rows, .baseline_fingerprint = parsed.value.baseline_fingerprint, .metrics = parsed.value.metrics, .alloc = alloc };
+}
+
 pub fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);

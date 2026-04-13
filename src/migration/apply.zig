@@ -109,7 +109,9 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
         return error.FileSystemError;
     };
     defer dir.close();
-    var ledger = try ledger_mod.loadLedger(alloc, cfg);
+    // Use loadLedgerReadOnly to avoid creating the directory or ledger file
+    // as a side effect of a read-only status check.
+    var ledger = try ledger_mod.loadLedgerReadOnly(alloc, cfg);
     defer ledger.deinit();
     var result = std.ArrayList(StatusRow).initCapacity(alloc, 16) catch return error.OutOfMemory;
     errdefer {
