@@ -25,6 +25,17 @@ include:
       sign_needs: build-release
       allow_failure: false
 
+# Auto-cancel redundant pipelines on push (non-tag builds only).
+# Tagged release pipelines are never cancelled — they must run to completion.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: '$CI_COMMIT_TAG'
+      auto_cancel:
+        on_new_commit: none
+    - when: always
+
 stages:
   - lint
   - governance
@@ -38,6 +49,7 @@ default:
   tags:
     - company
     - linux
+  interruptible: true  # Allow auto-cancel of redundant pipelines on push
 
 # Issue #465: Global Zig build cache for CI pipeline efficiency
 cache:
@@ -776,81 +788,69 @@ test-gql-compliance:
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
   allow_failure: false
 
-test-geodetestlab-comprehensive:
+# =============================================================================
+# Test Stage - Geode Test Harness Integration
+# Clones the latest geode-test-harness main branch and runs the full spec
+# suite against the freshly built Geode binary. Blocks releases on failure.
+# =============================================================================
+
+test-harness-integration:
   stage: test
   image: $ZIG_IMAGE
   timeout: 2h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+  retry:
+    max: 1
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
   before_script:
     - *zig-vendor-cache
-    - apt-get update && apt-get install -y python3 python3-pip python3-venv
+    - apt-get update && apt-get install -y python3 python3-pip python3-venv pipx git
     - python3 -m venv /opt/venv
     - source /opt/venv/bin/activate
     - pip install --no-cache-dir pyyaml pytest
     - |
+      echo "=== Cloning geode-test-harness (latest main) ==="
       HARNESS_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git"
-      mkdir -p ../geode-test-harness
-      git -C ../geode-test-harness init
-      git -C ../geode-test-harness remote remove origin 2>/dev/null || true
-      git -C ../geode-test-harness remote add origin "$HARNESS_URL"
-      git -C ../geode-test-harness fetch --depth 1 origin "$GEODE_TEST_HARNESS_REF"
-      git -C ../geode-test-harness checkout --detach FETCH_HEAD
-      echo "Pinned geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
+      git clone --depth 1 --branch main "$HARNESS_URL" ../geode-test-harness
+      echo "geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
+    - |
+      echo "=== Installing geodetestlab CLI ==="
+      source /opt/venv/bin/activate
+      pip install --no-cache-dir -e ../geode-test-harness/geodetestlab-cli
   script:
     - |
-      echo "=== Building Geode (Debug for comprehensive testing) ==="
-      # Use Debug build: ReleaseSafe disables --insecure-tls-skip-verify
-      # which is needed to connect to per-spec self-signed servers.
+      echo "=== Building Geode (Debug for integration testing) ==="
       zig build --summary all
+      GEODE_BINARY="$(pwd)/zig-out/bin/geode"
+      echo "Geode binary: ${GEODE_BINARY}"
+      "${GEODE_BINARY}" --version || true
 
-      echo "=== Running Comprehensive geodetestlab Tests ==="
+      echo "=== Running Full Test Harness Suite ==="
       source /opt/venv/bin/activate
+      cd ../geode-test-harness
 
-      # CANARY: REQ=REQ-GQL-CI-002; FEATURE="GQL Comprehensive CI"; ASPECT=TestReporting; STATUS=TESTED; TEST=geodetestlab/specs/geode_gql_compliance.yml; OWNER=ci; UPDATED=2026-01-14
-      # GAP-0167: Comprehensive tests report actual status (allow_failure: true permits pipeline to continue)
-      python3 scripts/test/extended_test_runner.py || TEST_FAILED=1
+      # Run the full spec suite against the freshly built binary.
+      # make test exits non-zero on any spec failure, which fails this job.
+      GEODE_BINARY="${GEODE_BINARY}" make test
 
-      echo "=== Test Summary ==="
-      if [ -f geodetestlab-results.xml ]; then
-        python3 -c "import xml.etree.ElementTree as ET; t=ET.parse('geodetestlab-results.xml').getroot(); print(f'Total: {t.get(\"tests\",0)}, Failures: {t.get(\"failures\",0)}, Errors: {t.get(\"errors\",0)}')" || echo "Could not parse results"
+      echo "=== Test Harness Results ==="
+      if [ -f reports/results.json ]; then
+        python3 -c "import json; d=json.load(open('reports/results.json')); print(f'Total: {d.get(\"total\",0)}, Passed: {d.get(\"passed\",0)}, Failed: {d.get(\"failed\",0)}, Skipped: {d.get(\"skipped\",0)}')"
       fi
-
-      # GAP-0167: Exit with failure if tests failed
-      if [ "${TEST_FAILED:-0}" = "1" ]; then exit 1; fi
+      echo "✓ All test harness specs passed"
   artifacts:
     when: always
     paths:
-      - geodetestlab-results.xml
-    reports:
-      junit: geodetestlab-results.xml
+      - ../geode-test-harness/reports/
     expire_in: 1 week
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
-      when: manual
     - if: '$CI_COMMIT_TAG'
-      when: manual
-  # GAP-0167: Comprehensive tests report actual status but don't block pipeline
-  # GQL compliance job (test-gql-compliance) is the blocking quality gate
-  allow_failure: true
-
-# =============================================================================
-# Test Stage - Client Harness Integration Placeholder (#420)
-# CANARY: REQ=REQ-CI-CLIENT-HARNESS-001; FEATURE="CI Client Harness Integration"; ASPECT=CI; STATUS=IMPL; TEST=test-client-harness; OWNER=ci; UPDATED=2026-02-18
-# GAP-0420: Placeholder for geode-test-harness and language client test suites.
-# Full integration is blocked on external harness repo CI runner availability.
-# allow_failure=true until stable.
-# =============================================================================
-
-test-client-harness:
-  stage: test
-  allow_failure: true
-  script:
-    - echo "Geode test harness integration placeholder"
-    - 'echo "TODO: wire geode-test-harness when client repo CI is stable"'
-  rules:
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+  allow_failure: false
 
 # =============================================================================
 # Security Stage - Mandatory Secret + Dependency/Config Scans
@@ -891,10 +891,12 @@ security-trivy:
 # Snapshot release for main branch (non-tag builds)
 snapshot:
   stage: release
-  # Skip stage-based ordering: don't wait for test-geodetestlab-comprehensive (2h+)
+  interruptible: false  # Never cancel in-flight release builds
+  # Skip stage-based ordering: require key quality gates only
   needs:
     - job: test-zig-unit
     - job: test-zig-release-safe
+    - job: test-harness-integration
     - job: test-performance-benchmarks
       optional: true  # Flaky SIMD benchmarks should not block snapshot builds
     - job: security-secrets
@@ -1010,11 +1012,12 @@ snapshot:
 # Build release artifacts for tags (alpha, beta, stable)
 build-release:
   stage: release
-  # Skip stage-based ordering: don't wait for test-geodetestlab-comprehensive (2h+)
-  # Only require unit tests and release-safe build to pass before building release
+  interruptible: false  # Never cancel in-flight release builds
+  # Only require unit tests, release-safe build, and harness to pass before building release
   needs:
     - job: test-zig-unit
     - job: test-zig-release-safe
+    - job: test-harness-integration
     - job: test-performance-benchmarks
       optional: false  # GAP-0252: Benchmarks required for release builds to detect regressions
     - job: security-secrets
@@ -1166,6 +1169,7 @@ build-release:
 # Publish GitLab release with artifacts (uses CI_JOB_TOKEN which has release permissions)
 publish-release:
   stage: release
+  interruptible: false
   # Use GitLab hosted runners
   tags:
     - saas-linux-medium-amd64
@@ -1271,6 +1275,7 @@ publish-release:
 # Publish packages to GitLab Package Registry (Generic, Debian, RPM)
 publish-packages:
   stage: publish
+  interruptible: false
   tags:
     - saas-linux-medium-amd64
   image: curlimages/curl:latest
