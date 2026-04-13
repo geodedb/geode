@@ -98,15 +98,19 @@ pub fn applyDownMigration(alloc: std.mem.Allocator, cfg: MigrationConfig, execut
 }
 
 pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError![]StatusRow {
-    var ledger = try ledger_mod.loadLedger(alloc, cfg);
-    defer ledger.deinit();
+    // Open the migrations directory first (read-only — never create it).
+    // This prevents statusReport from having side effects via loadLedger →
+    // initLedger → ensureDir, which would silently create directories (e.g.
+    // when running as root in CI containers).
     var dir = std.fs.cwd().openDir(cfg.migrations_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
-            return alloc.alloc(StatusRow, 0) catch return error.OutOfMemory;
+            return error.FileSystemError;
         }
         return error.FileSystemError;
     };
     defer dir.close();
+    var ledger = try ledger_mod.loadLedger(alloc, cfg);
+    defer ledger.deinit();
     var result = std.ArrayList(StatusRow).initCapacity(alloc, 16) catch return error.OutOfMemory;
     errdefer {
         for (result.items) |row| {
