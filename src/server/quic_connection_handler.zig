@@ -129,6 +129,22 @@ const isMutatingStatement = query_traits.isMutatingStatement;
 
 const isMutatingProgram = query_traits.isMutatingProgram;
 
+fn rebuildPendingIndexes(
+    allocator: std.mem.Allocator,
+    graph_name: []const u8,
+    pending_index_rebuilds: *std.StringHashMap(void),
+) void {
+    if (pending_index_rebuilds.count() == 0) return;
+    const manager = index_manager.getGlobalIndexManager() orelse return;
+
+    const rebuild_lock = graph_store.acquireGraphReadLock(graph_name);
+    defer graph_store.releaseGraphLock(rebuild_lock);
+
+    const store = graph_store.getGlobalStore(allocator);
+    var iter = pending_index_rebuilds.keyIterator();
+    while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -2228,13 +2244,7 @@ fn handleClientMessage(
                         // reads the store, so it does not need the graph write lock.
                         // This prevents MERGE stalls under sustained ingest.
                         graph_store.releaseGraphLock(h);
-                        if (pending_index_rebuilds.count() > 0) {
-                            if (index_manager.getGlobalIndexManager()) |manager| {
-                                const store = graph_store.getGlobalStore(gpa);
-                                var iter = pending_index_rebuilds.keyIterator();
-                                while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
-                            }
-                        }
+                        rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                     }
                 }
             }
@@ -2300,13 +2310,7 @@ fn handleClientMessage(
                                 if (graph_lock_handle) |h| {
                                     // GAP-0511: Release lock before index rebuild
                                     graph_store.releaseGraphLock(h);
-                                    if (pending_index_rebuilds.count() > 0) {
-                                        if (index_manager.getGlobalIndexManager()) |manager| {
-                                            const idx_store = graph_store.getGlobalStore(gpa);
-                                            var iter = pending_index_rebuilds.keyIterator();
-                                            while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
-                                        }
-                                    }
+                                    rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                                 }
                                 lock_released = true;
                             }
@@ -2375,13 +2379,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            if (pending_index_rebuilds.count() > 0) {
-                                if (index_manager.getGlobalIndexManager()) |manager| {
-                                    const idx_store = graph_store.getGlobalStore(gpa);
-                                    var iter = pending_index_rebuilds.keyIterator();
-                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
-                                }
-                            }
+                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }
@@ -2433,13 +2431,7 @@ fn handleClientMessage(
                                         if (graph_lock_handle) |h| {
                                             // GAP-0511: Release lock before index rebuild
                                             graph_store.releaseGraphLock(h);
-                                            if (pending_index_rebuilds.count() > 0) {
-                                                if (index_manager.getGlobalIndexManager()) |manager| {
-                                                    const idx_store = graph_store.getGlobalStore(gpa);
-                                                    var iter = pending_index_rebuilds.keyIterator();
-                                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
-                                                }
-                                            }
+                                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                                         }
                                         lock_released = true;
                                     }
@@ -2540,13 +2532,7 @@ fn handleClientMessage(
                         if (graph_lock_handle) |h| {
                             // GAP-0511: Release lock before index rebuild
                             graph_store.releaseGraphLock(h);
-                            if (pending_index_rebuilds.count() > 0) {
-                                if (index_manager.getGlobalIndexManager()) |manager| {
-                                    const idx_store = graph_store.getGlobalStore(gpa);
-                                    var iter = pending_index_rebuilds.keyIterator();
-                                    while (iter.next()) |k| manager.rebuildAdvancedIndex(idx_store, k.*) catch {};
-                                }
-                            }
+                            rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                         }
                         lock_released = true;
                     }

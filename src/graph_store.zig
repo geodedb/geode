@@ -4932,7 +4932,10 @@ fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
 
 // Global instance that persists across queries
 var global_store: ?GraphStore = null;
-var global_arena: ?std.heap.ArenaAllocator = null;
+// The global store is shared across transport threads, so its allocator must be
+// safe for cross-thread alloc/free traffic. A long-lived arena hid leaks but
+// left the backing allocator outside the thread-safe path used elsewhere.
+var global_store_allocator: ?std.heap.ThreadSafeAllocator = null;
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
 var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -5450,10 +5453,7 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         global_store.?.clearNodes();
         global_store.?.deinit();
         global_store = null;
-        if (global_arena != null) {
-            global_arena.?.deinit();
-            global_arena = null;
-        }
+        global_store_allocator = null;
     }
 
     // Update last_data_dir
@@ -5468,9 +5468,10 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     syncGlobalAdapterForDataDir(last_data_dir);
 
-    // Use a persistent arena allocator for the global store
-    global_arena = std.heap.ArenaAllocator.init(global_gpa.allocator());
-    global_store = GraphStore.init(global_arena.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
+    global_store_allocator = .{
+        .child_allocator = global_gpa.allocator(),
+    };
+    global_store = GraphStore.init(global_store_allocator.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {
         global_store.?.data_dir = dir;
@@ -5533,10 +5534,7 @@ pub fn deinitGlobalStore() void {
     if (initialized.load(.acquire) and global_store != null) {
         global_store.?.deinit();
         global_store = null;
-        if (global_arena != null) {
-            global_arena.?.deinit();
-            global_arena = null;
-        }
+        global_store_allocator = null;
         initialized.store(false, .release);
     }
     deinitGlobalAdapter();
