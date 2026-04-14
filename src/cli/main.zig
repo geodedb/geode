@@ -1699,7 +1699,10 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     };
 
     var attempts: u32 = 0;
-    const max_attempts = retry_count + 1;
+    // Match QUIC's behavior for rapid sequential CLI usage: allow at least
+    // three total attempts so transient handshake/connection churn does not
+    // fail whole specs unless it persists across retries.
+    const max_attempts = @max(retry_count + 1, 3);
     var last_error: ?[]const u8 = null;
 
     while (attempts < max_attempts) : (attempts += 1) {
@@ -1712,6 +1715,9 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
             .{ .on_progress = touchActiveQueryDeadlineWatchdog },
         ) catch |err| {
             last_error = @errorName(err);
+            if (attempts + 1 < max_attempts) {
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+            }
             continue;
         };
         defer tcp_stream.close();
@@ -1721,6 +1727,9 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
         return executeQueryOnGrpc(allocator, tcp_stream, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs) catch |err| {
             last_error = @errorName(err);
             params_transferred = false;
+            if (attempts + 1 < max_attempts) {
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+            }
             continue;
         };
     }
