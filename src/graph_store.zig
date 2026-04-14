@@ -4745,6 +4745,7 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
 pub const GraphLockHandle = struct {
     managed_graph: ?*graph_storage_adapter.ManagedGraph,
     is_write: bool,
+    holds_global_store_lock: bool,
 };
 
 /// Acquire a shared (read) lock scoped to `graph_name`.  If the per-graph
@@ -4752,26 +4753,41 @@ pub const GraphLockHandle = struct {
 /// to the global store rwlock for backward compatibility (tests, single-
 /// graph deployments without an adapter).
 pub fn acquireGraphReadLock(graph_name: []const u8) GraphLockHandle {
+    acquireStoreLock();
     if (global_adapter) |adapter| {
         if (adapter.acquireGraphReadLock(graph_name)) |mg| {
-            return .{ .managed_graph = mg, .is_write = false };
+            return .{
+                .managed_graph = mg,
+                .is_write = false,
+                .holds_global_store_lock = true,
+            };
         } else |_| {}
     }
-    // Fallback: use global store lock
-    acquireStoreLock();
-    return .{ .managed_graph = null, .is_write = false };
+    return .{
+        .managed_graph = null,
+        .is_write = false,
+        .holds_global_store_lock = true,
+    };
 }
 
 /// Acquire an exclusive (write) lock scoped to `graph_name`.  Falls back
 /// to the global store write-lock when no adapter is available.
 pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
+    acquireStoreWriteLock();
     if (global_adapter) |adapter| {
         if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
-            return .{ .managed_graph = mg, .is_write = true };
+            return .{
+                .managed_graph = mg,
+                .is_write = true,
+                .holds_global_store_lock = true,
+            };
         } else |_| {}
     }
-    acquireStoreWriteLock();
-    return .{ .managed_graph = null, .is_write = true };
+    return .{
+        .managed_graph = null,
+        .is_write = true,
+        .holds_global_store_lock = true,
+    };
 }
 
 /// Release a lock previously acquired via `acquireGraphReadLock` or
@@ -4784,14 +4800,15 @@ pub fn releaseGraphLock(handle: GraphLockHandle) void {
             } else {
                 adapter.releaseGraphReadLock(mg);
             }
-            return;
         }
     }
-    // Fallback: release global lock
-    if (handle.is_write) {
-        releaseStoreWriteLock();
-    } else {
-        releaseStoreLock();
+
+    if (handle.holds_global_store_lock) {
+        if (handle.is_write) {
+            releaseStoreWriteLock();
+        } else {
+            releaseStoreLock();
+        }
     }
 }
 

@@ -342,7 +342,11 @@ pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
     var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa_instance.deinit();
-    const gpa = gpa_instance.allocator();
+    // The server dispatches transport work on multiple threads. Wrap the
+    // process allocator so request parsing/execution can safely allocate
+    // concurrently without corrupting heap state.
+    var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = gpa_instance.allocator() };
+    const gpa = ts_alloc.allocator();
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
     const config_opt = try cli_args.parseArgs(gpa);
     if (config_opt == null) return; // Help was shown, exit
