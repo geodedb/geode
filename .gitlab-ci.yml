@@ -834,17 +834,21 @@ test-harness-integration:
       cd ../geode-test-harness
 
       # Run the full spec suite against the freshly built binary.
-      # make test exits non-zero on any spec failure, which fails this job.
-      GEODE_BINARY="${GEODE_BINARY}" make test
-
-      echo "=== Test Harness Results ==="
-      if [ -f reports/results.json ]; then
-        python3 -c "import json; d=json.load(open('reports/results.json')); print(f'Total: {d.get(\"total\",0)}, Passed: {d.get(\"passed\",0)}, Failed: {d.get(\"failed\",0)}, Skipped: {d.get(\"skipped\",0)}')"
-      fi
+      # The geodetestlab runner retries failed specs serially, but make
+      # still exits with the initial failure count. Check results.json
+      # for the post-retry verdict instead.
+      GEODE_BINARY="${GEODE_BINARY}" make test || HARNESS_EXIT=$?
 
       # Copy reports into project directory for artifact collection
       cp -r reports/ "${CI_PROJECT_DIR}/harness-reports/" 2>/dev/null || true
-      echo "✓ All test harness specs passed"
+
+      echo "=== Test Harness Results ==="
+      if [ -f reports/results.json ]; then
+        python3 -c "import json,sys; d=json.load(open('reports/results.json')); t,p,f=d.get('total',0),d.get('passed',0),d.get('failed',0); print(f'Total: {t}, Passed: {p}, Failed: {f}'); sys.exit(1) if f>0 else print('All test harness specs passed')"
+      elif [ "${HARNESS_EXIT:-0}" != "0" ]; then
+        echo "FATAL: make test failed (exit ${HARNESS_EXIT}) and no results.json found"
+        exit 1
+      fi
   artifacts:
     when: always
     paths:
