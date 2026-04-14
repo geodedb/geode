@@ -25,16 +25,33 @@ var global_mutex: std.Thread.Mutex = .{};
 // GAP-0203: Global flag to fast-path skip FLE when no encryption is configured
 // CANARY: REQ=REQ-PERF-FLE-SKIP-001; FEATURE="FLESkipOptimization"; ASPECT=GlobalDisable; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
 var fle_has_encrypted_fields: bool = false;
+var fle_catalog_state_checked: bool = false;
 
 /// Check if FLE has any encrypted fields configured. Returns false when no encryption is active,
 /// allowing callers to skip all FLE processing for non-encrypted deployments.
 pub fn hasEncryptedFields() bool {
+    if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
+        global_mutex.lock();
+        defer global_mutex.unlock();
+
+        if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
+            const catalog = fle_catalog.globalCatalog(std.heap.c_allocator) catch {
+                fle_catalog_state_checked = true;
+                return fle_has_encrypted_fields;
+            };
+            fle_has_encrypted_fields = catalog.count() > 0;
+            fle_catalog_state_checked = true;
+        }
+    }
     return fle_has_encrypted_fields;
 }
 
 /// Mark that encrypted fields exist (called when encryption is configured)
 pub fn setHasEncryptedFields(has_fields: bool) void {
+    global_mutex.lock();
+    defer global_mutex.unlock();
     fle_has_encrypted_fields = has_fields;
+    fle_catalog_state_checked = has_fields;
 }
 
 // GAP-0285/S3: Per-thread user role map replaces process-global variable.
@@ -237,7 +254,7 @@ pub fn getRotationStatus(
 /// CANARY: REQ=REQ-FLE-FAILSECURE-004; FEATURE="FLEFailSecure"; ASPECT=EncryptionCheck; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 pub fn fieldRequiresEncryption(type_name: []const u8, field_name: []const u8) bool {
     // Fast path - if no encrypted fields are configured globally, nothing requires encryption
-    if (!fle_has_encrypted_fields) {
+    if (!hasEncryptedFields()) {
         return false;
     }
 
@@ -274,7 +291,7 @@ pub fn encryptFieldIfNeeded(
     record_id: []const u8,
 ) ![]const u8 {
     // GAP-0203: Fast path - skip all FLE processing when no encryption is configured
-    if (!fle_has_encrypted_fields) {
+    if (!hasEncryptedFields()) {
         return plaintext;
     }
 
@@ -365,7 +382,7 @@ pub fn decryptFieldIfNeeded(
 ) ![]const u8 {
     // GAP-0203: Fast path - skip all FLE processing when no encryption is configured
     // CANARY: REQ=REQ-PERF-FLE-SKIP-002; FEATURE="FLESkipOptimization"; ASPECT=DecryptFastPath; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
-    if (!fle_has_encrypted_fields) {
+    if (!hasEncryptedFields()) {
         return data;
     }
 

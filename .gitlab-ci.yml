@@ -905,6 +905,7 @@ snapshot:
     - job: test-zig-unit
     - job: test-zig-release-safe
     - job: test-harness-integration
+      artifacts: false
     - job: test-performance-benchmarks
       optional: true  # Flaky SIMD benchmarks should not block snapshot builds
     - job: security-secrets
@@ -1026,6 +1027,7 @@ build-release:
     - job: test-zig-unit
     - job: test-zig-release-safe
     - job: test-harness-integration
+      artifacts: false
     - job: test-performance-benchmarks
       optional: false  # GAP-0252: Benchmarks required for release builds to detect regressions
     - job: security-secrets

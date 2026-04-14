@@ -12,6 +12,7 @@ const diagnostics = geode.diagnostics;
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const server_state = geode.server_state;
+const query_runner = geode.query_runner;
 const query_traits = geode.query_traits;
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
@@ -538,29 +539,36 @@ pub const GeodeGrpcServer = struct {
         var server = try GrpcServer.init(allocator, port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
-        // Initialize TLS if cert and key are provided
-        if (cert_path) |cp| {
-            if (key_path) |kp| {
-                // Create null-terminated strings for OpenSSL
-                const cert_z = try allocator.dupeZ(u8, cp);
-                defer allocator.free(cert_z);
-                const key_z = try allocator.dupeZ(u8, kp);
-                defer allocator.free(key_z);
+        if (allow_plaintext_fallback) {
+            server.on_tls_accept = grpc_tls.rawAccept;
+            log.warn("gRPC plaintext enabled in Debug mode via GEODE_GRPC_ALLOW_PLAINTEXT_FALLBACK", &.{});
+        }
 
-                grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
-                    if (!allow_plaintext_fallback) {
-                        log.err("gRPC TLS init failed; refusing plaintext fallback", &.{
+        // Initialize TLS if cert and key are provided and plaintext mode is not forced.
+        if (server.on_tls_accept == null) {
+            if (cert_path) |cp| {
+                if (key_path) |kp| {
+                    // Create null-terminated strings for OpenSSL
+                    const cert_z = try allocator.dupeZ(u8, cp);
+                    defer allocator.free(cert_z);
+                    const key_z = try allocator.dupeZ(u8, kp);
+                    defer allocator.free(key_z);
+
+                    grpc_tls.initTlsContext(cert_z, key_z) catch |err| {
+                        if (!allow_plaintext_fallback) {
+                            log.err("gRPC TLS init failed; refusing plaintext fallback", &.{
+                                Attr.string("error", @errorName(err)),
+                            });
+                            return err;
+                        }
+                        log.warn("gRPC TLS init failed; plaintext fallback explicitly enabled", &.{
                             Attr.string("error", @errorName(err)),
                         });
-                        return err;
+                    };
+                    if (grpc_tls.hasTlsContext()) {
+                        server.on_tls_accept = grpc_tls.tlsAccept;
+                        log.info("gRPC TLS enabled", &.{});
                     }
-                    log.warn("gRPC TLS init failed; plaintext fallback explicitly enabled", &.{
-                        Attr.string("error", @errorName(err)),
-                    });
-                };
-                if (grpc_tls.hasTlsContext()) {
-                    server.on_tls_accept = grpc_tls.tlsAccept;
-                    log.info("gRPC TLS enabled", &.{});
                 }
             }
         }
@@ -713,6 +721,7 @@ fn handlePacket(request_bytes: []const u8, method: []const u8, trans: *GrpcTrans
 /// Build a data page ExecutionResponse directly (avoids decode+re-encode cycle).
 /// Returns encoded ExecutionResponse bytes and whether this is the final page.
 const PageResult = struct { bytes: []u8, is_final: bool };
+const grpc_stream_page_size: usize = query_runner.default_page_size;
 
 fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !PageResult {
     const store = getSessionStore() orelse {
@@ -746,7 +755,7 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
     defer page_arena.deinit();
     const pa = page_arena.allocator();
 
-    const page = try proto_util.buildDataPage(pa, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+    const page = try proto_util.buildDataPage(pa, result_ptr, start, grpc_stream_page_size, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;
     const is_final = page.final;
 
@@ -783,7 +792,7 @@ fn buildStreamDataPageLocked(state: *server_state.ServerState, allocator: std.me
     defer page_arena.deinit();
     const pa = page_arena.allocator();
 
-    const page = try proto_util.buildDataPage(pa, result_ptr, start, 1000, state.result_ordered, state.result_order_keys);
+    const page = try proto_util.buildDataPage(pa, result_ptr, start, grpc_stream_page_size, state.result_ordered, state.result_order_keys);
     state.result_page_index += page.rows.items.len;
     const is_final = page.final;
 

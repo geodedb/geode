@@ -89,12 +89,19 @@ See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for full details. GitLab is the source of
 - [GAP-0255: gRPC transport parity gaps vs QUIC](https://gitlab.com/devnw/codepros/geode/geode/-/issues/548)
 - [GAP-0251: No code coverage instrumentation in CI](https://gitlab.com/devnw/codepros/geode/geode/-/issues/544)
 - [GAP-0252: CI benchmarks optional for release builds](https://gitlab.com/devnw/codepros/geode/geode/-/issues/545)
+- GAP-0526: glab CLI unavailable in environment — Blocked
+- GAP-0527: 8 tests failing with exit code after Vulkan/CUDA fixes
 
 ### Medium
 
 - [GAP-0246: LDAP/AD authentication not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/397) — Blocked (Q2 2026)
 - [GAP-0247: OAuth2/OIDC authentication not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/398) — Blocked (Q3 2026)
 - [GAP-0253: Incomplete cryptographic signature algorithms](https://gitlab.com/devnw/codepros/geode/geode/-/issues/546)
+- GAP-0528: Dijkstra missing expected output format
+
+### Low
+
+- GAP-0529: Missing multi-graph lock acquisition during backup/restore
 
 ### Recently Resolved
 

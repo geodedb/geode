@@ -277,7 +277,7 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
         }
     }
 
-    if (config.listen_quic == null) {
+    if (config.listen_quic == null and config.listen_grpc == null) {
         config.listen_quic = "0.0.0.0:3141";
     }
     return config;

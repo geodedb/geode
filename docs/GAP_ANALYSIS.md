@@ -1,17 +1,18 @@
 # Gap Analysis
 
-Last updated: 2026-04-10
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)**
+Last updated: 2026-04-14
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)**
 
 ## Summary
 
-- **Total open gaps:** 3
+- **Total open gaps:** 7
 - **Critical:** 1 (GAP-0256 blocked)
-- **High:** 0
-- **Medium:** 0
-- **Low:** 0
-- **Blocked (external dependency):** 3 (GAP-0246, GAP-0247, GAP-0256)
+- **High:** 2 (GAP-0526, GAP-0527)
+- **Medium:** 1 (GAP-0528)
+- **Low:** 1 (GAP-0529)
+- **Blocked (external dependency):** 4 (GAP-0246, GAP-0247, GAP-0256, GAP-0526)
 - **Won't Do:** 1 (GAP-0258)
+- **Opened (2026-04-14):** GAP-0526, GAP-0527, GAP-0528, GAP-0529
 - **Closed (2026-04-10):** GAP-0519 (posting-list intersection verified), GAP-0520 (dead materializing wrappers removed), GAP-0521 (GROUP BY at practical optimum), GAP-0522 (full-scan diagnostics added), GAP-0523 (ReadView adapter gate removed), GAP-0524 (storage APIs documented, partial), GAP-0525 (micro-benchmarks added)
 - **Closed (2026-04-05):** GAP-0500, GAP-0501, GAP-0502, GAP-0503, GAP-0504, GAP-0508, SEC-04..SEC-27 (17 critical security), R4, performance items #675/#681/#683/#688/#692/#695, migration security SEC-MIG-06/07/09/10/11, quality Q13/Q15/Q17/Q18, #696 dead imports
 - **Closed (2026-04-01):** ALL 17 multi-tenancy gaps (GAP-0279 through GAP-0295), GAP-0255 (savepoint/transport parity)
@@ -557,6 +558,59 @@ Bulk data ingestion via stdin is unreliable for medium-sized batches. Users pipi
 - **Impact/Risk:** Cannot integrate with enterprise identity providers (Okta, Auth0, Azure AD, etc.).
 - **Recommended fix:** Implement token introspection endpoint; OIDC discovery; claims-to-role mapping.
 - **Acceptance criteria:** OAuth2/OIDC authentication functional with configurable provider. **Status: Blocked** — requires dedicated auth provider sprint.
+
+### GAP-0526: glab CLI unavailable in environment
+
+- **GitLab issue:** N/A (Blocked from creation due to tool unavailable)
+- **Category:** CI-CD
+- **Severity:** High
+- **Requirement source:** Gap analysis instructions
+- **Current state (evidence):**
+  - Running `glab --version` or `glab auth status` produces no output and silently fails with either exit code 0 or 1.
+- **Why this is a gap:** The required tool for issue tracking and CI/CD automation `glab` is malfunctioning in the environment, preventing Gitlab synchronization.
+- **Impact/Risk:** Blocked from executing the required "Sync to GitLab" workflow.
+- **Recommended fix:** Fix `glab` installation in the environment or provide a valid auth token and proxy settings.
+- **Acceptance criteria:** `glab auth status` runs successfully and `glab issue create` succeeds.
+
+### GAP-0527: 8 tests failing with exit code after Vulkan/CUDA fixes
+
+- **GitLab issue:** N/A (Blocked)
+- **Category:** Test
+- **Severity:** High
+- **Requirement source:** [TODO.md](file:///home/benji/src/devnw/codepros/geode/geode/docs/TODO.md#L248-L265)
+- **Current state (evidence):**
+  - `docs/TODO.md` documents 8 test failures across multiple specs with non-zero exit codes.
+- **Why this is a gap:** 0.47% failure rate remains in the test suite due to regression or unpatched bugs.
+- **Impact/Risk:** Lower confidence in build integrity; incomplete validation of core features.
+- **Recommended fix:** Run isolated test suites, analyze logs, and patch authentication/configuration setup bugs.
+- **Acceptance criteria:** Test suite passes with 0 recurring test failures.
+
+### GAP-0528: Dijkstra missing expected output format
+
+- **GitLab issue:** N/A (Blocked)
+- **Category:** Test
+- **Severity:** Medium
+- **Requirement source:** [TODO.md](file:///home/benji/src/devnw/codepros/geode/geode/docs/TODO.md#L289-L301)
+- **Current state (evidence):**
+  - `docs/TODO.md` documents `match-call-dijkstra-optimal: missing expected output` in `geode_match_call_integration.yml`.
+- **Why this is a gap:** Output discrepancy in shortest-path algorithm test.
+- **Impact/Risk:** The test spec or the query executor logic is incorrectly formulated or broken.
+- **Recommended fix:** Compare the `expected` structure with the executor's stdout formats and map properties correctly.
+- **Acceptance criteria:** The Dijkstra integration test accurately matches expected outputs.
+
+### GAP-0529: Missing multi-graph lock acquisition during backup/restore
+
+- **GitLab issue:** N/A (Blocked)
+- **Category:** Correctness
+- **Severity:** Low
+- **Requirement source:** `src/server/quic_connection_handler.zig` TODO(P1) comments
+- **Current state (evidence):**
+  - `src/server/quic_connection_handler.zig:L2951` — `// TODO(P1): Consider multi-graph lock acquisition for backup.`
+  - `src/server/quic_connection_handler.zig:L3055` — `// TODO(P1): Consider multi-graph lock acquisition for restore.`
+- **Why this is a gap:** Backup and restore routines might lack full mutually-exclusive locking during multi-graph setups.
+- **Impact/Risk:** Concurrency race conditions or corrupted backups during multi-tenant backup/restore.
+- **Recommended fix:** Expand locking to encompass `multi_graph` write locks where appropriate during export/import paths.
+- **Acceptance criteria:** `quic_connection_handler.zig` acquires adequate multi-graph locking in `handleBackup` and `handleRestore`.
 
 ---
 
