@@ -27,6 +27,8 @@ typescript
 /audit_*.json
 /audit_*.jsonl
 audit.jsonl
+audit.jsonl.pub
+audit.jsonl.key
 
 # Stress test data
 stress_data_integration/
