@@ -4273,7 +4273,9 @@ REQ-WITH-WHERE-001,WITH WHERE Filtering,QueryExecution,TESTED,,,engine,2026-01-1
 REQ-XXX-NNN,Feature Name,Category,TESTED,,,team,YYYY-MM-DD,CONTRIBUTING.md
 REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
+REQ-ZIG-CLIENT-002,Zig Client v2,QuicPackageClient,IMPL,,,clients,2026-01-24,zig-pkg/geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F/geode_client_v2.zig
 REQ-ZIG-CLIENT-002,ZigClientV2,QUICTransport,TESTED,,,clients,2026-01-15,tests/test_requirement_traceability.zig
+REQ-ZIG-CLIENT-003,gRPC Transport,TransportAbstraction,IMPL,,,clients,2026-02-05,zig-pkg/geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F/geode_client_v2.zig
 SEC-D007,Federation RLS Filter,PostMergeEnforcement,TESTED,,,security,2026-04-10,src/distributed/federation.zig
 SEC-D007,Federation RLS Filter Callback,CallbackInvocation,TESTED,,,security,2026-04-10,src/distributed/federation.zig
 SEC-D007,Federation RLS Filter Callback,PostMergeRLS,TESTED,,,security,2026-04-10,src/distributed/federation.zig

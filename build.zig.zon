@@ -53,8 +53,8 @@
 
         // JSON parser/encoder - RFC 8259 compliant with JSON Schema 2020-12
         .json = .{
-            .url = "git+https://gitlab.com/devnw/zig/json.git#6281a8508117921096004d05e452e52041de3c60",
-            .hash = "json-0.1.0-tOue4RqoCwBR_QTbDnTYNloo6_CLLzV3MYywaF0OU8_l",
+            .url = "git+https://gitlab.com/devnw/zig/json.git#f9ed006f54f49dfa7b067e478fba25287d6882f0",
+            .hash = "json-0.1.0-tOue4QGoCwBCW2fq2BeCL3TLptE7K5XXeoP5NWiMcQOz",
         },
 
         // QUIC v1/v2 protocol implementation
@@ -71,8 +71,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#466e17527cca10d0ecfe6926f7dc9d106ab9ac4f",
-            .hash = "slog-0.1.0-SamED6IzBgBy98zccvmmG5-zhi-KpG1_Ch6nVmYKYeAt",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#4f979be2fe1a1625d01845547f110282014f9c0c",
+            .hash = "slog-0.1.0-SamED4U0BgA8WdNZCC7Xx_0fGwb22V7S5vcbiFXysXG4",
         },
 
         // Configuration management - XDG compliant, multi-format support
@@ -99,8 +99,8 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#eab3de8bc3b8be2fa7c69d2adba01e9f8584fbb6",
-            .hash = "thread_pool-0.2.0-11B1Bt_DBACJcRTYAhhadVdIlEF0xz7EHzKzaIEcEHAe",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#98a94afb01726bd533c109e28901e58b18848b81",
+            .hash = "thread_pool-0.2.0-11B1BlZbOQCfrvQ2WzuIbCsl9TIjkrC6H_U1CbI9vm3K",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#aefcfdac0371e65f00e8385332860d46416cf476",
-            .hash = "geode_client_zig-0.2.1-8ysbV3SLCAA_hswSlsD3uG7AFpGp_N3mF7yd1hqnCZro",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#8cc6935151361488f5024f26869f96431fd493a2",
+            .hash = "geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F",
         },
 
         // =======================================================================
@@ -137,8 +137,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git#bb5ca4c18c0a03f3a9899118ff089ce1e7bf9eb9",
-            .hash = "uuid-0.1.0-tL1irjACDACny9L2zq94wlw_rv0mb2q4De6I0Us4dO0q",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git#4a960e8e573ef79497ec2a2470273cf17df89e5d",
+            .hash = "uuid-0.1.0-tL1irqsGDAAcOzxBzLlKrEEsemPKKNsLhgxurxXZgSdL",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#65edc62d1ee23c1bb27bd1fcb151749df91767b8",
-            .hash = "graph_storage-0.1.0-9UyJSzNFCwA9DJnaAH2YMQS_EJHZUClguT6GRKgdETzX",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#c5fb53aad8913aed6bc8f0f2749d94230dca49c1",
+            .hash = "graph_storage-0.1.0-9UyJS-hECwDePxWrqdehrCfA7FozBeXDorB9CiUetVIN",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -174,8 +174,8 @@
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#0e317aae53e88ebd38b7a0ce03545df8e21352f0",
-            .hash = "hnsw-0.1.0-wYzBy5wQAQCPeApLgqmBv2g3HJ00H-FusFp6H5FUlKXm",
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#cbf643d02a7841833e0fc8f8eafb88a99521785e",
+            .hash = "hnsw-0.1.0-wYzBy0ESAQAshb0jxmLk1TKVWmwOKtglTlEVQnqWbRrh",
         },
 
         // R-tree - Spatial index with bounding-box search
@@ -192,8 +192,8 @@
 
         // FLE - Field-level encryption with AEAD, HKDF, blind indices
         .fle = .{
-            .url = "git+https://gitlab.com/devnw/zig/fle.git#40293399e36c917d61420ac1a507403a7dde8f33",
-            .hash = "fle-0.1.0-1Cfwlb1KAQCCTGi8pKEt2CPu4G0vz8kq-zrZQG_IbclA",
+            .url = "git+https://gitlab.com/devnw/zig/fle.git#4e3cdfca8ce29f603b879ba2940f9d57b060e9a8",
+            .hash = "fle-0.1.0-1Cfwlb5KAQDmGZPa_-DMrgHUn5L8gujyUi8SEc8Abumm",
         },
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
@@ -204,14 +204,14 @@
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#3b32dc8e32f4309a4cc1e6d01d039ef13a034f44",
-            .hash = "timeseries-0.1.0-iAEwOtjoAwDDegjZDQWCVigNsa2U4nyWtgcAelWKFHH9",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#f511a0e69cbe10978a593e46e00e8f1ab2b2b82d",
+            .hash = "timeseries-0.1.0-iAEwOq7oAwDjfmZH7eMadUIalphxV5EI5hyjl4TWsT6c",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git#56f838714cc985087ddb9055791101fcbbcef7f5",
-            .hash = "auth-0.1.0-W76ZZ1z9AABE00GhNYYiZBzPvQfFTJCyPAhJnHRjyNux",
+            .url = "git+https://gitlab.com/devnw/zig/auth.git#e63466720b5e019cdb3684b12728187f6478c243",
+            .hash = "auth-0.1.0-W76ZZ2r9AABn71BDR_5VIfH9lWTDbuVk7TT64MfgYbt3",
         },
     },
 
