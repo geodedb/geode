@@ -1655,13 +1655,16 @@ REQ-GQL-074,Network Transport,QUICHandshake,TESTED,,,wire,2025-09-22,tests/canar
 REQ-GQL-074,Network Transport,QUICHandshakeRegression,TESTED,,,wire,2025-10-01,tests/test_quic_handshake_regression.zig
 REQ-GQL-074,Network Transport,QUICIdleTimeout,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICListener,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
+REQ-GQL-074,Network Transport,QUICListener,TESTED,,,wire,2025-09-25,zig-pkg/quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICMultiplexedStreams,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,,,wire,2025-09-22,src/canary.zig
 REQ-GQL-074,Network Transport,QUICMultiplexing,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
 REQ-GQL-074,Network Transport,QUICPerformanceMetrics,BENCHED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICProtocol,TESTED,,,wire,2025-09-22,tests/e2e_quic_basic.zig
 REQ-GQL-074,Network Transport,QUICStream,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
+REQ-GQL-074,Network Transport,QUICStream,TESTED,,,wire,2025-09-22,zig-pkg/quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,,,wire,2025-09-22,tests/canary_quic.zig
+REQ-GQL-074,Network Transport,QUICStreamOpen,TESTED,,,wire,2025-09-22,zig-pkg/quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ/src/quic/transport.zig
 REQ-GQL-074,Network Transport,QUICTLS,TESTED,,,wire,2025-09-22,tests/canary_quic_tls.zig
 REQ-GQL-074,Network Transport,QUICTLSComprehensive,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
 REQ-GQL-074,Network Transport,QUICTLSConfig,TESTED,,,wire,2025-09-22,tests/e2e_quic_tls_comprehensive.zig
@@ -4031,6 +4034,7 @@ REQ-TIMESERIES-WIRE-002,TimeseriesServerWiring,ExecutionContext,TESTED,,,engine,
 REQ-TIMESERIES-WIRE-003,TimeseriesServerWiring,ServerInit,TESTED,,,server,2026-04-01,src/server/main.zig
 REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.zig
 REQ-TRACEABILITY-001,Requirement Traceability Tests,Governance,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
+REQ-TRANSPORT-001,AmplificationProtection,LocalhostExemption,IMPLEMENTED,,,transport,2025-10-15,zig-pkg/quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ/src/quic/conn.zig
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TS-CHUNK-001,ChunkStorage,Storage,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig
@@ -4273,9 +4277,9 @@ REQ-WITH-WHERE-001,WITH WHERE Filtering,QueryExecution,TESTED,,,engine,2026-01-1
 REQ-XXX-NNN,Feature Name,Category,TESTED,,,team,YYYY-MM-DD,CONTRIBUTING.md
 REQ-ZERO-LEN-PATH-002,ZeroLengthPaths,Basic,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-ZERO-LEN-PATH-003,ZeroLengthPaths,SelfLoop,TESTED,,,engine,2026-01-15,tests/test_gap_0193_impl_verification.zig
-REQ-ZIG-CLIENT-002,Zig Client v2,QuicPackageClient,IMPL,,,clients,2026-01-24,zig-pkg/geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F/geode_client_v2.zig
+REQ-ZIG-CLIENT-002,Zig Client v2,QuicPackageClient,IMPL,,,clients,2026-01-24,zig-pkg/geode_client_zig-0.2.1-8ysbVw6NCAANIa91qcoCAqsYT0MQmjbT_fWUeN3rQJ54/geode_client_v2.zig
 REQ-ZIG-CLIENT-002,ZigClientV2,QUICTransport,TESTED,,,clients,2026-01-15,tests/test_requirement_traceability.zig
-REQ-ZIG-CLIENT-003,gRPC Transport,TransportAbstraction,IMPL,,,clients,2026-02-05,zig-pkg/geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F/geode_client_v2.zig
+REQ-ZIG-CLIENT-003,gRPC Transport,TransportAbstraction,IMPL,,,clients,2026-02-05,zig-pkg/geode_client_zig-0.2.1-8ysbVw6NCAANIa91qcoCAqsYT0MQmjbT_fWUeN3rQJ54/geode_client_v2.zig
 SEC-D007,Federation RLS Filter,PostMergeEnforcement,TESTED,,,security,2026-04-10,src/distributed/federation.zig
 SEC-D007,Federation RLS Filter Callback,CallbackInvocation,TESTED,,,security,2026-04-10,src/distributed/federation.zig
 SEC-D007,Federation RLS Filter Callback,PostMergeRLS,TESTED,,,security,2026-04-10,src/distributed/federation.zig

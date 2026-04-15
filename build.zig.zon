@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#0d4178eac097db0012437e40ad33dad9a9b28c67",
-            .hash = "quic-0.1.11-gBIqUV_iNQCxxXGcginIT8nclBglP6tPzKF530LrWLka",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#7fea7a497fa82b50b2e87c1c65b9e86e3b58a8f0",
+            .hash = "quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ",
         },
 
         // =======================================================================
@@ -71,8 +71,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#4f979be2fe1a1625d01845547f110282014f9c0c",
-            .hash = "slog-0.1.0-SamED4U0BgA8WdNZCC7Xx_0fGwb22V7S5vcbiFXysXG4",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#553c8f0e63ac4c3c2e90fbb85dc9f2b4c7e44a51",
+            .hash = "slog-0.1.0-SamED3k0BgDlEGPoYK7WhTkldla-RfzSe_S-HGWTXuzw",
         },
 
         // Configuration management - XDG compliant, multi-format support
@@ -99,8 +99,8 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#98a94afb01726bd533c109e28901e58b18848b81",
-            .hash = "thread_pool-0.2.0-11B1BlZbOQCfrvQ2WzuIbCsl9TIjkrC6H_U1CbI9vm3K",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#0e97cc5bc923abc4d53a0f77c37a1c123ee03721",
+            .hash = "thread_pool-0.2.0-11B1BqNcOQAzTl_c2UTVvTKNCnsqrCu4CLdCpEvSQa2a",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#8cc6935151361488f5024f26869f96431fd493a2",
-            .hash = "geode_client_zig-0.2.1-8ysbVw2NCACwLGlEvLYlZ9WHmmbTTmAFprfW0mtRGw1F",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#94be940b09b8c0b2df8c4e0d23e1dade37d9fb2a",
+            .hash = "geode_client_zig-0.2.1-8ysbVw6NCAANIa91qcoCAqsYT0MQmjbT_fWUeN3rQJ54",
         },
 
         // =======================================================================
@@ -137,8 +137,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git#4a960e8e573ef79497ec2a2470273cf17df89e5d",
-            .hash = "uuid-0.1.0-tL1irqsGDAAcOzxBzLlKrEEsemPKKNsLhgxurxXZgSdL",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git#98050367b2e31568cfcc9ea4c2d63a5b05dd764a",
+            .hash = "uuid-0.1.0-tL1irqkGDAAQffPvTus04nMI_mW67YKIvPSibstA0oIM",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#c5fb53aad8913aed6bc8f0f2749d94230dca49c1",
-            .hash = "graph_storage-0.1.0-9UyJS-hECwDePxWrqdehrCfA7FozBeXDorB9CiUetVIN",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#a401a37305e45e79c5f15faacbd7e7d1c316ed54",
+            .hash = "graph_storage-0.1.0-9UyJS_FECwB9JAFKy-plc5X6lszjyq7YQMBQ0TtgErcB",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -210,8 +210,8 @@
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git#e63466720b5e019cdb3684b12728187f6478c243",
-            .hash = "auth-0.1.0-W76ZZ2r9AABn71BDR_5VIfH9lWTDbuVk7TT64MfgYbt3",
+            .url = "git+https://gitlab.com/devnw/zig/auth.git#391e8a39c1f7f7ce01d78af6e9f0d6e6d5ef5cb9",
+            .hash = "auth-0.1.0-W76ZZxgAAQDxE3gQnZwl7C10StfYSoi0VmBEicnMQMPR",
         },
     },
 
