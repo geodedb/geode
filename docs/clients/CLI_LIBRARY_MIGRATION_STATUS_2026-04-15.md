@@ -85,13 +85,15 @@ That run exposed two separate follow-up issues:
 
 After fixing both issues, `backup_restore_operations.yml` passes (`10 passed`).
 
-## Remaining broad verification
+## Broader validation status
 
-Still pending at time of this note:
+Current validation checkpoint:
 
-- clean rerun of the full `geode-test-harness` spec sweep (`geodetestlab run --specs geodetestlab-cli/specs`) from the beginning after the backup streaming and harness-command fixes
-- harness Python/unit reruns from their correct working directories
-- previously requested cross-repo client validation beyond the targeted harness slice
+- Full `geodetestlab` CLI sweep rerun from `geode-test-harness/geodetestlab-cli` completed with `4145 passed`, `1 failed`, `0 skipped` (`4146` total) and wrote `../reports/cli_migration_full_quic_2026_04_15.json`.
+- The lone failure was confirmed on serial retry in `gap_150_151_152_security_regression.yml` (`8 passed`, `1 failed`); the rest of the full harness matrix completed cleanly.
+- `./.venv/bin/python -m pytest geodetestlab/tests/ -v --tb=short` from `geode-test-harness/geodetestlab-cli` passed (`102 passed`).
+- Root harness Python/unit reruns and broader cross-repo validation were still in progress at this checkpoint.
+- `zig build test` from `geode-test-harness/` is currently blocked by an upstream dependency manifest hash mismatch in `grpc_zig` for package `spice`, which is outside the CLI migration changes.
 
 ## Worktree notes
 
