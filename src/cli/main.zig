@@ -3105,8 +3105,8 @@ fn saveCredentials(allocator: std.mem.Allocator, creds: CredentialStorage) !void
     , .{ creds.server, creds.username, creds.session_token, creds.expires_at });
     defer allocator.free(json_content);
 
-    // Write to file
-    const file = try std.fs.createFileAbsolute(creds_path, .{});
+    // Write to file with restrictive permissions (owner read/write only)
+    const file = try std.fs.createFileAbsolute(creds_path, .{ .mode = 0o600 });
     defer file.close();
 
     try file.writeAll(json_content);
@@ -3176,7 +3176,9 @@ fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]cons
     } else {
         // Unix: Restore original termios if we successfully changed it
         if (echo_disabled) {
-            _ = std.posix.tcsetattr(std.posix.STDIN_FILENO, std.posix.TCSA.NOW, original_termios) catch {};
+            std.posix.tcsetattr(std.posix.STDIN_FILENO, std.posix.TCSA.NOW, original_termios) catch {
+                std.debug.print("Warning: failed to restore terminal echo. Run 'stty echo' to fix.\n", .{});
+            };
         }
     }
 

@@ -1,3 +1,6 @@
+// gRPC HTTP/2 query transport — used by distributed coordination and gRPC fallback paths.
+// The primary CLI transport is QUIC via zig_quic_bridge → geode-client-zig.
+// Keep this file's QueryTransport interface in sync with quic_query_runner.zig.
 const std = @import("std");
 const builtin = @import("builtin");
 const protobuf = @import("protobuf");

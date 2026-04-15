@@ -130,14 +130,8 @@ pub const CredentialStore = struct {
     pub fn saveCredentials(self: *CredentialStore, creds: Credentials) !void {
         // CANARY: REQ=REQ-AUTH-SESSION-002; FEATURE="SaveSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        const file = try std.fs.createFileAbsolute(self.file_path, .{ .truncate = true });
+        const file = try std.fs.createFileAbsolute(self.file_path, .{ .truncate = true, .mode = 0o600 });
         defer file.close();
-
-        // Set restrictive permissions (600 - owner read/write only)
-        // Windows doesn't support chmod - skip on Windows
-        if (builtin.os.tag != .windows) {
-            try file.chmod(0o600);
-        }
 
         // Write JSON
         var buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
