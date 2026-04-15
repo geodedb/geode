@@ -139,6 +139,24 @@ repos:
     pass_filenames: false
     args: [src/, build.zig]
 
+      # Reject .path dependencies in build.zig.zon — they work locally but fail
+      # in CI where sibling repos aren't checked out (caused pipeline #847, #848).
+  - id: zon-no-path-deps
+    name: build.zig.zon no local path deps
+    entry: bash
+    args:
+    - -c
+    - |
+      if grep -n '\.path\s*=' build.zig.zon 2>/dev/null; then
+        echo ""
+        echo "✗ build.zig.zon contains .path dependencies that will fail in CI."
+        echo "  Use .url + .hash instead (run: zig fetch <git+https://...>)"
+        exit 1
+      fi
+    language: system
+    files: build\.zig\.zon$
+    pass_filenames: false
+
       # Zig build check (compilation) - moved to pre-push per #471 to reduce commit friction
   - id: zig-build
     name: zig build (compilation check)
