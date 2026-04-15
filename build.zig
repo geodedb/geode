@@ -2701,8 +2701,11 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         zig_client_lib.linkSystemLibrary("ws2_32");
     }
-    b.installArtifact(zig_client_lib);
-    client_step.dependOn(&zig_client_lib.step);
+    // Client artifacts are NOT in the default install — they require system
+    // SSL libraries that aren't available during cross-compilation.  Build
+    // them explicitly via `zig build clients`.
+    const install_client_lib = b.addInstallArtifact(zig_client_lib, .{});
+    client_step.dependOn(&install_client_lib.step);
 
     // Zig client example
     const zig_client_example = b.addExecutable(.{
@@ -2725,8 +2728,8 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         zig_client_example.linkSystemLibrary("ws2_32");
     }
-    b.installArtifact(zig_client_example);
-    client_step.dependOn(&zig_client_example.step);
+    const install_client_example = b.addInstallArtifact(zig_client_example, .{});
+    client_step.dependOn(&install_client_example.step);
 
     // Cross-compilation step for clients
     const cross_clients_step = b.step("cross-clients", "Cross-compile client libraries for all platforms");
