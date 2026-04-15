@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#7fea7a497fa82b50b2e87c1c65b9e86e3b58a8f0",
-            .hash = "quic-0.1.11-gBIqUS_iNQB3RVuNot6Am_J3Dy9jtmfQaoFTiTDJqmwJ",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#5e2410f81fc0b3115bc6f74c44783348d7679e9a",
+            .hash = "quic-0.1.11-gBIqUUfiNQDms6KTmnr_P5_xyTcJFe_LJvVesvx_ArxD",
         },
 
         // =======================================================================
@@ -71,14 +71,14 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#553c8f0e63ac4c3c2e90fbb85dc9f2b4c7e44a51",
-            .hash = "slog-0.1.0-SamED3k0BgDlEGPoYK7WhTkldla-RfzSe_S-HGWTXuzw",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#f0f0e186baded8a09aeeebf5cb6c8a38677c556f",
+            .hash = "slog-0.1.0-SamED206BgBaGe0Sgws6LUIzJbLdmZyl5b2FvEau9gii",
         },
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#fffce60b188441be7b6422522cb412f988897a5f",
-            .hash = "config-0.1.0-TiLumtlACgCU1wB3O9kf3ko_DrCSSra3qmZyuVU-28Pe",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#0befd3befeb16936e8e83ecdcfb5b933028eea21",
+            .hash = "config-0.1.0-TiLuml5CCgAPZ0oCFg1v1mHrn6Fdq8zVJMaK1wXGDDwY",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#94be940b09b8c0b2df8c4e0d23e1dade37d9fb2a",
-            .hash = "geode_client_zig-0.2.1-8ysbVw6NCAANIa91qcoCAqsYT0MQmjbT_fWUeN3rQJ54",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#786f90767d7d49c1c910878af8faefb0e4541e85",
+            .hash = "geode_client_zig-0.2.1-8ysbVw6NCAB90krxriJBHsMPoMF5ucII9CfhpyaKyeMD",
         },
 
         // =======================================================================
@@ -137,8 +137,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git#98050367b2e31568cfcc9ea4c2d63a5b05dd764a",
-            .hash = "uuid-0.1.0-tL1irqkGDAAQffPvTus04nMI_mW67YKIvPSibstA0oIM",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git#6c8320c9b1586cbf50d355ea17d70b30f6c0043d",
+            .hash = "uuid-0.1.0-tL1irqsGDAAcOzxBzLlKrEEsemPKKNsLhgxurxXZgSdL",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#a401a37305e45e79c5f15faacbd7e7d1c316ed54",
-            .hash = "graph_storage-0.1.0-9UyJS_FECwB9JAFKy-plc5X6lszjyq7YQMBQ0TtgErcB",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#ce0bafde62dd073fa830b53bc19cc6590d444514",
+            .hash = "graph_storage-0.1.0-9UyJS-VECwDBEYFoca8r6yXsXESI-nHlFfWeNWDzddhQ",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
