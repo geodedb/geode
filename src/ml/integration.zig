@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 pub const EmbeddingDimension = u32;
@@ -130,7 +165,7 @@ pub const MLEngine = struct {
         // Implementation of Node2Vec algorithm
         try self.computeNode2Vec(model, params);
 
-        const model_name = try std.fmt.allocPrint(self.allocator, "node2vec_{d}", .{std.time.milliTimestamp()});
+        const model_name = try std.fmt.allocPrint(self.allocator, "node2vec_{d}", .{compat_milliTimestamp()});
         try self.models.put(model_name, model);
         self.active_model = model;
 
@@ -146,7 +181,7 @@ pub const MLEngine = struct {
         // 3. Generate embeddings
 
         // For demonstration, generate random embeddings
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.Random.DefaultPrng.init(@intCast(compat_milliTimestamp()));
         const random = prng.random();
 
         // Generate embeddings for sample nodes
@@ -161,7 +196,7 @@ pub const MLEngine = struct {
         }
 
         model.metadata.training_time_ms = 100; // Mock training time
-        model.metadata.created_at = std.time.milliTimestamp();
+        model.metadata.created_at = compat_milliTimestamp();
     }
 
     pub fn linkPrediction(self: *Self, source: u64, target: u64, params: LinkPredictionParams) !f32 {

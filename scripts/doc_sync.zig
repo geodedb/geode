@@ -13,7 +13,7 @@ pub fn main() !void {
     try scanDir(allocator, "docs", &req_ids);
 
     // Parse GAP_ANALYSIS.md ledger lines retrieving IDs
-    var file = try std.fs.cwd().openFile("docs/GAP_ANALYSIS.md", .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "docs/GAP_ANALYSIS.md", .{});
     defer file.close();
     const data = try file.readToEndAlloc(allocator, 2 * 1024 * 1024);
     defer allocator.free(data);
@@ -87,13 +87,13 @@ fn isReqId(s: []const u8) bool {
 }
 
 fn scanDir(allocator: std.mem.Allocator, path: []const u8, map: *std.StringHashMap(void)) !void {
-    var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+    var dir = try std.Io.Dir.cwd().openDir(path, .{ .iterate = true });
     defer dir.close();
     var it = dir.iterate();
     while (try it.next()) |e| {
         if (e.kind == .file) {
             if (std.mem.endsWith(u8, e.name, ".zig") or std.mem.endsWith(u8, e.name, ".md")) {
-                var f = try dir.openFile(e.name, .{});
+                var f = try dir.openFile(std.Io.Threaded.global_single_threaded.io(), e.name, .{});
                 defer f.close();
                 const data = try f.readToEndAlloc(allocator, 1 * 1024 * 1024);
                 defer allocator.free(data);

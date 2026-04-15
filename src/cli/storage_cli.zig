@@ -2,11 +2,11 @@ const std = @import("std");
 const stdio_util = @import("../utils/stdio.zig");
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-005; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-fn getStdOut() error{StdioUnavailable}!std.fs.File {
+fn getStdOut() error{StdioUnavailable}!std.Io.File {
     return stdio_util.getStdout() catch error.StdioUnavailable;
 }
 
-fn printTo(file: std.fs.File, comptime fmt: []const u8, args: anytype) !void {
+fn printTo(file: std.Io.File, comptime fmt: []const u8, args: anytype) !void {
     var buf: [4096]u8 = undefined;
     const slice = try std.fmt.bufPrint(&buf, fmt, args);
     try file.writeAll(slice);

@@ -114,51 +114,50 @@ pub const JsonbDocument = struct {
         var result = std.ArrayList(u8).initCapacity(allocator, 256) catch return Error.OutOfMemory;
         errdefer result.deinit(allocator);
 
-        const writer = result.writer(allocator);
         // P2-3: Pass allocator to canonicalizeValue for temporary allocations
-        try canonicalizeValue(allocator, writer, value);
+        try canonicalizeValue(allocator, &result, value);
         return result.toOwnedSlice(allocator);
     }
 
     /// P2-3: Now accepts allocator parameter for temporary allocations
-    fn canonicalizeValue(allocator: std.mem.Allocator, writer: anytype, value: std.json.Value) Error!void {
+    fn canonicalizeValue(allocator: std.mem.Allocator, result: *std.ArrayList(u8), value: std.json.Value) Error!void {
         switch (value) {
-            .null => try writer.writeAll("null"),
-            .bool => |b| try writer.writeAll(if (b) "true" else "false"),
-            .integer => |i| try std.fmt.format(writer, "{d}", .{i}),
-            .float => |f| try std.fmt.format(writer, "{d}", .{f}),
-            .number_string => |ns| try writer.writeAll(ns),
+            .null => result.appendSlice(allocator, "null") catch return Error.OutOfMemory,
+            .bool => |b| result.appendSlice(allocator, if (b) "true" else "false") catch return Error.OutOfMemory,
+            .integer => |i| result.print(allocator, "{d}", .{i}) catch return Error.OutOfMemory,
+            .float => |f| result.print(allocator, "{d}", .{f}) catch return Error.OutOfMemory,
+            .number_string => |ns| result.appendSlice(allocator, ns) catch return Error.OutOfMemory,
             .string => |s| {
-                try writer.writeByte('"');
+                result.append(allocator, '"') catch return Error.OutOfMemory;
                 for (s) |c| {
                     switch (c) {
-                        '"' => try writer.writeAll("\\\""),
-                        '\\' => try writer.writeAll("\\\\"),
-                        '\n' => try writer.writeAll("\\n"),
-                        '\r' => try writer.writeAll("\\r"),
-                        '\t' => try writer.writeAll("\\t"),
-                        else => try writer.writeByte(c),
+                        '"' => result.appendSlice(allocator, "\\\"") catch return Error.OutOfMemory,
+                        '\\' => result.appendSlice(allocator, "\\\\") catch return Error.OutOfMemory,
+                        '\n' => result.appendSlice(allocator, "\\n") catch return Error.OutOfMemory,
+                        '\r' => result.appendSlice(allocator, "\\r") catch return Error.OutOfMemory,
+                        '\t' => result.appendSlice(allocator, "\\t") catch return Error.OutOfMemory,
+                        else => result.append(allocator, c) catch return Error.OutOfMemory,
                     }
                 }
-                try writer.writeByte('"');
+                result.append(allocator, '"') catch return Error.OutOfMemory;
             },
             .array => |arr| {
-                try writer.writeByte('[');
+                result.append(allocator, '[') catch return Error.OutOfMemory;
                 for (arr.items, 0..) |item, i| {
-                    if (i > 0) try writer.writeByte(',');
-                    try canonicalizeValue(allocator, writer, item);
+                    if (i > 0) result.append(allocator, ',') catch return Error.OutOfMemory;
+                    try canonicalizeValue(allocator, result, item);
                 }
-                try writer.writeByte(']');
+                result.append(allocator, ']') catch return Error.OutOfMemory;
             },
             .object => |obj| {
-                try writer.writeByte('{');
+                result.append(allocator, '{') catch return Error.OutOfMemory;
                 // P2-3: Use provided allocator instead of page_allocator
                 var keys = std.ArrayList([]const u8).empty;
                 defer keys.deinit(allocator);
 
                 var iter = obj.iterator();
                 while (iter.next()) |entry| {
-                    try keys.append(allocator, entry.key_ptr.*);
+                    keys.append(allocator, entry.key_ptr.*) catch return Error.OutOfMemory;
                 }
 
                 std.sort.insertion([]const u8, keys.items, {}, struct {
@@ -168,11 +167,13 @@ pub const JsonbDocument = struct {
                 }.lessThan);
 
                 for (keys.items, 0..) |key, i| {
-                    if (i > 0) try writer.writeByte(',');
-                    try std.fmt.format(writer, "\"{s}\":", .{key});
-                    try canonicalizeValue(allocator, writer, obj.get(key).?);
+                    if (i > 0) result.append(allocator, ',') catch return Error.OutOfMemory;
+                    result.append(allocator, '"') catch return Error.OutOfMemory;
+                    result.appendSlice(allocator, key) catch return Error.OutOfMemory;
+                    result.appendSlice(allocator, "\":") catch return Error.OutOfMemory;
+                    try canonicalizeValue(allocator, result, obj.get(key).?);
                 }
-                try writer.writeByte('}');
+                result.append(allocator, '}') catch return Error.OutOfMemory;
             },
         }
     }

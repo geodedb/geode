@@ -1,4 +1,40 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+const builtin = @import("builtin");
 const heap = @import("../storage/heap.zig");
 const Value = heap.Value;
 const decimal128 = @import("decimal128.zig");
@@ -14,6 +50,47 @@ const network = @import("network.zig");
 const vector = @import("vector.zig");
 const geographic = @import("geographic.zig");
 const cryptographic = @import("cryptographic.zig");
+
+// Zig 0.16 removed std.posix.getrandom. Use Linux syscall or libc fallback.
+fn getRandomBytes(buf: []u8) void {
+    if (comptime builtin.os.tag == .linux) {
+        var filled: usize = 0;
+        while (filled < buf.len) {
+            const rc = std.os.linux.getrandom(buf[filled..].ptr, buf.len - filled, 0);
+            if (@as(isize, @bitCast(rc)) < 0) {
+                @memset(buf[filled..], 0);
+                return;
+            }
+            filled += rc;
+        }
+    } else {
+        const rc = std.c.getrandom(buf.ptr, buf.len, 0);
+        if (rc < 0) @memset(buf, 0);
+    }
+}
+
+// Zig 0.16 removed std.time.timestamp/milliTimestamp/microTimestamp.
+// These helpers use clock_gettime via the Linux vDSO or libc fallback.
+fn clockGetRealtimeSpec() std.posix.timespec {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return .{ .sec = 0, .nsec = 0 };
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return .{ .sec = 0, .nsec = 0 };
+    }
+    return ts;
+}
+
+fn timestampSeconds() i64 {
+    return @as(i64, clockGetRealtimeSpec().sec);
+}
+
+fn microTimestamp() i64 {
+    const ts = clockGetRealtimeSpec();
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 
 pub const EvaluatorError = error{
     TypeMismatch,
@@ -599,25 +676,25 @@ pub fn upper(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
 }
 
 pub fn now() Value {
-    const timestamp = std.time.microTimestamp();
-    return Value{ .TimestampTZ = datetime.TimestampTZ{ .micros_since_epoch_utc = timestamp } };
+    const ts = microTimestamp();
+    return Value{ .TimestampTZ = datetime.TimestampTZ{ .micros_since_epoch_utc = ts } };
 }
 
 pub fn current_date() Value {
-    const timestamp = std.time.timestamp();
-    const days = @divFloor(timestamp, 24 * 3600);
+    const ts = timestampSeconds();
+    const days = @divFloor(ts, 24 * 3600);
     return Value{ .Date = datetime.Date{ .days_since_epoch = @intCast(days) } };
 }
 
 pub fn current_time() Value {
-    const timestamp = std.time.microTimestamp();
-    const time_of_day = @rem(timestamp, 24 * 3600 * 1_000_000);
+    const ts = microTimestamp();
+    const time_of_day = @rem(ts, 24 * 3600 * 1_000_000);
     return Value{ .Time = datetime.Time{ .micros_since_midnight = time_of_day } };
 }
 
 pub fn current_timestamp() Value {
-    const timestamp = std.time.microTimestamp();
-    return Value{ .TimestampTZ = datetime.TimestampTZ{ .micros_since_epoch_utc = timestamp } };
+    const ts = microTimestamp();
+    return Value{ .TimestampTZ = datetime.TimestampTZ{ .micros_since_epoch_utc = ts } };
 }
 
 pub fn to_hex(allocator: std.mem.Allocator, val: Value) EvaluatorError!Value {
@@ -1106,7 +1183,10 @@ pub fn exp_val(val: Value) EvaluatorError!Value {
 // GAP-0494: Use CSPRNG for random() GQL function — timestamp LCG was predictable
 pub fn random_val(allocator: std.mem.Allocator) EvaluatorError!Value {
     _ = allocator;
-    return Value{ .Double = std.crypto.random.float(f64) };
+    var seed: [32]u8 = undefined;
+    getRandomBytes(&seed);
+    var rng = std.Random.DefaultCsprng.init(seed);
+    return Value{ .Double = rng.random().float(f64) };
 }
 
 pub fn sqrt_val(val: Value) EvaluatorError!Value {

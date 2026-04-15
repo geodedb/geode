@@ -33,9 +33,9 @@ pub const GlobalStreamThrottle = struct {
     /// Maximum allowed concurrent stream handler threads.
     max: u32,
     /// Mutex protecting the condvar wait.
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
     /// Condition variable signalled when a stream handler thread exits.
-    cv: std.Thread.Condition = .{},
+    cv: std.Io.Condition = std.Io.Condition.init,
 
     pub fn init(max: u32) GlobalStreamThrottle {
         return .{ .max = max };
@@ -62,8 +62,8 @@ pub const GlobalStreamThrottle = struct {
         }
 
         // Slow path: at the limit, wait with backpressure.
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Re-check under the lock in case a slot opened between the fast
         // path failure and acquiring the mutex.
@@ -115,9 +115,9 @@ pub const GlobalStreamThrottle = struct {
         std.debug.assert(prev > 0); // underflow guard
 
         // Wake one waiter (if any) so it can claim the freed slot.
-        self.mu.lock();
-        defer self.mu.unlock();
-        self.cv.signal();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.cv.signal(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Return the current number of active stream handler threads.
@@ -127,13 +127,13 @@ pub const GlobalStreamThrottle = struct {
 };
 
 pub const ActiveStreamRegistry = struct {
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
     len: usize = 0,
     ids: [max_total_streams_per_connection]u64 = [_]u64{0} ** max_total_streams_per_connection,
 
     pub fn register(self: *ActiveStreamRegistry, stream_id: u64) RegistryError!bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.containsLocked(stream_id)) return false;
         if (self.len == self.ids.len) return error.StreamRegistryFull;
@@ -144,20 +144,20 @@ pub const ActiveStreamRegistry = struct {
     }
 
     pub fn unregister(self: *ActiveStreamRegistry, stream_id: u64) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.unregisterLocked(stream_id);
     }
 
     pub fn contains(self: *ActiveStreamRegistry, stream_id: u64) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.containsLocked(stream_id);
     }
 
     pub fn count(self: *ActiveStreamRegistry) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.len;
     }
 

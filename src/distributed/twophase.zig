@@ -1,4 +1,44 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const Allocator = std.mem.Allocator;
 const quic = @import("transport/quic");
 const protobuf = @import("protobuf");
@@ -26,7 +66,7 @@ const fd = protobuf.fd;
 /// SEC-D003: Read the cluster token from environment for 2PC message authentication.
 /// Returns the token string or empty slice if not set.
 fn getClusterToken() []const u8 {
-    return std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "";
+    return posixGetenv("GEODE_CLUSTER_TOKEN") orelse "";
 }
 
 /// Two-Phase Commit transaction states
@@ -142,7 +182,7 @@ fn defaultSendMessage(_: ?*anyopaque, endpoint: []const u8, msg: TwoPhaseMessage
 pub const TwoPhaseTransport = struct {
     allocator: Allocator,
     connections: std.StringHashMap(ConnectionEntry),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub const ConnectionEntry = struct {
         client: quic.QuicClient,
@@ -155,7 +195,7 @@ pub const TwoPhaseTransport = struct {
         return .{
             .allocator = allocator,
             .connections = std.StringHashMap(ConnectionEntry).init(allocator),
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 
@@ -177,10 +217,10 @@ pub const TwoPhaseTransport = struct {
     pub fn getConnection(self: *TwoPhaseTransport, endpoint: []const u8) !*ConnectionEntry {
         // Phase 1: Check cache under lock (fast path).
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             if (self.connections.getPtr(endpoint)) |entry| {
-                entry.last_used = std.time.timestamp();
+                entry.last_used = compat_timestamp();
                 return entry;
             }
         }
@@ -226,20 +266,20 @@ pub const TwoPhaseTransport = struct {
         // this endpoint.  In that case we discard our freshly-created client and
         // return the existing entry to avoid leaking a connection.
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.connections.getPtr(endpoint)) |existing| {
                 // Another goroutine won the race; clean up ours and use theirs.
                 client.deinit();
-                existing.last_used = std.time.timestamp();
+                existing.last_used = compat_timestamp();
                 return existing;
             }
 
             const entry = ConnectionEntry{
                 .client = client,
                 .stream = null,
-                .last_used = std.time.timestamp(),
+                .last_used = compat_timestamp(),
                 .endpoint = try self.allocator.dupe(u8, endpoint),
             };
 
@@ -251,7 +291,7 @@ pub const TwoPhaseTransport = struct {
     // CANARY: REQ=REQ-2PC-TIMEOUT-001; FEATURE="2PCTimeout"; ASPECT=Transport; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
     /// Send a 2PC message and receive response with timeout handling
     pub fn sendMessage(self: *TwoPhaseTransport, endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !TwoPhaseResponse {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         const conn = try self.getConnection(endpoint);
 
@@ -262,7 +302,7 @@ pub const TwoPhaseTransport = struct {
         const stream = conn.stream.?;
 
         // Check timeout before sending
-        const elapsed = std.time.milliTimestamp() - start_time;
+        const elapsed = compat_milliTimestamp() - start_time;
         if (elapsed >= @as(i64, @intCast(timeout_ms))) {
             log.warn("2PC transport timeout before send", &.{
                 Attr.string("endpoint", endpoint),
@@ -327,7 +367,7 @@ fn readExact(
 ) !void {
     var offset: usize = 0;
     while (offset < buf.len) {
-        if (std.time.milliTimestamp() > deadline_ms) return error.Timeout;
+        if (compat_milliTimestamp() > deadline_ms) return error.Timeout;
         const n = stream.read(buf[offset..]) catch |err| {
             if (err == error.WouldBlock) {
                 client.poll(10) catch {};
@@ -351,7 +391,7 @@ fn readFrame(
     stream: *quic.QuicClientStream,
     timeout_ms: u64,
 ) ![]u8 {
-    const deadline = std.time.milliTimestamp() + @as(i64, @intCast(timeout_ms));
+    const deadline = compat_milliTimestamp() + @as(i64, @intCast(timeout_ms));
     var len_buf: [4]u8 = undefined;
     try readExact(client, stream, len_buf[0..], deadline);
     const len = std.mem.readInt(u32, &len_buf, .big);
@@ -674,7 +714,7 @@ pub const Transaction = struct {
             .coordinator_id = try allocator.dupe(u8, coordinator_id),
             .participants = std.ArrayList(Participant).init(allocator),
             .state = .active,
-            .start_time = std.time.timestamp(),
+            .start_time = compat_timestamp(),
             .timeout_ms = timeout_ms,
             .send_fn = send_fn,
             .send_ctx = send_ctx,
@@ -708,7 +748,7 @@ pub const Transaction = struct {
             .id = try self.allocator.dupe(u8, id),
             .endpoint = try self.allocator.dupe(u8, endpoint),
             .state = .active,
-            .last_message_time = std.time.timestamp(),
+            .last_message_time = compat_timestamp(),
             .prepare_response = null,
             .undo_log = std.ArrayList(UndoEntry).init(self.allocator),
             .redo_log = std.ArrayList(RedoEntry).init(self.allocator),
@@ -724,7 +764,7 @@ pub const Transaction = struct {
         const savepoint = Savepoint{
             .name = try self.allocator.dupe(u8, name),
             .operation_index = self.operations.items.len,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat_timestamp(),
         };
         try self.savepoints.append(self.allocator, savepoint);
     }
@@ -758,7 +798,7 @@ pub const Transaction = struct {
             .msg_type = .PREPARE,
             .transaction_id = ctx.txn.id,
             .coordinator_id = ctx.txn.coordinator_id,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat_timestamp(),
             .operations = ctx.txn.operations,
             .auth_token = getClusterToken(),
             .nonce = nonce_tracker.NonceTracker.generateNonce(),
@@ -769,7 +809,7 @@ pub const Transaction = struct {
         };
         defer response.deinit(ctx.txn.allocator);
         participant.prepare_response = response.vote;
-        participant.last_message_time = std.time.timestamp();
+        participant.last_message_time = compat_timestamp();
         if (response.vote == .VOTE_COMMIT) {
             ctx.votes[ctx.idx] = true;
         }
@@ -797,7 +837,7 @@ pub const Transaction = struct {
             .msg_type = .COMMIT,
             .transaction_id = ctx.txn.id,
             .coordinator_id = ctx.txn.coordinator_id,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat_timestamp(),
             .operations = ops,
             .auth_token = getClusterToken(),
             .nonce = nonce_tracker.NonceTracker.generateNonce(),
@@ -815,7 +855,7 @@ pub const Transaction = struct {
             break;
         }
         participant.state = .committed;
-        participant.last_message_time = std.time.timestamp();
+        participant.last_message_time = compat_timestamp();
     }
 
     fn runCommitWorker(ctx: *anyopaque, runtime: *pooled.TaskContext) void {
@@ -932,7 +972,7 @@ pub const Transaction = struct {
                 .msg_type = .ABORT,
                 .transaction_id = self.id,
                 .coordinator_id = self.coordinator_id,
-                .timestamp = std.time.timestamp(),
+                .timestamp = compat_timestamp(),
                 .operations = ops,
                 .auth_token = getClusterToken(),
                 .nonce = nonce_tracker.NonceTracker.generateNonce(),
@@ -952,14 +992,14 @@ pub const Transaction = struct {
             }
 
             participant.state = .aborted;
-            participant.last_message_time = std.time.timestamp();
+            participant.last_message_time = compat_timestamp();
         }
 
         self.state = .aborted;
     }
 
     pub fn isTimedOut(self: *Transaction) bool {
-        const current_time = std.time.timestamp();
+        const current_time = compat_timestamp();
         const elapsed_ms = @as(u64, @intCast((current_time - self.start_time) * 1000));
         return elapsed_ms > self.timeout_ms;
     }
@@ -978,7 +1018,7 @@ pub const Coordinator = struct {
 
     pub const LogWriter = struct {
         allocator: Allocator,
-        file: std.fs.File,
+        file: std.Io.File,
 
         pub fn writeEntry(self: *LogWriter, entry: LogEntry) !void {
             const framed = try encodeFrame(self.allocator, entry);
@@ -1054,7 +1094,7 @@ pub const Coordinator = struct {
         // Log transaction start
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
-                .timestamp = std.time.timestamp(),
+                .timestamp = compat_timestamp(),
                 .transaction_id = txn.id,
                 .event_type = .transaction_start,
                 .data = "",
@@ -1072,7 +1112,7 @@ pub const Coordinator = struct {
 
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
-                .timestamp = std.time.timestamp(),
+                .timestamp = compat_timestamp(),
                 .transaction_id = transaction_id,
                 .event_type = if (can_commit) .commit_decision else .abort_decision,
                 .data = "",
@@ -1088,7 +1128,7 @@ pub const Coordinator = struct {
 
         if (self.log_writer) |writer| {
             try writer.writeEntry(.{
-                .timestamp = std.time.timestamp(),
+                .timestamp = compat_timestamp(),
                 .transaction_id = transaction_id,
                 .event_type = .transaction_complete,
                 .data = "",
@@ -1104,7 +1144,7 @@ pub const Coordinator = struct {
     }
 
     pub fn recoverFromLog(self: *Coordinator, log_file: []const u8) !void {
-        const file = try std.Io.Dir.cwd().openFile(log_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), log_file, .{});
         defer file.close();
 
         var buf_reader = std.io.bufferedReader(file.reader());
@@ -1286,7 +1326,7 @@ pub const TwoPCCoordinator = struct {
                     .transaction_id = msg.transaction_id,
                     .participant_id = self.participant_id,
                     .vote = vote,
-                    .timestamp = std.time.timestamp(),
+                    .timestamp = compat_timestamp(),
                 };
             },
             .COMMIT => blk: {
@@ -1296,7 +1336,7 @@ pub const TwoPCCoordinator = struct {
                     .transaction_id = msg.transaction_id,
                     .participant_id = self.participant_id,
                     .vote = .VOTE_COMMIT,
-                    .timestamp = std.time.timestamp(),
+                    .timestamp = compat_timestamp(),
                 };
             },
             .ABORT => blk: {
@@ -1306,7 +1346,7 @@ pub const TwoPCCoordinator = struct {
                     .transaction_id = msg.transaction_id,
                     .participant_id = self.participant_id,
                     .vote = .VOTE_ABORT,
-                    .timestamp = std.time.timestamp(),
+                    .timestamp = compat_timestamp(),
                 };
             },
             else => return error.UnsupportedMessage,
@@ -1403,7 +1443,7 @@ test "applyUndoOperation deletes created node" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
     };
 
     applyUndoOperation(&store, undo);
@@ -1434,7 +1474,7 @@ test "applyUndoOperation deletes created edge" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
     };
 
     applyUndoOperation(&store, undo);
@@ -1492,7 +1532,7 @@ test "Transaction.abort applies undo log via store" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
     });
 
     // Abort the transaction -- this should apply undo and delete node 77.
@@ -1848,7 +1888,7 @@ test "applyUndoOperation UPDATE node restores pre-image properties" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
         .pre_image_props = pre_props,
     };
     defer undo.deinit(testing.allocator);
@@ -1888,7 +1928,7 @@ test "applyUndoOperation DELETE node re-creates node from pre-image" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
         .pre_image_props = pre_props,
         .pre_image_labels = pre_labels,
         .pre_image_graph_name = try testing.allocator.dupe(u8, graph_store.DEFAULT_GRAPH_NAME),
@@ -1925,7 +1965,7 @@ test "captureNodePreImage captures properties and labels" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
     };
     defer undo.deinit(testing.allocator);
 
@@ -1965,7 +2005,7 @@ test "captureEdgePreImage captures edge properties" {
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
     };
     defer undo.deinit(testing.allocator);
 
@@ -1993,7 +2033,7 @@ test "applyUndoOperation UPDATE node without pre-image logs warning and is no-op
                 .properties = std.ArrayList(proto_schema.MapEntry).init(testing.allocator),
             },
         },
-        .timestamp = std.time.timestamp(),
+        .timestamp = compat_timestamp(),
         // No pre_image_props — should log warning and leave property intact.
     };
 

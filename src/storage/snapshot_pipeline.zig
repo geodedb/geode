@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const graph_store = @import("../graph_store.zig");
 
 // CANARY: REQ=REQ-GRAPHSTORE-SNAP-PIPE-001; FEATURE="SnapshotPipeline"; ASPECT=Maintenance; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-04
@@ -53,7 +88,7 @@ pub const Pipeline = struct {
         self.commit_count = 0;
         self.checkpoint_count += 1;
         try self.store.saveToFile();
-        self.last_checkpoint_id = @intCast(std.time.milliTimestamp());
+        self.last_checkpoint_id = @intCast(compat_milliTimestamp());
         res.checkpoint = true;
 
         if (self.compaction_interval > 0 and (self.checkpoint_count % self.compaction_interval == 0)) {

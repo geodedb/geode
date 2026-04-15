@@ -1,4 +1,62 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const geode = @import("geode");
 const schema = @import("schema");
@@ -57,7 +115,7 @@ pub const GrpcConfig = struct {
 
 const SessionEntry = struct {
     state: *server_state.ServerState,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 };
 
 const SessionAuthStatus = enum {
@@ -74,7 +132,7 @@ const AdminSessionStatus = enum {
 };
 
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
-    const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
+    const raw = getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);
     if (raw.len == 0) return false;
     if (raw[0] == '0') return false;
@@ -93,14 +151,14 @@ fn shouldAllowGrpcPlaintextFallback(allocator: std.mem.Allocator) bool {
 
 fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     var entropy: [16]u8 = undefined;
-    std.crypto.random.bytes(&entropy);
+    compat_fillRandom(&entropy);
     const token = std.fmt.bytesToHex(entropy, .lower);
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
 }
 
 fn throttleInvalidSessionProbe() void {
     var jitter: [1]u8 = undefined;
-    std.crypto.random.bytes(&jitter);
+    compat_fillRandom(&jitter);
     const delay_ms: u64 = 5 + @as(u64, @intCast(jitter[0] % 6));
     std.Thread.sleep(delay_ms * std.time.ns_per_ms);
 }
@@ -124,7 +182,7 @@ fn rebuildPendingIndexes(
 // Issue #453: Use RwLock instead of Mutex to allow concurrent readers
 const SessionStore = struct {
     allocator: std.mem.Allocator,
-    rwlock: std.Thread.RwLock = .{},
+    rwlock: std.Io.RwLock = std.Io.RwLock.init,
     sessions: std.StringHashMap(*SessionEntry),
     config: GrpcConfig,
 
@@ -202,15 +260,15 @@ const SessionStore = struct {
         const entry = try self.allocator.create(SessionEntry);
         entry.* = .{ .state = state };
 
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.sessions.put(session_id, entry);
         return session_id;
     }
 
     pub fn getEntry(self: *SessionStore, session_id: []const u8) ?*SessionEntry {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         return self.sessions.get(session_id);
     }
 };
@@ -233,7 +291,7 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     const state = try allocator.create(server_state.ServerState);
     state.* = .{ .allocator = allocator };
     state.exec_session = execution.SessionState.init(allocator);
-    state.telemetry_paging = if (std.process.getEnvVarOwned(allocator, "GEODE_TELEMETRY_PAGING")) |v| blk: {
+    state.telemetry_paging = if (getEnvVarOwned(allocator, "GEODE_TELEMETRY_PAGING")) |v| blk: {
         defer allocator.free(v);
         break :blk true;
     } else |_| false;
@@ -245,7 +303,7 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
-    state.query_optimizer_enabled = if (std.process.getEnvVarOwned(allocator, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
+    state.query_optimizer_enabled = if (getEnvVarOwned(allocator, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
         defer allocator.free(v);
         // Use consistent boolean parsing across transports (matches QUIC handler)
         if (v.len == 0) break :blk false;
@@ -345,8 +403,8 @@ fn authorizeAdminSession(session_id: []const u8, allocator: std.mem.Allocator) !
         return .missing;
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -517,7 +575,7 @@ fn updateTxnStateFromProgram(state: *server_state.ServerState, program: *const g
     if (has_start) {
         state.in_txn = true;
         if (state.txn_id == 0) {
-            state.txn_id = @intCast(std.time.milliTimestamp());
+            state.txn_id = @intCast(compat_milliTimestamp());
         }
     }
 }
@@ -548,7 +606,7 @@ pub const GeodeGrpcServer = struct {
         // hardcoded literal.  The 32-byte key is hex-encoded (64 chars) and
         // heap-allocated so it lives as long as the server.
         var grpc_session_key_raw: [32]u8 = undefined;
-        std.crypto.random.bytes(&grpc_session_key_raw);
+        compat_fillRandom(&grpc_session_key_raw);
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);
@@ -753,8 +811,8 @@ fn buildStreamDataPage(session_id: []const u8, allocator: std.mem.Allocator) !Pa
         return .{ .bytes = try encodeMessage(allocator, resp), .is_final = true };
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     const result_ptr = if (state.active_result_values) |*res| res else {
@@ -886,8 +944,8 @@ fn handleExecuteStreaming(request_bytes: []const u8, trans: *GrpcTransport, allo
             return;
         };
 
-        entry.mutex.lock();
-        defer entry.mutex.unlock();
+        entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Pull all data pages under a single lock scope
         var page_count: usize = 0;
@@ -1145,7 +1203,7 @@ fn peerIpSlice(buf: *const [45]u8) []const u8 {
 // CANARY: REQ=REQ-GAP-0284-FEDERATION-GRPC-AUTH; FEATURE="FederationAuth"; ASPECT=GrpcServerValidation; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_CLUSTER_TOKEN") else null;
+    const expected = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_CLUSTER_TOKEN") else null;
     const expected_tok = expected orelse return false;
     if (expected_tok.len == 0 or password.len == 0) return false;
     // SEC-07: No early length check — pad both independently to prevent length-leak timing
@@ -1659,8 +1717,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     state.resetResult();
@@ -1837,8 +1895,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     if (head.props) |props| {
                                         if (props.len > 0) {
                                             const prop_name = props[0].key;
-                                            catalog.rwlock.lockShared();
-                                            defer catalog.rwlock.unlockShared();
+                                            catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                                            defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
                                             var idx_iter = catalog.indexes.valueIterator();
                                             while (idx_iter.next()) |info| {
                                                 if (std.mem.eql(u8, info.table_name, label) and
@@ -1855,8 +1913,8 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                     if (!traits.has_index_seek) {
                                         if (q.where_clause) |where_expr| {
                                             if (head.name) |vn| {
-                                                catalog.rwlock.lockShared();
-                                                defer catalog.rwlock.unlockShared();
+                                                catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                                                defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
                                                 traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
                                             }
                                         }
@@ -2283,8 +2341,8 @@ fn handlePull(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, pull_resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2383,8 +2441,8 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2401,7 +2459,7 @@ fn handleBegin(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
     }
 
     state.in_txn = true;
-    state.txn_id = @intCast(std.time.milliTimestamp());
+    state.txn_id = @intCast(compat_milliTimestamp());
     state.session_snapshot_ts = state.global_commit_ts;
     txn_undo_log.getGlobalUndoLog(allocator).begin();
 
@@ -2436,8 +2494,8 @@ fn handleCommit(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2490,8 +2548,8 @@ fn handleRollback(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2546,8 +2604,8 @@ fn handleSavepoint(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2596,8 +2654,8 @@ fn handleRollbackTo(request_bytes: []const u8, allocator: std.mem.Allocator) ![]
         return encodeMessage(allocator, resp);
     };
 
-    entry.mutex.lock();
-    defer entry.mutex.unlock();
+    entry.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer entry.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const state = entry.state;
 
     switch (try validateSessionAuth(allocator, state)) {
@@ -2627,8 +2685,8 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
     // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
     const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lock();
-    defer cdc_mutex.unlock();
+    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (execution.getGlobalCdcEngine()) |eng| {
         const resp = try eng.exportDiagnostics(allocator);
         return encodeMessage(allocator, resp);
@@ -2640,7 +2698,7 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
         .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
         .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
         .version = try allocator.dupe(u8, @import("build_options").version),
-        .timestamp_ms = std.time.milliTimestamp(),
+        .timestamp_ms = compat_milliTimestamp(),
     };
     return encodeMessage(allocator, resp);
 }
@@ -2649,8 +2707,8 @@ fn handleCdcCtrl(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     // GAP-0255: Use the real global CDC engine when available (parity with QUIC handler).
     // Acquire CDC mutex for thread-safe access (parity with procedure_registry).
     const cdc_mutex = execution.getCdcMutex();
-    cdc_mutex.lock();
-    defer cdc_mutex.unlock();
+    cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (execution.getGlobalCdcEngine()) |eng| {
         var reader: std.Io.Reader = .fixed(request_bytes);
         var req = protobuf.decode(schema.CdcControlRequest, &reader, allocator) catch {
@@ -2822,11 +2880,11 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
     defer mgr.deinit();
 
     const target_time: i64 = if (req.target_time.len > 0)
-        std.fmt.parseInt(i64, req.target_time, 10) catch std.time.milliTimestamp()
+        std.fmt.parseInt(i64, req.target_time, 10) catch compat_milliTimestamp()
     else
-        std.time.milliTimestamp();
+        compat_milliTimestamp();
 
-    const restore_dir = if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
+    const restore_dir = if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |dir| blk: {
         defer allocator.free(dir);
         break :blk try allocator.dupe(u8, dir);
     } else |_| try allocator.dupe(u8, "./data");
@@ -2843,7 +2901,7 @@ fn handleRestore(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
         .message = try allocator.dupe(u8, "Restore completed"),
         .restore_dir = restore_dir,
         .target_time = try allocator.dupe(u8, if (req.target_time.len > 0) req.target_time else "latest"),
-        .restore_timestamp = @intCast(std.time.milliTimestamp()),
+        .restore_timestamp = @intCast(compat_milliTimestamp()),
     };
     return encodeMessage(allocator, resp);
 }
@@ -2892,10 +2950,10 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         return encodeMessage(allocator, resp);
     }
 
-    std.Io.Dir.cwd().makePath("./uploaded_backups") catch {};
-    const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
+    const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
     // Create empty placeholder file for upload slot
-    if (std.Io.Dir.cwd().createFile(path, .{})) |file| {
+    if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
         file.close();
     } else |_| {}
 

@@ -6,6 +6,41 @@
 ///
 /// Extracted as part of Phase 1, M1.1 of the modularization effort.
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const audit_formatter = @import("audit_formatter.zig");
 
 // CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditSinks; STATUS=TESTED; TEST=audit_tests; OWNER=security; UPDATED=2025-11-12
@@ -47,11 +82,11 @@ pub const SinkInterface = struct {
 
 /// FileSink writes audit events to a file
 pub const FileSink = struct {
-    file: std.fs.File,
-    mutex: std.Thread.Mutex,
+    file: std.Io.File,
+    mutex: std.Io.Mutex,
 
     pub fn init(file_path: []const u8) !FileSink {
-        const file = try std.Io.Dir.cwd().createFile(file_path, .{
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{
             .truncate = false,
             .exclusive = false,
         });
@@ -80,15 +115,15 @@ pub const FileSink = struct {
 
     fn write(ptr: *anyopaque, data: []const u8) !void {
         const self: *FileSink = @ptrCast(@alignCast(ptr));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.file.writeAll(data);
     }
 
     fn flush(ptr: *anyopaque) !void {
         const self: *FileSink = @ptrCast(@alignCast(ptr));
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.file.sync();
     }
 
@@ -110,7 +145,7 @@ pub fn writeToWindowsEventLog(
     var events_written: u32 = 0;
 
     // Create output file
-    const file = try std.Io.Dir.cwd().createFile(output_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), output_path, .{});
     defer file.close();
 
     // Write XML header
@@ -145,7 +180,7 @@ pub fn writeToSyslog(
     var events_sent: u32 = 0;
 
     // Create output file
-    const file = try std.Io.Dir.cwd().createFile(output_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), output_path, .{});
     defer file.close();
 
     // Write each event
@@ -233,7 +268,7 @@ test "FileSink - basic write" {
     try iface.flush();
 
     // Verify file was created
-    const file = try std.Io.Dir.cwd().openFile("test_audit_sink.log", .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_audit_sink.log", .{});
     defer file.close();
     const stat = try file.stat();
     try testing.expect(stat.size > 0);
@@ -247,7 +282,7 @@ test "writeToWindowsEventLog - creates valid XML" {
 
     const test_events = [_]AuditEvent{
         .{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .access_granted,
             .user_id = 1001,
             .tenant_id = null,
@@ -266,7 +301,7 @@ test "writeToWindowsEventLog - creates valid XML" {
     try testing.expectEqual(@as(u32, 1), events_written);
 
     // Verify file exists and contains valid XML
-    const file = try std.Io.Dir.cwd().openFile("test_windows.xml", .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_windows.xml", .{});
     defer file.close();
     const content = try file.readToEndAlloc(testing.allocator, 10000);
     defer testing.allocator.free(content);
@@ -284,7 +319,7 @@ test "writeToSyslog - creates valid syslog entries" {
 
     const test_events = [_]AuditEvent{
         .{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .policy_violation,
             .user_id = 2001,
             .tenant_id = null,
@@ -303,7 +338,7 @@ test "writeToSyslog - creates valid syslog entries" {
     try testing.expectEqual(@as(u32, 1), events_sent);
 
     // Verify file exists and contains syslog format
-    const file = try std.Io.Dir.cwd().openFile("test_syslog.log", .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_syslog.log", .{});
     defer file.close();
     const content = try file.readToEndAlloc(testing.allocator, 10000);
     defer testing.allocator.free(content);
@@ -335,12 +370,12 @@ test "MultiSink - writes to multiple destinations" {
     try iface.flush();
 
     // Verify both files exist and contain data
-    const file1 = try std.Io.Dir.cwd().openFile("test_multi1.log", .{});
+    const file1 = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_multi1.log", .{});
     defer file1.close();
     const stat1 = try file1.stat();
     try testing.expect(stat1.size > 0);
 
-    const file2 = try std.Io.Dir.cwd().openFile("test_multi2.log", .{});
+    const file2 = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_multi2.log", .{});
     defer file2.close();
     const stat2 = try file2.stat();
     try testing.expect(stat2.size > 0);

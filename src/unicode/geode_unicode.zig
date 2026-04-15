@@ -60,7 +60,7 @@ pub fn nfcNormalize(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
         }
         i_byte += len;
     }
-    var out_list: std.ArrayListUnmanaged(u8) = .{};
+    var out_list: std.ArrayListUnmanaged(u8) = .empty;
     defer out_list.deinit(alloc);
     var i: usize = 0;
     while (i < scalars.items.len) : (i += 1) {
@@ -99,7 +99,7 @@ pub fn nfcNormalize(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
 }
 
 pub fn foldCase(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .{};
+    var out: std.ArrayListUnmanaged(u8) = .empty;
     defer out.deinit(alloc);
     var i: usize = 0;
     while (i < s.len) {

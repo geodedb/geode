@@ -15,37 +15,34 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const language_metadata = geode.language_metadata;
 
-fn getStdoutHandle() std.Io.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
-    } else {
-        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
-    }
-}
-
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = getStdoutHandle();
-    try generateApiDocsToFile(allocator, stdout);
+    try generateApiDocsToStdout(allocator);
 }
 
-fn generateApiDocsToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
+fn generateApiDocsToStdout(allocator: std.mem.Allocator) !void {
     var output = try std.ArrayList(u8).initCapacity(allocator, 65536);
     defer output.deinit(allocator);
 
-    try generateApiDocs(allocator, output.writer(allocator));
-    try file.writeAll(output.items);
+    try generateApiDocs(allocator, &output);
+    // Note: generateApiDocs uses output.appendSlice/print directly
+
+    // Write output to stdout via Io.File.writer
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const stdout = std.Io.File.stdout();
+    var write_buf: [8192]u8 = undefined;
+    var writer = stdout.writer(io, &write_buf);
+    try writer.interface.writeAll(output.items);
+    try writer.interface.flush();
 }
 
-fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
-    _ = allocator;
+fn generateApiDocs(allocator: std.mem.Allocator, output: *std.ArrayList(u8)) !void {
 
     // Header
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\# GQL API Reference
         \\
         \\> Auto-generated from `src/gql/language_metadata.zig` - DO NOT EDIT MANUALLY
@@ -70,10 +67,10 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 
     // Group keywords by category
-    try writer.writeAll("### Clause Keywords\n\n| Keyword | Description | GQL Compliant |\n|---------|-------------|---------------|\n");
+    try output.appendSlice(allocator, "### Clause Keywords\n\n| Keyword | Description | GQL Compliant |\n|---------|-------------|---------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .clause) {
-            try writer.print("| `{s}` | {s} | {s} |\n", .{
+            try output.print(allocator, "| `{s}` | {s} | {s} |\n", .{
                 kw.name,
                 kw.doc,
                 if (kw.compliance == .iso_gql) "Yes" else "Extension",
@@ -81,10 +78,10 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
         }
     }
 
-    try writer.writeAll("\n### DDL Keywords\n\n| Keyword | Description | GQL Compliant |\n|---------|-------------|---------------|\n");
+    try output.appendSlice(allocator, "\n### DDL Keywords\n\n| Keyword | Description | GQL Compliant |\n|---------|-------------|---------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .ddl) {
-            try writer.print("| `{s}` | {s} | {s} |\n", .{
+            try output.print(allocator, "| `{s}` | {s} | {s} |\n", .{
                 kw.name,
                 kw.doc,
                 if (kw.compliance == .iso_gql) "Yes" else "Extension",
@@ -92,36 +89,36 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
         }
     }
 
-    try writer.writeAll("\n### Boolean & Logical Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
+    try output.appendSlice(allocator, "\n### Boolean & Logical Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .boolean_operator or kw.category == .literal or kw.category == .comparison) {
-            try writer.print("| `{s}` | {s} |\n", .{ kw.name, kw.doc });
+            try output.print(allocator, "| `{s}` | {s} |\n", .{ kw.name, kw.doc });
         }
     }
 
-    try writer.writeAll("\n### Transaction Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
+    try output.appendSlice(allocator, "\n### Transaction Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .transaction) {
-            try writer.print("| `{s}` | {s} |\n", .{ kw.name, kw.doc });
+            try output.print(allocator, "| `{s}` | {s} |\n", .{ kw.name, kw.doc });
         }
     }
 
-    try writer.writeAll("\n### Path Pattern Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
+    try output.appendSlice(allocator, "\n### Path Pattern Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .path_pattern) {
-            try writer.print("| `{s}` | {s} |\n", .{ kw.name, kw.doc });
+            try output.print(allocator, "| `{s}` | {s} |\n", .{ kw.name, kw.doc });
         }
     }
 
-    try writer.writeAll("\n### Set Operation Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
+    try output.appendSlice(allocator, "\n### Set Operation Keywords\n\n| Keyword | Description |\n|---------|-------------|\n");
     for (language_metadata.keywords) |kw| {
         if (kw.category == .set_operation) {
-            try writer.print("| `{s}` | {s} |\n", .{ kw.name, kw.doc });
+            try output.print(allocator, "| `{s}` | {s} |\n", .{ kw.name, kw.doc });
         }
     }
 
     // Functions section
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\
         \\---
         \\
@@ -131,87 +128,87 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 
     // Aggregate functions
-    try writer.writeAll("### Aggregate Functions\n\n");
+    try output.appendSlice(allocator, "### Aggregate Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .aggregate) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Math functions
-    try writer.writeAll("\n### Mathematical Functions\n\n");
+    try output.appendSlice(allocator, "\n### Mathematical Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .scalar_math) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // String functions
-    try writer.writeAll("\n### String Functions\n\n");
+    try output.appendSlice(allocator, "\n### String Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .scalar_string) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // List functions
-    try writer.writeAll("\n### List Functions\n\n");
+    try output.appendSlice(allocator, "\n### List Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .scalar_list) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Temporal functions
-    try writer.writeAll("\n### Temporal Functions\n\n");
+    try output.appendSlice(allocator, "\n### Temporal Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .temporal) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Graph functions
-    try writer.writeAll("\n### Graph Functions\n\n");
+    try output.appendSlice(allocator, "\n### Graph Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .graph) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Path functions
-    try writer.writeAll("\n### Path Functions\n\n");
+    try output.appendSlice(allocator, "\n### Path Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .path) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Vector functions
-    try writer.writeAll("\n### Vector Functions\n\n");
+    try output.appendSlice(allocator, "\n### Vector Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .vector) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Conversion functions
-    try writer.writeAll("\n### Conversion Functions\n\n");
+    try output.appendSlice(allocator, "\n### Conversion Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .conversion) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Predicate functions
-    try writer.writeAll("\n### Predicate Functions\n\n");
+    try output.appendSlice(allocator, "\n### Predicate Functions\n\n");
     for (language_metadata.functions) |f| {
         if (f.category == .predicate or f.category == .null_handling) {
-            try writeFunctionDoc(writer, f);
+            try writeFunctionDoc(allocator, output, f);
         }
     }
 
     // Types section
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\
         \\---
         \\
@@ -222,11 +219,11 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
         \\
     );
     for (language_metadata.types) |t| {
-        try writer.print("| `{s}` | {s} |\n", .{ t.name, t.doc });
+        try output.print(allocator, "| `{s}` | {s} |\n", .{ t.name, t.doc });
     }
 
     // Procedures section
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\
         \\---
         \\
@@ -238,43 +235,43 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 
     // Group procedures by category
-    try writer.writeAll("### Centrality Algorithms\n\n");
+    try output.appendSlice(allocator, "### Centrality Algorithms\n\n");
     for (language_metadata.procedures) |p| {
         if (p.category == .centrality) {
-            try writeProcedureDoc(writer, p);
+            try writeProcedureDoc(allocator, output, p);
         }
     }
 
-    try writer.writeAll("\n### Community Detection\n\n");
+    try output.appendSlice(allocator, "\n### Community Detection\n\n");
     for (language_metadata.procedures) |p| {
         if (p.category == .community) {
-            try writeProcedureDoc(writer, p);
+            try writeProcedureDoc(allocator, output, p);
         }
     }
 
-    try writer.writeAll("\n### Connectivity Analysis\n\n");
+    try output.appendSlice(allocator, "\n### Connectivity Analysis\n\n");
     for (language_metadata.procedures) |p| {
         if (p.category == .connectivity) {
-            try writeProcedureDoc(writer, p);
+            try writeProcedureDoc(allocator, output, p);
         }
     }
 
-    try writer.writeAll("\n### Path Finding\n\n");
+    try output.appendSlice(allocator, "\n### Path Finding\n\n");
     for (language_metadata.procedures) |p| {
         if (p.category == .path_finding) {
-            try writeProcedureDoc(writer, p);
+            try writeProcedureDoc(allocator, output, p);
         }
     }
 
-    try writer.writeAll("\n### Administrative\n\n");
+    try output.appendSlice(allocator, "\n### Administrative\n\n");
     for (language_metadata.procedures) |p| {
         if (p.category == .audit or p.category == .tde or p.category == .cdc) {
-            try writeProcedureDoc(writer, p);
+            try writeProcedureDoc(allocator, output, p);
         }
     }
 
     // Footer
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\
         \\---
         \\
@@ -287,32 +284,32 @@ fn generateApiDocs(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 }
 
-fn writeFunctionDoc(writer: anytype, f: language_metadata.FunctionInfo) !void {
+fn writeFunctionDoc(allocator: std.mem.Allocator, output: *std.ArrayList(u8), f: language_metadata.FunctionInfo) !void {
     // Format parameters
-    try writer.print("#### `{s}(", .{f.name});
+    try output.print(allocator, "#### `{s}(", .{f.name});
     for (f.params, 0..) |p, i| {
-        if (i > 0) try writer.writeAll(", ");
-        try writer.print("{s}: {s}", .{ p.name, p.type_name });
+        if (i > 0) try output.appendSlice(allocator, ", ");
+        try output.print(allocator, "{s}: {s}", .{ p.name, p.type_name });
     }
-    try writer.print(")` -> `{s}`\n\n", .{f.return_type});
-    try writer.print("{s}\n\n", .{f.doc});
+    try output.print(allocator, ")` -> `{s}`\n\n", .{f.return_type});
+    try output.print(allocator, "{s}\n\n", .{f.doc});
     if (f.example) |example| {
-        try writer.print("```gql\n{s}\n```\n\n", .{example});
+        try output.print(allocator, "```gql\n{s}\n```\n\n", .{example});
     }
 }
 
-fn writeProcedureDoc(writer: anytype, p: language_metadata.ProcedureInfo) !void {
-    try writer.print("#### `CALL {s}()`\n\n", .{p.name});
-    try writer.print("{s}\n\n", .{p.doc});
+fn writeProcedureDoc(allocator: std.mem.Allocator, output: *std.ArrayList(u8), p: language_metadata.ProcedureInfo) !void {
+    try output.print(allocator, "#### `CALL {s}()`\n\n", .{p.name});
+    try output.print(allocator, "{s}\n\n", .{p.doc});
     // Format columns
-    try writer.writeAll("**Yields:** ");
+    try output.appendSlice(allocator, "**Yields:** ");
     for (p.columns, 0..) |col, i| {
-        if (i > 0) try writer.writeAll(", ");
-        try writer.print("`{s}: {s}`", .{ col.name, col.type_name });
+        if (i > 0) try output.appendSlice(allocator, ", ");
+        try output.print(allocator, "`{s}: {s}`", .{ col.name, col.type_name });
     }
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\n\n");
     if (p.example) |example| {
-        try writer.print("```gql\n{s}\n```\n\n", .{example});
+        try output.print(allocator, "```gql\n{s}\n```\n\n", .{example});
     }
 }
 

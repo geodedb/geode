@@ -4,6 +4,64 @@
 // external raft package.
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const Allocator = std.mem.Allocator;
 const txn_coordinator = @import("txn_coordinator.zig");
 const protobuf = @import("protobuf");
@@ -41,10 +99,10 @@ pub const Clock = struct {
 };
 
 fn realNow() i64 {
-    return std.time.milliTimestamp();
+    return compat_milliTimestamp();
 }
 fn realRand(max: u64) u64 {
-    return if (max == 0) 0 else std.crypto.random.int(u64) % max;
+    return if (max == 0) 0 else blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); } % max;
 }
 pub const RealClock = struct {
     pub const instance: Clock = .{ .nowMillisFn = realNow, .randFn = realRand };
@@ -249,7 +307,7 @@ fn connectWithTLS(qc: *quic.QuicClient, allocator: Allocator, host: []const u8, 
         log.warn("SEC-D011: Raft RPC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
         try qc.connectInsecure(host, port, true);
     } else {
-        const ca_path = std.process.getEnvVarOwned(allocator, "GEODE_CLUSTER_CA_CERT") catch null;
+        const ca_path = getEnvVarOwned(allocator, "GEODE_CLUSTER_CA_CERT") catch null;
         defer if (ca_path) |p| allocator.free(p);
 
         if (ca_path) |path| {
@@ -349,7 +407,7 @@ pub const PersistentStorage = struct {
     // ---- Internal helpers ----
 
     fn ensureDir(path: []const u8) !void {
-        std.Io.Dir.cwd().makePath(path) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), path) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
     }
@@ -360,7 +418,7 @@ pub const PersistentStorage = struct {
             return err;
         };
         defer dir.close();
-        const f = dir.openFile(file_name, .{}) catch |err| {
+        const f = dir.openFile(std.Io.Threaded.global_single_threaded.io(), file_name, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
@@ -380,7 +438,7 @@ pub const PersistentStorage = struct {
         var tmp_buf: [256]u8 = undefined;
         const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
 
-        const f = try dir.createFile(tmp_name, .{});
+        const f = try dir.createFile(std.Io.Threaded.global_single_threaded.io(), tmp_name, .{});
         errdefer {
             f.close();
             dir.deleteFile(tmp_name) catch {};
@@ -465,7 +523,7 @@ pub fn encodeRaftFrame(allocator: Allocator, from: u64, term: u64, msg: Message)
         .from = from,
         .nonce = nonce_tracker.NonceTracker.generateNonce(),
         .message = proto_msg,
-        .auth_token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse "",
+        .auth_token = posixGetenv("GEODE_CLUSTER_TOKEN") orelse "",
     };
     defer envelope.deinit(allocator);
 
@@ -1178,7 +1236,7 @@ test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
     // Verify .tmp file does not persist (atomic rename should have cleaned up)
     var dir = try std.Io.Dir.cwd().openDir(dir_path, .{});
     defer dir.close();
-    const tmp_exists = dir.openFile("current_term.tmp", .{});
+    const tmp_exists = dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term.tmp", .{});
     if (tmp_exists) |f| {
         f.close();
         return error.TmpFileNotCleaned;

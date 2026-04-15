@@ -5,6 +5,15 @@
 ///
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const testing = std.testing; // global for test blocks
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -59,7 +68,7 @@ pub const NonceGenerator = struct {
                 // CRITICAL SECURITY: Use cryptographically secure random nonce
                 // NIST SP 800-38D requires unique nonces for AES-GCM security
                 // Deterministic nonces would allow catastrophic IV reuse attacks
-                std.crypto.random.bytes(nonce);
+                compat_fillRandom(nonce);
             },
             .Deterministic => {
                 // TESTING ONLY: Deterministic nonce generation
@@ -77,7 +86,7 @@ pub const NonceGenerator = struct {
 /// This is the recommended way to generate nonces for production use.
 /// Uses the system's cryptographically secure random number generator.
 pub fn generateSecureNonce(nonce: *[NonceBytes]u8) void {
-    std.crypto.random.bytes(nonce);
+    compat_fillRandom(nonce);
 }
 
 /// Generate a deterministic nonce for testing

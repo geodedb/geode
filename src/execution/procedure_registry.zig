@@ -44,7 +44,7 @@ pub fn getGlobalCdcEngine() ?*@import("../streaming/cdc_enhanced.zig").CDCEngine
 
 /// Public accessor for the CDC mutex so external transports (gRPC) can
 /// acquire it before accessing the CDC engine.
-pub fn getCdcMutex() *std.Thread.Mutex {
+pub fn getCdcMutex() *std.Io.Mutex {
     return storage_dispatch.getCdcMutex();
 }
 

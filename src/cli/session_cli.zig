@@ -1,4 +1,57 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 const cli_auth = @import("cli_auth_helpers.zig");
 
@@ -106,9 +159,9 @@ fn saveSessionState(allocator: std.mem.Allocator, sessions: std.StringHashMap(St
 fn getCurrentToken(allocator: std.mem.Allocator) ?[]const u8 {
     // Try to read from ~/.geode/credentials.json
     const home = if (builtin.os.tag == .windows)
-        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return null
+        getEnvVarOwned(allocator, "USERPROFILE") catch return null
     else
-        std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+        getEnvVarOwned(allocator, "HOME") catch return null;
     defer allocator.free(home);
 
     const creds_path = std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home}) catch return null;
@@ -227,7 +280,7 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
 
     // Check if session exists and is valid
     if (sessions.get(token)) |session| {
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         if (!session.is_active) {
             std.debug.print("Session is invalid or expired.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -246,9 +299,9 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
         var username: []const u8 = "unknown";
 
         const home = if (builtin.os.tag == .windows)
-            std.process.getEnvVarOwned(allocator, "USERPROFILE") catch null
+            getEnvVarOwned(allocator, "USERPROFILE") catch null
         else
-            std.process.getEnvVarOwned(allocator, "HOME") catch null;
+            getEnvVarOwned(allocator, "HOME") catch null;
 
         if (home) |h| {
             defer allocator.free(h);
@@ -307,12 +360,12 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     // Get username from credentials
     const home = if (builtin.os.tag == .windows)
-        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+        getEnvVarOwned(allocator, "USERPROFILE") catch {
             std.debug.print("Error: Cannot determine home directory\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
     else
-        std.process.getEnvVarOwned(allocator, "HOME") catch {
+        getEnvVarOwned(allocator, "HOME") catch {
             std.debug.print("Error: Cannot determine home directory\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -368,7 +421,7 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         }
     }
 
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const created_at = if (expires_at > 0) expires_at - (24 * 60 * 60 * 1000) else now; // Assume 24h sessions
 
     std.debug.print("Session Information:\n", .{});
@@ -405,7 +458,7 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 
     // Generate new token
     var new_token_bytes: [32]u8 = undefined;
-    std.crypto.random.bytes(&new_token_bytes);
+    compat_fillRandom(&new_token_bytes);
 
     // Convert to hex string
     const hex_chars = "0123456789abcdef";
@@ -417,12 +470,12 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 
     // Update credentials file with new token
     const home = if (builtin.os.tag == .windows)
-        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+        getEnvVarOwned(allocator, "USERPROFILE") catch {
             std.debug.print("Error: Cannot determine home directory\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
     else
-        std.process.getEnvVarOwned(allocator, "HOME") catch {
+        getEnvVarOwned(allocator, "HOME") catch {
             std.debug.print("Error: Cannot determine home directory\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };

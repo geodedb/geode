@@ -1,5 +1,14 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
 // Adaptive Replan Autotune Variance Envelope (S-019 / REQ-GQL-021)
 // Simulates an adaptive replan trigger loop where successive query executions
 // produce observed vs estimated cost deltas. An autotune controller adjusts a
@@ -206,7 +215,7 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
 }
 
 fn envOr(allocator: std.mem.Allocator, name: []const u8, default_: usize) usize {
-    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+    if (getEnvVarOwned(allocator, name)) |val| {
         defer allocator.free(val);
         return std.fmt.parseInt(usize, val, 10) catch default_;
     } else |_| {
@@ -215,7 +224,7 @@ fn envOr(allocator: std.mem.Allocator, name: []const u8, default_: usize) usize 
 }
 
 fn envOrU64(allocator: std.mem.Allocator, name: []const u8, default_: u64) u64 {
-    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+    if (getEnvVarOwned(allocator, name)) |val| {
         defer allocator.free(val);
         return std.fmt.parseInt(u64, val, 16) catch default_;
     } else |_| return default_;

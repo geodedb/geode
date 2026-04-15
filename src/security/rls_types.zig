@@ -65,7 +65,7 @@ pub const RLSFilterEngine = struct {
     policies: std.ArrayList(LabelPolicy),
     /// Property-level policies, protected by the same `mu`.
     property_policies: std.ArrayList(PropertyPolicy),
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -102,8 +102,8 @@ pub const RLSFilterEngine = struct {
     /// Register a deny policy: rows containing nodes/edges with `label` in `graph` will be
     /// filtered out for `username` (empty string = all users).
     pub fn addDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const policy = LabelPolicy{
             .graph = try self.allocator.dupe(u8, graph),
@@ -116,8 +116,8 @@ pub const RLSFilterEngine = struct {
 
     /// Remove all policies matching graph+label+username exactly.
     pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.policies.items.len) {
@@ -138,8 +138,8 @@ pub const RLSFilterEngine = struct {
 
     /// Returns true if the given label is denied for user+graph.
     pub fn isLabelDenied(self: *Self, graph: []const u8, label: []const u8, username: []const u8) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.policies.items) |p| {
             if (!p.deny) continue;
@@ -154,8 +154,8 @@ pub const RLSFilterEngine = struct {
 
     /// Snapshot denied labels for a specific user+graph into a HashSet.
     pub fn snapshotDeniedLabels(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMap(void) {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var denied = std.StringHashMap(void).init(allocator);
         for (self.policies.items) |p| {
@@ -170,8 +170,8 @@ pub const RLSFilterEngine = struct {
 
     /// Return the number of currently active label policies.
     pub fn policyCount(self: *Self) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.policies.items.len;
     }
 
@@ -181,8 +181,8 @@ pub const RLSFilterEngine = struct {
     /// matches the given predicate, for a specific user and optional graph.
     // CANARY: REQ=REQ-SEC-RLS-WIRE-008; FEATURE="RLS Property Filtering"; ASPECT=PolicyCRUD; STATUS=TESTED; OWNER=security; UPDATED=2026-04-01
     pub fn addPropertyPolicy(self: *Self, user: []const u8, graph_name: ?[]const u8, property_name: []const u8, op: ComparisonOp, expected_value: []const u8, deny: bool) !void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const pred = PropertyPredicate{
             .property_name = try self.allocator.dupe(u8, property_name),
@@ -203,8 +203,8 @@ pub const RLSFilterEngine = struct {
 
     /// Remove all property policies matching user + graph + property_name exactly.
     pub fn removePropertyPolicy(self: *Self, user: []const u8, graph_name: ?[]const u8, property_name: []const u8) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.property_policies.items.len) {
@@ -239,15 +239,15 @@ pub const RLSFilterEngine = struct {
 
     /// Return the number of currently active property policies.
     pub fn propertyPolicyCount(self: *Self) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.property_policies.items.len;
     }
 
     /// Snapshot property policies applicable to a user+graph.
     pub fn snapshotPropertyPolicies(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.ArrayList(PropertyPredicate) {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList(PropertyPredicate).empty;
         for (self.property_policies.items) |pp| {

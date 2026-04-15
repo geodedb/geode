@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const geode = @import("geode");
 const server_flags = geode.server_flags;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
@@ -276,7 +285,7 @@ pub fn initialize(
             };
 
             if (agm.hasAuthRecords()) {
-                if (std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+                if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
                     allocator.free(env_pw);
                     log.info("GEODE_ADMIN_PASSWORD ignored because auth records already exist", &.{});
                 } else |_| {}
@@ -305,7 +314,7 @@ pub fn initialize(
                 // Print generated password to stderr only (never to structured log).
                 // Skip the message when the password came from GEODE_ADMIN_PASSWORD
                 // so test runners don't see a misleading "generated" label.
-                if (std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+                if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
                     allocator.free(env_pw);
                 } else |_| {
                     std.debug.print("\n*** Generated admin password: {s} ***\n", .{result.password});
@@ -332,7 +341,7 @@ pub fn initialize(
 
     // Initialize shared AST cache (cross-connection) if enabled.
     const ast_cache_size = blk: {
-        if (std.process.getEnvVarOwned(allocator, "GEODE_AST_CACHE_SIZE")) |v| {
+        if (getEnvVarOwned(allocator, "GEODE_AST_CACHE_SIZE")) |v| {
             defer allocator.free(v);
             const parsed = std.fmt.parseInt(usize, v, 10) catch 0;
             break :blk parsed;
@@ -342,7 +351,7 @@ pub fn initialize(
 
     // Issue #460: Initialize shared query optimizer (cross-connection plan cache)
     const plan_cache_size = blk: {
-        if (std.process.getEnvVarOwned(allocator, "GEODE_PLAN_CACHE_SIZE")) |v| {
+        if (getEnvVarOwned(allocator, "GEODE_PLAN_CACHE_SIZE")) |v| {
             defer allocator.free(v);
             const parsed = std.fmt.parseInt(usize, v, 10) catch 0;
             break :blk parsed;

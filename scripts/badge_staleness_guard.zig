@@ -14,10 +14,10 @@ const builtin = @import("builtin");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=BadgeStalenessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_BadgeStalenessGuard; OWNER=tooling; UPDATED=2025-09-22
 
 fn getStdErr() std.Io.File {
-    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDERR_FILENO };
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 fn getStdOut() std.Io.File {
-    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 pub fn main() !void {
@@ -43,7 +43,7 @@ pub fn main() !void {
     }
 
     if (!fileExists(status_path)) return fail(2, "status file missing");
-    const status_data = std.fs.cwd().readFileAlloc(alloc, status_path, 4 * 1024 * 1024) catch return fail(2, "read status failed");
+    const status_data = std.Io.Dir.cwd().readFileAlloc(alloc, status_path, 4 * 1024 * 1024) catch return fail(2, "read status failed");
     defer alloc.free(status_data);
     const gen_date = parseGeneratedDate(status_data) catch return fail(2, "parse generated_at failed");
     // Extract YYYY-MM-DD from full timestamp
@@ -57,7 +57,7 @@ pub fn main() !void {
         }
         return fail(2, "badge missing");
     }
-    const badge_stat = std.fs.cwd().statFile(badge_path) catch return fail(2, "stat badge failed");
+    const badge_stat = std.Io.Dir.cwd().statFile(badge_path) catch return fail(2, "stat badge failed");
     const badge_mtime_ns = badge_stat.mtime;
     const now_ns = std.time.nanoTimestamp();
 
@@ -103,7 +103,7 @@ fn fail(code: u8, msg: []const u8) noreturn {
 }
 
 fn fileExists(p: []const u8) bool {
-    _ = std.fs.cwd().statFile(p) catch return false;
+    _ = std.Io.Dir.cwd().statFile(p) catch return false;
     return true;
 }
 

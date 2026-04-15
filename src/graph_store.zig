@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const pooled = @import("transport/thread_pool");
@@ -42,14 +51,14 @@ fn generateTimeBasedId() u64 {
 var g_override_data_dir_buf: [512]u8 = undefined;
 var g_override_data_dir_len: usize = 0;
 var g_override_data_dir_set: bool = false;
-var g_data_dir_mutex: std.Io.Mutex = .{};
+var g_data_dir_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Set the data directory override (takes precedence over GEODE_DATA_DIR env var)
 /// Pass null to clear the override and revert to env var behavior
 pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
     _ = allocator; // Not needed with fixed buffer
-    g_data_dir_mutex.lock();
-    defer g_data_dir_mutex.unlock();
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (dir) |path| {
         const copy_len = @min(path.len, g_override_data_dir_buf.len);
         @memcpy(g_override_data_dir_buf[0..copy_len], path[0..copy_len]);
@@ -63,8 +72,8 @@ pub fn setDataDirOverride(allocator: std.mem.Allocator, dir: ?[]const u8) void {
 
 /// Get the current data directory override (or null if using env var)
 pub fn getDataDirOverride() ?[]const u8 {
-    g_data_dir_mutex.lock();
-    defer g_data_dir_mutex.unlock();
+    g_data_dir_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_data_dir_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (g_override_data_dir_set and g_override_data_dir_len > 0) {
         return g_override_data_dir_buf[0..g_override_data_dir_len];
     }
@@ -79,7 +88,7 @@ pub fn getPersistenceFilePath(allocator: std.mem.Allocator) ![]u8 {
     if (getDataDirOverride()) |override| {
         return try allocator.dupe(u8, override);
     }
-    return std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch {
+    return getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch {
         return try allocator.dupe(u8, "/tmp");
     };
 }
@@ -4935,7 +4944,8 @@ var global_store: ?GraphStore = null;
 // The global store is shared across transport threads, so its allocator must be
 // safe for cross-thread alloc/free traffic. A long-lived arena hid leaks but
 // left the backing allocator outside the thread-safe path used elsewhere.
-var global_store_allocator: ?std.heap.ThreadSafeAllocator = null;
+// Zig 0.16: ThreadSafeAllocator removed; allocators are inherently thread-safe.
+var global_store_allocator: ?std.mem.Allocator = null;
 threadlocal var g_active_query_read_store: ?*GraphStore = null;
 var g_query_read_session_init_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
 var g_get_nodes_by_labels_count: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
@@ -4963,12 +4973,12 @@ pub fn getNodesByLabelsCallCount() u64 {
 /// Mutex protecting the re-initialization path in getGlobalStore.
 /// Without this, concurrent callers can race: one thread tears down the store
 /// while another reads a half-initialized global_store, yielding empty results.
-var g_init_mutex: std.Io.Mutex = .{};
+var g_init_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// GAP-0259/0260: RwLock replaces Mutex so query threads (shared readers) don't
 /// block each other — only the persistence thread takes an exclusive write lock.
 /// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
-var g_store_rwlock: std.Io.RwLock = .{};
+var g_store_rwlock: std.Io.RwLock = std.Io.RwLock.init;
 
 /// Mutation epoch counter for ReadView invalidation.
 /// Incremented on every data mutation (node/edge create, delete, property set/remove).
@@ -5080,27 +5090,27 @@ pub fn setWalPersistenceHooks(
 /// GAP-0001: Mutation operations must use acquireStoreWriteLock() instead
 /// to prevent concurrent HashMap rehash races (CWE-362, CWE-416).
 pub fn acquireStoreLock() void {
-    g_store_rwlock.lockShared();
+    g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
 }
 
 /// Try to acquire shared lock without blocking.  Returns true if locked.
 pub fn tryAcquireStoreLock() bool {
-    return if (g_store_rwlock.tryLockShared()) true else false;
+    return if (g_store_rwlock.tryLockShared(std.Io.Threaded.global_single_threaded.io())) true else false;
 }
 
 /// Release the global store lock (shared)
 pub fn releaseStoreLock() void {
-    g_store_rwlock.unlockShared();
+    g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 }
 
 /// Acquire exclusive write lock (for mutations and persistence thread)
 pub fn acquireStoreWriteLock() void {
-    g_store_rwlock.lock();
+    g_store_rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
 }
 
 /// Release exclusive write lock
 pub fn releaseStoreWriteLock() void {
-    g_store_rwlock.unlock();
+    g_store_rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
@@ -5197,8 +5207,8 @@ fn persistenceLoop() void {
                     };
                 } else {
                     // Fallback: global shared lock
-                    g_store_rwlock.lockShared();
-                    defer g_store_rwlock.unlockShared();
+                    g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                    defer g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
                     if (g_wal_checkpoint_fn) |checkpoint_fn| {
                         checkpoint_fn(store_ptr);
                     }
@@ -5244,9 +5254,9 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         }
     } else {
         // Fallback: use global shared lock for legacy (no-adapter) path.
-        g_store_rwlock.lockShared();
+        g_store_rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         store_ptr.cleanupLegacySidecars();
-        g_store_rwlock.unlockShared();
+        g_store_rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     }
 
     // Clear dirty flag
@@ -5391,11 +5401,11 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         }
 
         // Non-override path: check if data directory has changed (rare).
-        const current_data_dir: ?[]const u8 = if (std.posix.getenv("GEODE_DATA_DIR")) |ptr| std.mem.span(ptr) else null;
+        const current_data_dir: ?[]const u8 = if (std.c.getenv("GEODE_DATA_DIR")) |ptr| std.mem.span(ptr) else null;
 
         // Compare under the init mutex to avoid racing with a concurrent reinit.
         var needs_reinit = false;
-        g_init_mutex.lock();
+        g_init_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         if (current_data_dir) |curr_dir| {
             if (last_data_dir) |last_dir| {
                 if (!std.mem.eql(u8, curr_dir, last_dir)) {
@@ -5409,23 +5419,23 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         }
 
         if (!needs_reinit) {
-            g_init_mutex.unlock();
+            g_init_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return &global_store.?;
         }
         // Fall through to reinit with mutex already held.
         // (unlock handled by defer below after re-lock check)
-        g_init_mutex.unlock();
+        g_init_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     // Slow path: acquire init mutex for first initialization or reinit.
-    g_init_mutex.lock();
-    defer g_init_mutex.unlock();
+    g_init_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_init_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Resolve current data dir under lock.
     const current_data_dir: ?[]u8 = if (getDataDirOverride()) |override|
         allocator.dupe(u8, override) catch null
     else
-        std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
+        getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
     defer if (current_data_dir) |dir| allocator.free(dir);
 
     // Double-check under lock: another thread may have completed init.
@@ -5467,10 +5477,8 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     syncGlobalAdapterForDataDir(last_data_dir);
 
-    global_store_allocator = .{
-        .child_allocator = global_gpa.allocator(),
-    };
-    global_store = GraphStore.init(global_store_allocator.?.allocator()) catch @panic("OOM: failed to initialize global graph store");
+    global_store_allocator = global_gpa.allocator();
+    global_store = GraphStore.init(global_store_allocator.?) catch @panic("OOM: failed to initialize global graph store");
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {
         global_store.?.data_dir = dir;

@@ -2,7 +2,7 @@ const std = @import("std");
 
 // SignaledQueue: a simple thread-safe FIFO queue with condition variable signaling.
 // Multiple producers and consumers supported. Dequeue can block until an element arrives or until the queue is closed.
-// Uses std.Thread.Mutex and std.Thread.Condition for synchronization.
+// Uses std.Io.Mutex and std.Io.Condition for synchronization.
 //
 // CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=SignaledQueue; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_068_SignaledQueue; OWNER=graph; UPDATED=2025-09-23
 pub fn SignaledQueue(comptime T: type) type {
@@ -10,8 +10,8 @@ pub fn SignaledQueue(comptime T: type) type {
         const Self = @This();
 
         allocator: std.mem.Allocator,
-        mu: std.Thread.Mutex = .{},
-        cv: std.Thread.Condition = .{},
+        mu: std.Io.Mutex = std.Io.Mutex.init,
+        cv: std.Io.Condition = std.Io.Condition.init,
         q: std.ArrayListUnmanaged(T) = .{},
         closed: bool = false,
 
@@ -20,51 +20,51 @@ pub fn SignaledQueue(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             if (self.q.items.len > 0) self.q.clearAndFree(self.allocator);
             self.closed = true;
-            self.cv.broadcast();
+            self.cv.broadcast(std.Io.Threaded.global_single_threaded.io());
         }
 
         pub fn close(self: *Self) void {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             self.closed = true;
-            self.cv.broadcast();
+            self.cv.broadcast(std.Io.Threaded.global_single_threaded.io());
         }
 
         pub fn isClosed(self: *Self) bool {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             return self.closed;
         }
 
         pub fn len(self: *Self) usize {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             return self.q.items.len;
         }
 
         pub fn isEmpty(self: *Self) bool {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             return self.q.items.len == 0;
         }
 
         pub fn enqueue(self: *Self, value: T) !void {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             if (self.closed) return error.Closed;
             try self.q.append(self.allocator, value);
-            self.cv.signal();
+            self.cv.signal(std.Io.Threaded.global_single_threaded.io());
         }
 
         // Try to dequeue without blocking; returns null when empty and not closed.
         // If closed and empty, returns error.Closed to distinguish shutdown.
         pub fn tryDequeue(self: *Self) !?T {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             if (self.q.items.len > 0) {
                 return self.q.orderedRemove(0);
             }
@@ -75,10 +75,10 @@ pub fn SignaledQueue(comptime T: type) type {
         // Blocking dequeue: waits until an item is available or queue is closed.
         // Returns null only if spurious wake without data and not closed (should be rare); callers typically loop.
         pub fn dequeue(self: *Self) !?T {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             while (self.q.items.len == 0 and !self.closed) {
-                self.cv.wait(&self.mu);
+                self.cv.waitUncancelable(std.Io.Threaded.global_single_threaded.io(), &self.mu);
             }
             if (self.q.items.len > 0) return self.q.orderedRemove(0);
             if (self.closed) return error.Closed;

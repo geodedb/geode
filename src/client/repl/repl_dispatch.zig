@@ -1,4 +1,9 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
@@ -23,12 +28,12 @@ const ColumnInfo = query_result_accumulator.ColumnInfo;
 // Output write failures are non-critical — the query result is correct
 // even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
 
-var g_repl_background_pool_mu: std.Thread.Mutex = .{};
+var g_repl_background_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
 var g_repl_background_pool: ?*pooled.ThreadPool = null;
 
 fn getBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
-    g_repl_background_pool_mu.lock();
-    defer g_repl_background_pool_mu.unlock();
+    g_repl_background_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_repl_background_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (g_repl_background_pool == null) {
         g_repl_background_pool = try pooled.ThreadPool.init(allocator, .{
@@ -135,7 +140,7 @@ pub fn checkForInterrupt() bool {
     // reading from stdin will consume actual command input, not just Ctrl+C signals.
     // In piped mode, rely on signal-based interrupt handling above.
     if (builtin.os.tag != .windows) {
-        if (!std.posix.isatty(std.posix.STDIN_FILENO)) {
+        if (!(std.Io.File.stdin().isTty(std.Io.Threaded.global_single_threaded.io()) catch false)) {
             return false;
         }
     }
@@ -377,8 +382,8 @@ fn buildRowsJsonArray(allocator: std.mem.Allocator, rows: []const proto_schema.R
         pool.start();
         defer pool.deinit();
 
-        var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = allocator };
-        const safe_alloc = ts_alloc.allocator();
+        // Zig 0.16: ThreadSafeAllocator removed; allocator is already thread-safe.
+        const safe_alloc = allocator;
 
         const RowInput = struct {
             row: *const proto_schema.Row,
@@ -2673,7 +2678,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     var path_buf: [4096]u8 = undefined;
     const resolved_path = if (filename.len > 0 and filename[0] == '~') blk: {
         if (comptime builtin.os.tag == .windows) break :blk filename;
-        const home = std.posix.getenv("HOME") orelse {
+        const home = posixGetenv("HOME") orelse {
             try stderr.writeAll("Error [GEODE-E2005]: Cannot expand ~: HOME not set\r\n");
             return;
         };
@@ -2686,7 +2691,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     } else filename;
 
     // Open the file
-    const file = std.Io.Dir.cwd().openFile(resolved_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), resolved_path, .{}) catch |err| {
         var buf: [512]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
         try stderr.writeAll(msg);

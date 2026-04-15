@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const Lexer = @import("gql/lexer.zig").Lexer;
 const Parser = @import("gql/parser.zig").Parser;
 pub const ast = @import("gql/ast.zig");
@@ -530,7 +539,7 @@ pub const server = struct {
 
 pub fn parseGql(src: []const u8, allocator: std.mem.Allocator) !ParseResult {
     // Enforce ident-only ORDER BY keys and forbid function calls unless explicitly relaxed
-    const allow_expr = if (std.process.getEnvVarOwned(allocator, "GEODE_ORDER_KEYS_EXPR")) |v| blk: {
+    const allow_expr = if (getEnvVarOwned(allocator, "GEODE_ORDER_KEYS_EXPR")) |v| blk: {
         defer allocator.free(v);
         break :blk true;
     } else |_| false;

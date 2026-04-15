@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const auth_graph_manager = @import("auth_graph_manager");
@@ -183,7 +227,7 @@ pub const UserManager = struct {
             _ = meta; // metadata deprecated
         }
 
-        user.updated_at = std.time.milliTimestamp();
+        user.updated_at = compat_milliTimestamp();
 
         // Persist changes
         const bump_auth_version = request.password != null or request.attributes != null or request.is_active != null or request.mfa_enabled != null;
@@ -424,7 +468,7 @@ pub const UserManager = struct {
             }
         }
 
-        const policy_id = @as(u64, @intCast(std.time.milliTimestamp()));
+        const policy_id = @as(u64, @intCast(compat_milliTimestamp()));
 
         const policy = rls.RLSEngine.Policy{
             .id = policy_id,
@@ -448,8 +492,8 @@ pub const UserManager = struct {
                 .parameters = &[_]rls.RLSEngine.Expression.Parameter{},
             } else null,
             .enabled = true,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .created_by = 0, // System user
             .temporal = request.temporal,
             .data_classification = request.data_classification,
@@ -694,7 +738,7 @@ pub const UserManager = struct {
 
     fn generateMFASecret(self: *Self) ![]const u8 {
         var secret: [32]u8 = undefined;
-        std.crypto.random.bytes(&secret);
+        compat_fillRandom(&secret);
         const encoder = std.base64.standard.Encoder;
         const result = try self.allocator.alloc(u8, encoder.calcSize(secret.len));
         _ = encoder.encode(result, &secret);

@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const fle_integration = @import("fle_integration.zig");
 const fle_catalog = @import("schema/fle_catalog.zig");
 // fle_annotations import removed (#696) — unused
@@ -209,7 +218,7 @@ pub const writeValue = value_utilities.writeValue;
 // - All execution code uses context.catalog (not direct global access)
 // - This singleton serves as the "root" instance that's injected into contexts
 var global_catalog_instance: ?*catalog_mod.Catalog = null;
-var catalog_instance_mutex = std.Thread.Mutex{};
+var catalog_instance_mutex = std.Io.Mutex.init;
 
 /// Ensure the global catalog instance is initialized
 /// Returns a pointer to the process-level catalog singleton
@@ -228,8 +237,8 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
     }
 
     // Slow path - acquire mutex for initialization
-    catalog_instance_mutex.lock();
-    defer catalog_instance_mutex.unlock();
+    catalog_instance_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer catalog_instance_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Double-check under lock (another thread may have initialized while we waited)
     if (global_catalog_instance) |instance| {
@@ -242,7 +251,7 @@ pub fn ensureCatalogInstance(allocator: std.mem.Allocator) !*catalog_mod.Catalog
         data_dir_owned = try allocator.dupe(u8, override);
         break :blk data_dir_owned.?;
     } else blk: {
-        const env = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
+        const env = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| {
             if (err == error.EnvironmentVariableNotFound) {
                 break :blk "/tmp";
             }
@@ -287,8 +296,8 @@ pub fn initEvaluator() void {
 /// Cleanup the global catalog instance
 /// Should be called at program/test exit to avoid memory leaks
 pub fn cleanupCatalogInstance() void {
-    catalog_instance_mutex.lock();
-    defer catalog_instance_mutex.unlock();
+    catalog_instance_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer catalog_instance_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_catalog_instance) |instance| {
         // Store the allocator before deinit
@@ -632,7 +641,7 @@ const GuardLimits = struct {
 };
 
 fn parseGuardLimit(allocator: std.mem.Allocator, name: []const u8) !?usize {
-    const raw = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
+    const raw = getEnvVarOwned(allocator, name) catch |err| switch (err) {
         error.EnvironmentVariableNotFound => return null,
         else => return err,
     };

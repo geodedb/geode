@@ -39,7 +39,7 @@ pub const TenantQuotaManager = struct {
     allocator: std.mem.Allocator,
     quotas: std.StringHashMapUnmanaged(TenantQuota),
     usage: std.StringHashMapUnmanaged(*TenantUsage),
-    mu: std.Thread.Mutex,
+    mu: std.Io.Mutex,
     default_quota: TenantQuota,
 
     pub fn init(allocator: std.mem.Allocator) TenantQuotaManager {
@@ -72,8 +72,8 @@ pub const TenantQuotaManager = struct {
 
     /// Set (or update) the quota for a tenant.
     pub fn setQuota(self: *TenantQuotaManager, tenant_id: []const u8, quota: TenantQuota) !void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const result = self.quotas.getOrPut(self.allocator, tenant_id) catch return error.OutOfMemory;
         if (!result.found_existing) {
@@ -84,15 +84,15 @@ pub const TenantQuotaManager = struct {
 
     /// Return the effective quota for a tenant (explicit or default).
     pub fn getQuota(self: *TenantQuotaManager, tenant_id: []const u8) TenantQuota {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.quotas.get(tenant_id) orelse self.default_quota;
     }
 
     /// Return the current live usage counters for a tenant (zero if none tracked yet).
     pub fn getUsage(self: *TenantQuotaManager, tenant_id: []const u8) struct { connections: u32, queries: u32 } {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.usage.get(tenant_id)) |u| {
             return .{
                 .connections = u.active_connections.load(.monotonic),
@@ -108,8 +108,8 @@ pub const TenantQuotaManager = struct {
     /// Returns `QuotaError.ConnectionQuotaExceeded` if the tenant is at limit.
     pub fn acquireConnection(self: *TenantQuotaManager, tenant_id: []const u8) QuotaError!void {
         const quota = blk: {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.quotas.get(tenant_id) orelse self.default_quota;
         };
         const u = self.getOrCreateUsage(tenant_id) catch return QuotaError.ConnectionQuotaExceeded;
@@ -134,9 +134,9 @@ pub const TenantQuotaManager = struct {
 
     /// Release a connection slot for a tenant.
     pub fn releaseConnection(self: *TenantQuotaManager, tenant_id: []const u8) void {
-        self.mu.lock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const u = self.usage.get(tenant_id);
-        self.mu.unlock();
+        self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (u) |usage| {
             const prev = usage.active_connections.fetchSub(1, .monotonic);
@@ -152,8 +152,8 @@ pub const TenantQuotaManager = struct {
 
     /// Check (without acquiring) whether a connection can be opened.
     pub fn checkConnectionQuota(self: *TenantQuotaManager, tenant_id: []const u8) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         const quota = self.quotas.get(tenant_id) orelse self.default_quota;
         const u = self.usage.get(tenant_id) orelse return true;
         return u.active_connections.load(.monotonic) < quota.max_connections;
@@ -165,8 +165,8 @@ pub const TenantQuotaManager = struct {
     /// Returns `QuotaError.QueryQuotaExceeded` if the tenant is at limit.
     pub fn acquireQuery(self: *TenantQuotaManager, tenant_id: []const u8) QuotaError!void {
         const quota = blk: {
-            self.mu.lock();
-            defer self.mu.unlock();
+            self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.quotas.get(tenant_id) orelse self.default_quota;
         };
         const u = self.getOrCreateUsage(tenant_id) catch return QuotaError.QueryQuotaExceeded;
@@ -189,9 +189,9 @@ pub const TenantQuotaManager = struct {
 
     /// Release a query execution slot for a tenant.
     pub fn releaseQuery(self: *TenantQuotaManager, tenant_id: []const u8) void {
-        self.mu.lock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const u = self.usage.get(tenant_id);
-        self.mu.unlock();
+        self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (u) |usage| {
             const prev = usage.active_queries.fetchSub(1, .monotonic);
@@ -206,8 +206,8 @@ pub const TenantQuotaManager = struct {
 
     /// Check (without acquiring) whether a query can be started.
     pub fn checkQueryQuota(self: *TenantQuotaManager, tenant_id: []const u8) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         const quota = self.quotas.get(tenant_id) orelse self.default_quota;
         const u = self.usage.get(tenant_id) orelse return true;
         return u.active_queries.load(.monotonic) < quota.max_concurrent_queries;
@@ -217,8 +217,8 @@ pub const TenantQuotaManager = struct {
 
     /// Return (or create) the usage entry for a tenant, allocating under `mu`.
     fn getOrCreateUsage(self: *TenantQuotaManager, tenant_id: []const u8) !*TenantUsage {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const result = self.usage.getOrPut(self.allocator, tenant_id) catch return error.OutOfMemory;
         if (!result.found_existing) {

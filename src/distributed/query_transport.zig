@@ -2,6 +2,41 @@
 // CANARY: REQ=REQ-DIST-QUERY-TRANSPORT-002; FEATURE="Remote Query Execution"; ASPECT=RemoteExecution; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-01
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const quic = @import("../transport/quic.zig");
 const federation = @import("federation.zig");
@@ -85,7 +120,7 @@ pub const QueryTransport = struct {
         node_id: u32,
         query: federation.FederatedQuery,
     ) !federation.QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Get or create connection to node
         var connection = try self.connection_pool.getConnection(node_id);
@@ -93,7 +128,7 @@ pub const QueryTransport = struct {
 
         try connection.ensureSession(self.timeout_ms);
         var result = try connection.executeQuery(self.allocator, query, self.timeout_ms, self.page_size);
-        result.execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        result.execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         return result;
     }
 
@@ -188,7 +223,7 @@ pub const QueryTransport = struct {
 const ConnectionPool = struct {
     allocator: std.mem.Allocator,
     connections: std.AutoHashMap(u32, *Connection),
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     max_connections_per_node: u32 = 10,
 
     pub fn init(allocator: std.mem.Allocator) !ConnectionPool {
@@ -208,8 +243,8 @@ const ConnectionPool = struct {
     }
 
     pub fn getConnection(self: *ConnectionPool, node_id: u32) !*Connection {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.connections.get(node_id)) |conn| {
             if (conn.isHealthy()) {
@@ -254,7 +289,7 @@ const Connection = struct {
         return Connection{
             .allocator = allocator,
             .node_id = node_id,
-            .last_activity = std.time.milliTimestamp(),
+            .last_activity = compat_milliTimestamp(),
         };
     }
 
@@ -262,7 +297,7 @@ const Connection = struct {
         return Connection{
             .allocator = allocator,
             .node_id = node_id,
-            .last_activity = std.time.milliTimestamp(),
+            .last_activity = compat_milliTimestamp(),
             .node_registry = registry,
         };
     }
@@ -286,7 +321,7 @@ const Connection = struct {
 
         // Check if connection is too old (5 minutes)
         const max_age_ms = 5 * 60 * 1000;
-        const age = std.time.milliTimestamp() - self.last_activity;
+        const age = compat_milliTimestamp() - self.last_activity;
 
         return age < max_age_ms;
     }
@@ -412,7 +447,7 @@ const Connection = struct {
         const rows_slice = try rows.toOwnedSlice(allocator);
         const schema_slice = try columns.toOwnedSlice(allocator);
         const order_keys_slice = try order_keys.toOwnedSlice(allocator);
-        self.last_activity = std.time.milliTimestamp();
+        self.last_activity = compat_milliTimestamp();
 
         return federation.QueryResults{
             .rows = rows_slice,
@@ -490,7 +525,7 @@ const Connection = struct {
             .page_size = page_size,
             .params = params,
         }, &consumer);
-        self.last_activity = std.time.milliTimestamp();
+        self.last_activity = compat_milliTimestamp();
     }
 
     // GAP-0144: Secure TLS connections for distributed queries
@@ -550,7 +585,7 @@ const Connection = struct {
         }
 
         self.is_connected = true;
-        self.last_activity = std.time.milliTimestamp();
+        self.last_activity = compat_milliTimestamp();
     }
 
     /// Get node address from registry or use default cluster naming convention
@@ -604,7 +639,7 @@ pub const NodeRegistry = struct {
             .host = host,
             .port = port,
             .status = .active,
-            .last_heartbeat = std.time.milliTimestamp(),
+            .last_heartbeat = compat_milliTimestamp(),
         });
     }
 
@@ -614,7 +649,7 @@ pub const NodeRegistry = struct {
 
     pub fn updateHeartbeat(self: *NodeRegistry, node_id: u32) void {
         if (self.nodes.getPtr(node_id)) |info| {
-            info.last_heartbeat = std.time.milliTimestamp();
+            info.last_heartbeat = compat_milliTimestamp();
             info.status = .active;
         }
     }
@@ -737,11 +772,11 @@ fn readProtoMessage(
 ) !schema.QuicServerMessage {
     var len_buf: [4]u8 = undefined;
     var total_read: usize = 0;
-    const start = std.time.milliTimestamp();
+    const start = compat_milliTimestamp();
     while (total_read < len_buf.len) {
         const n = stream.read(len_buf[total_read..]) catch |err| switch (err) {
             error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                if (compat_milliTimestamp() - start > timeout_ms) return error.Timeout;
                 try client.poll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
@@ -762,7 +797,7 @@ fn readProtoMessage(
     while (total_read < msg_len) {
         const n = stream.read(msg_bytes[total_read..]) catch |err| switch (err) {
             error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                if (compat_milliTimestamp() - start > timeout_ms) return error.Timeout;
                 try client.poll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;

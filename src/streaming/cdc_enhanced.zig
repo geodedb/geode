@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const cdc_sinks = @import("cdc_sinks.zig");
 const MemorySink = cdc_sinks.MemorySink;
 const FileSink = cdc_sinks.FileSink;
@@ -207,7 +251,7 @@ pub const CDCEngine = struct {
     total_events: u64,
     is_running: bool,
     worker_pool: ?*pooled.ThreadPool,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     diag_events: std.ArrayList(DiagEvent), // lifecycle diagnostics (START/STOP)
     current_txn_id: u64 = 0, // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=TxnAttribution; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_API; OWNER=streaming; UPDATED=2025-09-20
     next_sequence: u64 = 1,
@@ -241,7 +285,7 @@ pub const CDCEngine = struct {
 
         pub fn record(self: *MalformedRing, count: u64) void {
             self.counts[self.next] = count;
-            self.times[self.next] = std.time.milliTimestamp();
+            self.times[self.next] = compat_milliTimestamp();
             self.next = (self.next + 1) % CAP;
             if (self.next == 0) self.filled = true;
         }
@@ -264,7 +308,7 @@ pub const CDCEngine = struct {
         fn record(self: *MalformedHashStore, cfg_limit: u32, count: u64, payload: []const u8) void {
             if (self.used >= cfg_limit or cfg_limit == 0) return;
             const idx = self.used;
-            const ts = std.time.milliTimestamp();
+            const ts = compat_milliTimestamp();
             var prefix_buf: [16]u8 = .{0} ** 16;
             const take = @min(payload.len, prefix_buf.len);
             if (take > 0) std.mem.copyForwards(u8, prefix_buf[0..take], payload[0..take]);
@@ -286,7 +330,7 @@ pub const CDCEngine = struct {
             .config = config,
             .event_buffer = std.ArrayList(ChangeEvent).empty,
             .sinks = std.ArrayList(Sink).empty,
-            .last_flush = std.time.milliTimestamp(),
+            .last_flush = compat_milliTimestamp(),
             .total_events = 0,
             .is_running = false,
             .worker_pool = null,
@@ -300,23 +344,23 @@ pub const CDCEngine = struct {
             .guardrail_warn_triggered = false,
             .guardrail_abort_triggered = false,
             .guardrail_epoch = 0,
-            .start_time_ms = std.time.milliTimestamp(),
+            .start_time_ms = compat_milliTimestamp(),
         };
 
         // Environment variable overrides (ignore parse errors; bounds check defensively)
-        if (std.process.getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_WARN_PCT")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_WARN_PCT")) |val| {
             defer allocator.free(val);
             if (std.fmt.parseFloat(f64, val)) |p| {
                 if (p > 0.0 and p < 1.0) engine.config.malformed_warn_pct = p;
             } else |_| {}
         } else |_| {}
-        if (std.process.getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_ABORT_PCT")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_ABORT_PCT")) |val| {
             defer allocator.free(val);
             if (std.fmt.parseFloat(f64, val)) |p| {
                 if (p > 0.0 and p < 1.0 and p > engine.config.malformed_warn_pct) engine.config.malformed_abort_pct = p;
             } else |_| {}
         } else |_| {}
-        if (std.process.getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_SNAPSHOT_INTERVAL")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_CDC_MALFORMED_SNAPSHOT_INTERVAL")) |val| {
             defer allocator.free(val);
             if (std.fmt.parseInt(u64, val, 10)) |v| {
                 if (v > 0 and v <= 10_000) engine.config.malformed_snapshot_interval = v;
@@ -399,8 +443,8 @@ pub const CDCEngine = struct {
     }
 
     pub fn start(self: *Self) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.is_running) {
             return error.AlreadyRunning;
@@ -412,7 +456,7 @@ pub const CDCEngine = struct {
         }
 
         self.is_running = true;
-        self.start_time_ms = std.time.milliTimestamp();
+        self.start_time_ms = compat_milliTimestamp();
         // record lifecycle diagnostic
         self.diag_events.append(self.allocator, .start) catch {}; // Diagnostic - silently ignore OOM
         const pool = try pooled.ThreadPool.init(self.allocator, .{
@@ -428,10 +472,10 @@ pub const CDCEngine = struct {
     }
 
     pub fn stop(self: *Self) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const was_running = self.is_running;
         self.is_running = false;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.worker_pool) |pool| {
             pool.deinit();
@@ -439,9 +483,9 @@ pub const CDCEngine = struct {
         }
 
         if (was_running) { // only record a stop once per active run
-            self.mutex.lock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.diag_events.append(self.allocator, .stop) catch {}; // Diagnostic - silently ignore OOM
-            self.mutex.unlock();
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
     }
 
@@ -453,18 +497,18 @@ pub const CDCEngine = struct {
         before: ?[]const u8,
         after: ?[]const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (!self.config.enabled) {
             return;
         }
 
         var metadata = std.StringHashMap([]const u8).init(self.allocator);
-        try metadata.put("capture_time", try std.fmt.allocPrint(self.allocator, "{}", .{std.time.milliTimestamp()}));
+        try metadata.put("capture_time", try std.fmt.allocPrint(self.allocator, "{}", .{compat_milliTimestamp()}));
 
         const event = ChangeEvent{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .transaction_id = self.current_txn_id,
             .sequence = self.next_sequence,
             .change_type = change_type,
@@ -483,7 +527,7 @@ pub const CDCEngine = struct {
             self.adapt_events_accum += 1;
             if (self.adapt_events_accum >= self.config.adapt_window_events) {
                 // Simple heuristic: events per interval vs desired; adjust up/down by 2x within bounds.
-                const now = std.time.milliTimestamp();
+                const now = compat_milliTimestamp();
                 const elapsed_ms = @max(now - self.last_flush, 1);
                 const eps = (@as(f64, @floatFromInt(self.adapt_events_accum)) * 1000.0) / @as(f64, @floatFromInt(elapsed_ms));
                 if (eps > 50_000 and self.dynamic_batch_size < self.config.max_batch_size) {
@@ -512,14 +556,14 @@ pub const CDCEngine = struct {
             if (@hasDecl(std.time, "sleep")) {
                 std.time.sleep(self.config.flush_interval_ms * 1_000_000);
             } else {
-                const target = std.time.milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
-                while (std.time.milliTimestamp() < target) {}
+                const target = compat_milliTimestamp() + @as(i64, @intCast(self.config.flush_interval_ms));
+                while (compat_milliTimestamp() < target) {}
             }
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             if (now - self.last_flush >= self.config.flush_interval_ms) {
                 self.flush() catch |err| {
                     log.err("CDC flush failed", &.{
@@ -553,11 +597,11 @@ pub const CDCEngine = struct {
         }
         self.event_buffer.clearRetainingCapacity();
 
-        self.last_flush = std.time.milliTimestamp();
+        self.last_flush = compat_milliTimestamp();
     }
 
     fn cleanupOldEvents(self: *Self) !void {
-        const cutoff = std.time.milliTimestamp() - self.config.retention_period_ms;
+        const cutoff = compat_milliTimestamp() - self.config.retention_period_ms;
 
         var i: usize = 0;
         while (i < self.event_buffer.items.len) {
@@ -576,8 +620,8 @@ pub const CDCEngine = struct {
     }
 
     pub fn getStatus(self: *Self) CDCStatus {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return CDCStatus{
             .is_running = self.is_running,
@@ -593,8 +637,8 @@ pub const CDCEngine = struct {
 
     /// Snapshot lifecycle diagnostic events (ordered) for tests.
     pub fn diagnosticsLifecycle(self: *Self, allocator: Allocator) ![]DiagEvent {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const out = try allocator.alloc(DiagEvent, self.diag_events.items.len);
         std.mem.copy(DiagEvent, out, self.diag_events.items);
         return out;
@@ -602,9 +646,9 @@ pub const CDCEngine = struct {
 
     /// Returns whether the CDC engine background processing loop is active.
     pub fn isRunning(self: *Self) bool {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const running = self.is_running;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return running;
     }
 
@@ -622,16 +666,16 @@ pub const CDCEngine = struct {
 
     /// Generate a resume token (opaque u64 sequence) representing next unread sequence after current highest.
     pub fn currentResumeToken(self: *Self) u64 {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const token = self.next_sequence; // next to be assigned => resume from this
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return token;
     }
 
     /// Replay events with sequence >= token into provided slice (allocator-owned). Primarily for tests now.
     pub fn replayFrom(self: *Self, allocator: Allocator, token: u64) ![]ChangeEvent {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         // Count how many qualify
         var count: usize = 0;
         for (self.event_buffer.items) |ev| {
@@ -650,27 +694,27 @@ pub const CDCEngine = struct {
 
     /// Force an immediate flush of currently buffered events to all sinks (primarily memory sink for tests).
     pub fn flushNow(self: *Self) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.flush();
     }
 
     pub fn beginTxn(self: *Self, id: u64) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.current_txn_id = id;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     pub fn endTxn(self: *Self) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.current_txn_id = 0;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Return the number of events stored in the in-process memory sink (0 if not configured).
     pub fn memorySinkEventCount(self: *Self) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         for (self.sinks.items) |*sink| {
             switch (sink.impl) {
                 .memory => |ms| return ms.events.items.len,
@@ -683,14 +727,14 @@ pub const CDCEngine = struct {
     /// Change record ingestion; maps record metadata to a change event.
     pub fn ingestChangeRecord(self: *Self, txn_id: u64, entity_type: EntityType, entity_id: u64, after_json: []const u8) !void {
         // Count attempt (valid or malformed)
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.total_change_attempts += 1;
         const attempt = self.total_change_attempts;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const malformed = after_json.len == 0 or after_json[0] != '{' or after_json[after_json.len - 1] != '}';
         if (malformed) {
-            self.mutex.lock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.malformed_change_records += 1;
             const count = self.malformed_change_records;
             // Snapshot interval logic (always first)
@@ -703,7 +747,7 @@ pub const CDCEngine = struct {
             const ratio = @as(f64, @floatFromInt(self.malformed_change_records)) / @as(f64, @floatFromInt(self.total_change_attempts));
             if (!self.guardrail_warn_triggered and ratio >= self.config.malformed_warn_pct) {
                 self.guardrail_warn_triggered = true;
-                self.first_warn_ts_ms = std.time.milliTimestamp();
+                self.first_warn_ts_ms = compat_milliTimestamp();
                 log.warn("CDC malformed change record warn threshold triggered", &.{
                     Attr.float("ratio", ratio),
                     Attr.int("ts_ms", self.first_warn_ts_ms),
@@ -711,13 +755,13 @@ pub const CDCEngine = struct {
             }
             if (!self.guardrail_abort_triggered and ratio >= self.config.malformed_abort_pct) {
                 self.guardrail_abort_triggered = true;
-                self.first_abort_ts_ms = std.time.milliTimestamp();
+                self.first_abort_ts_ms = compat_milliTimestamp();
                 log.err("CDC malformed change record abort threshold triggered", &.{
                     Attr.float("ratio", ratio),
                     Attr.int("ts_ms", self.first_abort_ts_ms),
                 });
             }
-            self.mutex.unlock();
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             if (count == 1 or (count % self.config.malformed_snapshot_interval == 0)) {
                 log.warn("CDC malformed change record", &.{
                     Attr.int("count", @intCast(count)),
@@ -734,8 +778,8 @@ pub const CDCEngine = struct {
 
     /// For tests: capture a snapshot of memory sink sequences (requires memory sink configured).
     pub fn memorySinkSequences(self: *Self, allocator: Allocator) ![]u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         for (self.sinks.items) |*sink| {
             switch (sink.impl) {
                 .memory => |ms| {
@@ -753,20 +797,20 @@ pub const CDCEngine = struct {
     /// Reset guardrail state (malformed change ratio tracking) clearing latched flags & timestamps while preserving counters.
     /// CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=GuardrailReset; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_042_CDC_GuardrailReset; OWNER=streaming; UPDATED=2025-09-20
     pub fn resetGuardrailState(self: *Self) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.guardrail_warn_triggered = false;
         self.guardrail_abort_triggered = false;
         self.first_warn_ts_ms = 0;
         self.first_abort_ts_ms = 0;
         self.guardrail_epoch += 1;
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Serialize malformed ring buffer snapshots to JSON array string.
     /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-054; FEATURE="JSON Library Migration"; ASPECT=CDCSnapshots; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
     pub fn malformedLogSnapshots(self: *Self, allocator: Allocator) ![]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var snapshots = try self.collectMalformedSnapshots(allocator);
         defer {
@@ -833,10 +877,10 @@ pub const CDCEngine = struct {
     /// Export diagnostics payload for protobuf wire responses.
     /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-055; FEATURE="JSON Library Migration"; ASPECT=CDCDiagnostics; STATUS=TESTED; OWNER=streaming; UPDATED=2026-01-24
     pub fn exportDiagnostics(self: *Self, allocator: Allocator) !schema.CdcDiagnosticsResponse {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const now_ms = std.time.milliTimestamp();
+        const now_ms = compat_milliTimestamp();
         const uptime_ms: i64 = if (self.start_time_ms > 0 and now_ms >= self.start_time_ms) (now_ms - self.start_time_ms) else 0;
         const pending_events: u64 = @intCast(self.event_buffer.items.len);
         const backpressure_active = self.config.pending_backpressure_watermark > 0 and pending_events >= self.config.pending_backpressure_watermark;
@@ -1048,7 +1092,7 @@ pub const StreamingEngine = struct {
         window: WindowConfig,
         aggregations: []const AggregationSpec,
     ) !void {
-        const id = try std.fmt.allocPrint(self.allocator, "query_{}", .{std.time.milliTimestamp()});
+        const id = try std.fmt.allocPrint(self.allocator, "query_{}", .{compat_milliTimestamp()});
 
         const streaming_query = StreamingQuery{
             .id = id,
@@ -1119,8 +1163,8 @@ pub const StreamingEngine = struct {
             if (@hasDecl(std.time, "sleep")) {
                 std.time.sleep(100_000_000); // 100ms
             } else {
-                const target = std.time.milliTimestamp() + 100;
-                while (std.time.milliTimestamp() < target) {}
+                const target = compat_milliTimestamp() + 100;
+                while (compat_milliTimestamp() < target) {}
             }
         }
     }

@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const repl_dispatch = @import("repl_dispatch.zig");
 const pooled = @import("transport/thread_pool");
 const zig_quic_bridge = @import("../zig_quic_bridge.zig");
@@ -36,7 +71,7 @@ const QuicTransportConnection = struct {
     owns_client: bool,
     // Single mutex guarding ALL QUIC client operations (read, write, poll).
     // Prevents data races between the keepalive thread and query I/O.
-    client_mu: std.Thread.Mutex = .{},
+    client_mu: std.Io.Mutex = std.Io.Mutex.init,
     // Background keepalive thread state
     keepalive_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     keepalive_pool: ?*pooled.ThreadPool = null,
@@ -71,7 +106,7 @@ const QuicTransportConnection = struct {
             // This ensures keepalive NEVER races with read/write/poll.
             if (self.client_mu.tryLock()) {
                 self.client.pollTransport(0);
-                self.client_mu.unlock();
+                self.client_mu.unlock(std.Io.Threaded.global_single_threaded.io());
             }
             // GAP-0276: Reduced from 500ms to 100ms for faster keepalive response
             std.Thread.sleep(100 * std.time.ns_per_ms);
@@ -89,8 +124,8 @@ fn quicWriteAll(self: *repl_dispatch.TransportConnection, data: []const u8) !voi
     const ctx = self.context orelse return error.NotConnected;
     const impl: *QuicTransportConnection = @ptrCast(@alignCast(ctx));
     // Hold client_mu for entire write to prevent keepalive interference
-    impl.client_mu.lock();
-    defer impl.client_mu.unlock();
+    impl.client_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer impl.client_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     try impl.client.sendRawFramed(data);
 }
 
@@ -102,15 +137,15 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     // Rolling idle timeout: resets on every successful byte read.
     // This prevents aborting mid-message while still timing out when
     // no data arrives at all.
-    var last_progress = std.time.milliTimestamp();
+    var last_progress = compat_milliTimestamp();
     const idle_timeout_ms: i64 = 30000; // 30 second idle timeout for REPL.
 
     // GAP-0276: Hold the lock for the entire receive loop to avoid
     // lock/unlock syscall overhead on every 50ms timeout iteration.
     // The keepalive thread uses tryLock(), so it safely skips cycles
     // while we hold the lock here during an active read.
-    impl.client_mu.lock();
-    defer impl.client_mu.unlock();
+    impl.client_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer impl.client_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     while (true) {
         if (repl_dispatch.checkForInterrupt()) {
@@ -121,7 +156,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
 
         const body = result catch |err| {
             if (err == error.ReceiveTimeout) {
-                if (std.time.milliTimestamp() - last_progress >= idle_timeout_ms) {
+                if (compat_milliTimestamp() - last_progress >= idle_timeout_ms) {
                     return error.WouldBlock;
                 }
                 continue;
@@ -134,7 +169,7 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
         errdefer allocator.free(body);
 
         if (max_size > 0 and body.len > max_size) return error.MessageTooLarge;
-        last_progress = std.time.milliTimestamp();
+        last_progress = compat_milliTimestamp();
         return body;
     }
 }

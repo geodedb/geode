@@ -24,7 +24,7 @@ const ReqSet = struct {
 };
 
 fn scanReqIds(allocator: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
-    const file = try std.Io.Dir.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
 
     // Read entire file into memory for simplicity

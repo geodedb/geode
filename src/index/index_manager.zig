@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const btree = @import("btree.zig");
 const fulltext = @import("fulltext.zig");
@@ -42,7 +77,7 @@ pub const IndexManager = struct {
     statistics: IndexStatistics,
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
-    rebuild_mutex: std.Io.Mutex = .{},
+    rebuild_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub const IndexType = enum {
         btree,
@@ -365,7 +400,7 @@ pub const IndexManager = struct {
                 .size_bytes = 0,
                 .height = 0,
                 .fill_factor = 0,
-                .last_updated = std.time.timestamp(),
+                .last_updated = compat_timestamp(),
                 .read_count = 0,
                 .write_count = 0,
                 .cache_hits = 0,
@@ -402,7 +437,7 @@ pub const IndexManager = struct {
                 .size_bytes = 0,
                 .height = 0,
                 .fill_factor = 0,
-                .last_updated = std.time.timestamp(),
+                .last_updated = compat_timestamp(),
                 .read_count = 0,
                 .write_count = 0,
                 .cache_hits = 0,
@@ -444,7 +479,7 @@ pub const IndexManager = struct {
                 .size_bytes = 0,
                 .height = 0,
                 .fill_factor = 0,
-                .last_updated = std.time.timestamp(),
+                .last_updated = compat_timestamp(),
                 .read_count = 0,
                 .write_count = 0,
                 .cache_hits = 0,
@@ -636,7 +671,7 @@ pub const IndexManager = struct {
 
     // Analyze and update statistics
     pub fn analyzeIndexes(self: *IndexManager) !void {
-        self.statistics.last_analyze = std.time.timestamp();
+        self.statistics.last_analyze = compat_timestamp();
 
         // Update statistics for each index
         var prop_it = self.property_indexes.iterator();
@@ -800,7 +835,7 @@ pub const IndexManager = struct {
                 .size_bytes = 0,
                 .height = 0,
                 .fill_factor = 0,
-                .last_updated = std.time.timestamp(),
+                .last_updated = compat_timestamp(),
                 .read_count = 0,
                 .write_count = 0,
                 .cache_hits = 0,
@@ -1263,8 +1298,8 @@ pub const IndexManager = struct {
         store: *graph_store.GraphStore,
         index_name: []const u8,
     ) !void {
-        self.rebuild_mutex.lock();
-        defer self.rebuild_mutex.unlock();
+        self.rebuild_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rebuild_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const meta = self.advanced_property_indexes.get(index_name) orelse return;
         const index_name_copy = try self.allocator.dupe(u8, index_name);
         defer self.allocator.free(index_name_copy);
@@ -1480,8 +1515,8 @@ pub const IndexManager = struct {
 };
 
 pub fn ensureGlobalIndexManager(allocator: std.mem.Allocator) !*IndexManager {
-    global_index_manager_mutex.lock();
-    defer global_index_manager_mutex.unlock();
+    global_index_manager_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_index_manager_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_index_manager) |manager| return manager;
 
@@ -1496,8 +1531,8 @@ pub fn getGlobalIndexManager() ?*IndexManager {
 }
 
 pub fn cleanupGlobalIndexManager() void {
-    global_index_manager_mutex.lock();
-    defer global_index_manager_mutex.unlock();
+    global_index_manager_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_index_manager_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_index_manager) |manager| {
         const allocator = manager.allocator;

@@ -3,6 +3,50 @@
 /// Handles routing for `tde.*`, `cdc.*`, `geode.fle.*`, `geode.storage.*`, and `geode.backup.*` procedures.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const value_types = @import("../value_types.zig");
@@ -25,11 +69,11 @@ const fle_annotations = @import("../schema/annotations.zig");
 const fle_integration = @import("../fle_integration.zig");
 
 // TDE globals
-pub var global_tde_mutex: std.Thread.Mutex = .{};
+pub var global_tde_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // CDC globals
 pub var global_cdc_engine: ?*cdc_mod.CDCEngine = null;
-pub var global_cdc_mutex: std.Thread.Mutex = .{};
+pub var global_cdc_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Public accessor for the global CDC engine (used by gRPC transport).
 pub fn getGlobalCdcEngine() ?*cdc_mod.CDCEngine {
@@ -37,7 +81,7 @@ pub fn getGlobalCdcEngine() ?*cdc_mod.CDCEngine {
 }
 
 /// Public accessor for the CDC mutex.
-pub fn getCdcMutex() *std.Thread.Mutex {
+pub fn getCdcMutex() *std.Io.Mutex {
     return &global_cdc_mutex;
 }
 
@@ -218,7 +262,7 @@ fn handleTdeTestEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
     var bytes_encrypted: i64 = 0;
     var encryption_time_ms: i64 = 0;
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = compat_milliTimestamp();
 
     // Perform actual encryption
     if (tde_mod.encrypt(allocator, test_plaintext, test_aad)) |ciphertext| {
@@ -239,7 +283,7 @@ fn handleTdeTestEncryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
         success = (err == error.KeyNotLoaded or err == error.FeatureDisabled);
     }
 
-    encryption_time_ms = std.time.milliTimestamp() - start_time;
+    encryption_time_ms = compat_milliTimestamp() - start_time;
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "success");
@@ -276,7 +320,7 @@ fn handleTdeTestDecryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
     if (tde_mod.encrypt(allocator, test_plaintext, test_aad)) |ciphertext| {
         defer allocator.free(ciphertext.data);
 
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Now decrypt the encrypted data
         if (tde_mod.decrypt(allocator, ciphertext, test_aad)) |decrypted| {
@@ -287,7 +331,7 @@ fn handleTdeTestDecryption(allocator: std.mem.Allocator, _: ast.CallProcedure) a
             success = false;
         }
 
-        decryption_time_ms = std.time.milliTimestamp() - start_time;
+        decryption_time_ms = compat_milliTimestamp() - start_time;
     } else |err| {
         // If encryption failed due to missing key, still report as test success
         // but with 0 bytes decrypted
@@ -384,12 +428,12 @@ fn handleTdeTestKeyRotation(allocator: std.mem.Allocator, _: ast.CallProcedure) 
         defer allocator.free(cipher.data);
 
         // Simulate key rotation by updating the global key hierarchy
-        global_tde_mutex.lock();
-        defer global_tde_mutex.unlock();
+        global_tde_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_tde_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Generate new master key
         var new_master: [32]u8 = undefined;
-        std.crypto.random.bytes(&new_master);
+        compat_fillRandom(&new_master);
 
         // Create new key hierarchy
         // const new_hierarchy = tde_hierarchy.KeyHierarchy.init(new_master); // Commented to avoid module conflict
@@ -621,7 +665,10 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
     // Generate auth token if needed
     const auth_token = if (enable_auth) blk: {
         var buf: [128]u8 = undefined;
-        const token_str = try std.fmt.bufPrint(&buf, "mock-token-{x}", .{std.crypto.random.int(u32)});
+        var rand_buf: [4]u8 = undefined;
+        compat_fillRandom(&rand_buf);
+        const rand_val = std.mem.readInt(u32, &rand_buf, .little);
+        const token_str = try std.fmt.bufPrint(&buf, "mock-token-{x}", .{rand_val});
         break :blk try allocator.dupe(u8, token_str);
     } else null;
     defer if (auth_token) |token| allocator.free(token);
@@ -726,7 +773,7 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
     // Store mock KMS configuration for later use
     const config_path = "mock_kms_config.json";
-    const config_file = try std.Io.Dir.cwd().createFile(config_path, .{});
+    const config_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{});
     defer config_file.close();
 
     var json_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
@@ -2015,8 +2062,8 @@ pub fn executeCdc(
 
 fn handleCdcEnable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-001; FEATURE="CDCProcedures"; ASPECT=Enable; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var status_str: []const u8 = "enabled";
 
@@ -2044,8 +2091,8 @@ fn handleCdcEnable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!
 
 fn handleCdcDisable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-002; FEATURE="CDCProcedures"; ASPECT=Disable; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const status_str: []const u8 = "disabled";
     var final_count: i64 = 0;
@@ -2070,8 +2117,8 @@ fn handleCdcDisable(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror
 
 fn handleCdcStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-003; FEATURE="CDCProcedures"; ASPECT=Status; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var enabled = false;
     var streaming = false;
@@ -2103,8 +2150,8 @@ fn handleCdcStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!
 
 fn handleCdcExportDiagnostics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-004; FEATURE="CDCProcedures"; ASPECT=ExportDiagnostics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var event_count: i64 = 0;
     var malformed_count: i64 = 0;
@@ -2131,8 +2178,8 @@ fn handleCdcExportDiagnostics(allocator: std.mem.Allocator, _: ast.CallProcedure
 
 fn handleCdcGetEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-005; FEATURE="CDCProcedures"; ASPECT=GetEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Return empty result if no engine
     if (global_cdc_engine == null) {
@@ -2240,8 +2287,8 @@ fn handleCdcSetGuardrail(allocator: std.mem.Allocator, call_stmt: ast.CallProced
 
 fn handleCdcGetGuardrailStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-009; FEATURE="CDCProcedures"; ASPECT=GetGuardrailStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var current_epoch: i64 = 0;
     var pending_events: i64 = 0;
@@ -2268,8 +2315,8 @@ fn handleCdcGetGuardrailStatus(allocator: std.mem.Allocator, _: ast.CallProcedur
 
 fn handleCdcResetGuardrails(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-010; FEATURE="CDCProcedures"; ASPECT=ResetGuardrails; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var new_epoch: i64 = 0;
 
@@ -2291,8 +2338,8 @@ fn handleCdcResetGuardrails(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 
 fn handleCdcGetWatermark(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-011; FEATURE="CDCProcedures"; ASPECT=GetWatermark; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var current_watermark: i64 = 0;
     var pending_bytes: i64 = 0;
@@ -2317,8 +2364,8 @@ fn handleCdcGetWatermark(allocator: std.mem.Allocator, _: ast.CallProcedure) any
 
 fn handleCdcGetPendingEvents(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-012; FEATURE="CDCProcedures"; ASPECT=GetPendingEvents; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var count: i64 = 0;
     var memory_usage: i64 = 0;
@@ -2354,8 +2401,8 @@ fn handleCdcConfigureAdaptiveFlush(allocator: std.mem.Allocator, _: ast.CallProc
 
 fn handleCdcGetFlushMetrics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-014; FEATURE="CDCProcedures"; ASPECT=GetFlushMetrics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var current_batch_size: i64 = 100;
     var adaptive_adjustments: i64 = 0;
@@ -2382,8 +2429,8 @@ fn handleCdcGetFlushMetrics(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 
 fn handleCdcGetMalformedRecords(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-015; FEATURE="CDCProcedures"; ASPECT=GetMalformedRecords; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var record_count: i64 = 0;
 
@@ -2436,8 +2483,8 @@ fn handleCdcGetOrderedEvents(allocator: std.mem.Allocator, _: ast.CallProcedure)
 
 fn handleCdcCheckDuplicates(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-018; FEATURE="CDCProcedures"; ASPECT=CheckDuplicates; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var unique_events: i64 = 0;
 
@@ -2460,8 +2507,8 @@ fn handleCdcCheckDuplicates(allocator: std.mem.Allocator, _: ast.CallProcedure) 
 
 fn handleCdcGetChangeStatus(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-019; FEATURE="CDCProcedures"; ASPECT=GetChangeStatus; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-02-04
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var change_position: i64 = 0;
     var pending_events: i64 = 0;
@@ -2527,8 +2574,8 @@ fn handleCdcCleanupExpiredEvents(allocator: std.mem.Allocator, _: ast.CallProced
 
 fn handleCdcGetTelemetryMetrics(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-023; FEATURE="CDCProcedures"; ASPECT=GetTelemetryMetrics; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const events_per_second: i64 = 0;
     var memory_usage_bytes: i64 = 0;
@@ -2571,8 +2618,8 @@ fn handleCdcGetPerformanceAlerts(allocator: std.mem.Allocator, _: ast.CallProced
 
 fn handleCdcStop(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-025; FEATURE="CDCProcedures"; ASPECT=Stop; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var final_event_count: i64 = 0;
 
@@ -2594,8 +2641,8 @@ fn handleCdcStop(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!Ex
 
 fn handleCdcStart(allocator: std.mem.Allocator, _: ast.CallProcedure) anyerror!ExecutionResult {
     // CANARY: REQ=REQ-CDC-PROC-026; FEATURE="CDCProcedures"; ASPECT=Start; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_cdc_comprehensive.yml; OWNER=cdc; UPDATED=2026-01-15
-    global_cdc_mutex.lock();
-    defer global_cdc_mutex.unlock();
+    global_cdc_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_cdc_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var recovered_event_count: i64 = 0;
 

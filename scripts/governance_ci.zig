@@ -182,7 +182,7 @@ fn gapConsistency(_: *Summary) !bool {
     const impl_cnt = counts.impl_cnt;
     const stub_cnt = counts.stub_cnt;
     const total = counts.total;
-    const gap_data = std.fs.cwd().readFileAlloc(a, "docs/GAP_ANALYSIS.md", 4 * 1024 * 1024) catch return false;
+    const gap_data = std.Io.Dir.cwd().readFileAlloc(a, "docs/GAP_ANALYSIS.md", 4 * 1024 * 1024) catch return false;
     defer a.free(gap_data);
     const total_s = std.fmt.allocPrint(a, "{d}", .{total}) catch return false;
     defer a.free(total_s);
@@ -224,7 +224,7 @@ fn gapConsistency(_: *Summary) !bool {
 const Counts = struct { tested: usize, benched: usize, impl_cnt: usize, stub_cnt: usize, total: usize };
 
 fn countStatusesFromCsv(a: std.mem.Allocator, path: []const u8) !Counts {
-    const data = try std.fs.cwd().readFileAlloc(a, path, 16 * 1024 * 1024);
+    const data = try std.Io.Dir.cwd().readFileAlloc(a, path, 16 * 1024 * 1024);
     defer a.free(data);
     var tested: usize = 0;
     var benched: usize = 0;
@@ -264,7 +264,7 @@ fn countStatusesFromCsv(a: std.mem.Allocator, path: []const u8) !Counts {
 fn checkReadmeExtended(total: usize, tested: usize, benched: usize, impl_cnt: usize, stub_cnt: usize) !bool {
     // Accept README lines listing counts; require total/tested/benched; if IMPL/STUB mention present must match values.
     const path = "README.md";
-    const data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
     defer std.heap.page_allocator.free(data);
     var lines = std.mem.splitScalar(u8, data, '\n');
     const total_str = try std.fmt.allocPrint(std.heap.page_allocator, "{d}", .{total});
@@ -294,7 +294,7 @@ fn checkReadmeExtended(total: usize, tested: usize, benched: usize, impl_cnt: us
 
 fn checkImplementationRealityExtended(total: usize, tested: usize, benched: usize, impl_cnt: usize, stub_cnt: usize) !bool {
     const path = "docs/IMPLEMENTATION_REALITY.md";
-    const data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
     defer std.heap.page_allocator.free(data);
     // Simplified tolerant parsing: just need occurrences of "<total> aspects", "<tested> TESTED", "<benched> BENCHED".
     const total_need = try std.fmt.allocPrint(std.heap.page_allocator, "{d} aspects", .{total});
@@ -324,7 +324,7 @@ fn sliceStructureCheck(_: *Summary) !bool {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
-    const data = std.fs.cwd().readFileAlloc(a, "docs/NEXT.md", 2 * 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(a, "docs/NEXT.md", 2 * 1024 * 1024) catch return false;
     defer a.free(data);
     var ok = true;
     var iter = std.mem.splitSequence(u8, data, "\n### Slice S-");
@@ -371,7 +371,7 @@ fn sliceReqCrosscheck(_: *Summary) !bool {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
-    const data = std.fs.cwd().readFileAlloc(a, "docs/NEXT.md", 2 * 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(a, "docs/NEXT.md", 2 * 1024 * 1024) catch return false;
     defer a.free(data);
     var req_set = std.StringHashMap(void).init(a);
     defer req_set.deinit();
@@ -407,7 +407,7 @@ fn sliceReqCrosscheck(_: *Summary) !bool {
     }
     // Load canonical status.json (source of truth for CANARY evidence aggregation)
     var status_ok = true;
-    const status_data = std.fs.cwd().readFileAlloc(a, "status.json", 4 * 1024 * 1024) catch |e| blk: {
+    const status_data = std.Io.Dir.cwd().readFileAlloc(a, "status.json", 4 * 1024 * 1024) catch |e| blk: {
         std.debug.print("SLICE_REQ_CROSSCHECK_WARN missing status.json ({s}) fallback to grep\n", .{@errorName(e)});
         break :blk null;
     };
@@ -482,7 +482,7 @@ fn parseInt(s: []const u8) ?usize {
 
 fn checkReadme(total: usize, tested: usize, benched: usize) !bool {
     const path = "README.md";
-    const data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
     defer std.heap.page_allocator.free(data);
     var saw_total = false;
     var saw_tested = false;
@@ -505,7 +505,7 @@ fn checkReadme(total: usize, tested: usize, benched: usize) !bool {
 
 fn checkImplementationReality(total: usize, tested: usize, benched: usize) !bool {
     const path = "docs/IMPLEMENTATION_REALITY.md";
-    const data = std.fs.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
+    const data = std.Io.Dir.cwd().readFileAlloc(std.heap.page_allocator, path, 1024 * 1024) catch return false;
     defer std.heap.page_allocator.free(data);
     var lines = std.mem.splitScalar(u8, data, '\n');
     var saw_total = false;
@@ -534,7 +534,7 @@ fn checkImplementationReality(total: usize, tested: usize, benched: usize) !bool
 
 fn fileExists(path: []const u8) bool {
     // statFile returns error.FileNotFound if missing; treat all other errors as missing for safety.
-    _ = std.fs.cwd().statFile(path) catch return false;
+    _ = std.Io.Dir.cwd().statFile(path) catch return false;
     return true;
 }
 
@@ -764,9 +764,9 @@ fn evidenceDeltaCheck(_: *Summary) !bool {
         } else |_| {}
         return true;
     }
-    const prev = std.fs.cwd().readFileAlloc(a, "status_prev.json", 8 * 1024 * 1024) catch return false;
+    const prev = std.Io.Dir.cwd().readFileAlloc(a, "status_prev.json", 8 * 1024 * 1024) catch return false;
     defer a.free(prev);
-    const curr = std.fs.cwd().readFileAlloc(a, "status.json", 8 * 1024 * 1024) catch return false;
+    const curr = std.Io.Dir.cwd().readFileAlloc(a, "status.json", 8 * 1024 * 1024) catch return false;
     defer a.free(curr);
     // Build sets of REQ ids from explicit id fields only to avoid false positives from tests referencing removed ids.
     var prev_set = std.StringHashMap(void).init(a);
@@ -824,9 +824,9 @@ fn realityFreshnessCheck(_: *Summary) !bool {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
-    const status = std.fs.cwd().readFileAlloc(a, "status.json", 4 * 1024 * 1024) catch return false;
+    const status = std.Io.Dir.cwd().readFileAlloc(a, "status.json", 4 * 1024 * 1024) catch return false;
     defer a.free(status);
-    const reality = std.fs.cwd().readFileAlloc(a, "docs/IMPLEMENTATION_REALITY.md", 2 * 1024 * 1024) catch return false;
+    const reality = std.Io.Dir.cwd().readFileAlloc(a, "docs/IMPLEMENTATION_REALITY.md", 2 * 1024 * 1024) catch return false;
     defer a.free(reality);
     const key = "\"generated_at\": \""; // "generated_at": "2025-09-22T12:34:56Z"
     const pos_opt = std.mem.indexOf(u8, status, key) orelse return false;
@@ -882,7 +882,7 @@ fn badgeGenerationStep(summary: *Summary) !bool {
     // status.csv generated by prior canary step.
     if (!fileExists("status.csv")) return false;
     // Create badges directory if missing
-    _ = std.fs.cwd().makePath("badges") catch |e| switch (e) {
+    _ = std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "badges") catch |e| switch (e) {
         error.PathAlreadyExists => {},
         else => return false,
     };

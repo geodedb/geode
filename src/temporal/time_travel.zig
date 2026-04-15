@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 pub const TemporalVersion = struct {
@@ -112,7 +147,7 @@ pub const TemporalStorage = struct {
         properties: std.StringHashMap([]const u8),
     ) !void {
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = compat_milliTimestamp();
 
         const node = try self.allocator.create(TemporalNode);
         node.* = TemporalNode{
@@ -151,7 +186,7 @@ pub const TemporalStorage = struct {
         const node = self.nodes.get(id) orelse return error.NodeNotFound;
 
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = compat_milliTimestamp();
         const version = TemporalVersion{
             .transaction_id = txn_id,
             .timestamp = timestamp,
@@ -183,7 +218,7 @@ pub const TemporalStorage = struct {
         const node = self.nodes.get(id) orelse return error.NodeNotFound;
 
         const txn_id = self.current_transaction_id.fetchAdd(1, .monotonic);
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = compat_milliTimestamp();
 
         node.deleted_at = TemporalVersion{
             .transaction_id = txn_id,
@@ -325,7 +360,7 @@ pub const TemporalStorage = struct {
 
     pub fn vacuum(self: *Self) !void {
         // Remove old versions based on retention policy
-        const cutoff_time = std.time.milliTimestamp() - self.retention_policy.retention_period_ms;
+        const cutoff_time = compat_milliTimestamp() - self.retention_policy.retention_period_ms;
 
         var node_it = self.nodes.iterator();
         while (node_it.next()) |entry| {
@@ -501,9 +536,9 @@ test "time travel query" {
     defer props.deinit();
     try props.put("name", "Bob");
 
-    const before = std.time.milliTimestamp();
+    const before = compat_milliTimestamp();
     try storage.createNode(2, &[_][]const u8{"Person"}, props);
-    const after = std.time.milliTimestamp();
+    const after = compat_milliTimestamp();
 
     // Query as of before creation
     const node_before = storage.getNodeAsOf(2, .{ .timestamp = before - 1 });

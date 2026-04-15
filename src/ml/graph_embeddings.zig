@@ -3,6 +3,41 @@
 // CANARY: REQ=REQ-ML-EMBEDDINGS-003; FEATURE="Graph Neural Networks"; ASPECT=GraphSAGE; STATUS=TESTED; TEST=TestCANARY_ML_EMBEDDINGS_003_GraphSAGE; OWNER=ml; UPDATED=2025-10-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
@@ -288,7 +323,7 @@ pub const GraphEmbeddingsManager = struct {
         }
 
         const config = custom_config orelse self.config;
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Initialize training context
         self.training_context = TrainingContext{
@@ -310,10 +345,10 @@ pub const GraphEmbeddingsManager = struct {
         try implementation.train_fn(self, graph, config);
 
         // Update statistics
-        const training_time = std.time.milliTimestamp() - start_time;
+        const training_time = compat_milliTimestamp() - start_time;
         self.statistics.algorithms_trained += 1;
         self.statistics.total_training_time_ms += @intCast(training_time);
-        self.statistics.last_training_timestamp = std.time.milliTimestamp();
+        self.statistics.last_training_timestamp = compat_milliTimestamp();
         self.statistics.total_embeddings = self.embeddings.count();
         self.statistics.updateMemoryUsage(&self.embeddings);
 
@@ -378,7 +413,7 @@ pub const GraphEmbeddingsManager = struct {
 
         // Copy new embedding values
         std.mem.copyForwards(f32, embedding_entry.embedding, new_embedding);
-        embedding_entry.updated_at = std.time.milliTimestamp();
+        embedding_entry.updated_at = compat_milliTimestamp();
 
         log.debug("Updated embedding for node {}", .{node_id});
     }
@@ -427,7 +462,7 @@ fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
         const embedding = try manager.allocator.alloc(f32, config.dimensions);
 
         // Initialize with small random values
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
         for (embedding) |*value| {
             value.* = (prng.random().float(f32) - 0.5) * 0.1;
         }
@@ -436,8 +471,8 @@ fn trainNode2Vec(manager: *GraphEmbeddingsManager, graph: *const geode.graph_com
             .node_id = node_id,
             .embedding = embedding,
             .algorithm = .node2vec,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
         });
     }
 
@@ -478,7 +513,7 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
         manager.aggregation_weights = try manager.allocator.alloc([]f32, manager.num_layers);
         for (manager.aggregation_weights.?) |*layer_weights| {
             layer_weights.* = try manager.allocator.alloc(f32, config.dimensions * 2);
-            var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+            var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
             for (layer_weights.*) |*w| {
                 w.* = prng.random().floatNorm(f32) * 0.1;
             }
@@ -494,7 +529,7 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
         const embedding = try manager.allocator.alloc(f32, config.dimensions);
 
         // Initialize with Xavier initialization
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp() + node_id));
+        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp() + node_id));
         const fan_in = @as(f32, @floatFromInt(config.dimensions));
         const xavier_std = @sqrt(2.0 / fan_in);
 
@@ -506,8 +541,8 @@ fn trainGraphSAGE(manager: *GraphEmbeddingsManager, graph: *const geode.graph_co
             .node_id = node_id,
             .embedding = embedding,
             .algorithm = .graphsage,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
         });
     }
 
@@ -562,7 +597,7 @@ fn generateRandomWalk(walk: *RandomWalk, graph: *const geode.graph_common.GraphS
         }
 
         // Sample next node based on probabilities
-        var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+        var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
         const random_value = prng.random().float(f64) * total_prob;
 
         var cumulative: f64 = 0.0;
@@ -610,8 +645,8 @@ fn updateEmbeddingsPair(manager: *GraphEmbeddingsManager, node1: u64, node2: u64
         e1.* += grad;
     }
 
-    emb1.updated_at = std.time.milliTimestamp();
-    emb2.updated_at = std.time.milliTimestamp();
+    emb1.updated_at = compat_milliTimestamp();
+    emb2.updated_at = compat_milliTimestamp();
 }
 
 /// Aggregate neighbor features for GraphSAGE
@@ -656,7 +691,7 @@ fn aggregateNeighborFeatures(manager: *GraphEmbeddingsManager, graph: *const geo
             node_val.* = 0.7 * node_val.* + 0.3 * agg_val; // Weighted combination
         }
 
-        node_embedding.updated_at = std.time.milliTimestamp();
+        node_embedding.updated_at = compat_milliTimestamp();
     }
 }
 
@@ -762,7 +797,7 @@ fn predictGraphSAGE(manager: *GraphEmbeddingsManager, node_id: u64) ![]f32 {
 /// Initialize a random embedding for nodes without neighbors
 fn initializeRandomEmbedding(manager: *GraphEmbeddingsManager) ![]f32 {
     const embedding = try manager.allocator.alloc(f32, manager.config.dimensions);
-    var prng = std.rand.DefaultPrng.init(@intCast(std.time.milliTimestamp()));
+    var prng = std.rand.DefaultPrng.init(@intCast(compat_milliTimestamp()));
     const fan_in = @as(f32, @floatFromInt(manager.config.dimensions));
     const xavier_std = @sqrt(2.0 / fan_in);
 

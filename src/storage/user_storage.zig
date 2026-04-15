@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const graph_store = @import("geode").graph_store;
 const auth_hmac = @import("auth_lib").hmac;
@@ -273,7 +308,7 @@ pub const UserStorageBackend = struct {
         record.failed_login_attempts = @intCast(@max(0, getIntProp(store, node_id, "failed_login_attempts", 0)));
         record.lockout_until = getIntProp(store, node_id, "lockout_until", 0);
         record.last_login = getIntProp(store, node_id, "last_login", 0);
-        record.created_at = getIntProp(store, node_id, "created_at", std.time.milliTimestamp());
+        record.created_at = getIntProp(store, node_id, "created_at", compat_milliTimestamp());
         record.updated_at = getIntProp(store, node_id, "updated_at", record.created_at);
         record.hash_algorithm_len = copyIntoField(&record.hash_algorithm, getStringProp(store, node_id, "hash_algorithm", ""));
         record.is_default_user = getBoolProp(store, node_id, "is_default_user", false);
@@ -341,7 +376,7 @@ pub const UserStorageBackend = struct {
             record.parent_role = @intCast(@max(0, getIntProp(self.store, node_id, "parent_role", 0)));
             record.priority = @intCast(@max(0, getIntProp(self.store, node_id, "priority", 0)));
             record.is_system = getBoolProp(self.store, node_id, "is_system", false);
-            record.created_at = getIntProp(self.store, node_id, "created_at", std.time.milliTimestamp());
+            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
 
             try self.role_cache.put(role_id, record);
@@ -366,7 +401,7 @@ pub const UserStorageBackend = struct {
             record.resource_len = copyIntoField(&record.resource, getStringProp(self.store, node_id, "resource", ""));
             record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
             record.conditions_len = copyIntoField(&record.conditions, getStringProp(self.store, node_id, "conditions", ""));
-            record.created_at = getIntProp(self.store, node_id, "created_at", std.time.milliTimestamp());
+            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
 
             try self.permission_cache.put(perm_id, record);
             try self.permission_nodes.put(perm_id, node_id);
@@ -396,7 +431,7 @@ pub const UserStorageBackend = struct {
             record.using_clause_len = copyIntoField(&record.using_clause, getStringProp(self.store, node_id, "using_clause", ""));
             record.check_clause_len = copyIntoField(&record.check_clause, getStringProp(self.store, node_id, "check_clause", ""));
             record.audit_level = @intCast(@max(0, getIntProp(self.store, node_id, "audit_level", 0)));
-            record.created_at = getIntProp(self.store, node_id, "created_at", std.time.milliTimestamp());
+            record.created_at = getIntProp(self.store, node_id, "created_at", compat_milliTimestamp());
             record.updated_at = getIntProp(self.store, node_id, "updated_at", record.created_at);
             record.created_by = @intCast(@max(0, getIntProp(self.store, node_id, "created_by", 0)));
 
@@ -416,7 +451,7 @@ pub const UserStorageBackend = struct {
         record.email_len = copyIntoField(&record.email, email);
         record.password_hash_len = copyIntoField(&record.password_hash, password_hash);
         _ = copyIntoField(&record.salt, salt);
-        record.created_at = std.time.milliTimestamp();
+        record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
         record.auth_version = 1;
 
@@ -437,7 +472,7 @@ pub const UserStorageBackend = struct {
             if (ph.len > 127) return error.FieldTooLong;
             if (!std.mem.eql(u8, record.getPasswordHash(), ph)) {
                 bump_auth_version = true;
-                record.password_changed_at = std.time.milliTimestamp();
+                record.password_changed_at = compat_milliTimestamp();
             }
             record.password_hash_len = copyIntoField(&record.password_hash, ph);
         }
@@ -461,7 +496,7 @@ pub const UserStorageBackend = struct {
             record.mfa_secret_len = copyIntoField(&record.mfa_secret, secret);
         }
 
-        record.updated_at = std.time.milliTimestamp();
+        record.updated_at = compat_milliTimestamp();
         if (bump_auth_version) {
             record.auth_version += 1;
         }
@@ -514,7 +549,7 @@ pub const UserStorageBackend = struct {
             record.attributes_json_len = 0;
         }
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         if (is_new_record) {
             record.created_at = now;
             record.auth_version = 1;
@@ -535,7 +570,7 @@ pub const UserStorageBackend = struct {
     pub fn bumpUserAuthVersion(self: *Self, user_id: u64) !u64 {
         var record = self.user_cache.get(user_id) orelse return error.UserNotFound;
         record.auth_version += 1;
-        record.updated_at = std.time.milliTimestamp();
+        record.updated_at = compat_milliTimestamp();
         try self.user_cache.put(user_id, record);
         try self.upsertUserNode(record);
         return record.auth_version;
@@ -735,7 +770,7 @@ pub const UserStorageBackend = struct {
 
         try self.store.setNodeProperty(node_id, "chain_hash", .{ .String = chain_hash_hex });
         try self.store.setNodeProperty(node_id, "record_count", .{ .Int = safeI64(record_count) });
-        try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = std.time.milliTimestamp() });
+        try self.store.setNodeProperty(node_id, "last_verified", .{ .Int = compat_milliTimestamp() });
         try self.store.setNodeProperty(node_id, "hmac_key_id", .{ .String = hmac_key_id });
     }
 
@@ -751,7 +786,7 @@ pub const UserStorageBackend = struct {
         record.parent_role = parent_role;
         record.priority = priority;
         record.is_system = is_system;
-        record.created_at = std.time.milliTimestamp();
+        record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
 
         try self.role_cache.put(role_id, record);
@@ -793,7 +828,7 @@ pub const UserStorageBackend = struct {
             if (cond.len > 511) return error.FieldTooLong;
             record.conditions_len = copyIntoField(&record.conditions, cond);
         }
-        record.created_at = std.time.milliTimestamp();
+        record.created_at = compat_milliTimestamp();
 
         try self.permission_cache.put(permission_id, record);
         try self.upsertPermissionNode(record);
@@ -848,7 +883,7 @@ pub const UserStorageBackend = struct {
             record.check_clause_len = copyIntoField(&record.check_clause, cc);
         }
         record.audit_level = opts.audit_level;
-        record.created_at = std.time.milliTimestamp();
+        record.created_at = compat_milliTimestamp();
         record.updated_at = record.created_at;
         record.created_by = opts.created_by;
 
@@ -901,8 +936,8 @@ pub const UserStorageBackend = struct {
             .failed_login_attempts = 0,
             .lockout_until = 0,
             .last_login = 0,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .password_changed_at = 0,
             .hash_algorithm = [_]u8{0} ** 16,
             .hash_algorithm_len = 0,
@@ -925,8 +960,8 @@ pub const UserStorageBackend = struct {
             .parent_role = 0,
             .priority = 0,
             .is_system = false,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
         };
     }
 
@@ -940,7 +975,7 @@ pub const UserStorageBackend = struct {
             .action = 0,
             .conditions = [_]u8{0} ** 512,
             .conditions_len = 0,
-            .created_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
         };
     }
 
@@ -963,8 +998,8 @@ pub const UserStorageBackend = struct {
             .check_clause = [_]u8{0} ** 512,
             .check_clause_len = 0,
             .audit_level = 0,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .created_by = 0,
         };
     }

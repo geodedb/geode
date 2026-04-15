@@ -1,6 +1,50 @@
 // CANARY: REQ=REQ-AUTH-SESSION-001; FEATURE="LocalSessionStorage"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 const crypto = std.crypto;
 
@@ -29,7 +73,7 @@ pub const SessionToken = struct {
         var token: [32]u8 = undefined;
         crypto.random.bytes(&token);
 
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
         const fingerprint = try getSystemFingerprint(allocator);
 
         return SessionToken{
@@ -43,19 +87,19 @@ pub const SessionToken = struct {
     }
 
     pub fn needsRenewal(self: *const SessionToken) bool {
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
         const time_remaining = self.expires_at - now;
         return time_remaining < RENEWAL_THRESHOLD_SECS;
     }
 
     pub fn renew(self: *SessionToken) void {
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
         self.last_renewed_at = now;
         self.expires_at = now + TOKEN_LIFETIME_SECS;
     }
 
     pub fn isExpired(self: *const SessionToken) bool {
-        return std.time.timestamp() >= self.expires_at;
+        return compat_timestamp() >= self.expires_at;
     }
 
     pub fn isValid(self: *const SessionToken, system_fp: []const u8) bool {
@@ -79,12 +123,12 @@ pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
 
     const hostname = if (builtin.os.tag == .windows) blk: {
         // On Windows, use std.process for environment variables
-        break :blk std.process.getEnvVarOwned(allocator, "COMPUTERNAME") catch "unknown";
+        break :blk getEnvVarOwned(allocator, "COMPUTERNAME") catch "unknown";
     } else std.posix.gethostname(&hostname_buf) catch "unknown";
 
     // Get system username - use std.process for cross-platform compatibility
-    const username = std.process.getEnvVarOwned(allocator, "USER") catch
-        std.process.getEnvVarOwned(allocator, "USERNAME") catch "unknown";
+    const username = getEnvVarOwned(allocator, "USER") catch
+        getEnvVarOwned(allocator, "USERNAME") catch "unknown";
 
     // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
     const uid: u32 = if (builtin.os.tag == .windows) 0 else std.posix.getuid();
@@ -102,9 +146,9 @@ pub const CredentialStore = struct {
         // Get home directory - use std.process for cross-platform compatibility
         // Windows uses USERPROFILE, Unix uses HOME
         const home = if (builtin.os.tag == .windows)
-            std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDirectory
+            getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDirectory
         else
-            std.process.getEnvVarOwned(allocator, "HOME") catch return error.NoHomeDirectory;
+            getEnvVarOwned(allocator, "HOME") catch return error.NoHomeDirectory;
         defer allocator.free(home);
 
         const geode_dir = try std.fmt.allocPrint(allocator, "{s}/.geode", .{home});
@@ -234,20 +278,20 @@ fn extractJsonNumber(line: []const u8) ?i64 {
 // Session token registry (server-side storage)
 pub const SessionRegistry = struct {
     sessions: std.StringHashMap(SessionToken),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) SessionRegistry {
         return SessionRegistry{
             .sessions = std.StringHashMap(SessionToken).init(allocator),
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *SessionRegistry) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var iter = self.sessions.iterator();
         while (iter.next()) |entry| {
@@ -261,8 +305,8 @@ pub const SessionRegistry = struct {
     pub fn addSession(self: *SessionRegistry, token_hex: []const u8, session: SessionToken) !void {
         // CANARY: REQ=REQ-AUTH-SESSION-005; FEATURE="RegisterSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const key = try self.allocator.dupe(u8, token_hex);
         try self.sessions.put(key, session);
@@ -271,15 +315,15 @@ pub const SessionRegistry = struct {
     pub fn getSession(self: *SessionRegistry, token_hex: []const u8) ?*SessionToken {
         // CANARY: REQ=REQ-AUTH-SESSION-006; FEATURE="ValidateSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return self.sessions.getPtr(token_hex);
     }
 
     pub fn removeSession(self: *SessionRegistry, token_hex: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.sessions.fetchRemove(token_hex)) |kv| {
             self.allocator.free(kv.key);
@@ -291,8 +335,8 @@ pub const SessionRegistry = struct {
     pub fn cleanupExpired(self: *SessionRegistry) void {
         // CANARY: REQ=REQ-AUTH-SESSION-007; FEATURE="CleanupExpiredSessions"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
@@ -370,7 +414,7 @@ test "SessionToken.isExpired detects expired tokens" {
     try std.testing.expect(!token.isExpired());
 
     // Manually expire the token
-    token.expires_at = std.time.timestamp() - 1;
+    token.expires_at = compat_timestamp() - 1;
     try std.testing.expect(token.isExpired());
 }
 
@@ -385,7 +429,7 @@ test "SessionToken.needsRenewal detects renewal threshold" {
     try std.testing.expect(!token.needsRenewal());
 
     // Set expiry to 4 minutes from now (< 5 minute threshold)
-    token.expires_at = std.time.timestamp() + 240;
+    token.expires_at = compat_timestamp() + 240;
     try std.testing.expect(token.needsRenewal());
 }
 
@@ -425,7 +469,7 @@ test "SessionToken.isValid checks fingerprint and expiry" {
     try std.testing.expect(!token.isValid("wrong:fingerprint:123"));
 
     // Invalid when expired (even with correct fingerprint)
-    token.expires_at = std.time.timestamp() - 1;
+    token.expires_at = compat_timestamp() - 1;
     try std.testing.expect(!token.isValid(current_fp));
 }
 
@@ -588,7 +632,7 @@ test "SessionRegistry.cleanupExpired removes only expired sessions" {
 
     // Create expired token
     var expired_token = try SessionToken.generate(allocator, "expired_user");
-    expired_token.expires_at = std.time.timestamp() - 1;
+    expired_token.expires_at = compat_timestamp() - 1;
     const expired_hex = try expired_token.toHexString(allocator);
     defer allocator.free(expired_hex);
     try registry.addSession(expired_hex, expired_token);

@@ -33,7 +33,7 @@ pub const RLSFilterEngine = struct {
     allocator: std.mem.Allocator,
     /// Protected by `mu`.
     policies: std.ArrayList(LabelPolicy),
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -57,8 +57,8 @@ pub const RLSFilterEngine = struct {
     /// Register a deny policy: rows containing nodes/edges with `label` in `graph` will be
     /// filtered out for `username` (empty string = all users).
     pub fn addDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) !void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const policy = LabelPolicy{
             .graph = try self.allocator.dupe(u8, graph),
@@ -71,8 +71,8 @@ pub const RLSFilterEngine = struct {
 
     /// Remove all policies matching graph+label+username exactly.
     pub fn removeDenyPolicy(self: *Self, graph: []const u8, label: []const u8, username: []const u8) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var i: usize = 0;
         while (i < self.policies.items.len) {
@@ -93,8 +93,8 @@ pub const RLSFilterEngine = struct {
 
     /// Returns true if the given label is denied for user+graph.
     pub fn isLabelDenied(self: *Self, graph: []const u8, label: []const u8, username: []const u8) bool {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.policies.items) |p| {
             if (!p.deny) continue;
@@ -112,8 +112,8 @@ pub const RLSFilterEngine = struct {
     /// Single lock acquisition instead of per-label locking.  Caller must call
     /// `deinit()` on the returned map when done.
     pub fn snapshotDeniedLabels(self: *Self, allocator: std.mem.Allocator, graph: []const u8, username: []const u8) !std.StringHashMap(void) {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var denied = std.StringHashMap(void).init(allocator);
         for (self.policies.items) |p| {
@@ -128,8 +128,8 @@ pub const RLSFilterEngine = struct {
 
     /// Return the number of currently active policies.
     pub fn policyCount(self: *Self) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.policies.items.len;
     }
 };

@@ -1,6 +1,41 @@
 // CANARY: REQ=REQ-DIST-QUERY-COORD-001; FEATURE="Enhanced Query Coordination"; ASPECT=MergeStrategies; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const federation = @import("federation.zig");
 // value_utilities import removed — cloneBindingRow/freeBindingRow/cloneSchema/freeSchema
@@ -221,7 +256,7 @@ pub const QueryCache = struct {
         if (!self.enabled) return null;
 
         if (self.cache.get(query_hash)) |entry| {
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             if (now - entry.timestamp < entry.ttl_ms) {
                 return try cloneQueryResults(self.allocator, entry.result);
             } else {
@@ -248,7 +283,7 @@ pub const QueryCache = struct {
         const key_copy = try self.allocator.dupe(u8, query_hash);
         try self.cache.put(key_copy, CacheEntry{
             .result = try cloneQueryResults(self.allocator, result),
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .ttl_ms = ttl_ms,
         });
     }

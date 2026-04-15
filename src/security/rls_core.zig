@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const logging = @import("logging");
@@ -272,7 +307,7 @@ pub const RLSEngine = struct {
                 if (policy.id == policy_id) {
                     // Update fields
                     policy.* = updates;
-                    policy.updated_at = std.time.milliTimestamp();
+                    policy.updated_at = compat_milliTimestamp();
 
                     // Recompile expressions if changed
                     if (updates.using_expr) |*expr| {
@@ -878,7 +913,7 @@ pub const RLSEngine = struct {
     /// Supports valid_from/valid_until ranges and recurrence rules (daily, weekly, monthly, yearly).
     fn checkTemporalConstraint(self: *Self, constraint: TemporalConstraint) bool {
         _ = self;
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
 
         // Check basic time range
         if (constraint.valid_from) |from| {
@@ -1291,7 +1326,7 @@ pub const PolicyCache = struct {
         };
 
         if (self.cache.get(key)) |entry| {
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             if (now - entry.timestamp < self.ttl_ms) {
                 return entry.allowed;
             }
@@ -1322,7 +1357,7 @@ pub const PolicyCache = struct {
 
         try self.cache.put(key, CacheEntry{
             .allowed = allowed,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
         });
     }
 
@@ -1670,7 +1705,7 @@ pub const ContextEvaluator = struct {
         _ = allocator;
         _ = args;
         _ = context;
-        return Value{ .timestamp = std.time.milliTimestamp() };
+        return Value{ .timestamp = compat_milliTimestamp() };
     }
 
     /// Parse an IPv4 dotted-decimal string into a u32 in network byte order.
@@ -2020,7 +2055,7 @@ pub const AttributeBasedAccessControl = struct {
             attributes: std.StringHashMap(Value),
         ) !bool {
             // Check cache first
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             if (self.attribute_cache.get(rule.name)) |cached| {
                 if (now - cached.timestamp < cached.ttl) {
                     return switch (cached.value) {
@@ -2086,7 +2121,7 @@ pub const AuditLogger = struct {
     event_queue_len: usize,
 
     pub const LogWriter = union(enum) {
-        file: std.fs.File,
+        file: std.Io.File,
         database: *anyopaque,
         syslog: *anyopaque,
         custom: *const fn (event: AuditEvent) void,
@@ -2480,7 +2515,7 @@ test "TestCANARY_REQ_RLS_EVAL_001_BasicEquality" {
         .user_agent = "test-agent",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2536,7 +2571,7 @@ test "TestCANARY_REQ_RLS_EVAL_002_LogicalOperators" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2587,7 +2622,7 @@ test "TestCANARY_REQ_RLS_EVAL_003_FunctionCalls" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2632,7 +2667,7 @@ test "TestCANARY_REQ_RLS_PERM_001_HasPermission" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     // Test with admin role
@@ -2714,7 +2749,7 @@ test "TestCANARY_REQ_RLS_ROLE_001_HasRole" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     const editor_role = auth.Role{
@@ -2764,7 +2799,7 @@ test "TestCANARY_REQ_RLS_ROLE_001_HasRole" {
 
 test "TestCANARY_REQ_RLS_TEMPORAL_001_TimeRangeConstraint" {
     // Test basic time range constraints
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
 
     // Constraint: valid from 1 hour ago to 1 hour from now
     const constraint_valid = RLSEngine.TemporalConstraint{
@@ -2851,7 +2886,7 @@ test "TestCANARY_REQ_RLS_SESSION_001_SessionAttributeAccess" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2893,7 +2928,7 @@ test "TestCANARY_REQ_RLS_NULL_001_NullHandling" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2943,7 +2978,7 @@ test "TestCANARY_REQ_RLS_EMPTY_001_EmptyExpression" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{
@@ -2985,7 +3020,7 @@ test "TestCANARY_REQ_RLS_IP_001_IpRangeCheck" {
         .user_agent = "test",
         .device_id = null,
         .location = null,
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
     };
 
     var context = auth.SecurityContext{

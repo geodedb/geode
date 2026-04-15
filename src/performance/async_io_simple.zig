@@ -118,7 +118,7 @@ pub const SimpleAsyncIO = struct {
     fn executeRead(self: *Self, file_path: []const u8, buffer: []u8) AsyncResult {
         _ = self;
 
-        const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{}) catch {
             return AsyncResult{ .bytes_processed = 0, .status = .error_file_not_found };
         };
         defer file.close();
@@ -214,7 +214,7 @@ pub fn benchmarkAsyncIO(
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -250,7 +250,7 @@ pub fn benchmarkAsyncIO(
     // Benchmark sync
     timer.reset();
     for (0..iterations) |_| {
-        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.readAll(buffer);
     }
@@ -283,7 +283,7 @@ test "Simple async I/O basic functionality" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -337,7 +337,7 @@ test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple async I/O validation" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();

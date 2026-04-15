@@ -6,6 +6,50 @@
 // graph-storage properties; this codec remains for migration and tests.
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 /// Magic bytes at the start of legacy id_map.dat for format identification.
@@ -195,7 +239,7 @@ pub const IdMap = struct {
         const final_name = "id_map.dat";
 
         // Create temp file
-        const file = try dir.createFile(tmp_name, .{});
+        const file = try dir.createFile(std.Io.Threaded.global_single_threaded.io(), tmp_name, .{});
         defer file.close();
 
         const total_entries: u32 = self.node_uuid_to_slot.count() + self.edge_uuid_to_slot.count();
@@ -233,7 +277,7 @@ pub const IdMap = struct {
         var self = IdMap.init(allocator);
         errdefer self.deinit();
 
-        const file = dir.openFile("id_map.dat", .{}) catch |err| {
+        const file = dir.openFile(std.Io.Threaded.global_single_threaded.io(), "id_map.dat", .{}) catch |err| {
             if (err == error.FileNotFound) return self;
             return err;
         };
@@ -283,16 +327,16 @@ pub const IdMap = struct {
 /// Mutex-protected state for UUIDv7 generation.
 /// Uses a mutex instead of 64-bit atomics for 32-bit ARM compatibility
 /// (std.atomic.Value(i64) is unsupported on arm-linux-gnueabihf).
-var uuid_mutex = std.Thread.Mutex{};
+var uuid_mutex = std.Io.Mutex.init;
 var uuid_counter_val: u16 = 0;
 var uuid_last_ms_val: i64 = 0;
 
 /// Generate a UUIDv7 value: 48-bit millisecond timestamp | 4-bit version(7)
 /// | 12-bit counter/random | 2-bit variant(10) | 62-bit random.
 pub fn generateUuidV7() u128 {
-    const ms = std.time.milliTimestamp();
+    const ms = compat_milliTimestamp();
 
-    uuid_mutex.lock();
+    uuid_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     // Reset or increment the sub-ms counter
     if (ms != uuid_last_ms_val) {
         uuid_last_ms_val = ms;
@@ -300,11 +344,11 @@ pub fn generateUuidV7() u128 {
     }
     const seq = uuid_counter_val;
     uuid_counter_val +%= 1;
-    uuid_mutex.unlock();
+    uuid_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // 62 bits of randomness for the lower portion
     var rand_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand_bytes);
+    compat_fillRandom(&rand_bytes);
     const rand_bits: u64 = @bitCast(rand_bytes);
 
     // Build the 128-bit UUID

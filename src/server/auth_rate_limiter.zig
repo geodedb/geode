@@ -36,7 +36,7 @@ pub const AuthRateLimiter = struct {
     entries: std.StringHashMap(Entry),
     /// Keys that this map owns (heap-duped IP strings).
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Counter for periodic eviction of expired entries.
     record_count: u32 = 0,
 
@@ -61,8 +61,8 @@ pub const AuthRateLimiter = struct {
 
     /// Free all owned memory.
     pub fn deinit(self: *Self) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         var iter = self.entries.iterator();
         while (iter.next()) |kv| {
             self.allocator.free(kv.key_ptr.*);
@@ -72,8 +72,8 @@ pub const AuthRateLimiter = struct {
 
     /// Return true if the given IP is currently locked out.
     pub fn isLocked(self: *Self, ip: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.isLockedUnlocked(ip);
     }
 
@@ -89,8 +89,8 @@ pub const AuthRateLimiter = struct {
     /// If the failure count reaches `max_attempts`, the IP is locked out.
     /// Periodically evicts expired entries to prevent unbounded memory growth.
     pub fn recordFailure(self: *Self, ip: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Evict expired entries every 100 failures to bound memory growth
         self.record_count +%= 1;
@@ -125,8 +125,8 @@ pub const AuthRateLimiter = struct {
 
     /// Record a successful authentication, resetting the failure counter.
     pub fn recordSuccess(self: *Self, ip: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.entries.fetchRemove(ip)) |kv| {
             self.allocator.free(kv.key);
@@ -136,8 +136,8 @@ pub const AuthRateLimiter = struct {
     /// Evict entries whose lockout has expired.  Call periodically to
     /// prevent unbounded memory growth (e.g. from a maintenance timer).
     pub fn evictExpired(self: *Self) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.evictExpiredLocked();
     }
 
@@ -168,8 +168,8 @@ pub const AuthRateLimiter = struct {
 
     /// Return the number of tracked IPs (for diagnostics / tests).
     pub fn count(self: *Self) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.entries.count();
     }
 };

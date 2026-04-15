@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const geode = @import("geode");
 
 /// P2-3: Now accepts allocator parameter for temporary sorting buffer
@@ -33,12 +42,12 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     const default_ratio_max: f64 = 2.60;
     var cv_max = default_cv_max;
     var ratio_max = default_ratio_max;
-    if (std.process.getEnvVarOwned(allocator, "VARIANCE_CV_MAX")) |val| {
+    if (getEnvVarOwned(allocator, "VARIANCE_CV_MAX")) |val| {
         defer allocator.free(val);
         const parsed = std.fmt.parseFloat(f64, val) catch null;
         if (parsed) |p| cv_max = p;
     } else |_| {}
-    if (std.process.getEnvVarOwned(allocator, "VARIANCE_P95_OVER_MEAN_MAX")) |val| {
+    if (getEnvVarOwned(allocator, "VARIANCE_P95_OVER_MEAN_MAX")) |val| {
         defer allocator.free(val);
         const parsed2 = std.fmt.parseFloat(f64, val) catch null;
         if (parsed2) |p| ratio_max = p;
@@ -72,7 +81,7 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     const starts = [_]u64{ 1, 9 };
     // Allow tuning via environment for stabilization experiments
     const warmup: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "VARIANCE_WARMUP")) |val| {
+        if (getEnvVarOwned(allocator, "VARIANCE_WARMUP")) |val| {
             defer allocator.free(val);
             const parsed = std.fmt.parseInt(u32, val, 10) catch break :blk 5;
             break :blk @as(usize, @intCast(parsed));
@@ -80,7 +89,7 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
         break :blk 5;
     };
     const runs: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "VARIANCE_RUNS")) |val| {
+        if (getEnvVarOwned(allocator, "VARIANCE_RUNS")) |val| {
             defer allocator.free(val);
             const parsed = std.fmt.parseInt(u32, val, 10) catch break :blk 60;
             break :blk @as(usize, @intCast(parsed));
@@ -140,7 +149,7 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     var pass = (st.cv <= cv_max) and (p95_over_mean <= ratio_max);
     // Optional adaptive stabilization: if CV too high and env VARIANCE_ADAPTIVE=on, perform extra batches (capped)
     if (!pass) {
-        if (std.process.getEnvVarOwned(allocator, "VARIANCE_ADAPTIVE")) |val| {
+        if (getEnvVarOwned(allocator, "VARIANCE_ADAPTIVE")) |val| {
             defer allocator.free(val);
             if (std.mem.eql(u8, val, "on")) {
                 var extra_batches: u8 = 0;

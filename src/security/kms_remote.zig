@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const quic = @import("transport/quic");
 const crypto = std.crypto;
 
@@ -109,7 +118,7 @@ pub const Server = struct {
     pub fn init(allocator: std.mem.Allocator, _: u64) Server {
         var kek: [32]u8 = undefined;
         // Use cryptographic random for KEK generation
-        std.crypto.random.bytes(&kek);
+        compat_fillRandom(&kek);
         return .{ .allocator = allocator, .kek = kek };
     }
 
@@ -122,7 +131,7 @@ pub const Server = struct {
         h.final(&self.attestation_hash);
         // Generate a fresh ephemeral Ed25519 key pair from cryptographic random
         var seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&seed);
+        compat_fillRandom(&seed);
         const attest_kp = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
         self.attest_keypair = attest_kp;
     }
@@ -131,7 +140,7 @@ pub const Server = struct {
     pub fn wrap(self: *Server, plaintext: [32]u8) Envelope {
         var nonce: [12]u8 = undefined;
         // Use cryptographic random for nonce generation - CRITICAL for AES-GCM security
-        std.crypto.random.bytes(&nonce);
+        compat_fillRandom(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &plaintext, &.{}, nonce, self.kek);
@@ -268,7 +277,7 @@ pub const RemoteKmsServer = struct {
     fn handleGenerate(self: *RemoteKmsServer, response_buf: []u8) ![]const u8 {
         // Generate a new data key and wrap it
         var plaintext: [32]u8 = undefined;
-        std.crypto.random.bytes(&plaintext);
+        compat_fillRandom(&plaintext);
 
         const envelope = self.server.wrap(plaintext);
 
@@ -433,7 +442,7 @@ pub const RemoteKmsClient = struct {
             // GAP-0216: Handle potential error from LocalSimulated KMS init
             var client = try ext.Client.init(self.allocator, 0x12345678);
             var key: [32]u8 = undefined;
-            std.crypto.random.bytes(&key);
+            compat_fillRandom(&key);
             const ext_envelope = try client.wrap(key);
             return Envelope{
                 .version = ext_envelope.version,

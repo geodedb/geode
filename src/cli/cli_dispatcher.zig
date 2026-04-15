@@ -1,4 +1,53 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
@@ -91,7 +140,7 @@ const SimpleAuditEvent = struct {
 };
 
 // Global audit logger instances
-var global_audit_file: ?std.fs.File = null;
+var global_audit_file: ?std.Io.File = null;
 var global_windows_eventlog_handle: ?std.os.windows.HANDLE = null;
 // GAP-0075: Global syslog configuration for audit logging
 var global_syslog_host: ?[]const u8 = null;
@@ -963,7 +1012,7 @@ fn handleMcpCommand(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 
     // SEC-08: Also check GEODE_MCP_TOKEN env var as fallback for bearer token
     if (bearer_token == null) {
-        bearer_token = std.posix.getenv("GEODE_MCP_TOKEN");
+        bearer_token = posixGetenv("GEODE_MCP_TOKEN");
     }
 
     // Create and start MCP server with Options struct
@@ -1028,7 +1077,7 @@ fn printMcpHelp() void {
 
 /// Cross-platform environment variable helper
 pub fn getEnvVar(allocator: std.mem.Allocator, key: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(allocator, key) catch null;
+    return getEnvVarOwned(allocator, key) catch null;
 }
 
 // CANARY: REQ=REQ-AUDIT-CLI-001; FEATURE="CLI Audit Configuration"; ASPECT=Configuration; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_001_Configuration; OWNER=audit; UPDATED=2025-09-30
@@ -1096,16 +1145,16 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
 
         // Create directory if it doesn't exist
         if (std.fs.path.dirname(path)) |dir| {
-            std.Io.Dir.cwd().makePath(dir) catch |err| switch (err) {
+            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir) catch |err| switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
             };
         }
 
-        global_audit_file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false }) catch |err| switch (err) {
+        global_audit_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = false }) catch |err| switch (err) {
             error.FileNotFound => blk: {
                 // Try to create the file
-                break :blk try std.Io.Dir.cwd().createFile(path, .{});
+                break :blk try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
             },
             else => return err,
         };
@@ -1159,7 +1208,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
     // Log to file if enabled
     if (global_audit_file) |file| {
         // Get current timestamp
-        const timestamp = std.time.timestamp();
+        const timestamp = compat_timestamp();
 
         // Create simple JSON audit event
         var buf: [1024]u8 = undefined;
@@ -1197,7 +1246,7 @@ fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: 
     const pri = 16 * 8 + severity; // LOCAL0 facility
 
     // Get timestamp
-    const ts = std.time.timestamp();
+    const ts = compat_timestamp();
 
     // Format RFC 5424 message: <PRI>1 TIMESTAMP HOST APP PROCID MSGID - MSG
     var buf: [1024]u8 = undefined;

@@ -47,7 +47,7 @@ pub const ReplLoop = struct {
             const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch break :blk false;
             var mode: std.os.windows.DWORD = undefined;
             break :blk std.os.windows.kernel32.GetConsoleMode(handle, &mode) != 0;
-        } else std.posix.isatty(std.posix.STDIN_FILENO);
+        } else (std.Io.File.stdin().isTty(std.Io.Threaded.global_single_threaded.io()) catch false);
 
         if (!is_tty) {
             const stderr_file = platform.getStderrHandle();

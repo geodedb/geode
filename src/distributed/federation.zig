@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const quic = @import("../transport/quic.zig");
 const schema = @import("schema");
@@ -303,7 +338,7 @@ pub const Connection = struct {
             },
             else => return error.ProtocolError,
         }
-        self.last_used = std.time.milliTimestamp();
+        self.last_used = compat_milliTimestamp();
         self.connected = true;
     }
 
@@ -322,7 +357,7 @@ pub const Connection = struct {
         page_size: u32,
         query: FederatedQuery,
     ) !QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
         try self.ensureConnected(endpoint, timeout_ms);
         if (self.stream == null or self.client == null or self.session_id == null) return error.NotConnected;
 
@@ -425,8 +460,8 @@ pub const Connection = struct {
         const schema_slice = try columns.toOwnedSlice(allocator);
         const order_keys_slice = try order_keys.toOwnedSlice(allocator);
 
-        self.last_used = std.time.milliTimestamp();
-        const exec_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        self.last_used = compat_milliTimestamp();
+        const exec_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         return QueryResults{
             .rows = rows_slice,
             .schema = schema_slice,
@@ -570,7 +605,7 @@ pub const FederationManager = struct {
             .node_id = try self.allocator.dupe(u8, node.node_id),
             .endpoint = try self.allocator.dupe(u8, node.endpoint),
             .health_status = node.health_status,
-            .last_heartbeat = std.time.milliTimestamp(),
+            .last_heartbeat = compat_milliTimestamp(),
             .capabilities = node.capabilities,
             .connection_pool = try ConnectionPool.init(
                 self.allocator,
@@ -1094,7 +1129,7 @@ pub const FederationManager = struct {
             };
 
             node.health_status = .healthy;
-            node.last_heartbeat = std.time.milliTimestamp();
+            node.last_heartbeat = compat_milliTimestamp();
         }
     }
 };
@@ -1136,7 +1171,7 @@ pub const QueryCache = struct {
         const key = computeKey(query);
 
         if (self.cache.get(key)) |entry| {
-            const age_ms = std.time.milliTimestamp() - entry.timestamp;
+            const age_ms = compat_milliTimestamp() - entry.timestamp;
             if (age_ms < self.ttl_seconds * 1000) {
                 return try cloneQueryResults(self.allocator, entry.results);
             }
@@ -1164,7 +1199,7 @@ pub const QueryCache = struct {
 
         try self.cache.put(key, CacheEntry{
             .results = try cloneQueryResults(self.allocator, results),
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
         });
     }
 
@@ -1280,7 +1315,7 @@ test "federation: basic setup" {
         .node_id = "node1",
         .endpoint = "127.0.0.1:7567",
         .health_status = .healthy,
-        .last_heartbeat = std.time.milliTimestamp(),
+        .last_heartbeat = compat_milliTimestamp(),
         .capabilities = .{
             .version = "0.16.0",
             .supported_operations = &.{ .match_, .filter, .project },

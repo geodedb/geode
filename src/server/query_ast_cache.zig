@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const geode = @import("geode");
 const token = geode.gql.token;
 
@@ -39,7 +74,7 @@ pub const QueryAstCache = struct {
             if (std.mem.eql(u8, cached.query_text, query_text)) {
                 self.hit_count += 1;
                 cached.access_count += 1;
-                cached.last_accessed = std.time.timestamp();
+                cached.last_accessed = compat_timestamp();
                 self.lruPromote(key);
                 return .{ .Ok = .{
                     .cache = null,
@@ -88,8 +123,8 @@ pub const QueryAstCache = struct {
                 var cached_ast = CachedAst{
                     .query_text = query_text_copy,
                     .parse_result = ok,
-                    .created_at = std.time.timestamp(),
-                    .last_accessed = std.time.timestamp(),
+                    .created_at = compat_timestamp(),
+                    .last_accessed = compat_timestamp(),
                     .access_count = 1,
                 };
                 errdefer {
@@ -192,7 +227,7 @@ pub const SharedAstCache = struct {
     max_size: usize,
     hit_count: u64 = 0,
     miss_count: u64 = 0,
-    lock: std.Thread.Mutex = .{},
+    lock: std.Io.Mutex = std.Io.Mutex.init,
     lru_head: ?u64 = null,
     lru_tail: ?u64 = null,
 
@@ -205,8 +240,8 @@ pub const SharedAstCache = struct {
     }
 
     pub fn deinit(self: *SharedAstCache) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         var iter = self.cache.iterator();
         while (iter.next()) |entry| {
             entry.value_ptr.parse_result.deinit();
@@ -220,12 +255,12 @@ pub const SharedAstCache = struct {
         const key = hashQuery(query_text, opts);
 
         // Fast lookup under lock.
-        self.lock.lock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         if (self.cache.getPtr(key)) |cached| {
             if (std.mem.eql(u8, cached.query_text, query_text)) {
                 self.hit_count += 1;
                 cached.access_count += 1;
-                cached.last_accessed = std.time.timestamp();
+                cached.last_accessed = compat_timestamp();
                 cached.ref_count += 1;
                 self.lruPromoteUnlocked(key);
                 const handle = AstHandle{
@@ -233,7 +268,7 @@ pub const SharedAstCache = struct {
                     .key = key,
                     .parse_result = cached.parse_result,
                 };
-                self.lock.unlock();
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
                 return .{ .Ok = handle };
             }
 
@@ -247,7 +282,7 @@ pub const SharedAstCache = struct {
                 }
             }
         }
-        self.lock.unlock();
+        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         self.miss_count += 1;
 
@@ -285,8 +320,8 @@ pub const SharedAstCache = struct {
                 pr_ptr.* = ok;
 
                 // Insert into cache under lock (double-check for races).
-                self.lock.lock();
-                defer self.lock.unlock();
+                self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
                 if (self.cache.getPtr(key)) |existing| {
                     if (std.mem.eql(u8, existing.query_text, query_text)) {
@@ -295,7 +330,7 @@ pub const SharedAstCache = struct {
                         self.allocator.destroy(pr_ptr);
                         self.allocator.free(query_text_copy);
                         existing.access_count += 1;
-                        existing.last_accessed = std.time.timestamp();
+                        existing.last_accessed = compat_timestamp();
                         existing.ref_count += 1;
                         self.lruPromoteUnlocked(key);
                         return .{ .Ok = AstHandle{
@@ -316,8 +351,8 @@ pub const SharedAstCache = struct {
                 var cached_ast = SharedCachedAst{
                     .query_text = query_text_copy,
                     .parse_result = pr_ptr,
-                    .created_at = std.time.timestamp(),
-                    .last_accessed = std.time.timestamp(),
+                    .created_at = compat_timestamp(),
+                    .last_accessed = compat_timestamp(),
                     .access_count = 1,
                     .ref_count = 1,
                 };
@@ -339,8 +374,8 @@ pub const SharedAstCache = struct {
     }
 
     pub fn release(self: *SharedAstCache, key: u64) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.cache.getPtr(key)) |entry| {
             if (entry.ref_count > 0) entry.ref_count -= 1;
         }

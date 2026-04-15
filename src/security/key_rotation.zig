@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -121,7 +165,7 @@ pub const KeyRegistry = struct {
         duration_ms: u64,
     ) !void {
         try self.audit_log.append(.{
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat_timestamp(),
             .event_type = event_type,
             .old_key_id = old_key_id,
             .new_key_id = new_key_id,
@@ -137,7 +181,7 @@ pub const KeyRegistry = struct {
         if (self.active) |current_key| {
             self.rollback_state.enabled = true;
             self.rollback_state.checkpoint_key_id = current_key.id;
-            self.rollback_state.checkpoint_timestamp = std.time.timestamp();
+            self.rollback_state.checkpoint_timestamp = compat_timestamp();
             self.rollback_state.original_key_material = current_key.material;
             self.rollback_state.pages_to_restore.clearRetainingCapacity();
         }
@@ -192,13 +236,13 @@ pub const KeyRegistry = struct {
         // Generate key material using cryptographically secure random source
         var key: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
-            .created_unix_epoch = std.time.timestamp(),
+            .created_unix_epoch = compat_timestamp(),
             .material = undefined,
             .envelope_json = null,
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        std.crypto.random.bytes(&key.material);
+        compat_fillRandom(&key.material);
         try self.history.append(key);
         self.active = key;
         return key;
@@ -212,16 +256,16 @@ pub const KeyRegistry = struct {
         // Generate new key material using cryptographically secure random source
         var key: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
-            .created_unix_epoch = std.time.timestamp(),
+            .created_unix_epoch = compat_timestamp(),
             .material = undefined,
             .envelope_json = null,
             .is_wrapped = false,
         };
         // Use std.crypto.random for secure key generation
-        std.crypto.random.bytes(&key.material);
+        compat_fillRandom(&key.material);
         try self.history.append(key);
         self.active = key;
-        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = std.time.timestamp(), .method = .manual };
+        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key.id, .ts = compat_timestamp(), .method = .manual };
     }
 
     /// Rotate key with KMS wrapping using cryptographically secure random source
@@ -231,7 +275,7 @@ pub const KeyRegistry = struct {
         const old = self.active;
         // Generate plaintext key material using cryptographically secure random
         var plaintext: [32]u8 = undefined;
-        std.crypto.random.bytes(&plaintext);
+        compat_fillRandom(&plaintext);
         // Wrap key using KMS client
         const kms = @import("external_kms_client.zig");
         // GAP-0216: Handle potential error from LocalSimulated KMS init
@@ -240,14 +284,14 @@ pub const KeyRegistry = struct {
         const env_json = try kms.envelopeToJson(env, self.allocator.*);
         const key_ref: DataKeyRef = .{
             .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1,
-            .created_unix_epoch = std.time.timestamp(),
+            .created_unix_epoch = compat_timestamp(),
             .material = plaintext,
             .envelope_json = env_json,
             .is_wrapped = true,
         };
         try self.history.append(key_ref);
         self.active = key_ref;
-        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = std.time.timestamp(), .method = .manual };
+        return .{ .old_id = if (old) |o| o.id else 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
     }
 
     pub fn rotateWithRemoteKms(self: *KeyRegistry) !RotationEvent {
@@ -271,14 +315,14 @@ pub const KeyRegistry = struct {
         // Simpler: call external_kms_client.envelopeToJson since schema same
         const ekc = @import("external_kms_client.zig");
         const env_json = try ekc.envelopeToJson(.{ .nonce = env.nonce, .tag = env.tag, .ct = env.ct, .version = env.version, .alg = env.alg }, self.allocator.*);
-        const key_ref: DataKeyRef = .{ .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1, .created_unix_epoch = std.time.timestamp(), .material = zero, .envelope_json = env_json, .is_wrapped = true };
+        const key_ref: DataKeyRef = .{ .id = if (self.history.items.len == 0) 1 else self.history.items[self.history.items.len - 1].id + 1, .created_unix_epoch = compat_timestamp(), .material = zero, .envelope_json = env_json, .is_wrapped = true };
         try self.history.append(key_ref);
         self.active = key_ref;
-        return .{ .old_id = 0, .new_id = key_ref.id, .ts = std.time.timestamp(), .method = .manual };
+        return .{ .old_id = 0, .new_id = key_ref.id, .ts = compat_timestamp(), .method = .manual };
     }
 
     pub fn saveState(self: *KeyRegistry, path: []const u8) !void {
-        var file = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true });
+        var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true });
         defer file.close();
         var w = file.writer();
         // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
@@ -323,7 +367,7 @@ pub const KeyRegistry = struct {
     }
 
     pub fn loadState(self: *KeyRegistry, path: []const u8) !void {
-        const file = std.Io.Dir.cwd().openFile(path, .{}) catch |e| switch (e) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |e| switch (e) {
             error.FileNotFound => return, // nothing to load
             else => return e,
         };
@@ -507,7 +551,7 @@ pub const KeyRegistry = struct {
     /// Re-encrypt a page with the current active key
     /// This supports online rotation without downtime by re-encrypting pages lazily
     pub fn reencryptPage(self: *KeyRegistry, page_id: u64, ciphertext: []u8) !void {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Need at least two keys in history for re-encryption (old and new)
         if (self.history.items.len < 2) {
@@ -548,14 +592,14 @@ pub const KeyRegistry = struct {
                 .failed,
                 1,
                 "Decryption failed with previous key",
-                @intCast(std.time.milliTimestamp() - start_time),
+                @intCast(compat_milliTimestamp() - start_time),
             );
             return error.DecryptionFailed;
         };
 
         // Generate new nonce for re-encryption
         var new_nonce: [aes_gcm.nonce_length]u8 = undefined;
-        std.crypto.random.bytes(&new_nonce);
+        compat_fillRandom(&new_nonce);
 
         // Re-encrypt with active key
         var new_tag: [aes_gcm.tag_length]u8 = undefined;
@@ -565,7 +609,7 @@ pub const KeyRegistry = struct {
         @memcpy(ciphertext[0..aes_gcm.nonce_length], &new_nonce);
         @memcpy(ciphertext[ciphertext.len - aes_gcm.tag_length ..], &new_tag);
 
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         try self.logAuditEvent(
             .reencryption_completed,
             previous_key.id,
@@ -579,7 +623,7 @@ pub const KeyRegistry = struct {
 
     /// Perform batch re-encryption of multiple pages (for eager rotation strategy)
     pub fn reencryptBatch(self: *KeyRegistry, page_ids: []const u64, ciphertexts: [][]u8) !u64 {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
         var success_count: u64 = 0;
 
         const active_key = self.active orelse return error.NoActiveKey;
@@ -609,7 +653,7 @@ pub const KeyRegistry = struct {
             success_count += 1;
         }
 
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         const status: RotationAuditEntry.RotationStatus = if (success_count == page_ids.len) .success else .failed;
 
         try self.logAuditEvent(

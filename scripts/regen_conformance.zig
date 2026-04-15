@@ -84,13 +84,13 @@ pub fn main() !void {
     try writeTable(alloc, &builder, res);
 
     const gap_path = "docs/GAP_ANALYSIS.md";
-    var gap_file = try std.fs.cwd().openFile(gap_path, .{ .mode = .read_only });
+    var gap_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), gap_path, .{ .mode = .read_only });
     defer gap_file.close();
     const gap_data = try gap_file.readToEndAlloc(alloc, 1024 * 1024);
     defer alloc.free(gap_data);
     const new_gap = try replaceSegment(gap_data, "<!-- AUTOGEN:BEGIN REQUIREMENTS_LEDGER", "<!-- AUTOGEN:END REQUIREMENTS_LEDGER -->", builder.buf[0..builder.len], alloc);
     defer alloc.free(new_gap);
-    try std.fs.cwd().writeFile(.{ .sub_path = gap_path, .data = new_gap });
+    try std.Io.Dir.cwd().writeFile(.{ .sub_path = gap_path, .data = new_gap });
 
     var stdout = std.io.getStdOut().writer();
     try stdout.print("Updated {s} (ids={d} dups={d} gaps={d})\n", .{ gap_path, res.ids.items.len, res.duplicates.items.len, res.gaps.len });

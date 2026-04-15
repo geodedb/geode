@@ -21,7 +21,7 @@ pub const TransportError = error{
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-003; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // Cross-platform file handle helpers with proper error handling
-fn getStdinHandle() TransportError!std.fs.File.Handle {
+fn getStdinHandle() TransportError!std.Io.File.Handle {
     if (builtin.os.tag == .windows) {
         const handle = windows.GetStdHandle(windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
         if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
@@ -31,7 +31,7 @@ fn getStdinHandle() TransportError!std.fs.File.Handle {
     }
 }
 
-fn getStdoutHandle() TransportError!std.fs.File.Handle {
+fn getStdoutHandle() TransportError!std.Io.File.Handle {
     if (builtin.os.tag == .windows) {
         const handle = windows.GetStdHandle(windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
         if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
@@ -41,7 +41,7 @@ fn getStdoutHandle() TransportError!std.fs.File.Handle {
     }
 }
 
-fn getStderrHandle() TransportError!std.fs.File.Handle {
+fn getStderrHandle() TransportError!std.Io.File.Handle {
     if (builtin.os.tag == .windows) {
         const handle = windows.GetStdHandle(windows.STD_ERROR_HANDLE) catch return error.StdioUnavailable;
         if (handle == windows.INVALID_HANDLE_VALUE) return error.StdioUnavailable;
@@ -53,16 +53,16 @@ fn getStderrHandle() TransportError!std.fs.File.Handle {
 
 pub const Transport = struct {
     allocator: Allocator,
-    stdin: std.fs.File,
-    stdout: std.fs.File,
-    stderr: std.fs.File,
+    stdin: std.Io.File,
+    stdout: std.Io.File,
+    stderr: std.Io.File,
 
     pub fn init(allocator: Allocator) TransportError!Transport {
         return .{
             .allocator = allocator,
-            .stdin = std.fs.File{ .handle = try getStdinHandle() },
-            .stdout = std.fs.File{ .handle = try getStdoutHandle() },
-            .stderr = std.fs.File{ .handle = try getStderrHandle() },
+            .stdin = std.Io.File{ .handle = try getStdinHandle(), .flags = .{ .nonblocking = false } },
+            .stdout = std.Io.File{ .handle = try getStdoutHandle(), .flags = .{ .nonblocking = false } },
+            .stderr = std.Io.File{ .handle = try getStderrHandle(), .flags = .{ .nonblocking = false } },
         };
     }
 

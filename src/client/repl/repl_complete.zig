@@ -1,4 +1,9 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 
 pub const CompletionContext = struct {
@@ -346,7 +351,7 @@ fn generateFilePathCandidates(state: anytype, prefix: []const u8) !void {
 
     // Check for tilde expansion
     if (prefix.len > 0 and prefix[0] == '~') {
-        const home_opt = if (comptime builtin.os.tag != .windows) std.posix.getenv("HOME") else null;
+        const home_opt = if (comptime builtin.os.tag != .windows) posixGetenv("HOME") else null;
         const home = home_opt orelse return;
         if (prefix.len == 1) {
             // Just ~ - complete with home directory contents
@@ -668,7 +673,7 @@ test "file path completion - tilde expansion" {
 
     // Only run if HOME is set
     if (comptime builtin.os.tag != .windows) {
-        if (std.posix.getenv("HOME")) |_| {
+        if (posixGetenv("HOME")) |_| {
             try generateFilePathCandidates(&state, "~");
 
             // All candidates should start with "~/"
@@ -686,7 +691,7 @@ test "file path completion - tilde with subpath" {
 
     // Only run if HOME is set
     if (comptime builtin.os.tag != .windows) {
-        if (std.posix.getenv("HOME")) |_| {
+        if (posixGetenv("HOME")) |_| {
             try generateFilePathCandidates(&state, "~/");
 
             // All candidates should start with "~/"
@@ -1147,7 +1152,7 @@ test "file path completion - tilde with nested path" {
 
     // Only run if HOME is set
     if (comptime builtin.os.tag != .windows) {
-        if (std.posix.getenv("HOME")) |_| {
+        if (posixGetenv("HOME")) |_| {
             // This test depends on having some directory in HOME
             try generateFilePathCandidates(&state, "~/.");
 

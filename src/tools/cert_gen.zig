@@ -7,9 +7,10 @@ const builtin = @import("builtin");
 pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8, cert_path: []const u8, key_path: []const u8) !void {
     // Extract directory from cert_path
     const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
+    const io = std.Io.Threaded.global_single_threaded.io();
 
     // Create certificate directory if it doesn't exist
-    std.Io.Dir.cwd().makePath(cert_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().createDirPath(io, cert_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -17,8 +18,7 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
     // Use OpenSSL to generate self-signed ECDSA P-256 certificate
     // This is a development utility - production should use proper certificates
     // Using ECDSA P-256 for compatibility with TLS 1.3 signature schemes
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
+    const result = try std.process.run(allocator, io, .{
         .argv = &[_][]const u8{
             "openssl", "req",                                                                                                      "-x509",                        "-newkey",
             "ec",      "-pkeyopt",                                                                                                 "ec_paramgen_curve:prime256v1", "-keyout",
@@ -30,7 +30,7 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) {
+    if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("Failed to generate certificate: {s}\n", .{result.stderr});
         return error.CertificateGenerationFailed;
     }
@@ -48,8 +48,9 @@ pub fn ensureCertificates(allocator: std.mem.Allocator) !void {
 }
 
 pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
     // Check if certificates already exist
-    std.Io.Dir.cwd().access(cert_path, .{}) catch {
+    std.Io.Dir.cwd().access(io, cert_path, .{}) catch {
         // Generate new certificates
         try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
 
@@ -57,13 +58,13 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
         //   server.key  → 0600 (owner-only read/write)
         //   server.crt  → 0644 (world-readable public cert)
         if (builtin.os.tag != .windows) {
-            if (std.Io.Dir.cwd().openFile(key_path, .{})) |f| {
-                defer f.close();
-                f.chmod(0o600) catch {};
+            if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), io, key_path, .{})) |f| {
+                defer f.close(io);
+                f.setPermissions(io, std.Io.File.Permissions.fromMode(0o600)) catch {};
             } else |_| {}
-            if (std.Io.Dir.cwd().openFile(cert_path, .{})) |f| {
-                defer f.close();
-                f.chmod(0o644) catch {};
+            if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), io, cert_path, .{})) |f| {
+                defer f.close(io);
+                f.setPermissions(io, std.Io.File.Permissions.fromMode(0o644)) catch {};
             } else |_| {}
         }
 

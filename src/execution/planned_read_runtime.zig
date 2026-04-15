@@ -1415,8 +1415,8 @@ fn estimateScanRows(allocator: std.mem.Allocator, graph_name: []const u8, patter
 /// enabling the planner to choose IndexSeek over LabelScan.
 fn labelHasIndexForProp(context: ExecutionContext, label: []const u8, prop: []const u8) bool {
     const cat = context.catalog;
-    cat.rwlock.lockShared();
-    defer cat.rwlock.unlockShared();
+    cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     var iter = cat.indexes.valueIterator();
     while (iter.next()) |info| {
         if (std.mem.eql(u8, info.table_name, label) and

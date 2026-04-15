@@ -388,7 +388,7 @@ pub fn executeFunction(
                 const items = series.points.items;
                 if (items.len == 0) return .Null;
 
-                var results: std.ArrayList(Value) = .{};
+                var results: std.ArrayList(Value) = .empty;
                 errdefer {
                     for (results.items) |*item| {
                         deinitValue(item, allocator);
@@ -445,7 +445,7 @@ pub fn executeFunction(
                 const items = series.points.items;
                 if (items.len < 2) return .Null;
 
-                var results: std.ArrayList(Value) = .{};
+                var results: std.ArrayList(Value) = .empty;
                 errdefer {
                     for (results.items) |*item| {
                         deinitValue(item, allocator);
@@ -530,7 +530,7 @@ pub fn executeFunction(
             errdefer obj.deinit();
 
             // Profile as list of doubles
-            var prof_list: std.ArrayList(Value) = .{};
+            var prof_list: std.ArrayList(Value) = .empty;
             errdefer prof_list.deinit(allocator);
             for (mp_result.profile) |v| {
                 try prof_list.append(allocator, Value{ .Double = v });
@@ -538,7 +538,7 @@ pub fn executeFunction(
             try obj.put("profile", Value{ .List = try prof_list.toOwnedSlice(allocator) });
 
             // Indices as list of ints
-            var idx_list: std.ArrayList(Value) = .{};
+            var idx_list: std.ArrayList(Value) = .empty;
             errdefer idx_list.deinit(allocator);
             for (mp_result.indices) |v| {
                 try idx_list.append(allocator, Value{ .Int = @intCast(v) });
@@ -587,7 +587,7 @@ pub fn executeFunction(
             try obj.put("area", Value{ .Double = inv.area });
 
             // histogram as list
-            var hist_list: std.ArrayList(Value) = .{};
+            var hist_list: std.ArrayList(Value) = .empty;
             errdefer hist_list.deinit(allocator);
             for (inv.histogram) |h| {
                 try hist_list.append(allocator, Value{ .Double = h });
@@ -640,7 +640,7 @@ pub fn executeFunction(
 
                 if (current_len == 0) return .Null;
 
-                var results: std.ArrayList(Value) = .{};
+                var results: std.ArrayList(Value) = .empty;
                 errdefer {
                     for (results.items) |*item| {
                         deinitValue(item, allocator);

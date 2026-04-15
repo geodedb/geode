@@ -341,7 +341,7 @@ test "session state: handles null/missing fields" {
     defer testing.allocator.free(session_file);
 
     // Create minimal session file
-    const file = try std.Io.Dir.cwd().createFile(session_file, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{});
     defer file.close();
     try file.writeAll("{\"format\": \"json\", \"variables\": {}}");
 

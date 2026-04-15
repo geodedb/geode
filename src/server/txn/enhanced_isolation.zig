@@ -4,6 +4,41 @@
 // CANARY: REQ=REQ-TXN-ISOLATION-004; FEATURE="Deadlock Detection and Resolution"; ASPECT=DeadlockResolution; STATUS=TESTED; TEST=TestCANARY_REQ_TXN_ISOLATION_004_DeadlockResolution; OWNER=txn; UPDATED=2025-10-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const mvcc = @import("mvcc.zig");
 const phantom_prevention = @import("phantom_read_prevention.zig");
 
@@ -452,7 +487,7 @@ pub const EnhancedIsolationManager = struct {
         data: []const u8,
         isolation: EnhancedIsolationLevel,
     ) !void {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // CANARY: REQ=REQ-TXN-ISOLATION-006; FEATURE="SSI Predicate Lock Checking"; ASPECT=PredicateLocks; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Check for phantom read conflicts if required
@@ -496,7 +531,7 @@ pub const EnhancedIsolationManager = struct {
             if (try self.dependency_tracker.checkDangerousStructure(txn.id)) {
                 self.conflict_statistics.total_conflicts += 1;
 
-                const resolution_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
+                const resolution_time = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time));
                 self.conflict_statistics.updateResolutionTime(resolution_time);
 
                 return error.SerializationConflict;
@@ -510,7 +545,7 @@ pub const EnhancedIsolationManager = struct {
         txn: *mvcc.Transaction,
         isolation: EnhancedIsolationLevel,
     ) !void {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // CANARY: REQ=REQ-TXN-ISOLATION-008; FEATURE="SSI Read Set Validation"; ASPECT=CommitValidation; STATUS=TESTED; TEST=geodetestlab/specs/gql_transaction_management_comprehensive.yml; OWNER=txn; UPDATED=2025-12-30
         // Final phantom read validation for serializable transactions
@@ -532,7 +567,7 @@ pub const EnhancedIsolationManager = struct {
                                 self.conflict_statistics.total_conflicts += 1;
                                 self.conflict_statistics.transactions_aborted += 1;
 
-                                const resolution_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
+                                const resolution_time = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time));
                                 self.conflict_statistics.updateResolutionTime(resolution_time);
 
                                 return error.WriteSkewConflict;
@@ -548,7 +583,7 @@ pub const EnhancedIsolationManager = struct {
             if (try self.dependency_tracker.checkDangerousStructure(txn.id)) {
                 self.conflict_statistics.transactions_aborted += 1;
 
-                const resolution_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
+                const resolution_time = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time));
                 self.conflict_statistics.updateResolutionTime(resolution_time);
 
                 return error.SerializationConflict;

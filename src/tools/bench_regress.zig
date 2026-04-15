@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=EXEMPT; OWNER=tools; UPDATED=2026-01-24
@@ -134,7 +169,7 @@ const MetricMap = std.StringHashMap(std.StringHashMap(u64)); // kind -> (metric 
 
 fn loadFile(allocator: std.mem.Allocator, path: []const u8) !MetricMap {
     var map = MetricMap.init(allocator);
-    var file = try std.Io.Dir.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
     const stat = try file.stat();
     const cap = @min(stat.size, 10_000_000); // 10MB safety
@@ -209,7 +244,7 @@ fn freeMetricMap(allocator: std.mem.Allocator, map: *MetricMap) void {
 }
 
 fn writeBaseline(path: []const u8, map: *MetricMap) !void {
-    var file = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true });
+    var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true });
     defer file.close();
     var it = map.iterator();
     while (it.next()) |entry| {
@@ -230,13 +265,13 @@ fn writeBaseline(path: []const u8, map: *MetricMap) !void {
 }
 
 fn emitSummary(paths: *const struct { baseline_path: []const u8, current_path: []const u8 }, tol_pct: f64, failures: usize, total: usize, regressions: []const []const u8) !void {
-    const ts = std.time.milliTimestamp();
+    const ts = compat_milliTimestamp();
     var stdout_file = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
             std.process.exit(1);
         } }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     var buf: [4096]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&buf);
     const allocator = fba.allocator();

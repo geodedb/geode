@@ -130,7 +130,7 @@ pub const History = struct {
         };
         try h.path_buf.appendSlice(path);
         // Try to open existing file (ignore if not found)
-        var file = std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only }) catch |e| switch (e) {
+        var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = .read_only }) catch |e| switch (e) {
             error.FileNotFound => return h,
             else => return e,
         };
@@ -164,7 +164,7 @@ pub const History = struct {
         std.mem.copyForwards(u8, dup, stmt);
         try self.entries.append(dup);
         // Append to file with trailing newline
-        var file = try std.Io.Dir.cwd().createFile(self.path_buf.items, .{ .read = true, .append = true });
+        var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), self.path_buf.items, .{ .read = true, .append = true });
         defer file.close();
         try file.writeAll(stmt);
         try file.writeAll("\n");

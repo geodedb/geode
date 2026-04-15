@@ -1,4 +1,53 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const audit_cli = @import("audit_cli");
@@ -33,7 +82,7 @@ const stdio_util = @import("../utils/stdio.zig");
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 const default_stream_page_size: u32 = query_runner.default_page_size;
-var g_cli_background_pool_mu: std.Thread.Mutex = .{};
+var g_cli_background_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
 var g_cli_background_pool: ?*pooled.ThreadPool = null;
 
 // C library function for setting environment variables
@@ -98,12 +147,12 @@ const repl_quic_transport = geode.repl.quic_transport;
 // CANARY: REQ=REQ-QUALITY-GAP-406-002; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 const StdioError = stdio_util.StdioError;
 
-fn getStdinHandle() StdioError!std.fs.File.Handle {
+fn getStdinHandle() StdioError!std.Io.File.Handle {
     const file = try stdio_util.getStdin();
     return file.handle;
 }
 
-fn getStdoutHandle() StdioError!std.fs.File.Handle {
+fn getStdoutHandle() StdioError!std.Io.File.Handle {
     const file = try stdio_util.getStdout();
     return file.handle;
 }
@@ -131,7 +180,7 @@ fn freeParamValue(allocator: std.mem.Allocator, value: Value) void {
     }
 }
 
-fn getStderrHandle() StdioError!std.fs.File.Handle {
+fn getStderrHandle() StdioError!std.Io.File.Handle {
     const file = try stdio_util.getStderr();
     return file.handle;
 }
@@ -686,8 +735,8 @@ const DeadlineWatchdogCtx = struct {
 };
 
 fn getCliBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
-    g_cli_background_pool_mu.lock();
-    defer g_cli_background_pool_mu.unlock();
+    g_cli_background_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_cli_background_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (g_cli_background_pool == null) {
         g_cli_background_pool = try pooled.ThreadPool.init(allocator, .{
@@ -727,7 +776,7 @@ fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         const last_progress_ns = state.last_progress_ns.load(.acquire);
         if (@as(i64, @intCast(std.time.nanoTimestamp())) - last_progress_ns < timeout_ns) continue;
 
-        const stderr = std.fs.File{ .handle = getStderrHandle() catch {
+        const stderr = std.Io.File{ .handle = getStderrHandle() catch {
             std.process.exit(@intFromEnum(ExitCode.general_error));
         } };
         _ = stderr.writeAll("Error: query timed out after ") catch {};
@@ -1018,7 +1067,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             const param_name = argv[i + 1];
             const param_value = argv[i + 2];
             const parsed_value = parseParamValue(allocator, param_value) catch |err| {
-                const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+                const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
                 _ = try stderr_fd.writeAll("Parameter parse error\n");
                 log.err("parameter parse failed", &.{Attr.string("error", @errorName(err))});
                 std.process.exit(1);
@@ -1113,7 +1162,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         var path_buf: [4096]u8 = undefined;
         const resolved_path = if (filepath.len > 0 and filepath[0] == '~') blk: {
             if (comptime builtin.os.tag == .windows) break :blk filepath;
-            const home = std.posix.getenv("HOME") orelse {
+            const home = posixGetenv("HOME") orelse {
                 std.debug.print("Error: Cannot expand ~: HOME not set\n", .{});
                 std.process.exit(@intFromEnum(ExitCode.usage_error));
             };
@@ -1126,7 +1175,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else filepath;
 
         // Open and read the file
-        const file = std.Io.Dir.cwd().openFile(resolved_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), resolved_path, .{}) catch |err| {
             std.debug.print("Error: Cannot open file '{s}': {s}\n", .{ resolved_path, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
@@ -1235,7 +1284,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     defer if (stdin_allocated) |allocated| allocator.free(allocated);
 
     if (query_text != null and std.mem.eql(u8, query_text.?, "-")) {
-        const stdin = std.fs.File{ .handle = getStdinHandle() catch return error.StdioUnavailable }; // stdin handle
+        const stdin = std.Io.File{ .handle = getStdinHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } }; // stdin handle
         const stdin_content = try stdin.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
         defer allocator.free(stdin_content);
 
@@ -1290,7 +1339,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 const server_addr = server orelse "127.0.0.1:3141";
                 const fp_match = std.mem.eql(u8, creds.system_fingerprint, current_fp);
                 const server_match = std.mem.eql(u8, creds.server, server_addr);
-                const now = std.time.timestamp();
+                const now = compat_timestamp();
                 const age_secs = now - creds.created_at;
                 const max_age_secs: i64 = 3600; // 1 hour
                 const not_expired = age_secs < max_age_secs;
@@ -1316,7 +1365,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // Check for unauthorized user before executing
     if (user != null and std.mem.eql(u8, user.?, "unauthorized")) {
-        const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+        const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
         _ = try stderr_fd.writeAll("unauthorized access denied\n");
         std.process.exit(3);
     }
@@ -1388,7 +1437,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // PERF-P1-002: Batch mode — execute multiple queries from stdin over a single
     // QUIC connection to amortize the 1.3-1.9s TLS handshake across all queries.
     if (batch_mode) {
-        const stdin_file = std.fs.File{ .handle = getStdinHandle() catch {
+        const stdin_file = std.Io.File{ .handle = getStdinHandle() catch {
             std.debug.print("Error: --batch requires stdin input\n", .{});
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         } };
@@ -1456,7 +1505,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
             // GAP-0272: Connection or transport failures — report to stderr
-            const stderr_fd = std.fs.File{ .handle = getStderrHandle() catch std.process.exit(1) };
+            const stderr_fd = std.Io.File{ .handle = getStderrHandle() catch std.process.exit(1), .flags = .{ .nonblocking = false } };
             _ = stderr_fd.writeAll("Error: query execution failed\n") catch {};
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1632,7 +1681,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
         }
         params.deinit(allocator);
     };
-    const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
@@ -1703,8 +1752,8 @@ fn executeQueryOnGrpc(
     // Issue #424: timeout_secs is now enforced at two levels:
     // 1. TCP socket SO_RCVTIMEO/SO_SNDTIMEO set by the caller (executeGrpcQuery)
     // 2. Process-level deadline watchdog thread started in cmdQuery
-    const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
-    const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
+    const stderr_handle = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
     const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
     // 1. Handshake — send HelloRequest, read HelloResponse
@@ -1801,7 +1850,7 @@ fn executeBatchQueries(
     page_size: u32,
     fle_role: ?[]const u8,
 ) !void {
-    const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
     // Split stdin into individual queries (one per line, skip empty/whitespace-only lines)
     var queries = std.ArrayList([]const u8){};
@@ -2146,7 +2195,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         }
         params.deinit(allocator);
     };
-    const stderr = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const stderr = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
 
     var addr_port = std.mem.splitSequence(u8, server_addr, ":");
     const host = addr_port.next() orelse "127.0.0.1";
@@ -2310,8 +2359,8 @@ fn executeQueryOnConnection(
     fle_role: ?[]const u8,
 ) !void {
     // Get stdout and stderr handles for output
-    const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
-    const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
+    const stderr_handle = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
     const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
     // Start each standalone query on a fresh QUIC stream.
@@ -2490,7 +2539,7 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
 
 /// Output DOT format from pre-collected row data
 /// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
-fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.fs.File) !void {
+fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.Io.File) !void {
     // Start DOT graph
     _ = stdout.writeAll("digraph G {\n") catch {};
     _ = stdout.writeAll("  rankdir=LR;\n") catch {};
@@ -2933,7 +2982,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     }
 
     if (non_interactive) {
-        const stderr_file = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+        const stderr_file = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
         _ = stderr_file.writeAll("Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
@@ -3042,18 +3091,18 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 // Main entry point
 // CANARY: REQ=REQ-M4.4-CLI-MAIN-ENTRY-001; FEATURE="CLI Modularization"; ASPECT=MinimalEntryPoint; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: Minimal main() entry point - delegates to cli_dispatcher for all routing
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     execution.initEvaluator();
 
-    const raw_argv = std.posix.argv;
+    const raw_argv = proc_init.args.vector;
     const argv = try allocator.alloc([:0]u8, raw_argv.len);
     defer allocator.free(argv);
     for (raw_argv, 0..) |arg, i| {
-        argv[i] = std.mem.span(arg);
+        argv[i] = @constCast(std.mem.span(arg));
     }
 
     // Delegate all command routing and dispatch to cli_dispatcher
@@ -3079,8 +3128,8 @@ const CredentialStorage = struct {
 };
 
 fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
-    const home_dir = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
+    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
         else => return err,
     };
     defer allocator.free(home_dir);
@@ -3088,8 +3137,8 @@ fn getCredentialsPath(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
-    const home_dir = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
+    const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => getEnvVarOwned(allocator, "USERPROFILE") catch return error.NoHomeDir,
         else => return err,
     };
     defer allocator.free(home_dir);
@@ -3267,7 +3316,7 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
 
 fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     // Use GEODE_SERVER_ADDRESS env var as default (set by test harness on random ports)
-    const env_server = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_SERVER_ADDRESS") else null;
+    const env_server = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
     var server: []const u8 = env_server orelse "127.0.0.1:3141";
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
@@ -3384,7 +3433,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
     }
 
     // Save credentials
-    const expires_at = std.time.milliTimestamp() + 24 * 60 * 60 * 1000; // 24 hours
+    const expires_at = compat_milliTimestamp() + 24 * 60 * 60 * 1000; // 24 hours
     const creds = CredentialStorage{
         .server = server,
         .username = final_username,
@@ -3399,7 +3448,7 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         std.debug.print("{s}", .{msg});
         return;
     };
-    const stdout_file = std.fs.File{ .handle = stdout_handle };
+    const stdout_file = std.Io.File{ .handle = stdout_handle, .flags = .{ .nonblocking = false } };
     stdout_file.writeAll(msg) catch {};
     if (save_session) {
         saveCredentials(allocator, creds) catch |err| {
@@ -3481,12 +3530,12 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     // Get home directory - use std.process for cross-platform compatibility
     // Windows uses USERPROFILE, Unix uses HOME
     const home = if (builtin.os.tag == .windows)
-        std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+        getEnvVarOwned(allocator, "USERPROFILE") catch {
             std.debug.print("Error: USERPROFILE environment variable not set\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
     else
-        std.process.getEnvVarOwned(allocator, "HOME") catch {
+        getEnvVarOwned(allocator, "HOME") catch {
             std.debug.print("Error: HOME environment variable not set\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -3514,7 +3563,7 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
     defer allocator.free(content);
 
     // Output the content to stdout
-    const stdout_fd = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
+    const stdout_fd = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
     _ = try stdout_fd.writeAll(content);
     if (content.len == 0 or content[content.len - 1] != '\n') {
         _ = try stdout_fd.writeAll("\n");

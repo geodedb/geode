@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 // Note: mvcc types defined as opaque to avoid circular dependency with server module
 // The actual MVCCManager is in server/txn/mvcc.zig
 const TxnId = u64;
@@ -111,8 +146,8 @@ pub const MaterializedViewData = struct {
             .allocator = allocator,
             .rows = ArrayList(graph_storage.Binding).init(allocator),
             .schema = ArrayList(graph_storage.Column).init(allocator),
-            .creation_timestamp = std.time.milliTimestamp(),
-            .refresh_timestamp = std.time.milliTimestamp(),
+            .creation_timestamp = compat_milliTimestamp(),
+            .refresh_timestamp = compat_milliTimestamp(),
         };
     }
 
@@ -126,7 +161,7 @@ pub const MaterializedViewData = struct {
     }
 
     pub fn updateRefreshTimestamp(self: *MaterializedViewData) void {
-        self.refresh_timestamp = std.time.milliTimestamp();
+        self.refresh_timestamp = compat_milliTimestamp();
     }
 };
 
@@ -189,7 +224,7 @@ pub const DependencyTracker = struct {
         const entry = ChangeLogEntry{
             .table_name = try self.allocator.dupe(u8, table_name),
             .change_type = change_type,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .processed = false,
         };
         try self.change_log.append(entry);
@@ -300,7 +335,7 @@ pub const MaterializedViewManager = struct {
             .view_name = owned_name,
             .source_query = owned_query,
             .refresh_strategy = refresh_strategy,
-            .creation_timestamp = std.time.milliTimestamp(),
+            .creation_timestamp = compat_milliTimestamp(),
             .last_refresh_timestamp = 0,
             .next_refresh_timestamp = null,
             .refresh_interval_seconds = refresh_interval_seconds,
@@ -362,7 +397,7 @@ pub const MaterializedViewManager = struct {
         const data_ptr = self.view_data.getPtr(view_name) orelse return error.ViewDataNotFound;
 
         metadata_ptr.state = .refreshing;
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         errdefer {
             metadata_ptr.state = .failed;
@@ -389,7 +424,7 @@ pub const MaterializedViewManager = struct {
         data_ptr.updateRefreshTimestamp();
 
         // Update metadata
-        const end_time = std.time.milliTimestamp();
+        const end_time = compat_milliTimestamp();
         const refresh_time = @as(f64, @floatFromInt(end_time - start_time));
 
         metadata_ptr.last_refresh_timestamp = end_time;
@@ -431,7 +466,7 @@ pub const MaterializedViewManager = struct {
 
         // Update statistics
         metadata_ptr.statistics.total_query_hits += 1;
-        metadata_ptr.statistics.last_query_hit_timestamp = std.time.milliTimestamp();
+        metadata_ptr.statistics.last_query_hit_timestamp = compat_milliTimestamp();
         self.statistics.total_query_hits += 1;
 
         // Apply filter and limit
@@ -494,11 +529,11 @@ pub const MaterializedViewManager = struct {
         switch (strategy) {
             .auto_scheduled => {
                 const interval = interval_seconds orelse self.config.default_refresh_interval_seconds;
-                const schedule_time = std.time.milliTimestamp() + (@as(i64, @intCast(interval)) * 1000);
+                const schedule_time = compat_milliTimestamp() + (@as(i64, @intCast(interval)) * 1000);
                 try self.refresh_scheduler.scheduleJob(view_name, schedule_time, .normal);
             },
             .auto_immediate => {
-                try self.refresh_scheduler.scheduleJob(view_name, std.time.milliTimestamp(), .high);
+                try self.refresh_scheduler.scheduleJob(view_name, compat_milliTimestamp(), .high);
             },
             else => {}, // Manual or other strategies don't need scheduling
         }
@@ -554,7 +589,7 @@ pub const MaterializedViewManager = struct {
         // GAP-0046: Execute query using the actual query execution engine
         // CANARY: REQ=REQ-MATERIALIZED-VIEWS-006; FEATURE="MV Source Query Execution"; ASPECT=ActualQueryExecution; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2026-01-10
 
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Parse the source query
         var parse_result = lib.parseGql(query, self.allocator) catch |err| {
@@ -634,7 +669,7 @@ pub const MaterializedViewManager = struct {
             }
         }
 
-        const end_time = std.time.milliTimestamp();
+        const end_time = compat_milliTimestamp();
 
         return QueryResult{
             .rows = try result_rows.toOwnedSlice(),

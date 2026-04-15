@@ -1,4 +1,57 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const geode_auth = @import("geode_auth");
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -215,7 +268,7 @@ const AuthSnapshot = struct {
 };
 
 /// Global user store - LRU cache backed by optional persistent resolver.
-var user_store_mutex = std.Thread.Mutex{};
+var user_store_mutex = std.Io.Mutex.init;
 var user_store: ?UserCache = null;
 var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var persistent_resolver: ?PersistentUserResolver = null;
@@ -223,21 +276,21 @@ var persistent_resolver: ?PersistentUserResolver = null;
 const default_auth_cache_entries: usize = 256;
 
 fn authCacheCapacity(allocator: std.mem.Allocator) usize {
-    const env_val = std.process.getEnvVarOwned(allocator, "GEODE_AUTH_CACHE_SIZE") catch return default_auth_cache_entries;
+    const env_val = getEnvVarOwned(allocator, "GEODE_AUTH_CACHE_SIZE") catch return default_auth_cache_entries;
     defer allocator.free(env_val);
     return std.fmt.parseInt(usize, env_val, 10) catch default_auth_cache_entries;
 }
 
 fn currentCacheAllocator() std.mem.Allocator {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (user_store) |*store| return store.allocator;
     return std.heap.c_allocator;
 }
 
 pub fn initUserStore(allocator: std.mem.Allocator) !void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) {
         user_store = UserCache.init(allocator, authCacheCapacity(allocator));
@@ -245,14 +298,14 @@ pub fn initUserStore(allocator: std.mem.Allocator) !void {
 }
 
 pub fn setPersistentUserResolver(resolver: ?PersistentUserResolver) void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     persistent_resolver = resolver;
 }
 
 pub fn setCacheCapacityForTesting(max_entries: usize) !void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store) |*store| {
         store.max_entries = @max(@as(usize, 1), max_entries);
@@ -271,8 +324,8 @@ pub fn isAuthEnabled() bool {
 }
 
 pub fn deinitUserStore() void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store) |*store| {
         store.deinit();
@@ -301,8 +354,8 @@ pub fn verifyPassword(password: []const u8, stored_hash: []const u8) bool {
 
 /// Create a new user
 pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) {
         user_store = UserCache.init(allocator, authCacheCapacity(allocator));
@@ -325,7 +378,7 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
         .password_hash = password_hash,
         .email = try store_allocator.dupe(u8, email),
         .role = role,
-        .created_at = std.time.timestamp(),
+        .created_at = compat_timestamp(),
         .last_login = null,
         .active = true,
         .password_reset_required = password_reset_required,
@@ -338,8 +391,8 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
 /// Create a user with a pre-hashed password (for syncing from auth graph store).
 /// Skips if the user already exists in the in-memory store.
 pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, password_hash: []const u8, email: []const u8, role: Role, password_reset_required: bool) !void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) {
         user_store = UserCache.init(allocator, authCacheCapacity(allocator));
@@ -358,7 +411,7 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
         .password_hash = try store_allocator.dupe(u8, password_hash),
         .email = try store_allocator.dupe(u8, email),
         .role = role,
-        .created_at = std.time.timestamp(),
+        .created_at = compat_timestamp(),
         .last_login = null,
         .active = true,
         .password_reset_required = password_reset_required,
@@ -410,8 +463,8 @@ pub fn getUser(username: []const u8) ?User {
 pub fn listUsers() ![]const User {
     try loadAllUsersFromResolver();
 
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return &[_]User{};
     return user_store.?.snapshot();
@@ -419,8 +472,8 @@ pub fn listUsers() ![]const User {
 
 /// GAP-0270: Delete a user from the in-memory store
 pub fn deleteUser(username: []const u8) !void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return error.Unauthenticated;
     if (!user_store.?.remove(username)) return error.Unauthenticated;
@@ -429,8 +482,8 @@ pub fn deleteUser(username: []const u8) !void {
 /// Check if any users exist
 pub fn hasUsers() bool {
     const resolver = blk: {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (user_store != null and user_store.?.entries.count() > 0) return true;
         break :blk persistent_resolver;
@@ -448,8 +501,8 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     _ = allocator;
     if (!try ensureUserCached(username)) return error.Unauthenticated;
 
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return error.Unauthenticated;
     const store_allocator = user_store.?.allocator;
@@ -468,8 +521,8 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
 }
 
 pub fn invalidateCachedUser(username: []const u8) void {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (user_store) |*store| {
         _ = store.remove(username);
     }
@@ -481,7 +534,7 @@ fn generateSecurePassword(allocator: std.mem.Allocator) ![]const u8 {
     const charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
     var password: [24]u8 = undefined;
     var random_bytes: [24]u8 = undefined;
-    std.crypto.random.bytes(&random_bytes);
+    compat_fillRandom(&random_bytes);
 
     for (&password, random_bytes) |*p, r| {
         p.* = charset[r % charset.len];
@@ -500,13 +553,13 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
 
     if (!hasUsers()) {
         // Get credentials from environment variables (no hardcoded fallback)
-        const admin_user = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {
+        const admin_user = getEnvVarOwned(allocator, "GEODE_ADMIN_USERNAME") catch |err| blk: {
             if (err == error.EnvironmentVariableNotFound) break :blk try allocator.dupe(u8, "geode");
             return err;
         };
         defer allocator.free(admin_user);
 
-        const admin_email = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_EMAIL") catch |err| blk: {
+        const admin_email = getEnvVarOwned(allocator, "GEODE_ADMIN_EMAIL") catch |err| blk: {
             if (err == error.EnvironmentVariableNotFound) break :blk try allocator.dupe(u8, "admin@localhost");
             return err;
         };
@@ -514,7 +567,7 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
 
         // Get password from env or generate secure random password
         var generated_password: bool = false;
-        const admin_password = std.process.getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD") catch |err| blk: {
+        const admin_password = getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD") catch |err| blk: {
             if (err == error.EnvironmentVariableNotFound) {
                 generated_password = true;
                 break :blk try generateSecurePassword(allocator);
@@ -540,15 +593,15 @@ pub fn ensureDefaultUser(allocator: std.mem.Allocator) !void {
 }
 
 fn persistentResolverEnabled() bool {
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return persistent_resolver != null;
 }
 
 fn resolvePersistentUser(allocator: std.mem.Allocator, username: []const u8) !?User {
     const resolver = blk: {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         break :blk persistent_resolver;
     };
 
@@ -560,8 +613,8 @@ fn resolvePersistentUser(allocator: std.mem.Allocator, username: []const u8) !?U
 
 fn resolvePersistentAuthVersion(username: []const u8) !?u64 {
     const resolver = blk: {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         break :blk persistent_resolver;
     };
 
@@ -575,8 +628,8 @@ fn resolvePersistentAuthVersion(username: []const u8) !?u64 {
 
 fn loadAllUsersFromResolver() !void {
     const resolver = blk: {
-        user_store_mutex.lock();
-        defer user_store_mutex.unlock();
+        user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         break :blk persistent_resolver;
     };
 
@@ -585,8 +638,8 @@ fn loadAllUsersFromResolver() !void {
     const loaded = try resolver.?.list_fn.?(resolver.?.ctx, cache_allocator);
     defer cache_allocator.free(loaded);
 
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) {
         user_store = UserCache.init(cache_allocator, authCacheCapacity(cache_allocator));
@@ -602,21 +655,21 @@ fn loadAllUsersFromResolver() !void {
 }
 
 fn ensureUserCached(username: []const u8) !bool {
-    user_store_mutex.lock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     if (user_store) |*store| {
         if (store.get(username) != null) {
-            user_store_mutex.unlock();
+            user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return true;
         }
     }
-    user_store_mutex.unlock();
+    user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const cache_allocator = currentCacheAllocator();
     const resolved = try resolvePersistentUser(cache_allocator, username);
     if (resolved == null) return false;
 
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (user_store == null) {
         user_store = UserCache.init(cache_allocator, authCacheCapacity(cache_allocator));
     }
@@ -631,13 +684,13 @@ fn refreshCachedUserIfStale(username: []const u8) !bool {
     if (persistent_version == null) return true;
 
     var cached_version: ?u64 = null;
-    user_store_mutex.lock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     if (user_store) |*store| {
         if (store.get(username)) |node| {
             cached_version = node.user.auth_version;
         }
     }
-    user_store_mutex.unlock();
+    user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (cached_version == null or cached_version.? == persistent_version.?) return true;
 
@@ -651,8 +704,8 @@ pub fn currentAuthVersion(username: []const u8) !?u64 {
     }
     if (!try ensureUserCached(username)) return null;
 
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (user_store == null) return null;
     const cached = user_store.?.entries.get(username) orelse return null;
     return cached.user.auth_version;
@@ -665,8 +718,8 @@ pub fn isSessionAuthCurrent(username: []const u8, session_auth_version: u64) !bo
 
 fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
     if (!try refreshCachedUserIfStale(username)) return null;
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return null;
     const cached = user_store.?.entries.get(username) orelse return null;
@@ -681,8 +734,8 @@ fn getAuthSnapshot(username: []const u8) !?AuthSnapshot {
 
 fn getUserInternal(username: []const u8) !?User {
     if (!try refreshCachedUserIfStale(username)) return null;
-    user_store_mutex.lock();
-    defer user_store_mutex.unlock();
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (user_store == null) return null;
     const cached = user_store.?.entries.get(username) orelse return null;

@@ -7,6 +7,59 @@
 /// Extracted as part of Phase 1, M1.3 of the modularization effort.
 const std = @import("std");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE Key Management"; ASPECT=KeyManagement; STATUS=TESTED; TEST=tde_tests; OWNER=security; UPDATED=2025-11-12
 
 /// AES-256 key size in bytes
@@ -115,7 +168,7 @@ var current_provider: KeyProvider = .StaticEnv;
 // CANARY: REQ=REQ-GQL-TDE-KEYID-001; FEATURE="SecureKeyIdDerivation"; ASPECT=Security; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
 pub fn loadKey(allocator: std.mem.Allocator, enabled: bool) !KeyStatus {
     if (!enabled) return error.FeatureDisabled;
-    const key_opt = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
+    const key_opt = getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return KeyStatus{ .loaded = false },
         else => return e,
     };
@@ -172,7 +225,7 @@ pub fn deriveKey(raw_hex: []const u8, out: *[KeyBytes]u8) !void {
 
 /// Load raw key from GEODE_TDE_KEY (hex-encoded) or return null if unset.
 pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
-    const key_buf = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
+    const key_buf = getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
@@ -187,7 +240,7 @@ pub fn loadRawKey(allocator: std.mem.Allocator) !?[KeyBytes]u8 {
 pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult {
     // Generate master key
     var master_key: [32]u8 = undefined;
-    std.crypto.random.bytes(&master_key);
+    compat_fillRandom(&master_key);
 
     // Generate derived keys
     const data_key_count: u32 = 10; // Number of data encryption keys
@@ -235,14 +288,14 @@ pub fn initializeKeyHierarchy(allocator: std.mem.Allocator) !KeyHierarchyResult 
 
 /// Rotate encryption keys with zero-downtime migration
 pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
-    const start_time = std.time.milliTimestamp();
+    const start_time = compat_milliTimestamp();
 
     // Load current key
     const old_key = try loadRawKey(allocator) orelse return error.NoCurrentKey;
 
     // Generate new master key
     var new_master_key: [32]u8 = undefined;
-    std.crypto.random.bytes(&new_master_key);
+    compat_fillRandom(&new_master_key);
 
     // Calculate key IDs
     var old_hash: [32]u8 = undefined;
@@ -274,10 +327,10 @@ pub fn rotateKeys(allocator: std.mem.Allocator) !RotateKeysResult {
         records_migrated += 1;
 
         // Simulate some work
-        std.crypto.random.bytes(&new_master_key);
+        compat_fillRandom(&new_master_key);
     }
 
-    const duration_ms: u64 = @intCast(std.time.milliTimestamp() - start_time);
+    const duration_ms: u64 = @intCast(compat_milliTimestamp() - start_time);
 
     return .{
         .old_key_id = old_key_id,
@@ -341,8 +394,8 @@ pub fn configureKMS(allocator: std.mem.Allocator, provider: []const u8) !Configu
         // SEC-06: Use ephemeral random key and nonce instead of static values
         var key: [32]u8 = undefined;
         var nonce: [12]u8 = undefined;
-        std.crypto.random.bytes(&key);
-        std.crypto.random.bytes(&nonce);
+        compat_fillRandom(&key);
+        compat_fillRandom(&nonce);
 
         // Encrypt test data
         var encrypted: [test_data.len]u8 = undefined;
@@ -417,7 +470,7 @@ pub fn getRotationState(allocator: std.mem.Allocator) !GetRotationStateResult {
 /// Configure key rotation schedule
 pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !ConfigureRotationResult {
     // Calculate next rotation time
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const next_rotation_ms = now + (@as(i64, max_age_hours) * 3600 * 1000);
     rotation_state.scheduled_rotation = next_rotation_ms;
 
@@ -433,7 +486,7 @@ pub fn configureRotation(allocator: std.mem.Allocator, max_age_hours: u32) !Conf
 pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
     // Generate key material using HKDF
     var ikm: [32]u8 = undefined;
-    std.crypto.random.bytes(&ikm);
+    compat_fillRandom(&ikm);
 
     // Derive key using SHA-256 based HKDF
     var derived_key: [32]u8 = undefined;
@@ -463,7 +516,7 @@ pub fn deriveDataKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyRe
 /// Derive backup encryption key from master key
 pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !DeriveDataKeyResult {
     var ikm: [32]u8 = undefined;
-    std.crypto.random.bytes(&ikm);
+    compat_fillRandom(&ikm);
 
     var derived_key: [32]u8 = undefined;
     const salt = "geode-backup-key";
@@ -566,7 +619,7 @@ pub fn deriveTenantTdeKey(master_key: *const [KeyBytes]u8, tenant_id: []const u8
 pub const TenantKeyManager = struct {
     master_key: [KeyBytes]u8,
     tenant_keys: std.StringHashMap(TenantKeyEntry),
-    mu: std.Thread.Mutex,
+    mu: std.Io.Mutex,
     allocator: std.mem.Allocator,
 
     const TenantKeyEntry = struct {
@@ -598,8 +651,8 @@ pub const TenantKeyManager = struct {
 
     /// Get the TDE encryption key for a tenant. Derives and caches on first access.
     pub fn getKeyForTenant(self: *TenantKeyManager, tenant_id: []const u8) !TenantKeyEntry {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.tenant_keys.get(tenant_id)) |entry| {
             return entry;
@@ -622,8 +675,8 @@ pub const TenantKeyManager = struct {
     /// Rotate the key for a specific tenant by incrementing its version.
     /// Returns the new version number.
     pub fn rotateTenantKey(self: *TenantKeyManager, tenant_id: []const u8) !u16 {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const current_version: u16 = if (self.tenant_keys.get(tenant_id)) |entry|
             entry.version
@@ -650,8 +703,8 @@ pub const TenantKeyManager = struct {
 
     /// Check if a tenant has a cached key and return its version, or null.
     pub fn getTenantKeyVersion(self: *TenantKeyManager, tenant_id: []const u8) ?u16 {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.tenant_keys.get(tenant_id)) |entry| {
             return entry.version;
@@ -661,8 +714,8 @@ pub const TenantKeyManager = struct {
 
     /// Return the number of cached tenant keys.
     pub fn cachedKeyCount(self: *TenantKeyManager) usize {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.tenant_keys.count();
     }
 };
@@ -895,7 +948,7 @@ test "per-tenant key isolates encryption - tenant A cannot decrypt tenant B data
     // Encrypt with tenant A's key
     const plaintext = "secret data for tenant A";
     var nonce: [12]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    compat_fillRandom(&nonce);
     var ciphertext: [plaintext.len]u8 = undefined;
     var tag: [16]u8 = undefined;
     crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ciphertext, &tag, plaintext, &.{}, nonce, key_a);

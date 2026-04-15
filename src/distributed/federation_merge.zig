@@ -3,6 +3,41 @@
 /// Extracted from federation.zig to reduce file size.  All public symbols are
 /// re-exported by federation.zig so callers need not change their imports.
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const quic = @import("../transport/quic.zig");
 const schema = @import("schema");
@@ -169,11 +204,11 @@ pub fn readProtoMessage(
 ) !schema.QuicServerMessage {
     var len_buf: [4]u8 = undefined;
     var total_read: usize = 0;
-    const start = std.time.milliTimestamp();
+    const start = compat_milliTimestamp();
     while (total_read < len_buf.len) {
         const n = stream.read(len_buf[total_read..]) catch |err| switch (err) {
             error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                if (compat_milliTimestamp() - start > timeout_ms) return error.Timeout;
                 try client.poll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;
@@ -194,7 +229,7 @@ pub fn readProtoMessage(
     while (total_read < msg_len) {
         const n = stream.read(msg_bytes[total_read..]) catch |err| switch (err) {
             error.WouldBlock => {
-                if (std.time.milliTimestamp() - start > timeout_ms) return error.Timeout;
+                if (compat_milliTimestamp() - start > timeout_ms) return error.Timeout;
                 try client.poll(5);
                 std.Thread.sleep(5 * std.time.ns_per_ms);
                 continue;

@@ -1,5 +1,40 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 // CANARY: REQ=REQ-GQL-010; FEATURE="RealityDocs"; ASPECT=ImplementationRealityDeltaTool; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_ImplementationRealityDeltaTool; OWNER=tooling; UPDATED=2025-09-21
 
 pub fn main() !void {
@@ -37,7 +72,7 @@ pub fn main() !void {
         defer allocator.free(prev_rows);
     }
 
-    const now_ts = std.time.timestamp();
+    const now_ts = compat_timestamp();
     var added_idx = std.ArrayListUnmanaged(usize){};
     defer if (added_idx.items.len > 0) added_idx.deinit(allocator);
     var promo_idx = std.ArrayListUnmanaged(usize){};
@@ -64,7 +99,7 @@ pub fn main() !void {
     }
 
     // Append delta section
-    var out_file = try std.Io.Dir.cwd().createFile(out_path, .{ .read = true, .truncate = false, .mode = 0o666 });
+    var out_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), out_path, .{ .read = true, .truncate = false, .mode = 0o666 });
     defer out_file.close();
     try out_file.seekFromEnd(0);
     const line = try std.fmt.allocPrint(allocator, "\n\n## Delta {d}\nAdded: {d}\n", .{ now_ts, added_idx.items.len });
@@ -93,7 +128,7 @@ pub fn main() !void {
     }
 
     // Persist simplified snapshot with aspects array for future fast diff
-    var prev_file = try std.Io.Dir.cwd().createFile(prev_path, .{ .read = true, .truncate = true });
+    var prev_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), prev_path, .{ .read = true, .truncate = true });
     defer prev_file.close();
     try prev_file.writeAll("{\n  \"aspects\": [\n");
     var first = true;
@@ -165,7 +200,7 @@ fn collectRows(v: *std.json.Value, ally2: std.mem.Allocator) ![]Row {
 test "TestCANARY_REQ_GQL_010_ImplementationRealityDeltaTool" {
     // smoke: create status.json in new schema (requirements/features)
     const sample = "{\n  \"requirements\": [ { \"id\": \"REQ-GQL-000\", \"features\": [ { \"feature\": \"Feature\", \"aspect\": \"Aspect\", \"status\": \"TESTED\" } ] } ]\n}";
-    var tmp = try std.Io.Dir.cwd().createFile("status.json", .{ .read = true, .truncate = true });
+    var tmp = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "status.json", .{ .read = true, .truncate = true });
     defer tmp.close();
     _ = try tmp.write(sample);
     // Ensure prev snapshot removed

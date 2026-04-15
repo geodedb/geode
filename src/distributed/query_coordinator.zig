@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const planner = @import("../planner.zig");
 const federation = @import("federation.zig");
@@ -73,7 +108,7 @@ pub const QueryCoordinator = struct {
         limit: ?u64,
         offset: ?u64,
     ) !federation.QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Parse and analyze query to determine sharding strategy
         const plan = try self.planDistributedQuery(query, params);
@@ -89,7 +124,7 @@ pub const QueryCoordinator = struct {
         // Gather phase - collect and merge results
         const merged = try self.gatherResults(shard_results, order_by, limit, offset);
 
-        const exec_time = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const exec_time = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordQuery(exec_time, shard_results.len);
 
         return merged;
@@ -239,7 +274,7 @@ pub const QueryCoordinator = struct {
     // CANARY: REQ=REQ-DIST-LOCAL-001; FEATURE="DistributedLocalExecution"; ASPECT=Distributed; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     /// Execute query fragment on local shard using the actual query executor
     fn executeLocalFragment(self: *Self, query_text: []const u8, params: []const protocol.Value) !federation.QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // GAP-0043: Wire to actual executor instead of returning mock results
         // Parse the query
@@ -252,7 +287,7 @@ pub const QueryCoordinator = struct {
             return federation.QueryResults{
                 .rows = &.{},
                 .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
                 .ordered = false,
             };
         };
@@ -263,7 +298,7 @@ pub const QueryCoordinator = struct {
             return federation.QueryResults{
                 .rows = &.{},
                 .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
                 .ordered = false,
             };
         };
@@ -274,7 +309,7 @@ pub const QueryCoordinator = struct {
             return federation.QueryResults{
                 .rows = &.{},
                 .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
                 .ordered = false,
             };
         };
@@ -322,7 +357,7 @@ pub const QueryCoordinator = struct {
         return federation.QueryResults{
             .rows = rows,
             .schema = schema,
-            .execution_time_ms = @as(u64, @intCast(std.time.milliTimestamp() - start_time)),
+            .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
             .ordered = false,
         };
     }

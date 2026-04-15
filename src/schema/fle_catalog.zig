@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const annotations = @import("annotations.zig");
 const tde = @import("../storage/tde_file_encryption.zig");
 
@@ -15,7 +24,7 @@ const global_allocator = std.heap.smp_allocator;
 
 /// Thread-safe global schema catalog for field-level encryption metadata
 pub const SchemaCatalog = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     allocator: std.mem.Allocator,
     schemas: std.StringHashMap(*annotations.TypeMetadata),
 
@@ -29,8 +38,8 @@ pub const SchemaCatalog = struct {
 
     /// Clean up catalog resources
     pub fn deinit(self: *SchemaCatalog) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         self.clearSchemasLocked();
     }
@@ -38,8 +47,8 @@ pub const SchemaCatalog = struct {
     /// Reset catalog contents while keeping the same instance pointer.
     /// This avoids invalidating outstanding references during concurrent tests.
     pub fn reset(self: *SchemaCatalog) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         self.clearSchemasLocked();
         self.schemas = std.StringHashMap(*annotations.TypeMetadata).init(self.allocator);
@@ -66,8 +75,8 @@ pub const SchemaCatalog = struct {
         type_name: []const u8,
         type_meta: annotations.TypeMetadata,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Check if type already exists
         if (self.schemas.contains(type_name)) {
@@ -90,8 +99,8 @@ pub const SchemaCatalog = struct {
     /// Thread-safe read operation
     /// Note: Caller must not modify the returned pointer
     pub fn getType(self: *SchemaCatalog, type_name: []const u8) ?*const annotations.TypeMetadata {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.get(type_name)) |type_meta_ptr| {
             return type_meta_ptr;
@@ -106,8 +115,8 @@ pub const SchemaCatalog = struct {
         type_name: []const u8,
         field_name: []const u8,
     ) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.get(type_name)) |type_meta_ptr| {
             return type_meta_ptr.isFieldEncrypted(field_name);
@@ -122,8 +131,8 @@ pub const SchemaCatalog = struct {
         type_name: []const u8,
         field_name: []const u8,
     ) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.get(type_name)) |type_meta_ptr| {
             return type_meta_ptr.isFieldSearchable(field_name);
@@ -138,8 +147,8 @@ pub const SchemaCatalog = struct {
         type_name: []const u8,
         field_name: []const u8,
     ) ?annotations.FieldMetadata {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.get(type_name)) |type_meta_ptr| {
             return type_meta_ptr.getField(field_name);
@@ -150,8 +159,8 @@ pub const SchemaCatalog = struct {
     /// Remove a type from the catalog
     /// Thread-safe operation
     pub fn removeType(self: *SchemaCatalog, type_name: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.fetchRemove(type_name)) |kv| {
             self.allocator.free(kv.key);
@@ -172,8 +181,8 @@ pub const SchemaCatalog = struct {
         type_name: []const u8,
         field_meta: annotations.FieldMetadata,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Deep-copy the field metadata so the catalog owns all strings.
         // The caller's strings (e.g. AST nodes) may be freed after this call.
@@ -228,8 +237,8 @@ pub const SchemaCatalog = struct {
         field_name: []const u8,
         role: []const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Get the type metadata (mutable)
         const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
@@ -274,8 +283,8 @@ pub const SchemaCatalog = struct {
         field_name: []const u8,
         role: []const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Get the type metadata (mutable)
         const type_meta_ptr = self.schemas.getPtr(type_name) orelse return error.TypeNotFound;
@@ -328,8 +337,8 @@ pub const SchemaCatalog = struct {
 
     /// Get count of registered types
     pub fn count(self: *SchemaCatalog) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return self.schemas.count();
     }
@@ -337,14 +346,14 @@ pub const SchemaCatalog = struct {
 
 /// Global singleton schema catalog instance
 var global_catalog: ?*SchemaCatalog = null;
-var global_catalog_mutex: std.Thread.Mutex = .{};
+var global_catalog_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Get or create the global schema catalog
 /// Thread-safe singleton access
 pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
     _ = allocator; // Kept for API compatibility with existing call sites
-    global_catalog_mutex.lock();
-    defer global_catalog_mutex.unlock();
+    global_catalog_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_catalog_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_catalog == null) {
         const catalog = try global_allocator.create(SchemaCatalog);
@@ -366,8 +375,8 @@ pub fn globalCatalog(allocator: std.mem.Allocator) !*SchemaCatalog {
 /// Reset global catalog (for testing)
 pub fn resetGlobalCatalog(allocator: std.mem.Allocator) void {
     _ = allocator; // Unused, kept for API compatibility
-    global_catalog_mutex.lock();
-    defer global_catalog_mutex.unlock();
+    global_catalog_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_catalog_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_catalog) |catalog| {
         catalog.reset();
@@ -379,7 +388,7 @@ pub fn saveCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
     // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+    const data_dir = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
         if (err == error.EnvironmentVariableNotFound) {
             break :blk try allocator.dupe(u8, "/tmp");
         }
@@ -464,7 +473,7 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     const allocator = catalog.allocator;
 
     // Get catalog path from GEODE_DATA_DIR or use default
-    const data_dir = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
+    const data_dir = getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch |err| blk: {
         if (err == error.EnvironmentVariableNotFound) {
             break :blk try allocator.dupe(u8, "/tmp");
         }

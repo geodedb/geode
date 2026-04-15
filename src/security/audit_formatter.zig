@@ -6,6 +6,41 @@
 /// Extracted as part of Phase 1, M1.1 of the modularization effort.
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 // CANARY: REQ=REQ-GQL-031; FEATURE="Security Audit"; ASPECT=AuditFormatting; STATUS=TESTED; TEST=audit_tests; OWNER=security; UPDATED=2025-11-12
 
 /// Import the AuditEvent type from the main audit module
@@ -68,7 +103,7 @@ pub fn formatSyslog(event: AuditEvent, allocator: std.mem.Allocator) ![]u8 {
 
     const writer = buf.writer(allocator);
     // RFC3164 format: <priority>timestamp hostname tag[pid]: message
-    const timestamp = std.time.milliTimestamp();
+    const timestamp = compat_milliTimestamp();
     const datetime = @divFloor(timestamp, 1000);
 
     // Format: <priority>Jan 01 12:00:00 hostname geode[pid]: message
@@ -170,7 +205,7 @@ test "formatSyslog - access denied event" {
     const testing = std.testing;
 
     const event = AuditEvent{
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .event_type = .access_denied,
         .user_id = 2001,
         .tenant_id = null,

@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 const logging = @import("logging");
@@ -42,7 +77,7 @@ pub const HealthMonitor = struct {
 
     /// Evaluate a node's health based on its last heartbeat timestamp.
     pub fn evaluateNodeHealth(last_heartbeat: i64) HealthStatus {
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         const elapsed = now - last_heartbeat;
 
         if (elapsed < 1000) return .healthy;
@@ -55,7 +90,7 @@ pub const HealthMonitor = struct {
         for (self.health_checks.items) |*check| {
             if (check.node_id == node_id) {
                 check.status = status;
-                check.last_check = std.time.milliTimestamp();
+                check.last_check = compat_milliTimestamp();
                 return;
             }
         }
@@ -63,7 +98,7 @@ pub const HealthMonitor = struct {
         try self.health_checks.append(self.allocator, .{
             .node_id = node_id,
             .consecutive_failures = 0,
-            .last_check = std.time.milliTimestamp(),
+            .last_check = compat_milliTimestamp(),
             .latency_ms = 0,
             .status = status,
         });
@@ -89,21 +124,21 @@ pub const HealthMonitor = struct {
 // CANARY: REQ=REQ-GAP-0513-DIST-HEALTH-003; FEATURE="ClusterHealth"; ASPECT=estimateReplicationLag; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-06
 
 test "HealthMonitor.evaluateNodeHealth: healthy when elapsed < 1000ms" {
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const last_heartbeat = now - 500;
     const status = HealthMonitor.evaluateNodeHealth(last_heartbeat);
     try std.testing.expectEqual(HealthMonitor.HealthStatus.healthy, status);
 }
 
 test "HealthMonitor.evaluateNodeHealth: degraded when elapsed 1000-5000ms" {
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const last_heartbeat = now - 2000;
     const status = HealthMonitor.evaluateNodeHealth(last_heartbeat);
     try std.testing.expectEqual(HealthMonitor.HealthStatus.degraded, status);
 }
 
 test "HealthMonitor.evaluateNodeHealth: unhealthy when elapsed > 5000ms" {
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const last_heartbeat = now - 10000;
     const status = HealthMonitor.evaluateNodeHealth(last_heartbeat);
     try std.testing.expectEqual(HealthMonitor.HealthStatus.unhealthy, status);
@@ -155,7 +190,7 @@ test "HealthMonitor.estimateReplicationLag: known node with latency_ms=10 and sh
     try hm.health_checks.append(std.testing.allocator, .{
         .node_id = 42,
         .consecutive_failures = 0,
-        .last_check = std.time.milliTimestamp(),
+        .last_check = compat_milliTimestamp(),
         .latency_ms = 10,
         .status = .healthy,
     });
@@ -172,7 +207,7 @@ test "HealthMonitor.estimateReplicationLag: known node with latency_ms=10 and 5M
     try hm.health_checks.append(std.testing.allocator, .{
         .node_id = 43,
         .consecutive_failures = 0,
-        .last_check = std.time.milliTimestamp(),
+        .last_check = compat_milliTimestamp(),
         .latency_ms = 10,
         .status = .healthy,
     });

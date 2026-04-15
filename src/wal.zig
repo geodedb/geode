@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const graph_store = @import("graph_store.zig");
 const property_codec = @import("property_value_codec.zig");
 const txn_undo_log = @import("txn_undo_log.zig");
@@ -89,7 +133,7 @@ pub const WalRecord = union(WalOpType) {
 /// then falls back to GEODE_TDE_KEY. Returns null if neither is set.
 fn loadWalKey(allocator: std.mem.Allocator) !?[32]u8 {
     // Try WAL-specific key first
-    const wal_hex = std.process.getEnvVarOwned(allocator, "GEODE_WAL_KEY") catch |e| switch (e) {
+    const wal_hex = getEnvVarOwned(allocator, "GEODE_WAL_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => null,
         else => return e,
     };
@@ -139,7 +183,7 @@ pub const WriteAheadLog = struct {
 
         const dir = std.Io.Dir.cwd().openDir(dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
-                try std.Io.Dir.cwd().makePath(dir_path);
+                try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir_path);
                 return init(allocator, path);
             }
             return err;
@@ -155,7 +199,7 @@ pub const WriteAheadLog = struct {
             .allocator = allocator,
             .inner = inner,
             .checkpoint_lsn = 0,
-            .last_checkpoint_ms = std.time.milliTimestamp(),
+            .last_checkpoint_ms = compat_milliTimestamp(),
         };
     }
 
@@ -269,7 +313,7 @@ pub const WriteAheadLog = struct {
         if (up_to_lsn == 0) return;
         try self.inner.compact(up_to_lsn);
         self.checkpoint_lsn = up_to_lsn;
-        self.last_checkpoint_ms = std.time.milliTimestamp();
+        self.last_checkpoint_ms = compat_milliTimestamp();
     }
 
     /// Perform a checkpoint: delegates physical durability to the graph-storage
@@ -286,7 +330,7 @@ pub const WriteAheadLog = struct {
         const bytes = self.inner.bytesSinceCompact();
         if (bytes >= byte_threshold) return true;
         if (time_threshold_ms > 0 and bytes > 0) {
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             const elapsed: u64 = @intCast(@max(0, now - self.last_checkpoint_ms));
             return elapsed >= time_threshold_ms;
         }
@@ -557,7 +601,7 @@ pub fn initGlobalWal(allocator: std.mem.Allocator, data_dir: ?[]const u8) !void 
     defer allocator.free(wal_path);
 
     // Ensure the directory exists
-    std.Io.Dir.cwd().makePath(dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir) catch |err| {
         log.err("WAL: failed to create data directory", &.{Attr.string("error", @errorName(err))});
     };
 

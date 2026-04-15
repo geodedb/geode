@@ -218,7 +218,7 @@ pub const SchemaColumn = struct {
 pub const JsonProcessorPool = struct {
     processors: std.ArrayList(*OptimizedJsonProcessor),
     allocator: Allocator,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -248,8 +248,8 @@ pub const JsonProcessorPool = struct {
 
     /// Get a processor from the pool (thread-safe)
     pub fn acquire(self: *Self) ?*OptimizedJsonProcessor {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.processors.items.len > 0) {
             const processor = self.processors.pop();
@@ -263,8 +263,8 @@ pub const JsonProcessorPool = struct {
 
     /// Return processor to pool (thread-safe)
     pub fn release(self: *Self, processor: *OptimizedJsonProcessor) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         processor.reset(); // Clean state for next use
         self.processors.append(self.allocator, processor) catch {

@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const RaftNode = raft_consensus.RaftNode;
@@ -21,7 +65,7 @@ pub const cluster_health = @import("cluster_health.zig");
 pub const HealthMonitor = cluster_health.HealthMonitor;
 
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
-    const raw = std.process.getEnvVarOwned(allocator, name) catch return false;
+    const raw = getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);
     if (raw.len == 0) return false;
     if (raw[0] == '0') return false;
@@ -117,7 +161,7 @@ const JoinResponsePayload = struct {
 
 /// SEC-D009: Replay protection guard for Raft frames.
 const ReplayGuard = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     entries: std.AutoHashMap(u128, i64), // key = (from << 64) | term, value = timestamp
     max_entries: usize,
     window_ms: i64,
@@ -136,9 +180,9 @@ const ReplayGuard = struct {
 
     /// Returns true if this (from, term) pair is fresh (not a replay).
     fn check(self: *ReplayGuard, from: u64, term: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        const now = std.time.milliTimestamp();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const now = compat_milliTimestamp();
         const key: u128 = (@as(u128, from) << 64) | @as(u128, term);
         if (self.entries.get(key)) |prev_ts| {
             if (now - prev_ts < self.window_ms) return false; // replay
@@ -373,7 +417,7 @@ pub const ClusterCoordinator = struct {
         pub const MessageQueue = struct {
             incoming: std.ArrayList(IncomingMessage),
             outgoing: std.ArrayList(OutgoingMessage),
-            mutex: std.Thread.Mutex,
+            mutex: std.Io.Mutex,
         };
 
         pub const IncomingMessage = struct {
@@ -914,7 +958,7 @@ pub const ClusterCoordinator = struct {
                 .endpoint = try allocator.dupe(u8, config.address),
                 .port = config.port,
                 .alive = true,
-                .last_contact = std.time.milliTimestamp(),
+                .last_contact = compat_milliTimestamp(),
                 .rpc_client = null,
             };
         }
@@ -948,7 +992,7 @@ pub const ClusterCoordinator = struct {
             .message_queue = .{
                 .incoming = std.ArrayList(NetworkTransport.IncomingMessage).init(allocator),
                 .outgoing = std.ArrayList(NetworkTransport.OutgoingMessage).init(allocator),
-                .mutex = std.Thread.Mutex{},
+                .mutex = std.Io.Mutex.init,
             },
         };
     }
@@ -1173,7 +1217,7 @@ pub const ClusterCoordinator = struct {
                 .network_mbps = 1000,
                 .current_load = 0.0,
             },
-            .last_heartbeat = std.time.milliTimestamp(),
+            .last_heartbeat = compat_milliTimestamp(),
             .metadata = std.StringHashMap([]const u8).init(allocator),
         };
     }
@@ -1194,7 +1238,7 @@ pub const ClusterCoordinator = struct {
             log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
             _ = client.connectInsecure(host, port, true) catch |err| return err;
         } else {
-            const ca_path = std.process.getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
+            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
             defer if (ca_path) |p| self.allocator.free(p);
 
             if (ca_path) |path| {
@@ -1337,7 +1381,7 @@ pub const ClusterCoordinator = struct {
 
     fn generateTransactionId(self: *ClusterCoordinator) !u64 {
         // Generate unique transaction ID
-        const timestamp: u64 = @intCast(std.time.milliTimestamp());
+        const timestamp: u64 = @intCast(compat_milliTimestamp());
         const node_part = self.node_id << 48;
         const counter = self.incrementTxCounter();
         return node_part | (timestamp << 16) | counter;
@@ -1366,7 +1410,7 @@ pub const ClusterCoordinator = struct {
     fn serializeMetadata(self: *ClusterCoordinator, msg: Message) ![]const u8 {
         const metadata = TxnMetadata{
             .client_id = msg.client_id orelse "",
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .msg_type = msg.msg_type,
         };
         var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);

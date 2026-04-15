@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const fle_catalog = @import("../schema/fle_catalog.zig");
 const fle_aead = @import("fle_aead");
 const fle_key_manager = @import("fle_key_manager");
@@ -265,7 +300,7 @@ fn executeMigrationWithStorage(
         }
 
         offset += state.batch_size;
-        state.last_checkpoint = std.time.milliTimestamp();
+        state.last_checkpoint = compat_milliTimestamp();
 
         // Progress update
         if (state.batch_count % 10 == 0) {
@@ -457,8 +492,8 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
         .migrated_count = 0,
         .error_count = 0,
         .batch_count = 0,
-        .start_time = std.time.milliTimestamp(),
-        .last_checkpoint = std.time.milliTimestamp(),
+        .start_time = compat_milliTimestamp(),
+        .last_checkpoint = compat_milliTimestamp(),
         .status = .in_progress,
     };
 
@@ -494,7 +529,7 @@ pub fn migrateEncrypt(allocator: std.mem.Allocator, args: MigrationArgs) !void {
     }
 
     // GAP-0207 FIX: Use state for elapsed time calculation
-    const elapsed_ms = std.time.milliTimestamp() - state.start_time;
+    const elapsed_ms = compat_milliTimestamp() - state.start_time;
 
     // 6. Update catalog to mark field as encrypted
     std.debug.print("\nUpdating catalog metadata...\n", .{});

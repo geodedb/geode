@@ -1179,7 +1179,7 @@ pub const HashAggregator = struct {
     memory_limit: usize,
     current_memory: usize,
     spilled: bool,
-    spill_file: ?std.fs.File,
+    spill_file: ?std.Io.File,
     /// Phase-2: multiple spill segment files (final rows merged at getResults). Each segment holds serialized AggregateState entries.
     spill_segments: std.ArrayList([]const u8),
     segment_counter: usize,
@@ -1369,7 +1369,7 @@ pub const HashAggregator = struct {
         if (self.groups.count() == 0) return; // nothing to flush
         const filename = try std.fmt.allocPrint(self.allocator, "geode_agg_spill_{d}.bin", .{self.segment_counter});
         errdefer self.allocator.free(filename);
-        var file = try std.Io.Dir.cwd().createFile(filename, .{ .read = true });
+        var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), filename, .{ .read = true });
         defer file.close();
         self.segment_counter += 1;
         self.spilled = true;
@@ -1416,7 +1416,7 @@ pub const HashAggregator = struct {
         };
     }
 
-    fn serializeBindingValue(file: *std.fs.File, v: BindingValue) !void {
+    fn serializeBindingValue(file: *std.Io.File, v: BindingValue) !void {
         switch (v) {
             .Null => try file.writer().writeInt(u8, 0, .little),
             .Int => |n| {
@@ -1440,7 +1440,7 @@ pub const HashAggregator = struct {
         }
     }
 
-    fn deserializeBindingValue(allocator: std.mem.Allocator, file: *std.fs.File) !BindingValue {
+    fn deserializeBindingValue(allocator: std.mem.Allocator, file: *std.Io.File) !BindingValue {
         const tag = try file.reader().readInt(u8, .little);
         return switch (tag) {
             0 => BindingValue{ .Null = {} },
@@ -1464,7 +1464,7 @@ pub const HashAggregator = struct {
         };
     }
 
-    fn serializeAggValue(file: *std.fs.File, av: AggregateState.AggValue) !void {
+    fn serializeAggValue(file: *std.Io.File, av: AggregateState.AggValue) !void {
         switch (av) {
             .Count => |c| try file.writer().writeInt(i64, c, .little),
             .Sum => |s| try serializeBindingValue(file, s),
@@ -1499,7 +1499,7 @@ pub const HashAggregator = struct {
         }
     }
 
-    fn deserializeAggValue(allocator: std.mem.Allocator, file: *std.fs.File, tag: u8) !AggregateState.AggValue {
+    fn deserializeAggValue(allocator: std.mem.Allocator, file: *std.Io.File, tag: u8) !AggregateState.AggValue {
         return switch (tag) {
             0 => AggregateState.AggValue{ .Count = try file.reader().readInt(i64, .little) },
             1 => AggregateState.AggValue{ .Sum = try deserializeBindingValue(allocator, file) },
@@ -1693,7 +1693,7 @@ pub const HashAggregator = struct {
         const filename_list = self.spill_segments.items; // alias
         var i: usize = 0;
         while (i < filename_list.len) : (i += 1) {
-            var file = std.Io.Dir.cwd().openFile(filename_list[i], .{}) catch continue;
+            var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), filename_list[i], .{}) catch continue;
             defer file.close();
             const gcount = try file.reader().readInt(u32, .little);
             var gi: u32 = 0;

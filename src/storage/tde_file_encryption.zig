@@ -14,6 +14,24 @@
 //   defer allocator.free(decrypted);
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const crypto = std.crypto;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=TDE; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-28
@@ -39,7 +57,7 @@ pub const TdeError = error{
 /// Load TDE key from GEODE_TDE_KEY environment variable
 /// Returns null if not set, error if invalid format
 pub fn loadKey(allocator: std.mem.Allocator) !?[KEY_BYTES]u8 {
-    const key_hex = std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
+    const key_hex = getEnvVarOwned(allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
@@ -86,7 +104,7 @@ pub fn encryptWithKey(allocator: std.mem.Allocator, plaintext: []const u8, key: 
     // Generate a cryptographically random nonce for each encryption operation.
     // AES-GCM requires nonce uniqueness per key; random nonces avoid deterministic reuse.
     var nonce: [NONCE_BYTES]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    compat_fillRandom(&nonce);
 
     // Encrypt
     var tag: [TAG_BYTES]u8 = undefined;
@@ -193,7 +211,7 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
     const encrypted = try encrypt(allocator, data);
     defer allocator.free(encrypted);
 
-    const file = try std.Io.Dir.cwd().createFile(path, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
     try file.writeAll(encrypted);
 }
@@ -201,7 +219,7 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
 /// Read and decrypt file
 /// If file is not encrypted, returns plaintext
 pub fn readDecryptedFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.Io.Dir.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
 
     const file_size = try file.getEndPos();

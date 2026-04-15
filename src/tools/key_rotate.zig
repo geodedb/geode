@@ -1,16 +1,25 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const tde = @import("tde_file_encryption");
 
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const raw_argv = std.posix.argv;
+    const raw_argv = proc_init.args.vector;
     const args = try allocator.alloc([:0]u8, raw_argv.len);
     defer allocator.free(args);
     for (raw_argv, 0..) |arg, i| {
-        args[i] = std.mem.span(arg);
+        args[i] = @constCast(std.mem.span(arg));
     }
 
     if (args.len < 2) {
@@ -80,10 +89,11 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
 
     // Generate random key
     var key_data: [tde.KEY_BYTES]u8 = undefined;
-    std.crypto.random.bytes(&key_data);
+    // Zig 0.16: std.crypto.random removed; use Linux getrandom syscall
+    _ = std.os.linux.getrandom(&key_data, key_data.len, 0);
 
     if (output_path) |path| {
-        const file = try std.Io.Dir.cwd().createFile(path, .{ .mode = 0o600 });
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = 0o600 });
         defer file.close();
 
         try file.writeAll(&key_data);
@@ -136,19 +146,19 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 
     // Read old key
-    const old_key_file = try std.Io.Dir.cwd().openFile(old_key_path.?, .{});
+    const old_key_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), old_key_path.?, .{});
     defer old_key_file.close();
     var old_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try old_key_file.read(&old_key_data);
 
     // Read new key
-    const new_key_file = try std.Io.Dir.cwd().openFile(new_key_path.?, .{});
+    const new_key_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), new_key_path.?, .{});
     defer new_key_file.close();
     var new_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try new_key_file.read(&new_key_data);
 
     // Read input file
-    const in_file = try std.Io.Dir.cwd().openFile(input_path.?, .{});
+    const in_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), input_path.?, .{});
     defer in_file.close();
     const in_size = try in_file.getEndPos();
     const raw = try allocator.alloc(u8, @intCast(in_size));
@@ -164,7 +174,7 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     defer allocator.free(encrypted);
 
     // Write output
-    const out_file = try std.Io.Dir.cwd().createFile(output_path.?, .{});
+    const out_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), output_path.?, .{});
     defer out_file.close();
     try out_file.writeAll(encrypted);
 
@@ -198,7 +208,7 @@ fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         return;
     }
 
-    const file = try std.Io.Dir.cwd().openFile(file_path.?, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path.?, .{});
     defer file.close();
 
     var header: [tde.MAGIC.len]u8 = undefined;

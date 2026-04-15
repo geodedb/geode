@@ -1,5 +1,49 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
 const json_lib = @import("json");
 
@@ -28,7 +72,7 @@ pub const UserStore = struct {
     file_path: []const u8,
 
     pub fn init(allocator: std.mem.Allocator) !UserStore {
-        const home_dir = std.process.getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
+        const home_dir = getEnvVarOwned(allocator, "HOME") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => return error.NoHomeDir,
             else => return err,
         };
@@ -63,8 +107,8 @@ pub const UserStore = struct {
                 .email = try allocator.dupe(u8, "admin@localhost"),
                 .status = try allocator.dupe(u8, "active"),
                 .roles = try allocator.dupe([]const u8, &[_][]const u8{"admin"}),
-                .created_at = std.time.timestamp(),
-                .updated_at = std.time.timestamp(),
+                .created_at = compat_timestamp(),
+                .updated_at = compat_timestamp(),
             };
             try store.users.append(store.allocator, admin);
             try store.save();
@@ -123,8 +167,8 @@ pub const UserStore = struct {
                     }
                     break :blk roles;
                 },
-                .created_at = if (json_user.created_at == 0) std.time.timestamp() else json_user.created_at,
-                .updated_at = if (json_user.updated_at == 0) std.time.timestamp() else json_user.updated_at,
+                .created_at = if (json_user.created_at == 0) compat_timestamp() else json_user.created_at,
+                .updated_at = if (json_user.updated_at == 0) compat_timestamp() else json_user.updated_at,
             };
 
             try self.users.append(self.allocator, user);
@@ -156,8 +200,8 @@ pub const UserStore = struct {
             .email = if (email) |e| try self.allocator.dupe(u8, e) else null,
             .status = try self.allocator.dupe(u8, "active"),
             .roles = if (roles) |r| try self.allocator.dupe([]const u8, r) else try self.allocator.dupe([]const u8, &[_][]const u8{"user"}),
-            .created_at = std.time.timestamp(),
-            .updated_at = std.time.timestamp(),
+            .created_at = compat_timestamp(),
+            .updated_at = compat_timestamp(),
         };
 
         try self.users.append(self.allocator, user);

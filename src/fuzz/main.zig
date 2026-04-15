@@ -15,8 +15,8 @@ pub fn main() !void {
     const stdin_file = if (builtin.os.tag == .windows) blk: {
         const h = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return;
         if (h == std.os.windows.INVALID_HANDLE_VALUE) return;
-        break :blk std.fs.File{ .handle = h };
-    } else std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        break :blk std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
+    } else std.Io.File{ .handle = std.posix.STDIN_FILENO, .flags = .{ .nonblocking = false } };
 
     // Read input with size limit to prevent OOM
     const max_input_size: usize = 1024 * 1024; // 1MB max

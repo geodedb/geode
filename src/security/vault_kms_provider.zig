@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const crypto = std.crypto;
 const logging = @import("logging");
 const log = logging.scoped("security");
@@ -366,13 +375,13 @@ pub fn createVaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const 
 
 // Integration with environment variables
 pub fn createVaultKMSFromEnv(allocator: std.mem.Allocator) !VaultKMSProvider {
-    const vault_addr = std.process.getEnvVarOwned(allocator, "VAULT_ADDR") catch return error.VaultAddrNotSet;
+    const vault_addr = getEnvVarOwned(allocator, "VAULT_ADDR") catch return error.VaultAddrNotSet;
     defer allocator.free(vault_addr);
 
-    const vault_token = std.process.getEnvVarOwned(allocator, "VAULT_TOKEN") catch return error.VaultTokenNotSet;
+    const vault_token = getEnvVarOwned(allocator, "VAULT_TOKEN") catch return error.VaultTokenNotSet;
     defer allocator.free(vault_token);
 
-    const key_path = std.process.getEnvVarOwned(allocator, "VAULT_KEY_PATH") catch "geode";
+    const key_path = getEnvVarOwned(allocator, "VAULT_KEY_PATH") catch "geode";
     defer if (!std.mem.eql(u8, key_path, "geode")) allocator.free(key_path);
 
     return VaultKMSProvider.init(allocator, try allocator.dupe(u8, vault_addr), try allocator.dupe(u8, vault_token), try allocator.dupe(u8, key_path));

@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 
 // fed_latency_streak: Analyze a JSONL file (or stdin) of fed_latency_aggregate outputs
@@ -72,12 +81,12 @@ pub fn main() !void {
         }
     }
 
-    var file: ?std.fs.File = null;
+    var file: ?std.Io.File = null;
     // Zig 0.15.1 File.reader requires providing an external buffer.
     var file_buf: [8192]u8 = undefined;
     var stdin_buf2: [8192]u8 = undefined;
     // Create a File for stdin for cross-platform compatibility.
-    const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
+    const stdin_file: std.Io.File = if (builtin.os.tag == .windows)
         .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
             std.process.exit(1);
         } }
@@ -86,7 +95,7 @@ pub fn main() !void {
     // Use stdin's reader directly when no file path provided.
     var reader = blk_reader: {
         if (file_path) |p| {
-            file = try std.Io.Dir.cwd().openFile(p, .{ .mode = .read_only });
+            file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), p, .{ .mode = .read_only });
             break :blk_reader file.?.reader(&file_buf);
         } else {
             break :blk_reader stdin_file.reader(&stdin_buf2);
@@ -94,7 +103,7 @@ pub fn main() !void {
     };
 
     const min_streak: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "FED_STREAK_MIN")) |v| {
+        if (getEnvVarOwned(allocator, "FED_STREAK_MIN")) |v| {
             defer allocator.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |n| break :blk if (n == 0) 1 else n else |_| break :blk 3;
         } else |_| {}
@@ -151,7 +160,7 @@ pub fn main() !void {
     if (current_streak >= min_streak) eligible = true;
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
             defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
@@ -167,11 +176,11 @@ pub fn main() !void {
         );
         const written = fbs2.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
             } }
         else
-            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
         try stdout.writeAll(written);
         return;
     }
@@ -191,11 +200,11 @@ pub fn main() !void {
     try w.writeAll("}\n");
     const out = fbs.getWritten();
     const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
             std.process.exit(1);
         } }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     try stdout.writeAll(out);
 }
 

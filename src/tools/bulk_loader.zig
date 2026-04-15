@@ -3,6 +3,41 @@
 //! Ingests billions of nodes and edges at 1M+ operations per second
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const builtin = @import("builtin");
 
 /// Bulk loader configuration
@@ -46,11 +81,11 @@ pub const LoadStats = struct {
     start_time: i64,
 
     pub fn init() LoadStats {
-        return .{ .start_time = std.time.milliTimestamp() };
+        return .{ .start_time = compat_milliTimestamp() };
     }
 
     pub fn getElapsedMs(self: *const LoadStats) i64 {
-        return std.time.milliTimestamp() - self.start_time;
+        return compat_milliTimestamp() - self.start_time;
     }
 
     pub fn getNodesPerSecond(self: *const LoadStats) f64 {
@@ -86,16 +121,16 @@ pub const Checkpoint = struct {
             self.last_offset,
             self.nodes_loaded,
             self.edges_loaded,
-            std.time.milliTimestamp(),
+            compat_milliTimestamp(),
         });
-        const file = try std.Io.Dir.cwd().createFile(path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
         defer file.close();
         try file.writeAll(json);
         _ = allocator;
     }
 
     pub fn restore(allocator: std.mem.Allocator, path: []const u8) !Checkpoint {
-        const file = try std.Io.Dir.cwd().openFile(path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
         defer file.close();
         var buf: [4096]u8 = undefined;
         const bytes_read = try file.readAll(&buf);
@@ -165,13 +200,13 @@ pub const Batch = struct {
 
 /// Line reader for streaming input
 pub const LineReader = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     buf: [65536]u8 = undefined,
     start: usize = 0,
     end: usize = 0,
     bytes_read: u64 = 0,
 
-    pub fn init(file: std.fs.File) LineReader {
+    pub fn init(file: std.Io.File) LineReader {
         return .{ .file = file };
     }
 
@@ -217,20 +252,20 @@ pub const ProgressReporter = struct {
     stats: *const LoadStats,
     last_report_time: i64,
     report_interval_ms: i64,
-    stderr_file: std.fs.File,
+    stderr_file: std.Io.File,
     buf: [256]u8 = undefined,
 
     pub fn init(stats: *const LoadStats, interval_ms: i64) ProgressReporter {
         return .{
             .stats = stats,
-            .last_report_time = std.time.milliTimestamp(),
+            .last_report_time = compat_milliTimestamp(),
             .report_interval_ms = interval_ms,
             .stderr_file = getStdErr(),
         };
     }
 
     pub fn maybeReport(self: *ProgressReporter) void {
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         if (now - self.last_report_time < self.report_interval_ms) return;
         self.last_report_time = now;
         self.report();
@@ -291,7 +326,7 @@ pub const BulkLoader = struct {
 
         // Open input file or use stdin
         const input_file = if (self.config.input_path) |path|
-            try std.Io.Dir.cwd().openFile(path, .{})
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{})
         else
             getStdIn();
         defer if (self.config.input_path != null) input_file.close();
@@ -362,40 +397,25 @@ pub const BulkLoader = struct {
     }
 };
 
-// Zig 0.15 compatibility for std file handles
-fn getStdIn() std.fs.File {
-    return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
-            std.process.exit(1);
-        } }
-    else
-        std.fs.File{ .handle = std.posix.STDIN_FILENO };
+// Zig 0.16: use std.Io.File static methods for standard handles
+fn getStdIn() std.Io.File {
+    return std.Io.File.stdin();
 }
 
-fn getStdOut() std.fs.File {
-    return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
-            std.process.exit(1);
-        } }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+fn getStdOut() std.Io.File {
+    return std.Io.File.stdout();
 }
 
-fn getStdErr() std.fs.File {
-    return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
-            std.process.exit(1);
-        } }
-    else
-        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+fn getStdErr() std.Io.File {
+    return std.Io.File.stderr();
 }
 
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const argv = std.posix.argv;
+    const argv = proc_init.args.vector;
 
     var config = Config{};
     _ = &config;

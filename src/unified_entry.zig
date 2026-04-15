@@ -8,10 +8,10 @@ const cli_main = @import("cli/main.zig");
 // Import server main module (now accessible since we're rooted at src/)
 const server_main = @import("server/main.zig");
 
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     // Delegate to CLI main which handles argument parsing and routing
     // including the 'serve' command which will call server_main.main()
-    return cli_main.main();
+    return cli_main.main(proc_init);
 }
 
 // Export server_main so CLI can access it

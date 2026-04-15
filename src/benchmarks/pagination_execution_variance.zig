@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 // (Note) We avoid importing non-public planner AST symbols; execution variance benchmark
 // uses a synthetic workload only (planning already covered by ordered planning benchmark).
 
@@ -42,7 +51,7 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     fabricatePlannedQuery(); // placeholder (future: real plan + exec state integration)
     // Determine page sizes sweep from env: GEODE_PAGINATION_BENCH_PAGE_SIZES="64,128,256" default.
     var sizes_buf: []const u8 = "64,128,256";
-    if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_BENCH_PAGE_SIZES")) |val| {
+    if (getEnvVarOwned(allocator, "GEODE_PAGINATION_BENCH_PAGE_SIZES")) |val| {
         sizes_buf = val;
     } else |_| {}
     defer if (!std.mem.eql(u8, sizes_buf, "64,128,256")) allocator.free(sizes_buf);
@@ -77,19 +86,19 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     if (sizes_len == 0) return error.InvalidPageSizeSweep;
     // Env overrides to tune benchmark without code changes.
     const inner_repeats: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_REPEATS")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_REPEATS")) |val| {
             defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 32;
         } else |_| break :blk 32;
     };
     const inner_work_scale: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_WORK_SCALE")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_PAGINATION_INNER_WORK_SCALE")) |val| {
             defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 8; // lower default
         } else |_| break :blk 8;
     };
     const per_size_samples: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "GEODE_PAGINATION_SAMPLES")) |val| {
+        if (getEnvVarOwned(allocator, "GEODE_PAGINATION_SAMPLES")) |val| {
             defer allocator.free(val);
             break :blk std.fmt.parseInt(usize, val, 10) catch 16; // lower default; we average internally
         } else |_| break :blk 16;

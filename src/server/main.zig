@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 const posix = std.posix;
 const geode = @import("geode");
@@ -345,8 +389,8 @@ pub fn main() !void {
     // The server dispatches transport work on multiple threads. Wrap the
     // process allocator so request parsing/execution can safely allocate
     // concurrently without corrupting heap state.
-    var ts_alloc = std.heap.ThreadSafeAllocator{ .child_allocator = gpa_instance.allocator() };
-    const gpa = ts_alloc.allocator();
+    // Zig 0.16: ThreadSafeAllocator removed; DebugAllocator is already thread-safe.
+    const gpa = gpa_instance.allocator();
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
     const config_opt = try cli_args.parseArgs(gpa);
     if (config_opt == null) return; // Help was shown, exit
@@ -372,10 +416,10 @@ pub fn main() !void {
     // CANARY: REQ=REQ-GAP-0503-DIST-GATE; FEATURE="DistributedMode"; ASPECT=ServerStartup; STATUS=TESTED; OWNER=core; UPDATED=2026-04-05
 
     // GAP-0269: Track total startup time for operator diagnostics
-    const startup_begin = std.time.milliTimestamp();
+    const startup_begin = compat_milliTimestamp();
 
     // Initialize user management (auth is always enabled in the server process)
-    var phase_start = std.time.milliTimestamp();
+    var phase_start = compat_milliTimestamp();
     const user_mgmt = geode.user_management;
     user_mgmt.initUserStore(gpa) catch |err| {
         log.err("Failed to initialize user store", &.{Attr.string("error", @errorName(err))});
@@ -383,7 +427,7 @@ pub fn main() !void {
     };
     defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
-    std.debug.print("[startup] user store initialized ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+    std.debug.print("[startup] user store initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a
     // second admin with a different password).
@@ -394,7 +438,7 @@ pub fn main() !void {
     var key_path = cert_paths.key_path;
 
     // Try to generate certificates if using QUIC or gRPC (TLS needed for both)
-    phase_start = std.time.milliTimestamp();
+    phase_start = compat_milliTimestamp();
     if (listen_quic != null or listen_grpc != null) {
         cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path) catch |err| {
             log.warn("Could not generate certificates, using fallback paths", &.{
@@ -406,7 +450,7 @@ pub fn main() !void {
             key_path = "/tmp/geode-server.key";
             try cert_gen.ensureCertificatesAtPath(gpa, cert_path, key_path);
         };
-        std.debug.print("[startup] certificates ready ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+        std.debug.print("[startup] certificates ready ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
     }
 
     // Initialize AuditLogger.
@@ -414,7 +458,7 @@ pub fn main() !void {
     var audit_config = audit.AuditLogger.Config{ .enabled = true };
 
     // Check for audit disable flag — only allowed in Debug builds.
-    const audit_disable_env = std.process.getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
+    const audit_disable_env = getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
     defer if (audit_disable_env) |d| gpa.free(d);
     if (audit_disable_env) |d| {
         if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
@@ -429,7 +473,7 @@ pub fn main() !void {
 
     var default_audit_path: ?[]u8 = null;
     defer if (default_audit_path) |p| gpa.free(p);
-    const audit_path_env = std.process.getEnvVarOwned(gpa, "GEODE_AUDIT_LOG_PATH") catch null;
+    const audit_path_env = getEnvVarOwned(gpa, "GEODE_AUDIT_LOG_PATH") catch null;
     defer if (audit_path_env) |p| gpa.free(p);
     if (audit_path_env) |p| {
         audit_config.file_path = p;
@@ -449,7 +493,7 @@ pub fn main() !void {
     audit.setGlobalAuditLogger(audit_logger);
 
     // Initialize server components using modularized server_init (M3.2 Phase 3 initialization extraction)
-    phase_start = std.time.milliTimestamp();
+    phase_start = compat_milliTimestamp();
     var init_ctx = try server_init.initialize(
         gpa,
         order_keys_mode_expr,
@@ -463,9 +507,9 @@ pub fn main() !void {
     init_ctx.fixupSelfPointers();
     defer init_ctx.deinit();
 
-    std.debug.print("[startup] server initialized ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+    std.debug.print("[startup] server initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
-    phase_start = std.time.milliTimestamp();
+    phase_start = compat_milliTimestamp();
     if (init_ctx.auth_graph_mgr) |agm| {
         _ = agm;
         user_mgmt.setPersistentUserResolver(.{
@@ -482,7 +526,7 @@ pub fn main() !void {
             return err;
         };
     }
-    std.debug.print("[startup] auth cache configured ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+    std.debug.print("[startup] auth cache configured ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
     // Extract initialization values for compatibility with existing code
     const env_spill_threshold = init_ctx.env_config.spill_threshold;
@@ -494,7 +538,7 @@ pub fn main() !void {
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
     // GAP-0166: Initialize Prometheus metrics server if enabled via environment
     // Default port is 9090 for Prometheus metrics endpoint
-    const metrics_port_env = std.process.getEnvVarOwned(gpa, "GEODE_METRICS_PORT") catch null;
+    const metrics_port_env = getEnvVarOwned(gpa, "GEODE_METRICS_PORT") catch null;
     defer if (metrics_port_env) |p| gpa.free(p);
     const metrics_port: ?u16 = if (metrics_port_env) |p| std.fmt.parseInt(u16, p, 10) catch 9090 else null;
     if (metrics_port) |port| {
@@ -598,7 +642,7 @@ pub fn main() !void {
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when
         // GEODE_QUIC_PASSIVE_TEARDOWN=1 is present.
-        const passive_teardown_env = if (std.process.getEnvVarOwned(gpa, "GEODE_QUIC_PASSIVE_TEARDOWN")) |v| blk: {
+        const passive_teardown_env = if (getEnvVarOwned(gpa, "GEODE_QUIC_PASSIVE_TEARDOWN")) |v| blk: {
             defer gpa.free(v);
             break :blk true;
         } else |_| false;
@@ -609,7 +653,7 @@ pub fn main() !void {
 
         // GAP-0258: Initialize mTLS provider for QUIC client certificate authentication
         // CANARY: REQ=REQ-AUTH-MTLS-QUIC-005; FEATURE="mTLS over QUIC"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-02-13
-        const mtls_required_env = std.process.getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
+        const mtls_required_env = getEnvVarOwned(gpa, "GEODE_MTLS_REQUIRED") catch null;
         defer if (mtls_required_env) |e| gpa.free(e);
         const mtls_required = if (mtls_required_env) |v| blk: {
             if (v.len == 0) break :blk false;
@@ -705,9 +749,9 @@ pub fn main() !void {
             log.info("mTLS authentication enabled for QUIC connections", &.{});
         }
 
-        phase_start = std.time.milliTimestamp();
+        phase_start = compat_milliTimestamp();
         try transport.listen();
-        std.debug.print("[startup] QUIC transport listening ({d}ms)\n", .{std.time.milliTimestamp() - phase_start});
+        std.debug.print("[startup] QUIC transport listening ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
 
         log.info("QUIC server started", &.{
             Attr.string("address", address_str),
@@ -728,7 +772,7 @@ pub fn main() !void {
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
         // GAP-0202: Initialize thread pool for async connection handling
         // This allows accepting new connections while previous ones are being processed
-        phase_start = std.time.milliTimestamp();
+        phase_start = compat_milliTimestamp();
         const pool = thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 0, // Auto-detect based on CPU count
             .stack_size = 2 * 1024 * 1024, // 2MB per thread (default 16MB causes ~19MB RSS growth per faulted stack)
@@ -754,10 +798,10 @@ pub fn main() !void {
         };
         defer pool.deinit();
 
-        std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ std.time.milliTimestamp() - phase_start, pool.workers.len });
+        std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ compat_milliTimestamp() - phase_start, pool.workers.len });
 
         // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
-        std.debug.print("[startup] server ready ({d}ms total)\n", .{std.time.milliTimestamp() - startup_begin});
+        std.debug.print("[startup] server ready ({d}ms total)\n", .{compat_milliTimestamp() - startup_begin});
 
         // #540: Spawn a dedicated poll thread to continuously process incoming
         // UDP datagrams. This decouples packet delivery from the accept loop,

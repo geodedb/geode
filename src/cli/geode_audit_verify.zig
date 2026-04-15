@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const Ed25519 = std.crypto.sign.Ed25519;
 
 // CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
@@ -36,7 +45,7 @@ pub fn hex64(buf: []const u8) VerifyError![64]u8 {
 /// GAP-0151: Full audit verification with Ed25519 signature and digest interval validation
 /// CANARY: REQ=REQ-AUDIT-VERIFY-002; FEATURE="Audit Signature Verification"; ASPECT=Ed25519Verify; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
 pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo, digest_interval_events: u32, require_digest: bool, pubkey: ?[32]u8, is_default_path: bool) VerifyError!void {
-    var file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
+    var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |err| {
         if (err == error.FileNotFound and is_default_path) {
             // Default path not found — nothing to verify, treat as clean.
             std.debug.print("audit log not found: {s} (0 records verified)\n", .{path});
@@ -241,7 +250,7 @@ test "TestCANARY_REQ_AUDIT_VERIFY_002_SignatureVerification" {
     // CANARY test marker for signature verification
     // Verifies Ed25519 is properly imported and usable
     var seed: [32]u8 = undefined;
-    std.crypto.random.bytes(&seed);
+    compat_fillRandom(&seed);
     const keypair = Ed25519.KeyPair.generateDeterministic(seed);
 
     const message = "test message";

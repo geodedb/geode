@@ -1,4 +1,22 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const logging = @import("logging");
 const log = logging.scoped("security");
 const Attr = logging.Attr;
@@ -41,7 +59,7 @@ pub const Provider = struct {
 /// GAP-0141: Safe hex parsing with proper error handling
 /// CANARY: REQ=REQ-HEX-PARSE-KEYPROV-001; FEATURE="Safe Hex Parsing"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2026-01-15
 fn loadStatic(allocator: std.mem.Allocator) !?KeyMaterial {
-    const hex = std.process.getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
+    const hex = getEnvVarOwned(allocator, "GEODE_DISK_KEY_HEX") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
@@ -151,12 +169,12 @@ fn fetchMockKms(self: Provider) ?KeyMaterial {
 /// CANARY: REQ=REQ-GQL-TDE-EXTKS-001; FEATURE="External KMS with Crypto Random"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
 fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // Require explicit KMS endpoint configuration
-    const endpoint = std.process.getEnvVarOwned(allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
+    const endpoint = getEnvVarOwned(allocator, "GEODE_KMS_ENDPOINT") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
     defer allocator.free(endpoint);
-    const api_key = std.process.getEnvVarOwned(allocator, "GEODE_KMS_API_KEY") catch |e| switch (e) {
+    const api_key = getEnvVarOwned(allocator, "GEODE_KMS_API_KEY") catch |e| switch (e) {
         error.EnvironmentVariableNotFound => return null,
         else => return e,
     };
@@ -177,9 +195,9 @@ fn fetchExternalKms(allocator: std.mem.Allocator) !?KeyMaterial {
     // Generate cryptographically secure random keys using std.crypto.random
     // CANARY: REQ=REQ-GQL-TDE-RANDOM-001; FEATURE="Cryptographic Key Generation"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_key_rotation_kms_envelopes.zig; OWNER=security; UPDATED=2026-01-15
     var data_plain: [32]u8 = undefined;
-    std.crypto.random.bytes(&data_plain);
+    compat_fillRandom(&data_plain);
     var backup_plain: [32]u8 = undefined;
-    std.crypto.random.bytes(&backup_plain);
+    compat_fillRandom(&backup_plain);
 
     // Wrap keys via KMS client (uses AES-GCM internally)
     const env_data = try client.wrap(data_plain);
@@ -311,8 +329,8 @@ test "GAP-0069: crypto random bytes differ across calls" {
     var buf1: [32]u8 = undefined;
     var buf2: [32]u8 = undefined;
 
-    std.crypto.random.bytes(&buf1);
-    std.crypto.random.bytes(&buf2);
+    compat_fillRandom(&buf1);
+    compat_fillRandom(&buf2);
 
     // Extremely unlikely to be equal with cryptographic random
     try std.testing.expect(!std.mem.eql(u8, &buf1, &buf2));

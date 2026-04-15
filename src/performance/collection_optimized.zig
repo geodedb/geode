@@ -114,7 +114,7 @@ pub fn CollectionPool(comptime T: type) type {
     return struct {
         available: std.ArrayList(*OptimizedArrayList(T)),
         allocator: Allocator,
-        mutex: std.Thread.Mutex = .{},
+        mutex: std.Io.Mutex = std.Io.Mutex.init,
         pool_size: usize,
         default_capacity: usize,
 
@@ -148,8 +148,8 @@ pub fn CollectionPool(comptime T: type) type {
 
         /// Get collection from pool (thread-safe)
         pub fn acquire(self: *Self) ?*OptimizedArrayList(T) {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             if (self.available.items.len > 0) {
                 const collection = self.available.pop();
@@ -161,8 +161,8 @@ pub fn CollectionPool(comptime T: type) type {
 
         /// Return collection to pool (thread-safe)
         pub fn release(self: *Self, collection: *OptimizedArrayList(T)) void {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             collection.clearRetainingCapacity();
             self.available.append(collection) catch {

@@ -217,7 +217,7 @@ fn walkDir(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *us
 }
 
 fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), allocator: std.mem.Allocator, path: []const u8) !void {
-    var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd().openDir(path, .{ .iterate = true }) catch return;
     defer dir.close();
     var it = dir.iterate();
     while (true) {
@@ -233,7 +233,7 @@ fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count
         if (ent.kind == .file) {
             if (!std.mem.endsWith(u8, ent.name, ".md") and !std.mem.endsWith(u8, ent.name, ".zig")) continue;
             const full = try std.fs.path.join(allocator, &.{ path, ent.name });
-            const data = std.fs.cwd().readFileAlloc(allocator, full, 1 << 20) catch {
+            const data = std.Io.Dir.cwd().readFileAlloc(allocator, full, 1 << 20) catch {
                 allocator.free(full);
                 continue;
             };

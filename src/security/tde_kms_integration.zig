@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const crypto = std.crypto;
 const kms = @import("kms.zig");
 const tde_hierarchy = @import("tde_hierarchy.zig");
@@ -66,7 +110,7 @@ pub const TDEKeyManager = struct {
             .loaded = true,
             .key_id = try self.allocator.dupe(u8, master_key_id),
             .provider_type = kms_config.provider_type,
-            .last_rotation = std.time.timestamp(),
+            .last_rotation = compat_timestamp(),
         };
     }
 
@@ -74,7 +118,7 @@ pub const TDEKeyManager = struct {
     pub fn initializeWithEnv(self: *TDEKeyManager) !void {
         if (!self.isEnabled()) return error.TDENotEnabled;
 
-        const key_hex = std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
+        const key_hex = getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch |e| switch (e) {
             error.EnvironmentVariableNotFound => return error.TDEKeyNotFound,
             else => return e,
         };
@@ -127,7 +171,7 @@ pub const TDEKeyManager = struct {
         self.hierarchy = tde_hierarchy.KeyHierarchy.init(new_master);
 
         // Update status
-        self.key_status.last_rotation = std.time.timestamp();
+        self.key_status.last_rotation = compat_timestamp();
     }
 
     /// Get current key status

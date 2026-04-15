@@ -12,6 +12,41 @@
 // The chain stops at the first successful authentication.
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
 
@@ -104,7 +139,7 @@ pub const RotatingSessionToken = struct {
         var token: [32]u8 = undefined;
         crypto.random.bytes(&token);
 
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
 
         return RotatingSessionToken{
             .token = token,
@@ -122,11 +157,11 @@ pub const RotatingSessionToken = struct {
     }
 
     pub fn needsRotation(self: *const RotatingSessionToken) bool {
-        return std.time.timestamp() >= self.rotation_at;
+        return compat_timestamp() >= self.rotation_at;
     }
 
     pub fn rotate(self: *RotatingSessionToken) void {
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
 
         // Save current token as previous (grace period)
         self.previous_token = self.token;
@@ -139,15 +174,15 @@ pub const RotatingSessionToken = struct {
     }
 
     pub fn isExpired(self: *const RotatingSessionToken) bool {
-        return std.time.timestamp() >= self.expires_at;
+        return compat_timestamp() >= self.expires_at;
     }
 
     pub fn isIdle(self: *const RotatingSessionToken) bool {
-        return (std.time.timestamp() - self.last_used_at) >= IDLE_TIMEOUT_SECS;
+        return (compat_timestamp() - self.last_used_at) >= IDLE_TIMEOUT_SECS;
     }
 
     pub fn touch(self: *RotatingSessionToken) void {
-        self.last_used_at = std.time.timestamp();
+        self.last_used_at = compat_timestamp();
     }
 
     pub fn matchesToken(self: *const RotatingSessionToken, token: *const [32]u8) bool {
@@ -157,7 +192,7 @@ pub const RotatingSessionToken = struct {
         // Check previous token during grace period
         if (self.previous_token) |prev| {
             if (self.previous_expires_at) |exp| {
-                if (std.time.timestamp() < exp) {
+                if (compat_timestamp() < exp) {
                     return constantTimeEqual(&prev, token);
                 }
             }
@@ -167,7 +202,7 @@ pub const RotatingSessionToken = struct {
     }
 
     pub fn setMfaVerified(self: *RotatingSessionToken) void {
-        self.mfa_verified_at = std.time.timestamp();
+        self.mfa_verified_at = compat_timestamp();
         self.elevation_level = .elevated;
     }
 
@@ -185,7 +220,7 @@ pub const AuthProvider = struct {
     api_key_manager: api_keys.ApiKeyManager,
     mtls: mtls_provider.MtlsProvider,
     sessions: std.StringHashMap(RotatingSessionToken),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     // Configuration
     allow_anonymous: bool,
@@ -198,7 +233,7 @@ pub const AuthProvider = struct {
             .api_key_manager = api_keys.ApiKeyManager.init(allocator, geode_api_key_config),
             .mtls = mtls_provider.MtlsProvider.init(allocator),
             .sessions = std.StringHashMap(RotatingSessionToken).init(allocator),
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
             .allow_anonymous = false,
             .anonymous_paths = std.StringHashMap(void).init(allocator),
             .require_mfa_paths = std.StringHashMap(void).init(allocator),
@@ -315,8 +350,8 @@ pub const AuthProvider = struct {
 
     /// Try session token authentication
     fn trySessionAuth(self: *Self, token_hex: []const u8, path: ?[]const u8) !?AuthResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const session = self.sessions.getPtr(token_hex) orelse return null;
 
@@ -379,8 +414,8 @@ pub const AuthProvider = struct {
         const token_hex = try session.toHexString(self.allocator);
         errdefer self.allocator.free(token_hex);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const key_dup = try self.allocator.dupe(u8, token_hex);
         try self.sessions.put(key_dup, session);
@@ -390,8 +425,8 @@ pub const AuthProvider = struct {
 
     /// Mark a session as MFA verified
     pub fn markSessionMfaVerified(self: *Self, token_hex: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.sessions.getPtr(token_hex)) |session| {
             session.setMfaVerified();
@@ -402,8 +437,8 @@ pub const AuthProvider = struct {
 
     /// Invalidate a session
     pub fn invalidateSession(self: *Self, token_hex: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.sessions.fetchRemove(token_hex)) |kv| {
             self.allocator.free(kv.key);
@@ -415,8 +450,8 @@ pub const AuthProvider = struct {
 
     /// Invalidate all sessions for a user
     pub fn invalidateUserSessions(self: *Self, user_id: u64) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
@@ -442,8 +477,8 @@ pub const AuthProvider = struct {
 
     /// Cleanup expired sessions
     pub fn cleanupExpiredSessions(self: *Self) usize {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var to_remove = std.ArrayList([]const u8).empty;
         defer to_remove.deinit(self.allocator);
@@ -533,7 +568,7 @@ test "RotatingSessionToken: idle detection" {
     try std.testing.expect(!session.isIdle());
 
     // Simulate idle timeout
-    session.last_used_at = std.time.timestamp() - RotatingSessionToken.IDLE_TIMEOUT_SECS - 1;
+    session.last_used_at = compat_timestamp() - RotatingSessionToken.IDLE_TIMEOUT_SECS - 1;
     try std.testing.expect(session.isIdle());
 }
 

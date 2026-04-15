@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const Allocator = std.mem.Allocator;
 
 // Distributed tracing implementation (OpenTelemetry compatible)
@@ -83,8 +92,8 @@ pub const Tracer = struct {
         var span_id: [8]u8 = undefined;
 
         // Generate IDs
-        std.crypto.random.bytes(&trace_id);
-        std.crypto.random.bytes(&span_id);
+        compat_fillRandom(&trace_id);
+        compat_fillRandom(&span_id);
 
         // Get parent span ID if there's an active span
         const parent_span_id = if (self.active_span) |parent|

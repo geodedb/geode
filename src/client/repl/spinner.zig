@@ -1,4 +1,53 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const platform = @import("platform.zig");
 const pooled = @import("transport/thread_pool");
@@ -31,25 +80,25 @@ pub const TerminalType = enum {
             // std.posix.getenv is unavailable on Windows; use FixedBufferAllocator + getEnvVarOwned
             var buf: [8192]u8 = undefined;
             var fba = std.heap.FixedBufferAllocator.init(&buf);
-            if (std.process.getEnvVarOwned(fba.allocator(), "WT_SESSION")) |_| {
+            if (getEnvVarOwned(fba.allocator(), "WT_SESSION")) |_| {
                 return .windows_modern;
             } else |_| {}
             fba.reset();
-            if (std.process.getEnvVarOwned(fba.allocator(), "TERM_PROGRAM")) |prog| {
+            if (getEnvVarOwned(fba.allocator(), "TERM_PROGRAM")) |prog| {
                 if (std.mem.eql(u8, prog, "vscode")) {
                     return .windows_modern;
                 }
             } else |_| {}
             fba.reset();
             // Check for PowerShell via PSModulePath
-            if (std.process.getEnvVarOwned(fba.allocator(), "PSModulePath")) |_| {
+            if (getEnvVarOwned(fba.allocator(), "PSModulePath")) |_| {
                 return .windows_modern;
             } else |_| {}
             // Fallback to basic Windows console
             return .windows_console;
         } else {
             // Unix-like systems
-            if (std.posix.getenv("TERM")) |term| {
+            if (posixGetenv("TERM")) |term| {
                 // Check for dumb terminals
                 if (std.mem.eql(u8, term, "dumb") or std.mem.eql(u8, term, "")) {
                     return .basic_ascii;
@@ -129,7 +178,7 @@ pub const Spinner = struct {
     /// Atomic flag to signal thread to stop
     stop_flag: std.atomic.Value(bool),
     /// Mutex for thread-safe message updates
-    message_mutex: std.Thread.Mutex,
+    message_mutex: std.Io.Mutex,
     /// Buffer for thread-safe message storage
     message_buffer: [256]u8,
     message_len: usize,
@@ -194,7 +243,7 @@ pub const Spinner = struct {
         }
 
         self.started = true;
-        self.last_update = std.time.milliTimestamp();
+        self.last_update = compat_milliTimestamp();
         self.render();
     }
 
@@ -208,7 +257,7 @@ pub const Spinner = struct {
 
         self.stop_flag.store(false, .seq_cst);
         self.started = true;
-        self.last_update = std.time.milliTimestamp();
+        self.last_update = compat_milliTimestamp();
         self.render();
 
         const pool = pooled.ThreadPool.init(self.allocator, .{
@@ -245,11 +294,11 @@ pub const Spinner = struct {
         const frame = self.style.frames[self.frame_index];
 
         // Get message under lock
-        self.message_mutex.lock();
+        self.message_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const msg_len = self.message_len;
         var msg_copy: [256]u8 = undefined;
         @memcpy(msg_copy[0..msg_len], self.message_buffer[0..msg_len]);
-        self.message_mutex.unlock();
+        self.message_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Build the output line
         var buf: [512]u8 = undefined;
@@ -274,7 +323,7 @@ pub const Spinner = struct {
     pub fn tick(self: *Spinner) bool {
         if (!self.started) return false;
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         const elapsed = now - self.last_update;
 
         if (elapsed >= self.style.interval_ms) {
@@ -288,12 +337,12 @@ pub const Spinner = struct {
 
     /// Update the message while spinning (thread-safe)
     pub fn setMessage(self: *Spinner, message: []const u8) void {
-        self.message_mutex.lock();
+        self.message_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const copy_len = @min(message.len, self.message_buffer.len);
         @memcpy(self.message_buffer[0..copy_len], message[0..copy_len]);
         self.message_len = copy_len;
         self.message = message;
-        self.message_mutex.unlock();
+        self.message_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.started and self.animation_pool == null) {
             self.render();

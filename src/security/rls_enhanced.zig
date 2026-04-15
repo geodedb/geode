@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const rls = @import("rls");
@@ -130,7 +165,7 @@ pub const EnhancedRLSEngine = struct {
         constraint: rls.RLSEngine.TemporalConstraint,
         context: *auth.SecurityContext,
     ) !bool {
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
 
         // Check valid time range
         if (constraint.valid_from) |from| {
@@ -514,7 +549,7 @@ pub const ExpressionCompiler = struct {
         // Check for time-based constraints
         if (std.mem.indexOf(u8, expression, "current_timestamp")) |_| {
             // Simplified time comparison
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
             if (std.mem.indexOf(u8, expression, ">")) |_| {
                 return now > 0; // Always true for positive timestamps
             }
@@ -634,7 +669,7 @@ pub const ExpressionCompiler = struct {
         _ = allocator;
         _ = args;
         _ = context;
-        return rls.Value{ .timestamp = std.time.milliTimestamp() };
+        return rls.Value{ .timestamp = compat_milliTimestamp() };
     }
 
     fn enhancedIpInRange(
@@ -765,7 +800,7 @@ pub const ExpressionCompiler = struct {
             else => return error.InvalidArguments,
         };
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         const seconds = @divTrunc(now, 1000);
         const day_seconds = @rem(seconds, 86400);
         const hour = @as(u8, @intCast(@divTrunc(day_seconds, 3600)));
@@ -906,12 +941,12 @@ pub const RLSStatisticsCollector = struct {
                 .cache_hits = 0,
                 .cache_misses = 0,
                 .avg_evaluation_time_ns = 0,
-                .last_evaluation = std.time.milliTimestamp(),
+                .last_evaluation = compat_milliTimestamp(),
             };
         }
 
         result.value_ptr.evaluations += 1;
-        result.value_ptr.last_evaluation = std.time.milliTimestamp();
+        result.value_ptr.last_evaluation = compat_milliTimestamp();
         self.global_stats.total_evaluations += 1;
     }
 
@@ -1026,7 +1061,7 @@ pub const EnhancedCacheManager = struct {
 
     pub fn get(self: *EnhancedCacheManager, key: CacheKey) ?bool {
         if (self.cache.getPtr(key)) |entry| {
-            const now = std.time.milliTimestamp();
+            const now = compat_milliTimestamp();
 
             // Check TTL
             if (now - entry.timestamp > self.default_ttl_ms) {
@@ -1051,7 +1086,7 @@ pub const EnhancedCacheManager = struct {
             try self.evictLRU();
         }
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         try self.cache.put(key, CacheEntry{
             .result = result,
             .timestamp = now,

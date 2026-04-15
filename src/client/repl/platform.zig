@@ -4,7 +4,7 @@ const builtin = @import("builtin");
 // CANARY: REQ=REQ-QUALITY-GAP-406-007; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // Cross-platform stdio handles with proper error handling
 // These functions exit on failure since failing to get stdio handles is fatal for a REPL
-pub fn getStdinHandle() std.fs.File {
+pub fn getStdinHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch |err| {
             std.debug.print("Fatal: Cannot get stdin handle: {}\n", .{err});
@@ -14,13 +14,13 @@ pub fn getStdinHandle() std.fs.File {
             std.debug.print("Fatal: Invalid stdin handle\n", .{});
             std.process.exit(1);
         }
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        return std.Io.File{ .handle = std.posix.STDIN_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
-pub fn getStdoutHandle() std.fs.File {
+pub fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch |err| {
             std.debug.print("Fatal: Cannot get stdout handle: {}\n", .{err});
@@ -30,13 +30,13 @@ pub fn getStdoutHandle() std.fs.File {
             std.debug.print("Fatal: Invalid stdout handle\n", .{});
             std.process.exit(1);
         }
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
-pub fn getStderrHandle() std.fs.File {
+pub fn getStderrHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
             // Can't print to stderr if we can't get stderr handle, just exit
@@ -45,9 +45,9 @@ pub fn getStderrHandle() std.fs.File {
         if (handle == std.os.windows.INVALID_HANDLE_VALUE) {
             std.process.exit(1);
         }
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        return std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
@@ -57,7 +57,7 @@ pub fn isStdinTty() bool {
         var mode: std.os.windows.DWORD = undefined;
         return std.os.windows.kernel32.GetConsoleMode(handle, &mode) != 0;
     } else {
-        return std.posix.isatty(std.posix.STDIN_FILENO);
+        return (std.Io.File.stdin().isTty(std.Io.Threaded.global_single_threaded.io()) catch false);
     }
 }
 
@@ -67,7 +67,7 @@ pub fn isStdoutTty() bool {
         var mode: std.os.windows.DWORD = undefined;
         return std.os.windows.kernel32.GetConsoleMode(handle, &mode) != 0;
     } else {
-        return std.posix.isatty(std.posix.STDOUT_FILENO);
+        return (std.Io.File.stdout().isTty(std.Io.Threaded.global_single_threaded.io()) catch false);
     }
 }
 

@@ -13,14 +13,15 @@ pub const Clock = slog.Clock;
 
 /// Stable storage for the stderr writer so that the AnyWriter's internal
 /// context pointer remains valid for the lifetime of the process.
-/// Without this, .deprecatedWriter().any() captures a pointer to a
-/// stack-local GenericWriter that is destroyed when the function returns,
-/// causing a dangling-pointer crash under concurrent logging (DESTADDRREQ).
-var g_stderr_writer: std.fs.File.DeprecatedWriter = std.fs.File.stderr().deprecatedWriter();
+/// Without this, the writer may capture a pointer to a stack-local object
+/// that is destroyed when the function returns, causing a dangling-pointer
+/// crash under concurrent logging (DESTADDRREQ).
+var g_stderr_buffer: [4096]u8 = undefined;
+var g_stderr_file_writer: std.Io.File.Writer = std.Io.File.stderr().writerStreaming(std.Options.debug_io, &g_stderr_buffer);
 
-/// Get stderr writer as AnyWriter compatible with Zig 0.15.1+
-fn getStderrWriter() std.io.AnyWriter {
-    return g_stderr_writer.any();
+/// Get stderr writer compatible with Zig 0.16+
+fn getStderrWriter() *std.Io.Writer {
+    return &g_stderr_file_writer.interface;
 }
 
 /// Output format for log messages
@@ -34,7 +35,7 @@ var g_logger: ?Logger = null;
 var g_text_ctx: ?slog.text.Context = null;
 var g_json_ctx: ?slog.json.Context = null;
 var g_initialized: bool = false;
-var g_mutex: std.Thread.Mutex = .{};
+var g_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Union to hold either text or json handler context (unused, kept for reference)
 const HandlerContext = union {
@@ -46,8 +47,8 @@ const HandlerContext = union {
 /// Must be called before any logging calls.
 /// Thread-safe: can be called multiple times, only first call takes effect.
 pub fn init(config: Config) void {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (g_initialized) return;
 
@@ -73,7 +74,7 @@ pub fn init(config: Config) void {
 pub const Config = struct {
     level: Level = .info,
     format: Format = .text,
-    writer: ?std.io.AnyWriter = null,
+    writer: ?*std.Io.Writer = null,
 };
 
 /// Get the global logger instance.
@@ -94,8 +95,8 @@ pub fn scoped(comptime scope: []const u8) ScopedLogger {
 /// Set the global log level at runtime.
 /// Thread-safe.
 pub fn setLevel(level: Level) void {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (g_logger) |*logger| {
         logger.setLevel(level);
@@ -125,8 +126,8 @@ pub fn flush() void {
 
 /// Reset the logger (primarily for testing).
 pub fn reset() void {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     g_logger = null;
     g_initialized = false;

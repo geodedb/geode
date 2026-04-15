@@ -20,7 +20,7 @@ pub const fle_aead_mod = fle_aead;
 // Global singletons for key management and blind index
 var global_key_manager_instance: ?*key_manager_mod.KeyManager = null;
 var global_blind_index_instance: ?*blind_index_mod.BlindIndex = null;
-var global_mutex: std.Thread.Mutex = .{};
+var global_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // GAP-0203: Global flag to fast-path skip FLE when no encryption is configured
 // CANARY: REQ=REQ-PERF-FLE-SKIP-001; FEATURE="FLESkipOptimization"; ASPECT=GlobalDisable; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
@@ -31,8 +31,8 @@ var fle_catalog_state_checked: bool = false;
 /// allowing callers to skip all FLE processing for non-encrypted deployments.
 pub fn hasEncryptedFields() bool {
     if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (!fle_has_encrypted_fields and !fle_catalog_state_checked) {
             const catalog = fle_catalog.globalCatalog(std.heap.c_allocator) catch {
@@ -48,8 +48,8 @@ pub fn hasEncryptedFields() bool {
 
 /// Mark that encrypted fields exist (called when encryption is configured)
 pub fn setHasEncryptedFields(has_fields: bool) void {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     fle_has_encrypted_fields = has_fields;
     fle_catalog_state_checked = has_fields;
 }
@@ -66,8 +66,8 @@ var per_thread_roles: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashM
 /// Set the current user role for RBAC checks (per-thread, safe for concurrent connections).
 /// This should be called at the start of a session/transaction.
 pub fn setCurrentUserRole(role: ?[]const u8) void {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const tid = std.Thread.getCurrentId();
     if (role) |r| {
         per_thread_roles.put(tid, r) catch {
@@ -88,8 +88,8 @@ var per_thread_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHas
 /// Set the current tenant_id for FLE encryption namespace (per-thread, safe for concurrent connections).
 /// Should be called at the start of query execution when session has a tenant_id.
 pub fn setCurrentTenantId(tenant_id: ?[]const u8) void {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const tid = std.Thread.getCurrentId();
     if (tenant_id) |t| {
         per_thread_tenants.put(tid, t) catch {
@@ -103,8 +103,8 @@ pub fn setCurrentTenantId(tenant_id: ?[]const u8) void {
 /// Get the current tenant_id for FLE operations.
 /// Returns the per-thread tenant_id if set, otherwise "default".
 pub fn getCurrentTenantId() []const u8 {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return per_thread_tenants.get(std.Thread.getCurrentId()) orelse "default";
 }
 
@@ -115,12 +115,12 @@ pub fn getCurrentTenantId() []const u8 {
 pub fn getCurrentUserRole() ?[]const u8 {
     // Check environment variable first (for CLI testing across process boundaries).
     // std.posix.getenv returns a slice into the process environment block -- no allocation.
-    if (std.posix.getenv("GEODE_CURRENT_ROLE")) |env_role| {
-        return env_role;
+    if (std.c.getenv("GEODE_CURRENT_ROLE")) |env_ptr| {
+        return std.mem.span(env_ptr);
     }
     // Fall back to per-thread role
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return per_thread_roles.get(std.Thread.getCurrentId());
 }
 
@@ -130,8 +130,8 @@ pub fn getCurrentUserRole() ?[]const u8 {
 /// GAP-0285: Prevents cross-tenant FLE decryption when threads are reused.
 /// CANARY: REQ=REQ-FLE-ROLE-ISOLATION-002; FEATURE="FLERoleIsolation"; ASPECT=ThreadCleanup; STATUS=TESTED; OWNER=security; UPDATED=2026-04-05
 pub fn clearCurrentThreadState() void {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const tid = std.Thread.getCurrentId();
     _ = per_thread_roles.remove(tid);
     _ = per_thread_tenants.remove(tid);
@@ -146,8 +146,8 @@ pub const EncryptionContext = struct {
 
 /// Get or create global key manager
 fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManager {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_key_manager_instance) |km| {
         return km;
@@ -160,8 +160,8 @@ fn getGlobalKeyManager(allocator: std.mem.Allocator) !*key_manager_mod.KeyManage
 
 /// Get or create global blind index
 fn getGlobalBlindIndex(allocator: std.mem.Allocator) !*blind_index_mod.BlindIndex {
-    global_mutex.lock();
-    defer global_mutex.unlock();
+    global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_blind_index_instance) |bi| {
         return bi;
@@ -702,8 +702,8 @@ test "clearCurrentThreadState removes per-thread role and tenant" {
     try testing.expectEqualStrings("acme-corp", getCurrentTenantId());
     // getCurrentUserRole may read env var first; check per_thread_roles directly
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try testing.expect(per_thread_roles.get(std.Thread.getCurrentId()) != null);
     }
 
@@ -713,8 +713,8 @@ test "clearCurrentThreadState removes per-thread role and tenant" {
     // After cleanup: tenant should fall back to "default", role should be null
     try testing.expectEqualStrings("default", getCurrentTenantId());
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try testing.expect(per_thread_roles.get(std.Thread.getCurrentId()) == null);
         try testing.expect(per_thread_tenants.get(std.Thread.getCurrentId()) == null);
     }
@@ -739,8 +739,8 @@ test "GAP-0515: thread reuse isolates FLE context across connections" {
     setCurrentTenantId("alpha");
     try testing.expectEqualStrings("alpha", getCurrentTenantId());
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const r = per_thread_roles.get(tid) orelse return error.RoleNotSet;
         try testing.expectEqualStrings("admin", r);
     }
@@ -752,8 +752,8 @@ test "GAP-0515: thread reuse isolates FLE context across connections" {
     // On entry the state MUST be clean — no leak from connection 1.
     try testing.expectEqualStrings("default", getCurrentTenantId());
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try testing.expect(per_thread_roles.get(tid) == null);
     }
 
@@ -763,8 +763,8 @@ test "GAP-0515: thread reuse isolates FLE context across connections" {
     // Reading back must return connection 2's values, not connection 1's.
     try testing.expectEqualStrings("beta", getCurrentTenantId());
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         const r = per_thread_roles.get(tid) orelse return error.RoleNotSet;
         try testing.expectEqualStrings("user", r);
         // And crucially: the old "admin" / "alpha" values are gone.
@@ -783,8 +783,8 @@ test "GAP-0515: thread reuse isolates FLE context across connections" {
     // the same thread starts from the same clean slate.
     try testing.expectEqualStrings("default", getCurrentTenantId());
     {
-        global_mutex.lock();
-        defer global_mutex.unlock();
+        global_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try testing.expect(per_thread_roles.get(tid) == null);
         try testing.expect(per_thread_tenants.get(tid) == null);
     }

@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const rls = @import("rls");
 const audit_formatter = @import("audit_formatter.zig");
 const audit_sink = @import("audit_sink.zig");
@@ -53,20 +97,20 @@ pub const SecurityGraphEvent = struct {
 };
 
 pub var global_audit_logger: ?*AuditLogger = null;
-pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
+pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // GAP-0282: Per-thread tenant_id for audit event enrichment.
 // Set from the QUIC connection handler before query execution so that all
 // audit events created on this thread carry the correct tenant context.
 // CANARY: REQ=REQ-AUDIT-TENANT-001; FEATURE="AuditTenantId"; ASPECT=PerThreadTenant; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
-var audit_tenant_mutex: std.Thread.Mutex = .{};
+var audit_tenant_mutex: std.Io.Mutex = std.Io.Mutex.init;
 var audit_tenant_gpa: std.heap.DebugAllocator(.{}) = std.heap.DebugAllocator(.{}){};
 var per_thread_audit_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(audit_tenant_gpa.allocator());
 
 /// Set the current tenant_id for audit events on this thread.
 pub fn setCurrentAuditTenantId(tenant_id: ?[]const u8) void {
-    audit_tenant_mutex.lock();
-    defer audit_tenant_mutex.unlock();
+    audit_tenant_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer audit_tenant_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const tid = std.Thread.getCurrentId();
     if (tenant_id) |t| {
         per_thread_audit_tenants.put(tid, t) catch {
@@ -79,21 +123,21 @@ pub fn setCurrentAuditTenantId(tenant_id: ?[]const u8) void {
 
 /// Get the current tenant_id for audit events. Returns null if not set.
 pub fn getCurrentAuditTenantId() ?[]const u8 {
-    audit_tenant_mutex.lock();
-    defer audit_tenant_mutex.unlock();
+    audit_tenant_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer audit_tenant_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return per_thread_audit_tenants.get(std.Thread.getCurrentId());
 }
 
 pub fn setGlobalAuditLogger(logger: ?*AuditLogger) void {
-    global_audit_logger_mutex.lock();
-    defer global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     global_audit_logger = logger;
 }
 
 pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) void {
-    global_audit_logger_mutex.lock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     const logger = global_audit_logger;
-    global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (logger == null or !logger.?.enabled) return;
 
     var detail_map = std.StringHashMap([]const u8).init(allocator);
@@ -112,7 +156,7 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
 
     // GAP-0282: Populate tenant_id from per-thread audit context
     var audit_event = AuditEvent{
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .event_type = event.event_type,
         .severity = .info,
         .tenant_id = getCurrentAuditTenantId(),
@@ -140,8 +184,8 @@ pub fn logSecurityGraphEvent(allocator: Allocator, event: SecurityGraphEvent) vo
 pub const AuditLogger = struct {
     const DigestBuf = std.ArrayList([32]u8);
     allocator: Allocator,
-    file: ?std.fs.File,
-    mutex: std.Thread.Mutex,
+    file: ?std.Io.File,
+    mutex: std.Io.Mutex,
     config: Config,
 
     // State for chaining and signing
@@ -199,7 +243,7 @@ pub const AuditLogger = struct {
 
         if (config.enabled) {
             // 1. Open File
-            logger.file = std.Io.Dir.cwd().createFile(config.file_path, .{
+            logger.file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config.file_path, .{
                 .truncate = false,
                 .read = true, // Needed for initFromTail
                 .exclusive = false,
@@ -228,7 +272,7 @@ pub const AuditLogger = struct {
         errdefer allocator.free(file_path);
 
         // Ensure the graph directory exists so the file create succeeds.
-        std.Io.Dir.cwd().makePath(graph_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), graph_dir) catch |err| {
             log.warn("failed to create graph audit dir", &.{
                 Attr.string("path", graph_dir),
                 Attr.string("error", @errorName(err)),
@@ -242,7 +286,7 @@ pub const AuditLogger = struct {
         };
 
         // Inherit env-based overrides for redaction / rotation.
-        if (std.process.getEnvVarOwned(allocator, "GEODE_AUDIT_REDACT_PII")) |v| {
+        if (getEnvVarOwned(allocator, "GEODE_AUDIT_REDACT_PII")) |v| {
             cfg.redact_pii = std.mem.eql(u8, v, "1");
             allocator.free(v);
         } else |_| {}
@@ -263,13 +307,13 @@ pub const AuditLogger = struct {
     }
 
     fn loadKeys(self: *AuditLogger) !void {
-        const pub_hex = std.process.getEnvVarOwned(self.allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
+        const pub_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_PUB") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => null,
             else => return err,
         };
         defer if (pub_hex) |p| self.allocator.free(p);
 
-        const sec_hex = std.process.getEnvVarOwned(self.allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
+        const sec_hex = getEnvVarOwned(self.allocator, "GEODE_AUDIT_SEC") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => null,
             else => return err,
         };
@@ -328,11 +372,11 @@ pub const AuditLogger = struct {
         const generated_pub = std.fmt.bytesToHex(kp.public_key.bytes, .lower);
         const generated_sec = std.fmt.bytesToHex(kp.secret_key.bytes, .lower);
 
-        const pub_file = try std.Io.Dir.cwd().createFile(pub_path, .{ .truncate = true, .mode = 0o600 });
+        const pub_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), pub_path, .{ .truncate = true, .mode = 0o600 });
         defer pub_file.close();
         try pub_file.writeAll(&generated_pub);
 
-        const sec_file = try std.Io.Dir.cwd().createFile(sec_path, .{ .truncate = true, .mode = 0o600 });
+        const sec_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), sec_path, .{ .truncate = true, .mode = 0o600 });
         defer sec_file.close();
         try sec_file.writeAll(&generated_sec);
 
@@ -391,8 +435,8 @@ pub const AuditLogger = struct {
     }
 
     pub fn appendAuditEvent(self: *AuditLogger, ev: *AuditEvent) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.appendEventLocked(ev);
     }
 
@@ -432,8 +476,8 @@ pub const AuditLogger = struct {
 
         if (self.file) |f| {
             const ByteWriter = struct {
-                file: std.fs.File,
-                pub const Error = std.fs.File.WriteError;
+                file: std.Io.File,
+                pub const Error = std.Io.File.WriteError;
                 pub fn writeAll(ctx: @This(), bytes: []const u8) Error!void {
                     try ctx.file.writeAll(bytes);
                 }
@@ -492,7 +536,7 @@ pub const AuditLogger = struct {
         try details.put("merkle_root", &hex_digest);
 
         var ev = AuditEvent{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .DIGEST,
             .severity = .info,
             .user_id = 0,
@@ -553,7 +597,7 @@ pub const AuditLogger = struct {
         }
 
         var real_ev = AuditEvent{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = et,
             .severity = .info,
             .user_id = 0,
@@ -578,7 +622,7 @@ pub const AuditLogger = struct {
         try dm.put("reason", try self.allocator.dupe(u8, reason));
 
         var ev = AuditEvent{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .policy_violation, // rls.AuditEventType
             .severity = .warning,
             .user_id = ctx.user_id,
@@ -600,7 +644,7 @@ pub const AuditLogger = struct {
         try dm.put("rule", try self.allocator.dupe(u8, rule));
 
         var ev = AuditEvent{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .policy_violation,
             .severity = .warning,
             .user_id = ctx.user_id,
@@ -619,8 +663,8 @@ pub const AuditLogger = struct {
 
     // Log rotation and management functionality
     pub fn rotateLogFile(self: *AuditLogger) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.file) |f| {
             const stat = try f.stat();
@@ -631,13 +675,13 @@ pub const AuditLogger = struct {
                 f.close();
 
                 // Rename current file with timestamp
-                const timestamp = std.time.milliTimestamp();
+                const timestamp = compat_milliTimestamp();
                 var buf: [256]u8 = undefined;
                 const new_path = try std.fmt.bufPrint(&buf, "{s}.{d}", .{ self.config.file_path, timestamp });
                 try std.Io.Dir.cwd().rename(self.config.file_path, new_path);
 
                 // Open new file
-                self.file = try std.Io.Dir.cwd().createFile(self.config.file_path, .{
+                self.file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), self.config.file_path, .{
                     .truncate = false,
                     .exclusive = false,
                 });
@@ -659,7 +703,7 @@ pub const AuditLogger = struct {
         defer dir.close();
 
         var iter = dir.iterate();
-        const cutoff_time = std.time.milliTimestamp() - (@as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000);
+        const cutoff_time = compat_milliTimestamp() - (@as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000);
 
         while (try iter.next()) |entry| {
             // Check if file is an old audit log (pattern: audit.jsonl.TIMESTAMP)
@@ -670,7 +714,7 @@ pub const AuditLogger = struct {
 
                 if (timestamp < cutoff_time) {
                     // Get file size before deletion
-                    const file = try std.Io.Dir.cwd().openFile(entry.name, .{});
+                    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), entry.name, .{});
                     const stat = try file.stat();
                     file.close();
 
@@ -696,7 +740,7 @@ pub const AuditLogger = struct {
 
         // Log a test event after rotation
         try self.logEvent(.{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = .access_granted,
             .user_id = 999,
             .tenant_id = null,
@@ -730,7 +774,7 @@ pub const AuditLogger = struct {
             .access_granted;
 
         try self.logEvent(.{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = event_type,
             .user_id = user_id,
             .tenant_id = tenant_id,
@@ -746,8 +790,8 @@ pub const AuditLogger = struct {
     }
 
     pub fn updateConfig(self: *AuditLogger, rotation_size_mb: u32, retention_days: u32) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         self.config.rotation_size_mb = rotation_size_mb;
         self.config.retention_days = retention_days;
@@ -793,7 +837,7 @@ pub const AuditLogger = struct {
         // Analyze events for anomalies
         var i: usize = 0;
         while (i < event_window) : (i += 1) {
-            const timestamp = std.time.milliTimestamp();
+            const timestamp = compat_milliTimestamp();
             const hour = @mod(@divFloor(timestamp, 3600000), 24);
 
             // Check for unusual access hours (2am - 4am)
@@ -945,7 +989,7 @@ pub const AuditLogger = struct {
 
         // Simulate event correlation using time windows and patterns
         const time_window_ms: i64 = 5000; // 5 second window
-        const base_time = std.time.milliTimestamp();
+        const base_time = compat_milliTimestamp();
 
         // Event patterns to correlate
         const event_chain = [_]struct {
@@ -1046,7 +1090,7 @@ pub const AuditLogger = struct {
         memory_used_mb: f64,
         cpu_percent: f64,
     } {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
         const test_duration_ms: u64 = 1000; // Test for 1 second
         var events_written: u64 = 0;
         var max_latency: u64 = 0;
@@ -1056,12 +1100,12 @@ pub const AuditLogger = struct {
         const initial_mem: usize = 100 * 1024 * 1024; // 100MB baseline estimate
 
         // Performance test - write as many events as possible in 1 second
-        while (std.time.milliTimestamp() - start_time < test_duration_ms) {
+        while (compat_milliTimestamp() - start_time < test_duration_ms) {
             const event_start = std.time.nanoTimestamp();
 
             // Create varied test events for realistic performance measurement
             const test_event = AuditEvent{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = if (events_written % 4 == 0) .authentication_failure else if (events_written % 4 == 1) .data_export else if (events_written % 4 == 2) .policy_violation else .schema_change,
                 .severity = .info,
                 .user_id = @intCast(1000 + (events_written % 100)),
@@ -1098,7 +1142,7 @@ pub const AuditLogger = struct {
             }
         }
 
-        const end_time = std.time.milliTimestamp();
+        const end_time = compat_milliTimestamp();
         const actual_duration_ms = end_time - start_time;
 
         // Measure final memory - simplified for now
@@ -1153,7 +1197,7 @@ pub const AuditLogger = struct {
         var event_batch = try arena_alloc.alloc(AuditEvent, 1000);
         for (0..1000) |i| {
             event_batch[i] = AuditEvent{
-                .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
+                .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
                 .event_type = .access_granted,
                 .severity = .info,
                 .user_id = @intCast(i % 100),
@@ -1254,7 +1298,7 @@ pub const AuditLogger = struct {
             fn run(ctx: ThreadContext) void {
                 for (0..ctx.iterations) |i| {
                     const event = AuditEvent{
-                        .timestamp = std.time.milliTimestamp(),
+                        .timestamp = compat_milliTimestamp(),
                         .event_type = .data_export, // Using existing event type for concurrent test
                         .severity = .info,
                         .user_id = ctx.thread_id,
@@ -1372,7 +1416,7 @@ pub const AuditLogger = struct {
                 self.file = null;
 
                 // Simulate compression by creating a new compressed file
-                const compressed_file = std.Io.Dir.cwd().createFile("audit_compressed.gz", .{}) catch {
+                const compressed_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "audit_compressed.gz", .{}) catch {
                     // Can't create compressed file, use fallback
                     fallback_used = true;
                     events_dropped = 5; // Simulate dropping some events
@@ -1388,7 +1432,7 @@ pub const AuditLogger = struct {
             }
         } else {
             // Normal disk space - test handling of sudden fill
-            const test_file = std.Io.Dir.cwd().createFile("disk_test.tmp", .{ .truncate = true }) catch |err| {
+            const test_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "disk_test.tmp", .{ .truncate = true }) catch |err| {
                 disk_full_handled = true;
                 fallback_used = true;
                 std.debug.print("DISK_TEST create failed: {}\n", .{err});
@@ -1416,7 +1460,7 @@ pub const AuditLogger = struct {
         // Test event logging under low disk conditions
         for (0..10) |i| {
             const test_event = AuditEvent{
-                .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
+                .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
                 .event_type = .data_export, // Using existing event type for disk test
                 .severity = .info,
                 .user_id = @intCast(9000 + i),
@@ -1468,7 +1512,7 @@ pub const AuditLogger = struct {
         // Create a test file with valid data
         const test_file_path = "corruption_test.jsonl";
         {
-            const file = try std.Io.Dir.cwd().createFile(test_file_path, .{});
+            const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file_path, .{});
             defer file.close();
 
             // Write some valid audit events
@@ -1491,7 +1535,7 @@ pub const AuditLogger = struct {
         defer std.Io.Dir.cwd().deleteFile(test_file_path) catch {};
 
         // Try to read and validate the file
-        const file = try std.Io.Dir.cwd().openFile(test_file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file_path, .{});
         defer file.close();
 
         // Read entire file
@@ -1581,11 +1625,11 @@ pub const AuditLogger = struct {
         // Create backup of recovered data
         if (corruption_detected and recovery_successful) {
             const backup_path = "corruption_test.recovered";
-            const backup_file = try std.Io.Dir.cwd().createFile(backup_path, .{});
+            const backup_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{});
             defer backup_file.close();
 
             var recovery_buf: [256]u8 = undefined;
-            const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ std.time.milliTimestamp(), total_expected, recovered, data_loss });
+            const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ compat_milliTimestamp(), total_expected, recovered, data_loss });
             try backup_file.writeAll(recovery_info);
 
             std.Io.Dir.cwd().deleteFile(backup_path) catch {};
@@ -1681,11 +1725,11 @@ pub const AuditLogger = struct {
         }
 
         // Write configuration validation report
-        const report_file = try std.Io.Dir.cwd().createFile("config_validation.json", .{});
+        const report_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "config_validation.json", .{});
         defer report_file.close();
 
         var buffer: [512]u8 = undefined;
-        const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ std.time.milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
+        const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ compat_milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
         try report_file.writeAll(report);
 
         std.Io.Dir.cwd().deleteFile("config_validation.json") catch {};
@@ -1713,7 +1757,7 @@ pub const AuditLogger = struct {
         var compliant_count: u64 = 0;
 
         // Analyze events for compliance
-        const current_time = std.time.milliTimestamp();
+        const current_time = compat_milliTimestamp();
 
         // Simulate event analysis
         for (0..1000) |i| {
@@ -1732,7 +1776,7 @@ pub const AuditLogger = struct {
 
         // Generate report file
         const report_path = try allocator.dupe(u8, "compliance_report.json");
-        const report_file = try std.Io.Dir.cwd().createFile(report_path, .{});
+        const report_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), report_path, .{});
         defer report_file.close();
 
         // Write JSON report using type-safe encoding
@@ -1780,11 +1824,11 @@ pub const AuditLogger = struct {
         }
 
         // Add additional forensic data using type-safe JSON encoding
-        const forensic_file = try std.Io.Dir.cwd().createFile("forensic_metadata.json", .{});
+        const forensic_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "forensic_metadata.json", .{});
         defer forensic_file.close();
 
         const metadata = ForensicMetadataJson{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .audit_enabled = self.enabled,
         };
         const json_str = try json_lib.encode(allocator, metadata, .{});
@@ -1827,7 +1871,7 @@ pub const AuditLogger = struct {
             try allocator.dupe(u8, "audit_export.json");
 
         // Create export file
-        const export_file = try std.Io.Dir.cwd().createFile(export_path, .{});
+        const export_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), export_path, .{});
         defer export_file.close();
 
         var records_exported: u64 = 0;
@@ -1839,7 +1883,7 @@ pub const AuditLogger = struct {
 
             // Export sample records
             for (0..100) |i| {
-                try writer.print("{},{},{},{},{}\n", .{ std.time.milliTimestamp() + @as(i64, @intCast(i)), "access_granted", i % 10, "resource", "SELECT" });
+                try writer.print("{},{},{},{},{}\n", .{ compat_milliTimestamp() + @as(i64, @intCast(i)), "access_granted", i % 10, "resource", "SELECT" });
                 records_exported += 1;
             }
         } else if (std.mem.eql(u8, format, "xml")) {
@@ -1849,7 +1893,7 @@ pub const AuditLogger = struct {
 
             for (0..100) |i| {
                 try writer.print("  <event>\n", .{});
-                try writer.print("    <timestamp>{}</timestamp>\n", .{std.time.milliTimestamp() + @as(i64, @intCast(i))});
+                try writer.print("    <timestamp>{}</timestamp>\n", .{compat_milliTimestamp() + @as(i64, @intCast(i))});
                 try writer.print("    <type>access_granted</type>\n", .{});
                 try writer.print("    <user_id>{}</user_id>\n", .{i % 10});
                 try writer.print("  </event>\n", .{});
@@ -1864,7 +1908,7 @@ pub const AuditLogger = struct {
             for (0..100) |i| {
                 if (i > 0) try writer.print(",\n", .{});
                 const event = ExportEventJson{
-                    .timestamp = std.time.milliTimestamp() + @as(i64, @intCast(i)),
+                    .timestamp = compat_milliTimestamp() + @as(i64, @intCast(i)),
                     .user_id = i % 10,
                 };
                 const event_json = try json_lib.encode(allocator, event, .{});

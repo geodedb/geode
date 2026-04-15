@@ -16,16 +16,16 @@ fn appendFmt(list: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, co
 // Future: color thresholds (green when 100% coverage) and stale detection colorization.
 fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 pub fn main() !void {
@@ -56,7 +56,7 @@ pub fn main() !void {
     const sp = status_path.?;
     const op = out_path.?;
 
-    var file = try std.fs.cwd().openFile(sp, .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), sp, .{});
     defer file.close();
 
     var read_buf: [8 * 1024]u8 = undefined;
@@ -135,7 +135,7 @@ pub fn main() !void {
     try append(&svg_buf, alloc, "</svg>");
 
     // Ensure output directory exists.
-    const cwd = std.fs.cwd();
+    const cwd = std.Io.Dir.cwd();
     var path_it = std.mem.tokenizeAny(u8, op, "/");
     var partial = std.ArrayListUnmanaged(u8){};
     defer partial.deinit(alloc);
@@ -145,14 +145,14 @@ pub fn main() !void {
         partial.appendSlice(alloc, seg) catch return error.OutOfMemory;
         // If not last segment treat as dir
         if (path_it.peek()) |_| {
-            _ = cwd.makePath(partial.items[0..partial.items.len]) catch |e| switch (e) {
+            _ = cwd.createDirPath(std.Io.Threaded.global_single_threaded.io(), partial.items[0..partial.items.len]) catch |e| switch (e) {
                 error.PathAlreadyExists => {},
                 else => return e,
             };
         }
     }
 
-    var out_file = try cwd.createFile(op, .{ .truncate = true });
+    var out_file = try cwd.createFile(std.Io.Threaded.global_single_threaded.io(), op, .{ .truncate = true });
     defer out_file.close();
     try out_file.writeAll(svg_buf.items[0..svg_buf.items.len]);
 

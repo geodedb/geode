@@ -1,5 +1,49 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 /// HyperLogLog++ sketch for cardinality estimation
 const HLLSketch = struct {
     buckets: []u8,
@@ -108,7 +152,7 @@ const AdaptiveSampler = struct {
 
         if (self.current_sample_size >= self.max_sample_size) {
             // Reservoir sampling
-            const rand = std.crypto.random.float(f64);
+            const rand = blk: { var _rf: [8]u8 = undefined; compat_fillRandom(&_rf); const _ri = std.mem.readInt(u64, &_rf, .little); break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53)); };
             if (rand < @as(f64, @floatFromInt(self.max_sample_size)) / @as(f64, @floatFromInt(self.total_seen))) {
                 return true;
             }
@@ -119,7 +163,7 @@ const AdaptiveSampler = struct {
         const target_rate = @as(f64, @floatFromInt(self.max_sample_size)) / @as(f64, @floatFromInt(self.total_seen));
         self.sample_rate = @min(1.0, target_rate * 1.1); // 10% buffer
 
-        const rand = std.crypto.random.float(f64);
+        const rand = blk: { var _rf: [8]u8 = undefined; compat_fillRandom(&_rf); const _ri = std.mem.readInt(u64, &_rf, .little); break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53)); };
         if (rand < self.sample_rate) {
             self.current_sample_size += 1;
             return true;
@@ -281,7 +325,7 @@ pub const SelectivityEstimator = struct {
             .histogram = null,
             .hll_sketch = null,
             .sampler = null,
-            .last_update_time = std.time.timestamp(),
+            .last_update_time = compat_timestamp(),
         };
 
         // Initialize HLL sketch if enabled
@@ -314,7 +358,7 @@ pub const SelectivityEstimator = struct {
             }
         }
 
-        stats.last_update_time = std.time.timestamp();
+        stats.last_update_time = compat_timestamp();
     }
 
     /// Get the estimated distinct count using HLL if available

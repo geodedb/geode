@@ -17,35 +17,33 @@ const language_metadata = geode.language_metadata;
 const KeywordCategory = language_metadata.KeywordCategory;
 const FunctionCategory = language_metadata.FunctionCategory;
 
-fn getStdoutHandle() std.Io.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
-    } else {
-        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
-    }
-}
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = getStdoutHandle();
-    try generateVimSyntaxToFile(allocator, stdout);
+
+    try generateVimSyntaxToStdout(allocator);
 }
 
-fn generateVimSyntaxToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
+fn generateVimSyntaxToStdout(allocator: std.mem.Allocator) !void {
     var output = try std.ArrayList(u8).initCapacity(allocator, 16384);
     defer output.deinit(allocator);
 
-    try generateVimSyntax(allocator, output.writer(allocator));
-    try file.writeAll(output.items);
+    try generateVimSyntax(allocator, &output);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const stdout = std.Io.File.stdout();
+    var write_buf: [8192]u8 = undefined;
+    var writer = stdout.writer(io, &write_buf);
+    try writer.interface.writeAll(output.items);
+    try writer.interface.flush();
 }
 
-fn generateVimSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
+fn generateVimSyntax(allocator: std.mem.Allocator, output: *std.ArrayList(u8)) !void {
     // Header
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\" Vim syntax file
         \\" Language: GQL (Graph Query Language)
         \\" Maintainer: Geode Team
@@ -128,50 +126,50 @@ fn generateVimSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     }
 
     // Write clause keywords
-    try writer.writeAll("\" Clause keywords (MATCH, CREATE, DELETE, etc.)\nsyn keyword gqlKeyword ");
-    try writeVimKeywordList(writer, clause_keywords.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Clause keywords (MATCH, CREATE, DELETE, etc.)\nsyn keyword gqlKeyword ");
+    try writeVimKeywordList(allocator, output, clause_keywords.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write boolean/logical keywords
-    try writer.writeAll("\" Boolean and logical keywords\nsyn keyword gqlBoolean ");
-    try writeVimKeywordList(writer, boolean_keywords.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Boolean and logical keywords\nsyn keyword gqlBoolean ");
+    try writeVimKeywordList(allocator, output, boolean_keywords.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write DDL keywords
-    try writer.writeAll("\" DDL keywords\nsyn keyword gqlDDL ");
-    try writeVimKeywordList(writer, ddl_keywords.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" DDL keywords\nsyn keyword gqlDDL ");
+    try writeVimKeywordList(allocator, output, ddl_keywords.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write transaction keywords
-    try writer.writeAll("\" Transaction keywords\nsyn keyword gqlTransaction ");
-    try writeVimKeywordList(writer, transaction_keywords.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Transaction keywords\nsyn keyword gqlTransaction ");
+    try writeVimKeywordList(allocator, output, transaction_keywords.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write other keywords
-    try writer.writeAll("\" Other keywords\nsyn keyword gqlKeyword ");
-    try writeVimKeywordList(writer, other_keywords.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Other keywords\nsyn keyword gqlKeyword ");
+    try writeVimKeywordList(allocator, output, other_keywords.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write aggregate functions
-    try writer.writeAll("\" Aggregate functions\nsyn keyword gqlAggregate ");
-    try writeVimKeywordList(writer, aggregate_functions.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Aggregate functions\nsyn keyword gqlAggregate ");
+    try writeVimKeywordList(allocator, output, aggregate_functions.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write scalar functions
-    try writer.writeAll("\" Scalar functions\nsyn keyword gqlFunction ");
-    try writeVimKeywordList(writer, scalar_functions.items);
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\" Scalar functions\nsyn keyword gqlFunction ");
+    try writeVimKeywordList(allocator, output, scalar_functions.items);
+    try output.appendSlice(allocator, "\n\n");
 
     // Write types
-    try writer.writeAll("\" Data types\nsyn keyword gqlType ");
+    try output.appendSlice(allocator, "\" Data types\nsyn keyword gqlType ");
     for (language_metadata.types, 0..) |t, i| {
-        if (i > 0) try writer.writeAll(" ");
-        try writer.writeAll(t.name);
+        if (i > 0) try output.appendSlice(allocator, " ");
+        try output.appendSlice(allocator, t.name);
     }
-    try writer.writeAll("\n\n");
+    try output.appendSlice(allocator, "\n\n");
 
     // Highlighting links
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\" Highlighting
         \\hi def link gqlComment Comment
         \\hi def link gqlTodo Todo
@@ -196,10 +194,10 @@ fn generateVimSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 }
 
-fn writeVimKeywordList(writer: anytype, items: []const []const u8) !void {
+fn writeVimKeywordList(allocator: std.mem.Allocator, output: *std.ArrayList(u8), items: []const []const u8) !void {
     for (items, 0..) |item, i| {
-        if (i > 0) try writer.writeAll(" ");
-        try writer.writeAll(item);
+        if (i > 0) try output.appendSlice(allocator, " ");
+        try output.appendSlice(allocator, item);
     }
 }
 

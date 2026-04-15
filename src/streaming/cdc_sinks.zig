@@ -7,6 +7,41 @@
 /// Extracted as part of Phase 1, M1.2 of the modularization effort.
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=Sinks; STATUS=TESTED; TEST=cdc_tests; OWNER=streaming; UPDATED=2025-11-12
 
 /// Import types from cdc_enhanced module
@@ -132,7 +167,7 @@ pub const MemorySink = struct {
 /// FileSink writes events to a file
 pub const FileSink = struct {
     allocator: std.mem.Allocator,
-    file: ?std.fs.File,
+    file: ?std.Io.File,
     path: []const u8,
 
     pub fn init(allocator: std.mem.Allocator, path: []const u8) !FileSink {
@@ -152,7 +187,7 @@ pub const FileSink = struct {
     pub fn send(self: *FileSink, events: []const ChangeEvent) !void {
         // Lazy initialization
         if (self.file == null) {
-            self.file = try std.Io.Dir.cwd().createFile(self.path, .{
+            self.file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), self.path, .{
                 .truncate = false,
             });
             try self.file.?.seekFromEnd(0);
@@ -209,7 +244,7 @@ test "MemorySink - stores events in memory" {
 
     const events = [_]ChangeEvent{
         .{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .transaction_id = 1,
             .sequence = 1,
             .change_type = .insert,
@@ -234,7 +269,7 @@ test "FileSink - writes events to file" {
 
     const events = [_]ChangeEvent{
         .{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .transaction_id = 1,
             .sequence = 1,
             .change_type = .insert,
@@ -249,7 +284,7 @@ test "FileSink - writes events to file" {
     try sink.send(&events);
 
     // Verify file exists
-    const file = try std.Io.Dir.cwd().openFile("test_cdc_sink.log", .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_cdc_sink.log", .{});
     defer file.close();
     const stat = try file.stat();
     try testing.expect(stat.size > 0);
@@ -282,7 +317,7 @@ test "SinkInterface - polymorphic sink access" {
 
     const events = [_]ChangeEvent{
         .{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .transaction_id = 1,
             .sequence = 1,
             .change_type = .update,

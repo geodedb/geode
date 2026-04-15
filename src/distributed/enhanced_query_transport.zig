@@ -3,6 +3,41 @@
 // CANARY: REQ=REQ-DISTRIBUTED-QUERY-006; FEATURE="Shard-Aware Query Execution"; ASPECT=ShardOptimization; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const network_transport = @import("network_transport.zig");
 const NetworkTransport = network_transport.NetworkTransport;
@@ -32,7 +67,7 @@ pub const EnhancedQueryTransport = struct {
     connection_pool: ConnectionPool,
     message_handlers: MessageHandlers,
     statistics: TransportStatistics,
-    stats_mutex: std.Thread.Mutex = .{}, // PERF-D010: Thread-safe statistics access
+    stats_mutex: std.Io.Mutex = std.Io.Mutex.init, // PERF-D010: Thread-safe statistics access
     config: TransportConfig,
     // CANARY: REQ=REQ-DIST-TRACKER-001; FEATURE="Query Tracker Storage"; ASPECT=Query; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     // GAP-0054: Added active_trackers map for query tracking
@@ -133,7 +168,7 @@ pub const EnhancedQueryTransport = struct {
         completion_callback: QueryCompletionCallback,
     ) !u64 {
         const query_id = self.generateQueryId();
-        _ = std.time.milliTimestamp(); // Query start time for logging
+        _ = compat_milliTimestamp(); // Query start time for logging
 
         log.info("Executing distributed query across shards", &.{
             Attr.uint("query_id", query_id),
@@ -151,9 +186,9 @@ pub const EnhancedQueryTransport = struct {
         try self.executeQueryFragments(query_id, execution_plan);
 
         // Update statistics (PERF-D010: thread-safe)
-        self.stats_mutex.lock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.statistics.messages_sent += target_shards.len;
-        self.stats_mutex.unlock();
+        self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return query_id;
     }
@@ -226,7 +261,7 @@ pub const EnhancedQueryTransport = struct {
             .query_id = query_id,
             .fragment_id = fragment.fragment_id,
             .shard_id = fragment.shard_id,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .fragment = proto_fragment,
             .metadata = QueryMetadata{
                 .estimated_rows = fragment.estimated_rows,
@@ -259,17 +294,17 @@ pub const EnhancedQueryTransport = struct {
 
         while (attempts < max_attempts) : (attempts += 1) {
             self.network_transport.sendToNode(node_id, &message) catch |err| {
-                self.stats_mutex.lock();
+                self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                 self.statistics.connection_errors += 1;
-                self.stats_mutex.unlock();
+                self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
                 if (attempts + 1 < max_attempts) {
                     // Exponential backoff
                     const delay_ms = @as(u64, 100) << @intCast(attempts);
                     std.time.sleep(delay_ms * std.time.ns_per_ms);
-                    self.stats_mutex.lock();
+                    self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                     self.statistics.retry_count += 1;
-                    self.stats_mutex.unlock();
+                    self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
                     continue;
                 }
 
@@ -281,10 +316,10 @@ pub const EnhancedQueryTransport = struct {
             };
 
             // Success (PERF-D010: thread-safe)
-            self.stats_mutex.lock();
+            self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             self.statistics.messages_sent += 1;
             self.statistics.bytes_transferred += message.payload.len;
-            self.stats_mutex.unlock();
+            self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return;
         }
     }
@@ -338,7 +373,7 @@ pub const EnhancedQueryTransport = struct {
         const merged_result = try self.mergeFragmentResults(results.items);
 
         // Calculate final execution time
-        const total_time = std.time.milliTimestamp() - query_tracker.start_time;
+        const total_time = compat_milliTimestamp() - query_tracker.start_time;
 
         // Update statistics
         self.updateQueryStatistics(@as(f64, @floatFromInt(total_time)));
@@ -409,8 +444,8 @@ pub const EnhancedQueryTransport = struct {
         try self.shard_registry.addShard(shard);
 
         // Initialize shard utilization tracking (PERF-D010: thread-safe)
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.statistics.shard_utilization.put(shard.shard_id, TransportStatistics.ShardUtilization{
             .queries_executed = 0,
             .avg_response_time_ms = 0.0,
@@ -429,8 +464,8 @@ pub const EnhancedQueryTransport = struct {
 
     /// Get transport statistics (PERF-D010: thread-safe snapshot)
     pub fn getStatistics(self: *EnhancedQueryTransport) TransportStatistics {
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.statistics;
     }
 
@@ -454,13 +489,13 @@ pub const EnhancedQueryTransport = struct {
     /// Generate unique query ID
     fn generateQueryId(self: *EnhancedQueryTransport) u64 {
         _ = self;
-        return @as(u64, @intCast(std.time.milliTimestamp()));
+        return @as(u64, @intCast(compat_milliTimestamp()));
     }
 
     /// Update query execution statistics (PERF-D010: thread-safe)
     fn updateQueryStatistics(self: *EnhancedQueryTransport, execution_time_ms: f64) void {
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.statistics.messages_received == 0) {
             self.statistics.query_latency_ms = execution_time_ms;
         } else {
@@ -472,8 +507,8 @@ pub const EnhancedQueryTransport = struct {
 
     /// Update shard utilization metrics (PERF-D010: thread-safe)
     fn updateShardUtilization(self: *EnhancedQueryTransport, shard_id: u64, execution_time_ms: u64) !void {
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.statistics.shard_utilization.getPtr(shard_id)) |util| {
             util.queries_executed += 1;
 
@@ -559,7 +594,7 @@ pub const EnhancedQueryTransport = struct {
         const tracker = try self.allocator.create(QueryTracker);
         tracker.* = QueryTracker{
             .query_id = query_id,
-            .start_time = std.time.milliTimestamp(),
+            .start_time = compat_milliTimestamp(),
             .fragment_results = std.AutoHashMap(u64, QueryResult).init(self.allocator),
             .completion_callback = callback,
         };
@@ -657,8 +692,8 @@ pub const EnhancedQueryTransport = struct {
 
     // Least connections - select shard with lowest active query count
     fn selectLeastConnections(self: *EnhancedQueryTransport, shards: []const u64) u64 {
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         var best_shard: u64 = shards[0];
         var min_queries: u64 = std.math.maxInt(u64);
 
@@ -694,8 +729,8 @@ pub const EnhancedQueryTransport = struct {
 
     // Adaptive - consider response time, error rate, and current load
     fn selectAdaptive(self: *EnhancedQueryTransport, shards: []const u64) u64 {
-        self.stats_mutex.lock();
-        defer self.stats_mutex.unlock();
+        self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         var best_shard: u64 = shards[0];
         var best_score: f64 = std.math.inf(f64);
 
@@ -738,8 +773,8 @@ pub const EnhancedQueryTransport = struct {
         defer self.allocator.free(scored_shards);
 
         {
-            self.stats_mutex.lock();
-            defer self.stats_mutex.unlock();
+            self.stats_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.stats_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             for (all_shards, 0..) |shard_id, i| {
                 var score: f64 = 0;
                 if (self.statistics.shard_utilization.get(shard_id)) |util| {

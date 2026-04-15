@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-061; FEATURE="JSON Library Migration"; ASPECT=UserStorageSecure; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
@@ -49,7 +93,7 @@ pub const UserStorage = struct {
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !Self {
         // Ensure data directory exists
-        std.Io.Dir.cwd().makePath(data_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), data_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -59,7 +103,7 @@ pub const UserStorage = struct {
         defer allocator.free(key_path);
 
         // Try to load existing key or generate new one
-        if (std.Io.Dir.cwd().openFile(key_path, .{})) |key_file| {
+        if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), key_path, .{})) |key_file| {
             // File exists, read the key
             defer key_file.close();
             const bytes_read = try key_file.readAll(&encryption_key);
@@ -69,10 +113,10 @@ pub const UserStorage = struct {
         } else |err| switch (err) {
             error.FileNotFound => {
                 // Generate new key
-                std.crypto.random.bytes(&encryption_key);
+                compat_fillRandom(&encryption_key);
 
                 // Save it
-                const file = try std.Io.Dir.cwd().createFile(key_path, .{ .mode = 0o600 });
+                const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), key_path, .{ .mode = 0o600 });
                 defer file.close();
                 try file.writeAll(&encryption_key);
             },
@@ -112,7 +156,7 @@ pub const UserStorage = struct {
 
         // Generate random salt
         var salt: [32]u8 = undefined;
-        std.crypto.random.bytes(&salt);
+        compat_fillRandom(&salt);
 
         // Hash password with Argon2id (OWASP recommended)
         const password_hash = try hashPassword(self.allocator, password, &salt);
@@ -125,7 +169,7 @@ pub const UserStorage = struct {
             .password_hash = try self.allocator.dupe(u8, password_hash),
             .salt = try self.allocator.dupe(u8, &salt),
             .roles = try self.allocator.alloc([]const u8, roles.len),
-            .created_at = std.time.timestamp(),
+            .created_at = compat_timestamp(),
             .is_active = true,
         };
 
@@ -233,7 +277,7 @@ pub const UserStorage = struct {
         defer self.allocator.free(data_path);
 
         // Try to load encrypted data
-        const file = std.Io.Dir.cwd().openFile(data_path, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), data_path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 // No users yet, return empty array
                 return try self.allocator.alloc(User, 0);
@@ -348,7 +392,7 @@ pub const UserStorage = struct {
         defer self.allocator.free(encrypted_data);
 
         // Write to file
-        const file = try std.Io.Dir.cwd().createFile(data_path, .{ .mode = 0o600 });
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), data_path, .{ .mode = 0o600 });
         defer file.close();
         try file.writeAll(encrypted_data);
     }
@@ -367,7 +411,7 @@ pub const UserStorage = struct {
 
         // Generate random nonce
         var nonce: [nonce_len]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        compat_fillRandom(&nonce);
         @memcpy(result[0..nonce_len], &nonce);
 
         // Encrypt with authentication

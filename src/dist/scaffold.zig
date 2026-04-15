@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const rpc = @import("rpc.zig");
 
 // CANARY: REQ=REQ-0006; FEATURE="Distributed Consensus"; ASPECT=RaftImplementation; STATUS=TESTED; TEST=geodetestlab/specs/gap_0210_distributed_rpc.yml; OWNER=dist; UPDATED=2026-01-16
@@ -85,7 +120,7 @@ pub const RaftNode = struct {
         try self.votes_received.put(self.node_id, {});
 
         // Reset election timeout
-        self.last_heartbeat = std.time.milliTimestamp();
+        self.last_heartbeat = compat_milliTimestamp();
 
         // Send RequestVote RPCs to all other nodes
         for (self.cluster_nodes.items) |node_id| {
@@ -178,7 +213,7 @@ pub const RaftNode = struct {
 
         // Grant vote
         self.voted_for = candidate_id;
-        self.last_heartbeat = std.time.milliTimestamp();
+        self.last_heartbeat = compat_milliTimestamp();
         return true;
     }
 
@@ -186,7 +221,7 @@ pub const RaftNode = struct {
     pub fn shouldStartElection(self: *RaftNode) bool {
         if (self.role == .Leader) return false;
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         return (now - self.last_heartbeat) > self.election_timeout;
     }
 
@@ -194,7 +229,7 @@ pub const RaftNode = struct {
     pub fn shouldSendHeartbeats(self: *RaftNode) bool {
         if (self.role != .Leader) return false;
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         return (now - self.last_heartbeat) > self.heartbeat_interval;
     }
 
@@ -239,7 +274,7 @@ pub const RaftNode = struct {
                 _ = self.sendAppendEntries(node_id, &.{});
             }
         }
-        self.last_heartbeat = std.time.milliTimestamp();
+        self.last_heartbeat = compat_milliTimestamp();
     }
 
     fn replicateToFollowers(self: *RaftNode) !void {

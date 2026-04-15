@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const ast = @import("../ast.zig");
 const planner = @import("../planner.zig");
@@ -135,7 +179,7 @@ pub const RecursiveQueryProcessor = struct {
             distinct_set: ?std.hash_map.HashMap(WorkingTable.RowHash, void, WorkingTable.RowHash.hash, WorkingTable.RowHash.eql, 80),
             memory_used: u64,
             spilled_to_disk: bool,
-            temp_file: ?std.fs.File,
+            temp_file: ?std.Io.File,
         };
 
         pub const CycleDetector = struct {
@@ -400,7 +444,7 @@ pub const RecursiveQueryProcessor = struct {
             .cycle_detector = cycle_detector,
             .path_builder = path_builder,
             .statistics = .{
-                .start_time = std.time.milliTimestamp(),
+                .start_time = compat_milliTimestamp(),
                 .end_time = 0,
                 .iterations = 0,
                 .rows_examined = 0,
@@ -615,10 +659,10 @@ pub const RecursiveQueryProcessor = struct {
             // Create temporary file with unique name
             const temp_dir = std.Io.Dir.cwd();
             var rand_buf: [8]u8 = undefined;
-            std.crypto.random.bytes(&rand_buf);
+            compat_fillRandom(&rand_buf);
             var filename_buf: [64]u8 = undefined;
             const filename = std.fmt.bufPrint(&filename_buf, "recursive_cte_{x}.dat", .{std.mem.readInt(u64, &rand_buf, .little)}) catch "recursive_temp.dat";
-            const temp_file = try temp_dir.createFile(filename, .{});
+            const temp_file = try temp_dir.createFile(std.Io.Threaded.global_single_threaded.io(), filename, .{});
             execution.result_accumulator.temp_file = temp_file;
             execution.result_accumulator.spilled_to_disk = true;
         }
@@ -812,7 +856,7 @@ pub const RecursiveQueryProcessor = struct {
         _ = self;
         _ = cte;
 
-        execution.statistics.end_time = std.time.milliTimestamp();
+        execution.statistics.end_time = compat_milliTimestamp();
         execution.statistics.iterations = execution.iteration_count;
         execution.statistics.rows_produced = execution.rows_produced;
 

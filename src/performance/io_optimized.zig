@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 /// Addresses 5.37ms File I/O bottleneck (5.4x slower than target) identified in performance analysis
 /// Buffered file writer with intelligent batching
 pub const BufferedFileWriter = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     buffer: []u8,
     position: usize,
     allocator: Allocator,
@@ -19,7 +19,7 @@ pub const BufferedFileWriter = struct {
     pub const DEFAULT_BUFFER_SIZE = 64 * 1024; // 64KB default buffer
     pub const DEFAULT_BATCH_SIZE = 16 * 1024; // 16KB batch size
 
-    pub fn init(allocator: Allocator, file: std.fs.File, buffer_size: usize) !Self {
+    pub fn init(allocator: Allocator, file: std.Io.File, buffer_size: usize) !Self {
         const buffer = try allocator.alloc(u8, buffer_size);
         return .{
             .file = file,
@@ -122,7 +122,7 @@ pub const BufferedFileWriter = struct {
 
 /// Buffered file reader with read-ahead
 pub const BufferedFileReader = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     buffer: []u8,
     position: usize,
     valid_data: usize,
@@ -134,7 +134,7 @@ pub const BufferedFileReader = struct {
     pub const DEFAULT_BUFFER_SIZE = 64 * 1024; // 64KB default buffer
     pub const DEFAULT_READ_AHEAD = 32 * 1024; // 32KB read-ahead
 
-    pub fn init(allocator: Allocator, file: std.fs.File, buffer_size: usize) !Self {
+    pub fn init(allocator: Allocator, file: std.Io.File, buffer_size: usize) !Self {
         const buffer = try allocator.alloc(u8, buffer_size);
         return .{
             .file = file,
@@ -238,7 +238,7 @@ pub const BufferedFileReader = struct {
 
 /// Memory-mapped file for high-performance access
 pub const MemoryMappedFile = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     mapping: []u8,
     allocator: Allocator,
     read_only: bool,
@@ -247,9 +247,9 @@ pub const MemoryMappedFile = struct {
 
     pub fn init(allocator: Allocator, file_path: []const u8, read_only: bool) !Self {
         const file = if (read_only)
-            try std.Io.Dir.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{})
         else
-            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
 
@@ -354,13 +354,13 @@ pub const BatchFileOperations = struct {
         for (self.operations.items) |operation| {
             switch (operation) {
                 .write => |write_op| {
-                    const file = try std.Io.Dir.cwd().createFile(write_op.path, .{});
+                    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), write_op.path, .{});
                     defer file.close();
                     _ = try file.writeAll(write_op.data);
                     try file.sync();
                 },
                 .read => |read_op| {
-                    const file = try std.Io.Dir.cwd().openFile(read_op.path, .{});
+                    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), read_op.path, .{});
                     defer file.close();
                     _ = try file.readAll(read_op.buffer);
                 },
@@ -463,13 +463,13 @@ pub const FileIOManager = struct {
 
     /// Create optimized file writer
     pub fn createWriter(self: *Self, file_path: []const u8) !BufferedFileWriter {
-        const file = try std.Io.Dir.cwd().createFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
         return BufferedFileWriter.init(self.allocator, file, self.buffer_size);
     }
 
     /// Create optimized file reader
     pub fn createReader(self: *Self, file_path: []const u8) !BufferedFileReader {
-        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
         return BufferedFileReader.init(self.allocator, file, self.buffer_size);
     }
 

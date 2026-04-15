@@ -219,8 +219,8 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-021; FEATURE="Schema Persistence"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn saveAll(self: *SchemaManager) !void {
-        self.db_catalog.rwlock.lock();
-        defer self.db_catalog.rwlock.unlock();
+        self.db_catalog.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.db_catalog.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         try self.db_catalog.save();
         // Note: FLE catalog and constraints are typically in-memory only
@@ -231,8 +231,8 @@ pub const SchemaManager = struct {
     ///
     /// CANARY: REQ=REQ-M7.1-SCHEMA-MANAGER-022; FEATURE="Schema Reload"; ASPECT=Core; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-17
     pub fn reload(self: *SchemaManager) !void {
-        self.db_catalog.rwlock.lock();
-        defer self.db_catalog.rwlock.unlock();
+        self.db_catalog.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.db_catalog.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         try self.db_catalog.load();
     }

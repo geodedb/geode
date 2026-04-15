@@ -9,16 +9,16 @@ const diagnostics = gql.diagnostics;
 const ast = gql.ast;
 const status = gql.gql.status;
 
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator
     var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
-    const raw_argv = std.posix.argv;
+    const raw_argv = proc_init.args.vector;
     const args = try gpa.alloc([:0]u8, raw_argv.len);
     defer gpa.free(args);
     for (raw_argv, 0..) |arg, i| {
-        args[i] = std.mem.span(arg);
+        args[i] = @constCast(std.mem.span(arg));
     }
     if (args.len < 2) {
         std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics|--demo-agg] <file>\n", .{});
@@ -164,7 +164,7 @@ pub fn main() !void {
         return;
     }
     const path = args[idx];
-    const src = std.Io.Dir.cwd().readFileAlloc(gpa, path, 1 << 20) catch |e| {
+    const src = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, gpa, std.Io.Limit.limited(1 << 20)) catch |e| {
         std.debug.print("io error: failed to read {s}: {any}\n", .{ path, e });
         std.process.exit(2);
     };
@@ -174,9 +174,9 @@ pub fn main() !void {
         .Ok => |ok| ok,
         .Err => |pe| {
             // Output structured JSON diagnostic to stderr
-            const stderr_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
+            const stderr_file = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch {
                 std.process.exit(1);
-            } } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
+            } } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
             const stderr = stderr_file.deprecatedWriter();
             const gql_status = status.syntaxError(pe.msg, pe.line, pe.column, @tagName(pe.token));
             try status.writeJson(stderr, gql_status);
@@ -190,12 +190,12 @@ pub fn main() !void {
         const prof: conf.Profile = .{ .features = .{} };
         {
             const stdout_file = if (builtin.os.tag == .windows)
-                std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                     std.process.exit(1);
                 } }
-            else if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            else if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
-            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
             const w = stdout_file.deprecatedWriter();
             try conf.writeConformanceJson(w, prof);
         }
@@ -204,18 +204,18 @@ pub fn main() !void {
         if (print_ast_json) {
             if (ast_json_verbose) {
                 {
-                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    const out_file = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
-                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
                     const w = out_file.deprecatedWriter();
                     // P2-3: Pass allocator to printProgramJsonWith
                     try printer.printProgramJsonWith(gpa, w, res.program, .{ .verbose_temporals = true, .session_offset_minutes = session_offset });
                 }
             } else {
                 {
-                    const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    const out_file = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
-                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
                     const w = out_file.deprecatedWriter();
                     // P2-3: Pass allocator to printProgramJsonWith
                     try printer.printProgramJsonWith(gpa, w, res.program, .{ .session_offset_minutes = session_offset });
@@ -225,9 +225,9 @@ pub fn main() !void {
             // P2-3: Add allocator to PrintOptions for temporal formatting
             const popts = printer.PrintOptions{ .normalize_temporals = normalize_temporals, .clamp_frac_digits = clamp_frac_digits, .allocator = gpa };
             {
-                const out_file = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                const out_file = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                     std.process.exit(1);
-                } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
                 const w = out_file.deprecatedWriter();
                 try printer.printProgramHumanWith(w, res.program, popts);
             }
@@ -292,9 +292,9 @@ pub fn main() !void {
                         try out.writer(ally).print("  {d} -> {s}\n", .{ r.id, s });
                     }
                     // Write once
-                    const outf = if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    const outf = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
-                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+                    } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
                     _ = try outf.write(out.items);
                 },
                 else => {
@@ -332,9 +332,9 @@ pub fn main() !void {
             defer ally.free(ea);
             const ed = try exec.exceptDistinctRows(ally, A, B);
             defer ally.free(ed);
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            const w = (if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
-            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).deprecatedWriter();
             try w.print("demo-setops:\n  A = 3 rows, B = 3 rows\n", .{});
             try w.print("  UNION ALL: {d} rows (stable-left)\n", .{ua.len});
             try w.print("  UNION DISTINCT: {d} rows (sorted)\n", .{ud.len});
@@ -365,17 +365,17 @@ pub fn main() !void {
             const ud2 = try exec.unionDistinctRowsOptimized(ally, a_rows, b_rows, exec.SetOpsTuning.union_distinct_hash_threshold);
             defer ally.free(ud2);
             const t2 = std.time.nanoTimestamp();
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            const w = (if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
-            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).deprecatedWriter();
             try w.print("bench-setops: N={d}\n  unionDistinctRows    => {d} ns\n  unionDistinct(opt)   => {d} ns\n  same cardinality?     {s}\n", .{ N, t1 - t0, t2 - t1, if (ud1.len == ud2.len) "yes" else "no" });
         } else if (bench_eval) {
             // Micro-bench: regex =~ and IN/NOT IN evaluation
             // P2-3: Use main GPA instead of page_allocator
             const ally = gpa;
-            const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            const w = (if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
-            } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+            } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).deprecatedWriter();
             // Regex benchmark
             const samples = [_][]const u8{ "Alice.", "Bob", "Carol123", "Z", "Alic", "Alice." };
             const pats = [_][]const u8{ "^A.*$", "A[il]ice\\.", "^[^B].*$", "Z?$", "Al?ice\\." };
@@ -437,9 +437,9 @@ pub fn main() !void {
             switch (st) {
                 .Query => |q| {
                     const names = &.{ "a", "s" };
-                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    const w = (if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
-                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+                    } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).deprecatedWriter();
                     const pr = gql.printer;
                     if (q.group_by != null) {
                         // Validate GROUP BY semantics first; surface diagnostics
@@ -743,9 +743,9 @@ pub fn main() !void {
                         _ = agg_map.put(sig_buf.items, ai) catch {};
                     }
                     // Print header
-                    const w = (if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+                    const w = (if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
-                    } } else std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+                    } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } }).deprecatedWriter();
                     try w.print("demo-agg: groups over (name, val)\n", .{});
                     try w.print("group\t", .{});
                     for (labels.items, 0..) |lab, i| {

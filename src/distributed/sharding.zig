@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const net = std.net;
 
@@ -273,7 +317,7 @@ pub const ShardManager = struct {
                 .size_bytes = 0,
                 .read_qps = 0,
                 .write_qps = 0,
-                .last_updated = std.time.timestamp(),
+                .last_updated = compat_timestamp(),
             },
         };
 
@@ -337,7 +381,7 @@ pub const ShardManager = struct {
 
             for (shard.replicas) |*replica| {
                 if (replica.status == .healthy) {
-                    const score = std.time.timestamp() - replica.last_heartbeat;
+                    const score = compat_timestamp() - replica.last_heartbeat;
                     if (score > best_score) {
                         best_score = score;
                         best_replica = replica;
@@ -475,8 +519,8 @@ pub const ShardManager = struct {
             .verified_items = 0,
             .checksum = std.hash.Crc32.init(),
             .status = .in_progress,
-            .start_time = std.time.milliTimestamp(),
-            .last_checkpoint = std.time.milliTimestamp(),
+            .start_time = compat_milliTimestamp(),
+            .last_checkpoint = compat_milliTimestamp(),
         };
 
         // Execute migration with proper data transfer
@@ -552,11 +596,11 @@ pub const ShardManager = struct {
 
             // Checkpoint every 10 batches
             if (state.migrated_items % (state.batch_size * 10) == 0) {
-                state.last_checkpoint = std.time.milliTimestamp();
+                state.last_checkpoint = compat_milliTimestamp();
             }
 
             // Update timestamps
-            const now = std.time.timestamp();
+            const now = compat_timestamp();
             target_shard.statistics.last_updated = now;
             source_shard.statistics.last_updated = now;
         }
@@ -585,7 +629,7 @@ pub const ShardManager = struct {
             state.verified_items += current_batch;
 
             // Update timestamps
-            const now = std.time.timestamp();
+            const now = compat_timestamp();
             target_shard.statistics.last_updated = now;
             source_shard.statistics.last_updated = now;
         }
@@ -595,7 +639,7 @@ pub const ShardManager = struct {
 
     fn generateShardId(self: *ShardManager) u64 {
         _ = self;
-        return @intCast(std.time.timestamp());
+        return @intCast(compat_timestamp());
     }
 
     // CANARY: REQ=REQ-DIST-SPLIT-001; FEATURE="Shard Split Point"; ASPECT=SplitPoint; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
@@ -641,11 +685,11 @@ pub const ShardManager = struct {
     fn allocateNode(self: *ShardManager) !ShardNode {
         _ = self;
         return ShardNode{
-            .id = @intCast(std.time.timestamp()),
+            .id = @intCast(compat_timestamp()),
             .address = try net.Address.parseIp4("127.0.0.1", 7567),
             .role = .primary,
             .status = .healthy,
-            .last_heartbeat = std.time.timestamp(),
+            .last_heartbeat = compat_timestamp(),
         };
     }
 
@@ -653,11 +697,11 @@ pub const ShardManager = struct {
         const replicas = try self.allocator.alloc(ShardNode, count);
         for (replicas, 0..) |*replica, i| {
             replica.* = ShardNode{
-                .id = @intCast(std.time.timestamp() + i),
+                .id = @intCast(compat_timestamp() + i),
                 .address = try net.Address.parseIp4("127.0.0.1", @intCast(7568 + i)),
                 .role = .replica,
                 .status = .healthy,
-                .last_heartbeat = std.time.timestamp(),
+                .last_heartbeat = compat_timestamp(),
             };
         }
         return replicas;
@@ -703,8 +747,8 @@ pub const ShardManager = struct {
         target.statistics.edge_count += edges_to_migrate;
         target.statistics.size_bytes += bytes_to_migrate;
 
-        source.statistics.last_updated = std.time.timestamp();
-        target.statistics.last_updated = std.time.timestamp();
+        source.statistics.last_updated = compat_timestamp();
+        target.statistics.last_updated = compat_timestamp();
     }
 
     // CANARY: REQ=REQ-DIST-MIGRATE-003; FEATURE="Shard Data Migration"; ASPECT=FullMigration; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
@@ -722,8 +766,8 @@ pub const ShardManager = struct {
         source.statistics.edge_count = 0;
         source.statistics.size_bytes = 0;
 
-        source.statistics.last_updated = std.time.timestamp();
-        target.statistics.last_updated = std.time.timestamp();
+        source.statistics.last_updated = compat_timestamp();
+        target.statistics.last_updated = compat_timestamp();
     }
 
     // CANARY: REQ=REQ-DIST-RANGE-001; FEATURE="Key Range Operations"; ASPECT=RangeOverlap; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-10
@@ -893,7 +937,7 @@ pub const SimpleShardManager = struct {
     }
 
     pub fn addShard(self: *ShardManager, node_id: u64, address: []const u8) !void {
-        const shard_id = std.crypto.random.int(u64);
+        const shard_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
 
         try self.consistent_hash.addNode(.{
             .id = node_id,
@@ -957,8 +1001,8 @@ pub const SimpleShardManager = struct {
         shard.state = .splitting;
 
         // Create two new shards
-        const new_shard1_id = std.crypto.random.int(u64);
-        const new_shard2_id = std.crypto.random.int(u64);
+        const new_shard1_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
+        const new_shard2_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
 
         // Split the key range
         // In a real implementation, this would be based on actual key distribution
@@ -1009,7 +1053,7 @@ pub const SimpleShardManager = struct {
         }
 
         // Create merged shard
-        const merged_id = std.crypto.random.int(u64);
+        const merged_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
 
         try self.shards.put(merged_id, .{
             .id = merged_id,

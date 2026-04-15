@@ -66,7 +66,7 @@ pub fn main() !void {
 
     const allow_regression = envFlagEnabled(allocator, cfg.allow_env);
 
-    const history = std.fs.cwd().readFileAlloc(allocator, cfg.history_path, 4 * 1024 * 1024) catch {
+    const history = std.Io.Dir.cwd().readFileAlloc(allocator, cfg.history_path, 4 * 1024 * 1024) catch {
         return fail(2, "trend_regression_guard: history file missing or unreadable");
     };
     defer allocator.free(history);
@@ -226,16 +226,16 @@ fn fail(code: u8, msg: []const u8) noreturn {
 
 fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 test "extractCoverage parses numeric value" {

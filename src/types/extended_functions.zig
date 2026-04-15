@@ -3,6 +3,20 @@ const ext = @import("extended.zig");
 
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/types/extended_functions.zig; OWNER=engine; UPDATED=2025-09-26
 
+// Zig 0.16: std.io.fixedBufferStream was removed. Minimal in-memory buffer
+// writer that implements writeAll for use with ext.formatUuid and similar
+// functions that accept an anytype writer.
+const FixedBufWriter = struct {
+    buf: []u8,
+    pos: usize = 0,
+
+    pub fn writeAll(self: *FixedBufWriter, data: []const u8) !void {
+        if (self.pos + data.len > self.buf.len) return error.NoSpaceLeft;
+        @memcpy(self.buf[self.pos..][0..data.len], data);
+        self.pos += data.len;
+    }
+};
+
 // Built-in style function value union (re-uses ext.Value for return values where possible)
 pub const BuiltinValue = union(enum) {
     Null,
@@ -52,10 +66,12 @@ fn fn_uuid_v4(allocator: std.mem.Allocator, args: []const BuiltinValue) !Builtin
     while (i < 16) : (i += 1) u.bytes[i] = @as(u8, @intCast((i * 97 + 13) & 0xFF));
     u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
     u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
+    // Zig 0.16: std.io.fixedBufferStream was removed. Use a minimal
+    // buffer writer that implements writeAll for ext.formatUuid.
     var buf: [36]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try ext.formatUuid(u, fbs.writer());
-    const slice = try allocator.dupe(u8, fbs.getWritten());
+    var bw = FixedBufWriter{ .buf = &buf };
+    try ext.formatUuid(u, &bw);
+    const slice = try allocator.dupe(u8, buf[0..bw.pos]);
     return .{ .Str = slice };
 }
 

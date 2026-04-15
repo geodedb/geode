@@ -3,6 +3,41 @@
 /// Handles routing for all `audit.*` procedure calls.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const ast = @import("../gql/ast.zig");
 const value_types = @import("../value_types.zig");
 
@@ -16,7 +51,7 @@ const audit_mod = @import("../security/audit.zig");
 // CANARY: REQ=REQ-AUDIT-PROC-001; FEATURE="AuditProcedures"; ASPECT=EventID; STATUS=TESTED; TEST=geodetestlab/specs/geode_audit_logging_enterprise.yml; OWNER=audit; UPDATED=2026-01-15
 pub var audit_event_id_counter: std.atomic.Value(u32) = std.atomic.Value(u32).init(1001);
 pub var global_audit_logger: ?audit_mod.AuditLogger = null;
-pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
+pub var global_audit_logger_mutex: std.Io.Mutex = std.Io.Mutex.init;
 pub var global_audit_file_path: []const u8 = "/etc/geode/geode_audit.jsonl";
 
 /// Get or create an audit logger suitable for test procedures.
@@ -26,16 +61,16 @@ pub var global_audit_file_path: []const u8 = "/etc/geode/geode_audit.jsonl";
 fn getOrCreateTestLogger(allocator: std.mem.Allocator) !*audit_mod.AuditLogger {
     // First, try the server's global audit logger — this is the preferred path
     // because the server already owns the audit file and mutex.
-    audit_mod.global_audit_logger_mutex.lock();
+    audit_mod.global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     const server_logger = audit_mod.global_audit_logger;
-    audit_mod.global_audit_logger_mutex.unlock();
+    audit_mod.global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (server_logger) |logger| {
         return logger;
     }
 
     // Fall back to dispatch module's own logger (e.g., in unit test or standalone mode)
-    global_audit_logger_mutex.lock();
-    defer global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (global_audit_logger == null) {
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
@@ -170,8 +205,8 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
     }
 
     // Initialize or reconfigure the global audit logger (double-checked locking)
-    global_audit_logger_mutex.lock();
-    defer global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_audit_logger == null) {
         const config = audit_mod.AuditLogger.Config{
@@ -198,7 +233,7 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
     // Write configuration to disk for persistence
     const config_path = "audit_config.json";
-    const config_file = try std.Io.Dir.cwd().createFile(config_path, .{});
+    const config_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{});
     defer config_file.close();
 
     var json_buf = try std.ArrayList(u8).initCapacity(allocator, 512);
@@ -214,7 +249,7 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
     try writer.print("\"enable_compression\":{},", .{enable_compression});
     try writer.print("\"enable_encryption\":{},", .{enable_encryption});
     try writer.print("\"enable_signatures\":{},", .{enable_signatures});
-    try writer.print("\"timestamp\":{d}", .{std.time.milliTimestamp()});
+    try writer.print("\"timestamp\":{d}", .{compat_milliTimestamp()});
     try writer.writeAll("}}");
 
     const config_json = try json_buf.toOwnedSlice(allocator);
@@ -236,7 +271,7 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
     row[0] = Value{ .Str = try allocator.dupe(u8, status) };
     row[1] = Value{ .Str = try allocator.dupe(u8, config_path) };
     row[2] = Value{ .Str = try allocator.dupe(u8, config_json) };
-    row[3] = Value{ .Int = std.time.milliTimestamp() };
+    row[3] = Value{ .Int = compat_milliTimestamp() };
     rows[0] = row;
 
     return ExecutionResult{
@@ -262,11 +297,11 @@ fn handleAuditLogAuthEvent(allocator: std.mem.Allocator, call_stmt: ast.CallProc
 
     // Generate event ID and timestamp
     const event_id = audit_event_id_counter.fetchAdd(1, .monotonic);
-    const timestamp = std.time.milliTimestamp();
+    const timestamp = compat_milliTimestamp();
 
     // Initialize audit logger if not already initialized
-    global_audit_logger_mutex.lock();
-    defer global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_audit_logger == null) {
         global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
@@ -337,7 +372,7 @@ fn handleAuditLogLifecycleEvent(allocator: std.mem.Allocator, call_stmt: ast.Cal
     const details = if (args.len > 1 and args[1].* == .String) args[1].String else "";
 
     const event_id = audit_event_id_counter.fetchAdd(1, .monotonic);
-    const timestamp = std.time.timestamp();
+    const timestamp = compat_timestamp();
 
     const columns = try allocator.alloc([]const u8, 3);
     columns[0] = try allocator.dupe(u8, "event_id");
@@ -400,7 +435,7 @@ fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure
     var valid = true;
 
     // Read audit log file if it exists
-    if (std.Io.Dir.cwd().openFile(global_audit_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), global_audit_file_path, .{})) |file| {
         defer file.close();
 
         var prev_hash: [32]u8 = [_]u8{0} ** 32; // Genesis hash
@@ -543,7 +578,7 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
     defer leaves.deinit(allocator);
 
     // Read audit events and create leaf hashes
-    if (std.Io.Dir.cwd().openFile(global_audit_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), global_audit_file_path, .{})) |file| {
         defer file.close();
 
         const content = try file.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
@@ -666,7 +701,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
     var events_written: i64 = 0;
 
     // Write test audit events to file
-    if (std.Io.Dir.cwd().createFile(test_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file_path, .{})) |file| {
         defer file.close();
 
         // Write sample audit events in JSONL format
@@ -685,8 +720,8 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
         success = true;
 
         // Also write using the global audit logger if initialized
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (global_audit_logger == null) {
             global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
@@ -700,7 +735,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
         if (global_audit_logger) |*logger| {
             // Log additional test event
             logger.logEvent(.{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = .access_granted,
                 .user_id = 1003,
                 .tenant_id = null,
@@ -757,8 +792,8 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
     };
 
     // Initialize audit logger if needed
-    global_audit_logger_mutex.lock();
-    defer global_audit_logger_mutex.unlock();
+    global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_audit_logger == null) {
         global_audit_logger = audit_mod.AuditLogger.init(allocator, .{
@@ -779,7 +814,7 @@ fn handleAuditTestAuthCategories(allocator: std.mem.Allocator, _: ast.CallProced
         if (global_audit_logger) |*logger| {
             // Log test event for this category
             logger.logEvent(.{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = cat.event_type,
                 .user_id = 1000 + @as(u64, @intCast(i)),
                 .tenant_id = null,
@@ -843,8 +878,8 @@ fn handleAuditTestDataAccessCategories(allocator: std.mem.Allocator, _: ast.Call
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_data_access.jsonl",
@@ -886,8 +921,8 @@ fn handleAuditConfigureRotation(allocator: std.mem.Allocator, _: ast.CallProcedu
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_rotation.jsonl",
@@ -928,8 +963,8 @@ fn handleAuditSimulateWindowsEventlog(allocator: std.mem.Allocator, _: ast.CallP
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_windows.jsonl",
@@ -964,8 +999,8 @@ fn handleAuditSimulateSyslogOutput(allocator: std.mem.Allocator, _: ast.CallProc
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_syslog.jsonl",
@@ -1000,8 +1035,8 @@ fn handleAuditTestCombinedOutput(allocator: std.mem.Allocator, _: ast.CallProced
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_combined.jsonl",
@@ -1035,8 +1070,8 @@ fn handleAuditTestSiemCorrelation(allocator: std.mem.Allocator, _: ast.CallProce
     // CANARY: REQ=REQ-AUDIT-PROC-017; FEATURE="AuditProcedures"; ASPECT=SIEMCorrelation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1074,8 +1109,8 @@ fn handleAuditTestSiemAlerts(allocator: std.mem.Allocator, _: ast.CallProcedure)
     // CANARY: REQ=REQ-AUDIT-PROC-018; FEATURE="AuditProcedures"; ASPECT=SIEMAlerts; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1159,8 +1194,8 @@ fn handleAuditTestRotationContinuity(allocator: std.mem.Allocator, _: ast.CallPr
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_continuity_test.jsonl",
@@ -1208,8 +1243,8 @@ fn handleAuditConfigureRetention(allocator: std.mem.Allocator, _: ast.CallProced
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_retention.jsonl",
@@ -1246,8 +1281,8 @@ fn handleAuditCleanupLogFiles(allocator: std.mem.Allocator, _: ast.CallProcedure
 
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
             .enabled = true,
             .file_path = "audit_cleanup.jsonl",
@@ -1281,8 +1316,8 @@ fn handleAuditDetectAnomalies(allocator: std.mem.Allocator, _: ast.CallProcedure
     // CANARY: REQ=REQ-AUDIT-PROC-024; FEATURE="AuditProcedures"; ASPECT=AnomalyDetection; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1320,8 +1355,8 @@ fn handleAuditExtractThreatIndicators(allocator: std.mem.Allocator, _: ast.CallP
     // CANARY: REQ=REQ-AUDIT-PROC-025; FEATURE="AuditProcedures"; ASPECT=ThreatIndicators; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1362,8 +1397,8 @@ fn handleAuditDetectPrivilegeEscalation(allocator: std.mem.Allocator, _: ast.Cal
     // CANARY: REQ=REQ-AUDIT-PROC-026; FEATURE="AuditProcedures"; ASPECT=PrivilegeEscalation; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1477,8 +1512,8 @@ fn handleAuditTestDiskSpaceHandling(allocator: std.mem.Allocator, _: ast.CallPro
     // CANARY: REQ=REQ-AUDIT-PROC-030; FEATURE="AuditProcedures"; ASPECT=DiskSpaceHandling; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1511,8 +1546,8 @@ fn handleAuditTestCorruptionHandling(allocator: std.mem.Allocator, _: ast.CallPr
     // CANARY: REQ=REQ-AUDIT-PROC-031; FEATURE="AuditProcedures"; ASPECT=CorruptionHandling; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,
@@ -1545,8 +1580,8 @@ fn handleAuditTestInvalidConfig(allocator: std.mem.Allocator, _: ast.CallProcedu
     // CANARY: REQ=REQ-AUDIT-PROC-032; FEATURE="AuditProcedures"; ASPECT=InvalidConfig; STATUS=TESTED; OWNER=audit; UPDATED=2025-10-19
     // Initialize audit logger if needed
     if (global_audit_logger == null) {
-        global_audit_logger_mutex.lock();
-        defer global_audit_logger_mutex.unlock();
+        global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (global_audit_logger == null) {
             global_audit_logger = try audit_mod.AuditLogger.init(allocator, .{
                 .enabled = true,

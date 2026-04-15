@@ -3,6 +3,41 @@
 // CANARY: REQ=REQ-MATVIEW-REFRESH-003; FEATURE="Query Rewriting"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=TestCANARY_REQ_MATVIEW_REFRESH_003_QueryRewrite; OWNER=query; UPDATED=2025-10-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const ast = @import("../gql/ast.zig");
 const exec = @import("../server/graph/exec.zig");
@@ -65,7 +100,7 @@ pub const MaterializedViewManager = struct {
             .dependencies = try self.allocator.dupe(Dependency, dependencies),
             .refresh_strategy = refresh_strategy,
             .statistics = ViewStatistics.init(),
-            .created_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
             .last_refresh = 0,
             .is_valid = true,
             .storage_name = undefined, // Will be set by createViewStorage
@@ -112,7 +147,7 @@ pub const MaterializedViewManager = struct {
     ) !RefreshResult {
         const view = self.view_catalog.getView(view_id) orelse return error.ViewNotFound;
 
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Determine optimal refresh method
         const refresh_method = if (options.force_complete)
@@ -128,7 +163,7 @@ pub const MaterializedViewManager = struct {
         };
 
         // Update view statistics
-        const end_time = std.time.milliTimestamp();
+        const end_time = compat_milliTimestamp();
         view.last_refresh = end_time;
         view.statistics.refresh_count += 1;
         view.statistics.last_refresh_duration_ms = @as(u64, @intCast(end_time - start_time));
@@ -368,7 +403,7 @@ pub const MaterializedViewManager = struct {
     // CANARY: REQ=REQ-MATVIEW-STORAGE-001; FEATURE="Materialized View Storage Creation"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
     fn createViewStorage(self: *MaterializedViewManager, view: *MaterializedView) !void {
         // Generate unique storage identifier with timestamp for uniqueness
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = compat_milliTimestamp();
         view.storage_name = try std.fmt.allocPrint(self.allocator, "mv_{s}_{d}_{d}", .{ view.name, view.id, timestamp });
 
         // Initialize storage entry in view catalog's storage map
@@ -1026,9 +1061,9 @@ const RefreshScheduler = struct {
 
     fn scheduleRefresh(self: *RefreshScheduler, view_id: u64, timing: RefreshTiming) !void {
         const scheduled_time = switch (timing) {
-            .immediate => std.time.milliTimestamp(),
-            .incremental => std.time.milliTimestamp() + 1000, // 1 second delay
-            .scheduled => std.time.milliTimestamp() + 60000, // 1 minute delay
+            .immediate => compat_milliTimestamp(),
+            .incremental => compat_milliTimestamp() + 1000, // 1 second delay
+            .scheduled => compat_milliTimestamp() + 60000, // 1 minute delay
         };
 
         try self.scheduled_refreshes.add(ScheduledRefresh{

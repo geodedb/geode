@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const tde = @import("../security/tde.zig");
 
 pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
@@ -21,9 +65,9 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
         defer allocator.free(test_data);
 
         // Fill with random data
-        std.crypto.random.bytes(test_data);
+        compat_fillRandom(test_data);
 
-        const start = std.time.microTimestamp();
+        const start = compat_microTimestamp();
 
         // Perform encryption operations
         var i: u32 = 0;
@@ -37,7 +81,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
             total_bytes += size * 2; // Count both encrypt and decrypt
         }
 
-        total_time_us += @intCast(std.time.microTimestamp() - start);
+        total_time_us += @intCast(compat_microTimestamp() - start);
     }
 
     const throughput_mbps = @as(f64, @floatFromInt(total_bytes)) / @as(f64, @floatFromInt(total_time_us));
@@ -63,28 +107,28 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
 
     const test_data = try allocator.alloc(u8, 256);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     const iterations = duration_seconds * 10; // Simulate transactions
 
     // Without encryption
-    const unencrypted_start = std.time.milliTimestamp();
+    const unencrypted_start = compat_milliTimestamp();
     for (0..iterations) |_| {
         const copy = try allocator.alloc(u8, test_data.len);
         @memcpy(copy, test_data);
         allocator.free(copy);
     }
-    const unencrypted_time = std.time.milliTimestamp() - unencrypted_start;
+    const unencrypted_time = compat_milliTimestamp() - unencrypted_start;
 
     // With encryption
-    const encrypted_start = std.time.milliTimestamp();
+    const encrypted_start = compat_milliTimestamp();
     for (0..iterations) |_| {
         const enc = try tde.encrypt(allocator, test_data, "oltp_test");
         const dec = try tde.decrypt(allocator, enc, "oltp_test");
         allocator.free(enc.data);
         allocator.free(dec);
     }
-    const encrypted_time = std.time.milliTimestamp() - encrypted_start;
+    const encrypted_time = compat_milliTimestamp() - encrypted_start;
 
     const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(unencrypted_time))) * 1000.0;
     const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(encrypted_time))) * 1000.0;

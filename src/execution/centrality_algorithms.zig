@@ -68,11 +68,11 @@ fn multiResult(columns: [][]const u8, rows: [][]Value) ExecutionResult {
 // GAP-0273: Global parallel pool for graph algorithm parallelism.
 // Initialized lazily on first use, shared across all algorithm calls.
 var g_parallel_pool: ?ParallelPool = null;
-var g_parallel_pool_mu: std.Thread.Mutex = .{};
+var g_parallel_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
 
 fn getParallelPool(allocator: std.mem.Allocator) *ParallelPool {
-    g_parallel_pool_mu.lock();
-    defer g_parallel_pool_mu.unlock();
+    g_parallel_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_parallel_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     if (g_parallel_pool == null) {
         g_parallel_pool = ParallelPool.init(allocator, null);
         g_parallel_pool.?.start();

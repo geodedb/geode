@@ -73,10 +73,10 @@ pub const Url = struct {
         var result = std.ArrayList(u8).empty;
         defer result.deinit(allocator);
 
-        try std.fmt.format(result.writer(allocator), "{s}://{s}", .{ self.scheme, self.host });
+        try result.print(allocator, "{s}://{s}", .{ self.scheme, self.host });
         if (self.port) |p| {
             if (!isDefaultPort(self.scheme, p)) {
-                try std.fmt.format(result.writer(allocator), ":{d}", .{p});
+                try result.print(allocator, ":{d}", .{p});
             }
         }
         return result.toOwnedSlice(allocator);

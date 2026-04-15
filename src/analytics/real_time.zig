@@ -3,6 +3,41 @@
 // CANARY: REQ=REQ-ANALYTICS-003; FEATURE="Real-time Analytics"; ASPECT=EventProcessing; STATUS=TESTED; TEST=TestCANARY_ANALYTICS_003_EventProcessing; OWNER=analytics; UPDATED=2025-10-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const AutoHashMap = std.AutoHashMap;
@@ -48,7 +83,7 @@ pub const AnalyticsEvent = struct {
         return AnalyticsEvent{
             .id = generateEventId(),
             .event_type = event_type,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .properties = AutoHashMap([]const u8, AnalyticsValue).init(allocator),
             .metadata = AnalyticsMetadata.init(allocator),
         };
@@ -162,8 +197,8 @@ pub const PatternDetector = struct {
                 .pattern_id = generatePatternId(),
                 .pattern_type = pattern_type,
                 .frequency = 1,
-                .first_occurrence = std.time.milliTimestamp(),
-                .last_occurrence = std.time.milliTimestamp(),
+                .first_occurrence = compat_milliTimestamp(),
+                .last_occurrence = compat_milliTimestamp(),
                 .confidence = 0.5,
                 .nodes_involved = ArrayList(u64).init(allocator),
             };
@@ -470,14 +505,14 @@ pub const AnomalyDetector = struct {
             baseline.mean = new_mean;
             baseline.variance = new_variance;
             baseline.sample_count += 1;
-            baseline.last_updated = std.time.milliTimestamp();
+            baseline.last_updated = compat_milliTimestamp();
         } else {
             // Initialize new baseline
             try self.baseline_stats.put(metric_key, AnomalyBaseline{
                 .mean = value,
                 .variance = 0.0,
                 .sample_count = 1,
-                .last_updated = std.time.milliTimestamp(),
+                .last_updated = compat_milliTimestamp(),
             });
         }
     }
@@ -502,7 +537,7 @@ pub const RealTimeAnalyticsEngine = struct {
     anomaly_detector: AnomalyDetector,
     processing_pool: ?*pooled.ThreadPool = null,
     should_stop: bool = false,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: Allocator, config: AnalyticsConfig) !RealTimeAnalyticsEngine {
         return RealTimeAnalyticsEngine{
@@ -558,8 +593,8 @@ pub const RealTimeAnalyticsEngine = struct {
     }
 
     pub fn queueEvent(self: *RealTimeAnalyticsEngine, event: AnalyticsEvent) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.event_queue.items.len >= self.config.max_event_queue_size) {
             // Remove oldest event to make space
@@ -573,14 +608,14 @@ pub const RealTimeAnalyticsEngine = struct {
     }
 
     pub fn processEventsBatch(self: *RealTimeAnalyticsEngine) !void {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
         var events_to_process = ArrayList(AnalyticsEvent).init(self.allocator);
         defer events_to_process.deinit();
 
         // Extract batch of events from queue
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             const batch_size = @min(self.config.batch_size, self.event_queue.items.len);
             if (batch_size == 0) return;
@@ -603,9 +638,9 @@ pub const RealTimeAnalyticsEngine = struct {
         }
 
         // Update processing statistics
-        const processing_time = @as(f64, @floatFromInt(std.time.milliTimestamp() - start_time));
+        const processing_time = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time));
         self.statistics.updateProcessingTime(processing_time);
-        self.statistics.last_update_timestamp = std.time.milliTimestamp();
+        self.statistics.last_update_timestamp = compat_milliTimestamp();
 
         // Clean up events
         for (events_to_process.items) |*event| {
@@ -614,7 +649,7 @@ pub const RealTimeAnalyticsEngine = struct {
     }
 
     fn processEvent(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {
-        const event_start_time = std.time.milliTimestamp();
+        const event_start_time = compat_milliTimestamp();
 
         // Pattern detection
         if (self.config.enable_pattern_detection) {
@@ -645,7 +680,7 @@ pub const RealTimeAnalyticsEngine = struct {
         }
 
         // Update processing metadata
-        event.metadata.processing_time = std.time.milliTimestamp() - event_start_time;
+        event.metadata.processing_time = compat_milliTimestamp() - event_start_time;
     }
 
     fn handleMLIntegration(self: *RealTimeAnalyticsEngine, event: *AnalyticsEvent) !void {

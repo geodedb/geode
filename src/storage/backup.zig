@@ -1,4 +1,57 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const geode = @import("geode");
 const graph_store = geode.graph_store;
 
@@ -128,14 +181,14 @@ pub const BackupManager = struct {
         store: *graph_store.GraphStore,
     ) !BackupManager {
         // Ensure backup directory exists
-        std.Io.Dir.cwd().makePath(backup_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), backup_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
 
         var enc_key: [32]u8 = [_]u8{0} ** 32;
         if (config.encryption) {
-            if (std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |raw| {
+            if (getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |raw| {
                 defer allocator.free(raw);
                 enc_key = try parseHexKey(raw);
             } else |err| {
@@ -165,7 +218,7 @@ pub const BackupManager = struct {
     /// Create a full backup and return metadata.
     pub fn createFullBackup(self: *BackupManager) !BackupMetadata {
         const backup_id = generateBackupId();
-        const timestamp = std.time.milliTimestamp();
+        const timestamp = compat_milliTimestamp();
 
         // Persist via adapter checkpoint (no-op for file-based — adapter owns storage).
         try self.store.saveToFile();
@@ -175,7 +228,7 @@ pub const BackupManager = struct {
         const data_dir = blk: {
             if (graph_store.getDataDirOverride()) |ov| {
                 break :blk try self.allocator.dupe(u8, ov);
-            } else if (std.process.getEnvVarOwned(self.allocator, "GEODE_DATA_DIR")) |dir| {
+            } else if (getEnvVarOwned(self.allocator, "GEODE_DATA_DIR")) |dir| {
                 break :blk dir;
             } else |_| {
                 break :blk try self.allocator.dupe(u8, "/tmp");
@@ -201,7 +254,7 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        const file = try std.Io.Dir.cwd().createFile(backup_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{});
         defer file.close();
 
         const header = BackupHeader{
@@ -246,7 +299,7 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        var file = try std.Io.Dir.cwd().openFile(backup_path, .{ .mode = .read_only });
+        var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{ .mode = .read_only });
         defer file.close();
 
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
@@ -312,7 +365,7 @@ pub const BackupManager = struct {
         }
         if (self.metadata_log.items.len == 0) return;
 
-        const cutoff = std.time.milliTimestamp() - @as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000;
+        const cutoff = compat_milliTimestamp() - @as(i64, @intCast(self.config.retention_days)) * 24 * 60 * 60 * 1000;
         var kept: std.ArrayList(BackupMetadata) = .{};
 
         for (self.metadata_log.items) |entry| {
@@ -340,7 +393,7 @@ pub const BackupManager = struct {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
 
-        const file = std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return self.metadata_log.items,
             else => return err,
         };
@@ -363,7 +416,7 @@ pub const BackupManager = struct {
     fn writeMetadata(self: *BackupManager) !void {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
-        const file = try std.Io.Dir.cwd().createFile(path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
         defer file.close();
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
         defer self.allocator.free(json_str);
@@ -397,13 +450,13 @@ pub const BackupManager = struct {
 };
 
 fn generateBackupId() u64 {
-    var rng = std.Random.DefaultPrng.init(@bitCast(std.time.milliTimestamp()));
+    var rng = std.Random.DefaultPrng.init(@bitCast(compat_milliTimestamp()));
     return rng.random().int(u64);
 }
 
 /// Append a single file entry (name + data) into the archive buffer.
 fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
-    const file = try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_only });
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     const data = try file.readToEndAlloc(allocator, @intCast(stat.size));
@@ -538,10 +591,10 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
         defer allocator.free(full_path);
 
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
-            std.Io.Dir.cwd().makePath(full_path[0..last_slash]) catch {};
+            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), full_path[0..last_slash]) catch {};
         }
 
-        const out = try std.Io.Dir.cwd().createFile(full_path, .{});
+        const out = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
         defer out.close();
         try out.writeAll(data);
     }
@@ -581,7 +634,7 @@ fn encryptData(data: []const u8, key: [32]u8, allocator: std.mem.Allocator) ![]u
     const TagSize = 16;
 
     var nonce: [NonceSize]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    compat_fillRandom(&nonce);
 
     var tag: [TagSize]u8 = undefined;
     const ciphertext = try allocator.alloc(u8, data.len);

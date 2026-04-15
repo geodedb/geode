@@ -1,5 +1,40 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 /// Conformance auto-regeneration system to prevent documentation drift
 pub const ConformanceGenerator = struct {
     allocator: std.mem.Allocator,
@@ -83,7 +118,7 @@ pub const ConformanceGenerator = struct {
         const status = ImplementationStatus{
             .percentage = percentage,
             .test_coverage = test_coverage,
-            .last_updated = std.time.timestamp(),
+            .last_updated = compat_timestamp(),
             .blockers = blocker_copies,
         };
 
@@ -107,7 +142,7 @@ pub const ConformanceGenerator = struct {
         // Header
         try writer.writeAll("# GQL Conformance Matrix\n\n");
         try writer.writeAll("Generated: ");
-        try writer.print("{d}\n\n", .{std.time.timestamp()});
+        try writer.print("{d}\n\n", .{compat_timestamp()});
 
         // Summary statistics
         const stats = self.calculateStats();

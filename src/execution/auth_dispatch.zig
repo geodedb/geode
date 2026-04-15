@@ -3,6 +3,50 @@
 /// Handles routing for all `geode.auth.*` procedure calls.
 /// Extracted from procedure_registry.zig as part of the procedure dispatch refactoring.
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const ast = @import("../gql/ast.zig");
 const value_types = @import("../value_types.zig");
 
@@ -23,11 +67,11 @@ const mfa_mod = @import("mfa");
 // GAP-0270: Global custom role store for geode.auth.role_create/role_list
 pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
 pub var g_custom_roles_init: bool = false;
-pub var g_custom_roles_mu: std.Thread.Mutex = .{};
+pub var g_custom_roles_mu: std.Io.Mutex = std.Io.Mutex.init;
 // GAP-0270: Global policy store for geode.auth.policy_create
 pub var g_policies: std.StringHashMap([]const u8) = undefined;
 pub var g_policies_init: bool = false;
-pub var g_policies_mu: std.Thread.Mutex = .{};
+pub var g_policies_mu: std.Io.Mutex = std.Io.Mutex.init;
 
 // GAP-0501/0502: Per-user MFA credential store for TOTP secrets and recovery codes.
 const MfaCredential = struct {
@@ -37,7 +81,7 @@ const MfaCredential = struct {
 
 pub var g_mfa_store: std.StringHashMap(MfaCredential) = undefined;
 pub var g_mfa_store_init: bool = false;
-pub var g_mfa_store_mu: std.Thread.Mutex = .{};
+pub var g_mfa_store_mu: std.Io.Mutex = std.Io.Mutex.init;
 
 // GAP-0502: Per-user MFA verify attempt rate limiter.
 const MfaAttemptRecord = struct {
@@ -63,8 +107,8 @@ fn ensureMfaStoreInit(allocator: std.mem.Allocator) void {
 
 /// Store MFA credentials for a user, replacing any existing ones.
 fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret_base32: []const u8, scratch_codes: [][]u8) !void {
-    g_mfa_store_mu.lock();
-    defer g_mfa_store_mu.unlock();
+    g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureMfaStoreInit(allocator);
 
     // Remove old entry if present
@@ -100,8 +144,8 @@ fn storeMfaCredential(allocator: std.mem.Allocator, username: []const u8, secret
 
 /// Look up a user's stored MFA secret (base32). Returns null if not enrolled.
 fn getMfaSecret(username: []const u8) ?[]const u8 {
-    g_mfa_store_mu.lock();
-    defer g_mfa_store_mu.unlock();
+    g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     if (!g_mfa_store_init) return null;
     const cred = g_mfa_store.get(username) orelse return null;
     return cred.secret_base32;
@@ -290,7 +334,7 @@ fn handleUserCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     var actual_password = password;
     if (std.mem.eql(u8, password, "auto_generated_password_placeholder")) {
         var random_bytes: [16]u8 = undefined;
-        std.crypto.random.bytes(&random_bytes);
+        compat_fillRandom(&random_bytes);
         generated_pw = std.fmt.bytesToHex(random_bytes, .lower);
         actual_password = &generated_pw;
     }
@@ -608,12 +652,12 @@ fn handleMfaVerify(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.C
         if (args.len >= 2 and args[1].* == .String) token = args[1].String;
     }
 
-    const now_ms = std.time.milliTimestamp();
+    const now_ms = compat_milliTimestamp();
 
     // Rate limit check: reject if user is locked out from too many failed attempts
     {
-        g_mfa_store_mu.lock();
-        defer g_mfa_store_mu.unlock();
+        g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
         ensureMfaStoreInit(allocator);
         if (checkMfaRateLimit(username, now_ms)) {
             const rl_columns = try allocator.alloc([]const u8, 2);
@@ -662,8 +706,8 @@ fn handleMfaVerify(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.C
 
     // Update rate limiter based on result
     {
-        g_mfa_store_mu.lock();
-        defer g_mfa_store_mu.unlock();
+        g_mfa_store_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer g_mfa_store_mu.unlock(std.Io.Threaded.global_single_threaded.io());
         if (is_valid) {
             clearMfaRateLimit(username);
         } else {
@@ -691,8 +735,8 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         if (args.len >= 1 and args[0].* == .String) role_name = args[0].String;
         if (args.len >= 2 and args[1].* == .String) desc = args[1].String;
     }
-    g_custom_roles_mu.lock();
-    defer g_custom_roles_mu.unlock();
+    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     g_custom_roles.put(try allocator.dupe(u8, role_name), try allocator.dupe(u8, desc)) catch {};
     const columns = try allocator.alloc([]const u8, 1);
@@ -710,8 +754,8 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) role_name = args[0].String;
     }
-    g_custom_roles_mu.lock();
-    defer g_custom_roles_mu.unlock();
+    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     _ = g_custom_roles.fetchRemove(role_name);
     const columns = try allocator.alloc([]const u8, 1);
@@ -734,8 +778,8 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
         row[0] = Value{ .Str = rn };
         try rows_list.append(allocator, row);
     }
-    g_custom_roles_mu.lock();
-    defer g_custom_roles_mu.unlock();
+    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     var it = g_custom_roles.iterator();
     while (it.next()) |entry| {
@@ -754,8 +798,8 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
         if (args.len >= 1 and args[0].* == .String) name = args[0].String;
         if (args.len >= 2 and args[1].* == .String) desc = args[1].String;
     }
-    g_policies_mu.lock();
-    defer g_policies_mu.unlock();
+    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensurePoliciesInit(allocator);
     g_policies.put(try allocator.dupe(u8, name), try allocator.dupe(u8, desc)) catch {};
     const columns = try allocator.alloc([]const u8, 1);
@@ -768,8 +812,8 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
 }
 
 fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    g_policies_mu.lock();
-    defer g_policies_mu.unlock();
+    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensurePoliciesInit(allocator);
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "name");
@@ -791,8 +835,8 @@ fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) name = args[0].String;
     }
-    g_policies_mu.lock();
-    defer g_policies_mu.unlock();
+    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensurePoliciesInit(allocator);
     _ = g_policies.fetchRemove(name);
     const columns = try allocator.alloc([]const u8, 1);

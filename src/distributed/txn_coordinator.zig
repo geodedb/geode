@@ -1,6 +1,41 @@
 // CANARY: REQ=REQ-GQL-2PC-002; FEATURE="Distributed Transaction Coordinator"; ASPECT=2PC; STATUS=TESTED; TEST=TestCANARY_2PC_Coordinator; OWNER=distributed; UPDATED=2025-09-29
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const raft_consensus = @import("raft_consensus.zig");
 const protobuf = @import("protobuf");
@@ -109,7 +144,7 @@ pub const TxnCoordinator = struct {
             .xid = prepare.xid,
             .write_set = try self.allocator.dupe(u8, prepare.write_set),
             .metadata = try self.allocator.dupe(u8, prepare.metadata),
-            .prepare_time = std.time.milliTimestamp(),
+            .prepare_time = compat_milliTimestamp(),
             .locks = locks,
         };
 
@@ -158,7 +193,7 @@ pub const TxnCoordinator = struct {
 
     /// Check for timed-out transactions
     pub fn checkTimeouts(self: *TxnCoordinator) !void {
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         var to_abort = try std.ArrayList(u64).initCapacity(self.allocator, 0);
         defer to_abort.deinit();
 
@@ -334,7 +369,7 @@ test "TestCANARY_2PC_Coordinator basic prepare and commit" {
         .msg_type = .PREPARE,
         .transaction_id = try allocator.dupe(u8, "txn-1"),
         .coordinator_id = try allocator.dupe(u8, "coord"),
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .operations = ops,
     };
 
@@ -385,7 +420,7 @@ test "TestCANARY_2PC_Idempotent repeated prepare" {
         .msg_type = .PREPARE,
         .transaction_id = try allocator.dupe(u8, "txn-1"),
         .coordinator_id = try allocator.dupe(u8, "coord"),
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .operations = ops,
     };
     const write_set = try encodeWriteSet(allocator, &msg);
@@ -453,7 +488,7 @@ test "TestCANARY_2PC_WriteSetApplied verifies data is persisted" {
         .msg_type = .PREPARE,
         .transaction_id = try allocator.dupe(u8, "txn-100"),
         .coordinator_id = try allocator.dupe(u8, "coord"),
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .operations = ops,
     };
     const write_set = try encodeWriteSet(allocator, &msg);
@@ -504,7 +539,7 @@ test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
         .msg_type = .PREPARE,
         .transaction_id = try allocator.dupe(u8, "txn-200"),
         .coordinator_id = try allocator.dupe(u8, "coord"),
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .operations = ops1,
     };
     const write_set1 = try encodeWriteSet(allocator, &msg1);
@@ -530,7 +565,7 @@ test "TestCANARY_2PC_WriteSetDelete verifies delete operations" {
         .msg_type = .PREPARE,
         .transaction_id = try allocator.dupe(u8, "txn-201"),
         .coordinator_id = try allocator.dupe(u8, "coord"),
-        .timestamp = std.time.milliTimestamp(),
+        .timestamp = compat_milliTimestamp(),
         .operations = ops2,
     };
     const write_set2 = try encodeWriteSet(allocator, &msg2);

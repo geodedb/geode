@@ -1,4 +1,53 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const build_options = @import("build_options");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
@@ -61,12 +110,12 @@ const TlsConfig = struct {
 
 // CANARY: REQ=REQ-QUALITY-GAP-406-004; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // Cross-platform stdin helper with proper error handling
-fn getStdinFile() error{StdioUnavailable}!std.fs.File {
+fn getStdinFile() error{StdioUnavailable}!std.Io.File {
     return stdio_util.getStdin() catch error.StdioUnavailable;
 }
 
 // Cross-platform stdout helper with proper error handling
-fn getStdoutFile() error{StdioUnavailable}!std.fs.File {
+fn getStdoutFile() error{StdioUnavailable}!std.Io.File {
     return stdio_util.getStdout() catch error.StdioUnavailable;
 }
 
@@ -101,7 +150,7 @@ fn resolveBackupPassword(password_arg: ?[]const u8) ?[]const u8 {
             "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
         return pw;
     }
-    if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
+    if (posixGetenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
         return env_pw;
     }
     return null;
@@ -111,7 +160,7 @@ fn resolveBackupPassword(password_arg: ?[]const u8) ?[]const u8 {
 // Checks GEODE_MIGRATION_HMAC_KEY env var first, then {migrations_dir}/.hmac_key file.
 fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std.mem.Allocator) ?*const [32]u8 {
     // 1. Try GEODE_MIGRATION_HMAC_KEY env var
-    if (std.posix.getenv("GEODE_MIGRATION_HMAC_KEY")) |env_val| {
+    if (posixGetenv("GEODE_MIGRATION_HMAC_KEY")) |env_val| {
         if (env_val.len == 64) {
             _ = std.fmt.hexToBytes(out, env_val[0..64]) catch return null;
             return out;
@@ -122,7 +171,7 @@ fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std
     const key_path = std.fs.path.join(allocator, &.{ migrations_dir, ".hmac_key" }) catch return null;
     defer allocator.free(key_path);
 
-    const file = std.Io.Dir.cwd().openFile(key_path, .{}) catch return null;
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), key_path, .{}) catch return null;
     defer file.close();
 
     var hex_buf: [64]u8 = undefined;
@@ -437,7 +486,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
                     // Try to read backup header for metadata (if uncompressed)
                     if (info.compression == .none) {
-                        if (dir.openFile(entry.name, .{})) |file| {
+                        if (dir.openFile(std.Io.Threaded.global_single_threaded.io(), entry.name, .{})) |file| {
                             defer file.close();
                             var header_buf: [@sizeOf(BackupHeader)]u8 align(@alignOf(BackupHeader)) = undefined;
                             // GAP-0221 FIX: Log read errors instead of silent catch 0
@@ -529,7 +578,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     const filepath = backup_file.?;
 
     // Open the backup file
-    const file = std.Io.Dir.cwd().openFile(filepath, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), filepath, .{}) catch |err| {
         std.debug.print("Error: Cannot open backup file '{s}': {}\n", .{ filepath, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1452,7 +1501,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
 
     // Ensure migrations directory exists
-    std.Io.Dir.cwd().makePath(migrations_dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), migrations_dir) catch |err| {
         if (err != error.PathAlreadyExists) {
             std.debug.print("Error: Cannot create migrations directory '{s}': {}\n", .{ migrations_dir, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1513,14 +1562,14 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         \\-- Example:
         \\-- CREATE (:Node {{name: "example"}})
         \\
-    , .{ migration_name.?, new_version, std.time.milliTimestamp() }) catch {
+    , .{ migration_name.?, new_version, compat_milliTimestamp() }) catch {
         std.debug.print("Error: Out of memory\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer allocator.free(template);
 
     // Write the file
-    const file = std.Io.Dir.cwd().createFile(filename, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), filename, .{}) catch |err| {
         std.debug.print("Error: Cannot create migration file '{s}': {}\n", .{ filename, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1754,7 +1803,7 @@ fn executeRemoteBackup(
     std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
 
     // Create destination file
-    const output_file = try std.Io.Dir.cwd().createFile(dest, .{});
+    const output_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), dest, .{});
     defer output_file.close();
 
     // Receive backup data chunks
@@ -2120,7 +2169,7 @@ const SimplifiedRestoreManager = struct {
     /// Restore from a backup file to the restore directory
     fn restoreFromBackup(self: SimplifiedRestoreManager, backup_path: []const u8) !RestoreMetadata {
         // Open backup file
-        const file = std.Io.Dir.cwd().openFile(backup_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{}) catch |err| {
             std.debug.print("RESTORE: Failed to open backup file '{s}': {}\n", .{ backup_path, err });
             return error.BackupFileNotFound;
         };
@@ -2166,7 +2215,7 @@ const SimplifiedRestoreManager = struct {
         var decoded: []u8 = payload;
         var decoded_owned = false;
         if (header.encrypted) {
-            const key_raw = std.process.getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch return error.MissingEncryptionKey;
+            const key_raw = getEnvVarOwned(self.allocator, "GEODE_TDE_KEY") catch return error.MissingEncryptionKey;
             defer self.allocator.free(key_raw);
             const key = try parseHexKey(key_raw);
             decoded = try decryptData(payload, key, self.allocator);
@@ -2178,7 +2227,7 @@ const SimplifiedRestoreManager = struct {
         defer self.allocator.free(decompressed);
 
         // Ensure restore directory exists
-        std.Io.Dir.cwd().makePath(self.restore_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), self.restore_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
                 std.debug.print("RESTORE: Failed to create restore directory: {}\n", .{err});
@@ -2214,7 +2263,7 @@ const SimplifiedRestoreManager = struct {
 
         return RestoreMetadata{
             .source_backup_id = backup_id,
-            .restore_timestamp = std.time.timestamp(),
+            .restore_timestamp = compat_timestamp(),
             .backup_type = header.backup_type,
             .data_size_bytes = decompressed.len,
             .checksum_verified = checksum_ok,
@@ -2228,7 +2277,7 @@ const SimplifiedRestoreManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
         defer self.allocator.free(metadata_path);
 
-        const file = std.Io.Dir.cwd().openFile(metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return error.BackupMetadataNotFound,
             else => return err,
         };

@@ -1,5 +1,10 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
+
 // CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="External Library Migration"; ASPECT=ConfigManagement; STATUS=EXEMPT; OWNER=core; UPDATED=2026-01-24
 // External configuration library - XDG compliant, multi-format support (YAML, TOML, JSON)
 // Provides config file support with precedence: flags > env > project > user > system > defaults
@@ -293,7 +298,7 @@ pub fn resolveCertPaths(allocator: std.mem.Allocator, config: *ServerConfig) !st
             // Check GEODE_CERT_DIR env var first (set by systemd unit).
             // This puts certs in /etc/geode/certs/ (0755) so non-root
             // processes can read the public cert for CA verification.
-            const cert_dir: ?[]const u8 = std.posix.getenv("GEODE_CERT_DIR");
+            const cert_dir: ?[]const u8 = posixGetenv("GEODE_CERT_DIR");
 
             if (config.cert_path == null) {
                 if (cert_dir) |dir| {

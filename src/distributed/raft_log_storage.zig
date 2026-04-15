@@ -28,22 +28,22 @@ const HEADER_SIZE: usize = 40; // 5 x u64/i64 = 40 bytes
 pub const LogStorage = struct {
     allocator: Allocator,
     file_path: []const u8,
-    file: std.fs.File,
+    file: std.Io.File,
 
     /// Open or create the log file at `file_path`.
     pub fn init(allocator: Allocator, file_path: []const u8) !LogStorage {
-        const file = std.Io.Dir.cwd().createFile(file_path, .{
+        const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{
             .truncate = false,
             .read = true,
         }) catch |err| {
             if (err == error.FileNotFound) {
                 // Parent directory may not exist — try to create it.
                 if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |sep| {
-                    try std.Io.Dir.cwd().makePath(file_path[0..sep]);
+                    try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), file_path[0..sep]);
                     return LogStorage{
                         .allocator = allocator,
                         .file_path = file_path,
-                        .file = try std.Io.Dir.cwd().createFile(file_path, .{
+                        .file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{
                             .truncate = false,
                             .read = true,
                         }),

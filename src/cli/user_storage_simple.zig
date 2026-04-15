@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-060; FEATURE="JSON Library Migration"; ASPECT=UserStorageSimple; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
@@ -48,7 +92,7 @@ pub const UserStorage = struct {
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !Self {
         // Ensure data directory exists
-        std.Io.Dir.cwd().makePath(data_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), data_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -66,7 +110,7 @@ pub const UserStorage = struct {
         const file_path = try self.getUsersFilePath();
         defer self.allocator.free(file_path);
 
-        const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // No users file yet, return empty list
                 return self.allocator.alloc(User, 0);
@@ -120,7 +164,7 @@ pub const UserStorage = struct {
         const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{file_path});
         defer self.allocator.free(tmp_path);
 
-        const file = try std.Io.Dir.cwd().createFile(tmp_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), tmp_path, .{});
         defer file.close();
 
         // Encode users to JSON using json library
@@ -184,7 +228,7 @@ pub const UserStorage = struct {
 
         // Generate salt
         var salt: [32]u8 = undefined;
-        std.crypto.random.bytes(&salt);
+        compat_fillRandom(&salt);
         const salt_hex = std.fmt.bytesToHex(salt, .lower);
         const salt_hex_str = try self.allocator.dupe(u8, &salt_hex);
         defer self.allocator.free(salt_hex_str);
@@ -205,7 +249,7 @@ pub const UserStorage = struct {
             .password_hash = try self.allocator.dupe(u8, password_hash),
             .salt = try self.allocator.dupe(u8, salt_hex_str),
             .roles = user_roles,
-            .created_at = std.time.timestamp(),
+            .created_at = compat_timestamp(),
             .is_active = true,
         };
 

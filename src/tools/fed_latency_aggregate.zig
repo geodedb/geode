@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 
 // Federation mismatch latency multi-run aggregation tool.
@@ -125,14 +134,14 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const runs: usize = blk: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_RUNS")) |v| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_AGG_RUNS")) |v| {
             defer allocator.free(v);
             if (std.fmt.parseInt(usize, v, 10)) |parsed| break :blk if (parsed == 0) 1 else parsed else |_| break :blk 5;
         } else |_| {}
         break :blk 5;
     };
 
-    const bench_path_owned = std.process.getEnvVarOwned(allocator, "FED_LATENCY_BENCH_PATH") catch null;
+    const bench_path_owned = getEnvVarOwned(allocator, "FED_LATENCY_BENCH_PATH") catch null;
     defer if (bench_path_owned) |p| allocator.free(p);
     const bench_path: []const u8 = bench_path_owned orelse "zig-out/bin/bench_federation_mismatch_latency";
 
@@ -157,7 +166,7 @@ pub fn main() !void {
     var outlier_rs = try allocator.alloc(f128, runs);
     defer allocator.free(outlier_rs);
 
-    const verbose_env = std.process.getEnvVarOwned(allocator, "FED_LATENCY_VERBOSE") catch null;
+    const verbose_env = getEnvVarOwned(allocator, "FED_LATENCY_VERBOSE") catch null;
     defer if (verbose_env) |v| allocator.free(v);
     const verbose = verbose_env != null;
     var verbose_storage: [4096]u8 = undefined;
@@ -267,7 +276,7 @@ pub fn main() !void {
     var fbs = std.io.fixedBufferStream(&buf);
     const w = fbs.writer();
     const want_txt = blk_format: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
             defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blk_format true;
         } else |_| {}
@@ -321,14 +330,14 @@ pub fn main() !void {
         });
         const out_txt = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
             } }
         else
-            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
         try stdout.writeAll(out_txt);
         if (!all_promotion) {
-            if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
+            if (getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
                 defer allocator.free(v);
                 if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
             } else |_| {}
@@ -389,27 +398,27 @@ pub fn main() !void {
     try w.writeAll("}\n");
     const line_out = fbs.getWritten();
     const stdout2 = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
             std.process.exit(1);
         } }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     try stdout2.writeAll(line_out);
 
     // Optional archival append & rotation.
-    if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_PATH") catch null) |ap| {
+    if (getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_PATH") catch null) |ap| {
         defer allocator.free(ap);
         var need_rotate = false;
         var max_lines: usize = 1000;
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_MAX_LINES") catch null) |ml| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_ARCHIVE_MAX_LINES") catch null) |ml| {
             defer allocator.free(ml);
             if (std.fmt.parseInt(usize, ml, 10)) |parsed| {
                 if (parsed > 0) max_lines = parsed;
             } else |_| {}
         }
         // Open (create if missing) for append.
-        var file = std.Io.Dir.cwd().createFile(ap, .{ .truncate = false, .read = true, .mode = 0o666 }) catch |e| switch (e) {
-            error.PathAlreadyExists => std.Io.Dir.cwd().openFile(ap, .{ .mode = .read_write }) catch return, // open existing
+        var file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), ap, .{ .truncate = false, .read = true, .mode = 0o666 }) catch |e| switch (e) {
+            error.PathAlreadyExists => std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), ap, .{ .mode = .read_write }) catch return, // open existing
             else => return,
         };
         defer file.close();
@@ -445,7 +454,7 @@ pub fn main() !void {
                 _ = std.Io.Dir.cwd().rename(ap, rot_name) catch {};
                 // Recreate fresh file
                 file.close();
-                file = std.Io.Dir.cwd().createFile(ap, .{ .truncate = true, .read = true, .mode = 0o666 }) catch return;
+                file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), ap, .{ .truncate = true, .read = true, .mode = 0o666 }) catch return;
             }
         }
         // Append line.
@@ -454,7 +463,7 @@ pub fn main() !void {
     }
 
     if (!all_promotion) {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_AGG_REQUIRE")) |v| {
             defer allocator.free(v);
             if (v.len > 0 and v[0] == '1') return error.AggregatePromotionNotReady;
         } else |_| {}

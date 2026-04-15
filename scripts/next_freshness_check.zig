@@ -13,8 +13,8 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
-    const cwd = std.fs.cwd();
-    var file = try cwd.openFile("docs/NEXT.md", .{ .mode = .read_only });
+    const cwd = std.Io.Dir.cwd();
+    var file = try cwd.openFile(std.Io.Threaded.global_single_threaded.io(), "docs/NEXT.md", .{ .mode = .read_only });
     defer file.close();
 
     var line_buf: [4096]u8 = undefined;

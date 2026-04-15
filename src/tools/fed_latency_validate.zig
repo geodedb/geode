@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 
 // fed_latency_validate: Validate a single JSON line produced by fed_latency_aggregate.
@@ -94,10 +103,10 @@ pub fn main() !void {
     var buf: [8192]u8 = undefined;
     var file_reader = blk: {
         if (file_path) |p| {
-            const f = std.Io.Dir.cwd().openFile(p, .{ .mode = .read_only }) catch return error.OpenFileFailed;
+            const f = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), p, .{ .mode = .read_only }) catch return error.OpenFileFailed;
             break :blk f.reader(&buf);
         } else {
-            const stdin_file: std.fs.File = if (builtin.os.tag == .windows)
+            const stdin_file: std.Io.File = if (builtin.os.tag == .windows)
                 .{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch {
                     std.process.exit(1);
                 } }
@@ -112,7 +121,7 @@ pub fn main() !void {
 
     var total_lines: usize = 0;
     var failures: usize = 0;
-    const strict_env = std.process.getEnvVarOwned(allocator, "FED_VALIDATE_STRICT") catch null;
+    const strict_env = getEnvVarOwned(allocator, "FED_VALIDATE_STRICT") catch null;
     defer if (strict_env) |s| allocator.free(s);
     const strict = strict_env != null;
 
@@ -151,7 +160,7 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
             defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
@@ -164,11 +173,11 @@ pub fn main() !void {
         try fbs.writer().print("FED_VALIDATE lines={d} failures={d} strict={s}\n", .{ total_lines, failures, if (strict) "yes" else "no" });
         const written = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
             } }
         else
-            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
         try stdout.writeAll(written);
     } else {
         var out_buf: [256]u8 = undefined;
@@ -177,11 +186,11 @@ pub fn main() !void {
         try fbs.writer().print("{{\"lines\":{d},\"failures\":{d},\"strict\":{s}}}\n", .{ total_lines, failures, if (strict) "true" else "false" });
         const written = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
-            std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+            std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                 std.process.exit(1);
             } }
         else
-            std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+            std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
         try stdout.writeAll(written);
     }
 

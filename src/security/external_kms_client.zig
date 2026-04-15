@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const crypto = std.crypto;
 const builtin = @import("builtin");
 const logging = @import("logging");
@@ -841,7 +864,7 @@ pub const Client = struct {
         // GAP-0216: Production safety check - block unless explicitly allowed
         if (is_production_build) {
             // Check for explicit override via environment variable
-            const allow_local_kms = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_ALLOW_LOCAL_KMS") else null;
+            const allow_local_kms = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_ALLOW_LOCAL_KMS") else null;
             if (allow_local_kms) |_| {
                 log.warn("LocalSimulated KMS allowed in production via GEODE_ALLOW_LOCAL_KMS - NOT secure", &.{
                     Attr.string("recommendation", "Configure VaultTransit or AwsKms for production"),
@@ -872,7 +895,7 @@ pub const Client = struct {
         }
 
         var kek: [32]u8 = undefined;
-        std.crypto.random.bytes(&kek);
+        compat_fillRandom(&kek);
         // GAP-0107 FIX: PRNG field retained for backward compatibility but NOT used for nonces
         return .{ .allocator = allocator, .kek = kek, .prng = std.Random.DefaultPrng.init(0) };
     }
@@ -880,7 +903,7 @@ pub const Client = struct {
     pub fn wrap(self: *Client, data_key: [32]u8) !Envelope {
         var nonce: [12]u8 = undefined;
         // GAP-0107 SECURITY FIX: Use cryptographic random for nonces, not deterministic PRNG
-        std.crypto.random.bytes(&nonce);
+        compat_fillRandom(&nonce);
         var ct: [32]u8 = undefined;
         var tag: [16]u8 = undefined;
         crypto.aead.aes_gcm.Aes256Gcm.encrypt(&ct, &tag, &data_key, &.{}, nonce, self.kek);
@@ -1012,13 +1035,13 @@ test "aws kms client configuration validation" {
 // Run with: VAULT_ADDR=http://127.0.0.1:8200 VAULT_TOKEN=geode-test-token AWS_KMS_ENDPOINT=http://127.0.0.1:8080 zig build test
 test "vault transit integration test" {
     // Skip if no Vault available
-    const vault_addr = std.process.getEnvVarOwned(std.testing.allocator, "VAULT_ADDR") catch {
+    const vault_addr = getEnvVarOwned(std.testing.allocator, "VAULT_ADDR") catch {
         std.debug.print("SKIP: VAULT_ADDR not set\n", .{});
         return;
     };
     defer std.testing.allocator.free(vault_addr);
 
-    const vault_token = std.process.getEnvVarOwned(std.testing.allocator, "VAULT_TOKEN") catch {
+    const vault_token = getEnvVarOwned(std.testing.allocator, "VAULT_TOKEN") catch {
         std.debug.print("SKIP: VAULT_TOKEN not set\n", .{});
         return;
     };
@@ -1053,13 +1076,13 @@ test "vault transit integration test" {
 
 test "aws kms integration test" {
     // Skip if no local-kms available
-    const aws_endpoint = std.process.getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
+    const aws_endpoint = getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
         std.debug.print("SKIP: AWS_KMS_ENDPOINT not set\n", .{});
         return;
     };
     defer std.testing.allocator.free(aws_endpoint);
 
-    const aws_key_id = std.process.getEnvVarOwned(std.testing.allocator, "AWS_KMS_KEY_ID") catch {
+    const aws_key_id = getEnvVarOwned(std.testing.allocator, "AWS_KMS_KEY_ID") catch {
         // Use default test key ID from local-kms
         std.debug.print("Using default test key ID\n", .{});
         const config = KmsConfig{
@@ -1119,7 +1142,7 @@ test "aws kms integration test" {
 }
 
 test "aws kms generate data key integration test" {
-    const aws_endpoint = std.process.getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
+    const aws_endpoint = getEnvVarOwned(std.testing.allocator, "AWS_KMS_ENDPOINT") catch {
         std.debug.print("SKIP: AWS_KMS_ENDPOINT not set\n", .{});
         return;
     };

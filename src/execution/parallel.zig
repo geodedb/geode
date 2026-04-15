@@ -76,7 +76,7 @@ pub const Pool = struct {
     enabled: bool = true,
     worker_count: usize,
     queued_jobs: std.ArrayList(Job),
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
     chunk_size_estimator: AdaptiveChunkEstimator,
 
     pub fn init(allocator: std.mem.Allocator, worker_count: usize) !Pool {
@@ -129,15 +129,15 @@ pub const Pool = struct {
 
     pub fn submit(self: *Pool, job: Job) !void {
         if (!self.enabled) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.queued_jobs.append(self.allocator, job);
     }
 
     pub fn submitBatch(self: *Pool, jobs: []const Job) !void {
         if (!self.enabled or jobs.len == 0) return;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.queued_jobs.appendSlice(self.allocator, jobs);
     }
 
@@ -145,20 +145,20 @@ pub const Pool = struct {
         if (!self.enabled) return;
 
         while (true) {
-            self.mutex.lock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             if (self.queued_jobs.items.len == 0) {
-                self.mutex.unlock();
+                self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
                 break;
             }
 
             const count = self.queued_jobs.items.len;
             const jobs = self.allocator.alloc(Job, count) catch {
-                self.mutex.unlock();
+                self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
                 break;
             };
             std.mem.copyForwards(Job, jobs, self.queued_jobs.items);
             self.queued_jobs.items.len = 0;
-            self.mutex.unlock();
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             const Context = struct {
                 jobs: []Job,

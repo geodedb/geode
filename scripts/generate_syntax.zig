@@ -20,34 +20,32 @@ const language_metadata = geode.language_metadata;
 const KeywordCategory = language_metadata.KeywordCategory;
 const FunctionCategory = language_metadata.FunctionCategory;
 
-fn getStdoutHandle() std.Io.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
-    } else {
-        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
-    }
-}
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = getStdoutHandle();
-    try generateSyntaxToFile(allocator, stdout);
+
+    try generateSyntaxToStdout(allocator);
 }
 
-fn generateSyntaxToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
+fn generateSyntaxToStdout(allocator: std.mem.Allocator) !void {
     // Build the entire output in memory, then write all at once
     var output = try std.ArrayList(u8).initCapacity(allocator, 32768);
     defer output.deinit(allocator);
 
-    try generateSyntax(allocator, output.writer(allocator));
-    try file.writeAll(output.items);
+    try generateSyntax(allocator, &output);
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const stdout = std.Io.File.stdout();
+    var write_buf: [8192]u8 = undefined;
+    var writer = stdout.writer(io, &write_buf);
+    try writer.interface.writeAll(output.items);
+    try writer.interface.flush();
 }
 
-fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
+fn generateSyntax(allocator: std.mem.Allocator, output: *std.ArrayList(u8)) !void {
     // Categorize keywords - use comptime arrays to avoid ArrayList API issues
     var clause_keywords = try std.ArrayList([]const u8).initCapacity(allocator, 32);
     defer clause_keywords.deinit(allocator);
@@ -129,7 +127,7 @@ fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     }
 
     // Generate JSON
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\{
         \\  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
         \\  "name": "GQL",
@@ -227,46 +225,46 @@ fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 
     // Clause keywords (MATCH, CREATE, DELETE, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.control.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, clause_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.control.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, clause_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Boolean/logical keywords (AND, OR, NOT, TRUE, FALSE, NULL, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.operator.logical.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, boolean_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.operator.logical.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, boolean_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Case keywords (CASE, WHEN, THEN, ELSE, END)
-    try writer.writeAll("        {\n          \"name\": \"keyword.control.case.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, case_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.control.case.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, case_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // DDL keywords (CREATE, DROP, GRAPH, SCHEMA, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.other.ddl.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, ddl_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.other.ddl.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, ddl_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Transaction keywords (BEGIN, COMMIT, ROLLBACK, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.control.transaction.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, transaction_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.control.transaction.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, transaction_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Path pattern keywords (SHORTEST, ACYCLIC, SIMPLE, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.other.path.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, path_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.other.path.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, path_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Set operation keywords (UNION, INTERSECT, EXCEPT)
-    try writer.writeAll("        {\n          \"name\": \"keyword.operator.set.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, set_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.operator.set.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, set_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        },\n");
 
     // Other keywords (AS, DISTINCT, ORDER, BY, etc.)
-    try writer.writeAll("        {\n          \"name\": \"keyword.other.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, other_keywords.items);
-    try writer.writeAll(")\\\\b\"\n        }\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"keyword.other.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, other_keywords.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n        }\n");
 
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\      ]
         \\    },
         \\    "functions": {
@@ -275,41 +273,41 @@ fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 
     // Aggregate functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.aggregate.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, aggregate_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.aggregate.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, aggregate_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // Scalar functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.scalar.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, scalar_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.scalar.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, scalar_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // Math functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.math.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, math_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.math.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, math_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // String functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.string.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, string_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.string.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, string_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // Temporal functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.temporal.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, temporal_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.temporal.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, temporal_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // Vector functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.vector.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, vector_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.vector.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, vector_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        },\n");
 
     // Other functions
-    try writer.writeAll("        {\n          \"name\": \"support.function.other.gql\",\n          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, other_functions.items);
-    try writer.writeAll(")\\\\b(?=\\\\s*\\\\()\"\n        }\n");
+    try output.appendSlice(allocator, "        {\n          \"name\": \"support.function.other.gql\",\n          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, other_functions.items);
+    try output.appendSlice(allocator, ")\\\\b(?=\\\\s*\\\\()\"\n        }\n");
 
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\      ]
         \\    },
         \\    "types": {
@@ -318,11 +316,11 @@ fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
         \\          "name": "storage.type.gql",
         \\
     );
-    try writer.writeAll("          \"match\": \"\\\\b(?i:");
-    try writeKeywordList(writer, type_names.items);
-    try writer.writeAll(")\\\\b\"\n");
+    try output.appendSlice(allocator, "          \"match\": \"\\\\b(?i:");
+    try writeKeywordList(allocator, output, type_names.items);
+    try output.appendSlice(allocator, ")\\\\b\"\n");
 
-    try writer.writeAll(
+    try output.appendSlice(allocator,
         \\        }
         \\      ]
         \\    },
@@ -368,10 +366,10 @@ fn generateSyntax(allocator: std.mem.Allocator, writer: anytype) !void {
     );
 }
 
-fn writeKeywordList(writer: anytype, items: []const []const u8) !void {
+fn writeKeywordList(allocator: std.mem.Allocator, output: *std.ArrayList(u8), items: []const []const u8) !void {
     for (items, 0..) |item, i| {
-        if (i > 0) try writer.writeAll("|");
-        try writer.writeAll(item);
+        if (i > 0) try output.appendSlice(allocator, "|");
+        try output.appendSlice(allocator, item);
     }
 }
 

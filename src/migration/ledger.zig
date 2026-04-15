@@ -1,5 +1,14 @@
 /// Ledger persistence — durable JSON ledger for migration state.
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const builtin = @import("builtin");
 const root = @import("mod.zig");
 const MigrationError = root.MigrationError;
@@ -30,7 +39,7 @@ pub fn ledgerPath(alloc: std.mem.Allocator, cfg: MigrationConfig) ![]u8 {
 }
 
 pub fn ensureDir(cfg: MigrationConfig) !void {
-    std.Io.Dir.cwd().makePath(cfg.migrations_dir) catch |err| {
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), cfg.migrations_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
 }
@@ -44,7 +53,7 @@ pub fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
 pub fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
-    var file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
+    var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |err| {
         if (err == error.FileNotFound) return initLedger(alloc, cfg);
         return error.FileSystemError;
     };
@@ -78,13 +87,13 @@ pub fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
     var rand_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&rand_bytes);
+    compat_fillRandom(&rand_bytes);
     const rand_hex = std.fmt.bytesToHex(rand_bytes, .lower);
     var suffix_buf: [96]u8 = undefined;
     const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.{s}.tmp", .{ root.nowMs(), rand_hex }) catch return error.OutOfMemory;
     const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
-    var tmp = std.Io.Dir.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
+    var tmp = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
     errdefer tmp.close();
     if (builtin.os.tag != .windows) tmp.chmod(0o600) catch {};
     var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const ast = @import("gql/ast.zig");
 const eval_funcs = @import("types/evaluator_functions.zig");
 const heap = @import("storage/heap.zig");
@@ -3029,7 +3030,17 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
     // Handle timestamp() function - returns current timestamp as integer (epoch millis)
     if (std.ascii.eqlIgnoreCase(function_name, "timestamp")) {
         if (args.len != 0) return null;
-        const ts = std.time.milliTimestamp();
+        const ts = blk: {
+            var timespec: std.posix.timespec = undefined;
+            if (comptime builtin.os.tag == .linux) {
+                const rc = std.os.linux.clock_gettime(.REALTIME, &timespec);
+                if (rc != 0) break :blk @as(i64, 0);
+            } else {
+                const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &timespec);
+                if (rc != 0) break :blk @as(i64, 0);
+            }
+            break :blk @as(i64, timespec.sec) * 1000 + @divTrunc(@as(i64, timespec.nsec), 1_000_000);
+        };
         return Value{ .Int = ts };
     }
 

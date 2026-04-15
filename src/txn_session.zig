@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const geode = @import("geode");
 const execution = geode.execution;
 
@@ -24,7 +59,7 @@ pub const TransactionSession = struct {
 
     pub fn init(allocator: std.mem.Allocator) !TransactionSession {
         // Generate a simple session ID from timestamp
-        const timestamp = std.time.timestamp();
+        const timestamp = compat_timestamp();
         const session_id = try std.fmt.allocPrint(allocator, "txn_{d}", .{timestamp});
 
         return TransactionSession{
@@ -44,7 +79,7 @@ pub fn loadSession(allocator: std.mem.Allocator) !?TransactionSession {
     defer allocator.free(session_file);
 
     // Use cwd().openFile to support both relative and absolute paths
-    const file = std.Io.Dir.cwd().openFile(session_file, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return null;
         }
@@ -81,7 +116,7 @@ pub fn saveSession(allocator: std.mem.Allocator, session: TransactionSession) !v
     defer allocator.free(session_file);
 
     // Use cwd().createFile to support both relative and absolute paths
-    const file = try std.Io.Dir.cwd().createFile(session_file, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{});
     defer file.close();
 
     const state_str = switch (session.state) {
@@ -117,7 +152,7 @@ pub fn hasActiveSession(allocator: std.mem.Allocator) bool {
     defer allocator.free(session_file);
 
     // Use cwd().openFile to support both relative and absolute paths
-    const file = std.Io.Dir.cwd().openFile(session_file, .{}) catch {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{}) catch {
         return false;
     };
     defer file.close();

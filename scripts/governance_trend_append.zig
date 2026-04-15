@@ -9,10 +9,10 @@ const builtin = @import("builtin");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=TrendAppend; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_TrendAppend; OWNER=tooling; UPDATED=2025-09-22
 
 fn getStdErr() std.Io.File {
-    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDERR_FILENO };
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 fn getStdOut() std.Io.File {
-    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 pub fn main() !void {
@@ -22,21 +22,21 @@ pub fn main() !void {
 
     // No flags presently; future: --status, --out
     if (!fileExists("status.json")) return fail(2, "status.json missing");
-    const data = std.fs.cwd().readFileAlloc(alloc, "status.json", 4 * 1024 * 1024) catch return fail(2, "read status.json failed");
+    const data = std.Io.Dir.cwd().readFileAlloc(alloc, "status.json", 4 * 1024 * 1024) catch return fail(2, "read status.json failed");
     defer alloc.free(data);
 
     const counts = try parseCounts(alloc, data);
     defer counts.deinit(alloc);
 
     // Ensure badges directory exists
-    _ = std.fs.cwd().makePath("badges") catch |e| switch (e) {
+    _ = std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "badges") catch |e| switch (e) {
         error.PathAlreadyExists => {},
         else => return fail(2, "mkdir badges failed"),
     };
 
     // Open/create history file
-    var hist_file = std.fs.cwd().createFile("badges/history.jsonl", .{ .read = true }) catch |e| switch (e) {
-        error.PathAlreadyExists => std.fs.cwd().openFile("badges/history.jsonl", .{ .mode = .read_write }) catch return fail(2, "open history failed"),
+    var hist_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), "badges/history.jsonl", .{ .read = true }) catch |e| switch (e) {
+        error.PathAlreadyExists => std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "badges/history.jsonl", .{ .mode = .read_write }) catch return fail(2, "open history failed"),
         else => return fail(2, "create history failed"),
     };
     defer hist_file.close();
@@ -80,7 +80,7 @@ fn fail(code: u8, msg: []const u8) noreturn {
 }
 
 fn fileExists(p: []const u8) bool {
-    _ = std.fs.cwd().statFile(p) catch return false;
+    _ = std.Io.Dir.cwd().statFile(p) catch return false;
     return true;
 }
 

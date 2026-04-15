@@ -5,6 +5,41 @@
 /// in the CLI, injectable for tests).  Migration files live in a
 /// configurable directory and are applied in version order.
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-GQL-087; FEATURE="MigrationEngine"; ASPECT=Core; STATUS=TESTED; TEST=geodetestlab-cli/specs/geode_migrations.yml; OWNER=migration; UPDATED=2026-04-01
@@ -128,7 +163,7 @@ pub fn validateMigrationName(name: []const u8) MigrationError!void {
 }
 
 pub fn nowMs() u64 {
-    return @intCast(std.time.milliTimestamp());
+    return @intCast(compat_milliTimestamp());
 }
 
 pub fn parseVersion(name: []const u8) ?i64 {
@@ -221,7 +256,7 @@ pub fn joinPath(alloc: std.mem.Allocator, cfg: MigrationConfig, name: []const u8
 }
 
 /// Protects global_lock, policy_mode, resume_slots, and baseline_override from concurrent access.
-pub var migration_mutex: std.Thread.Mutex = .{};
+pub var migration_mutex: std.Io.Mutex = std.Io.Mutex.init;
 pub var global_lock: ?LockHandle = null;
 pub var lock_steal_count: u64 = 0;
 pub const lock_filename = ".migration_lock";
@@ -248,8 +283,8 @@ var policy_mode: PolicyMode = .lenient;
 
 /// Sets the migration policy mode directly from a typed enum. Thread-safe.
 pub fn enforcePolicyMode(mode: PolicyMode) void {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     policy_mode = mode;
 }
 
@@ -266,8 +301,8 @@ pub fn enforcePolicy(mode: []const u8) MigrationError!void {
 
 /// Returns true if the current policy mode is STRICT.
 pub fn isStrictPolicy() bool {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return policy_mode == .strict;
 }
 
@@ -327,8 +362,8 @@ pub fn driftCheck(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
     defer ledger.deinit();
     const current = computeFingerprint(ledger.rows.items);
     const expected = blk: {
-        migration_mutex.lock();
-        defer migration_mutex.unlock();
+        migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         break :blk baseline_override orelse ledger.baseline_fingerprint;
     };
     const ok = current == expected;
@@ -453,8 +488,8 @@ fn evictCompletedSlots(alloc: std.mem.Allocator) void {
 
 /// Frees all heap-allocated resume token strings and resets slot count. Thread-safe.
 pub fn resetResumeSlots(alloc: std.mem.Allocator) void {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     var i: usize = 0;
     while (i < resume_slots_len) : (i += 1) {
         if (resume_slots[i].token.len > 0) alloc.free(resume_slots[i].token);
@@ -466,8 +501,8 @@ pub fn resetResumeSlots(alloc: std.mem.Allocator) void {
 /// Advances the resume state for a data migration token by one batch. Thread-safe.
 /// If the token is new, creates a slot with the given total_batches count.
 pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8, total_batches: u32) MigrationError!ResumeState {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const rs = try getOrInitResume(alloc, token, total_batches);
     if (!rs.done) {
         if (rs.completed_batches < rs.total_batches) rs.completed_batches += 1;
@@ -482,9 +517,9 @@ pub fn resumeDataMigration(alloc: std.mem.Allocator, token: []const u8, total_ba
 pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Metrics {
     var ledger = try loadLedger(alloc, cfg);
     defer ledger.deinit();
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     const steals = lock_steal_count;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     var m = ledger.metrics;
     m.lock_steal_attempts_total += steals;
     return m;
@@ -495,8 +530,8 @@ pub fn metricsSnapshot(alloc: std.mem.Allocator, cfg: MigrationConfig) Migration
 pub const testSimulateDrift = if (builtin.is_test) testSimulateDriftImpl else @compileError("testSimulateDrift is test-only");
 
 fn testSimulateDriftImpl() void {
-    migration_mutex.lock();
-    defer migration_mutex.unlock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     baseline_override = (baseline_override orelse fnv_offset_basis) ^ 0x9e3779b97f4a7c15;
 }
 
@@ -694,10 +729,10 @@ test "LockHandle has correct defaults" {
 
 test "acquireLock increments lock_steal_count on expired lock" {
     // Reset global state for this test.
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Acquire with a 1ms TTL, then sleep to let it expire.
     var h = try acquireLock(1);
@@ -706,19 +741,19 @@ test "acquireLock increments lock_steal_count on expired lock" {
     // Second acquire should steal the expired lock.
     var h2 = try acquireLock(60_000);
 
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     const steals = lock_steal_count;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     try std.testing.expect(steals >= 1);
 
     releaseLock(&h2) catch {};
     releaseLock(&h) catch {}; // stale handle, expected to fail
 
     // Cleanup.
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 // SEC-MIG-04: Cross-process file lock tests
@@ -856,10 +891,10 @@ fn makeFailingExecutor() QueryExecutor {
 
 test "applyUpMigrations applies migration and persists ledger" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -884,10 +919,10 @@ test "applyUpMigrations applies migration and persists ledger" {
 
 test "applyUpMigrations skips already-applied versions" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -907,10 +942,10 @@ test "applyUpMigrations skips already-applied versions" {
 
 test "applyUpMigrations records failure metric on executor error" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -927,10 +962,10 @@ test "applyUpMigrations records failure metric on executor error" {
 
 test "applyDownMigration rolls back the latest applied migration" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -982,11 +1017,11 @@ test "statusReport returns discovered migration files with applied status" {
 
 test "driftCheck returns true for consistent ledger" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
     baseline_override = null;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1006,11 +1041,11 @@ test "driftCheck returns true for consistent ledger" {
 
 test "driftCheck returns false after simulated drift" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
     baseline_override = null;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1028,17 +1063,17 @@ test "driftCheck returns false after simulated drift" {
     const ok = try driftCheck(alloc, cfg);
     try std.testing.expect(!ok);
 
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     baseline_override = null;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 test "checksumValidate passes for matching manifest" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1065,10 +1100,10 @@ test "checksumValidate passes for matching manifest" {
 
 test "checksumValidate fails for mismatched manifest" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1106,10 +1141,10 @@ test "computeContentSha256 detects single-byte changes" {
 
 test "applyUpMigrations stores SHA-256 content hash in ledger" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1138,10 +1173,10 @@ test "applyUpMigrations stores SHA-256 content hash in ledger" {
 
 test "checksumValidate accepts SHA-256 manifest (64-char hash)" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1170,10 +1205,10 @@ test "checksumValidate accepts SHA-256 manifest (64-char hash)" {
 
 test "checksumValidate rejects wrong SHA-256 hash" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1194,10 +1229,10 @@ test "checksumValidate rejects wrong SHA-256 hash" {
 
 test "planDryRun returns pending and rollback migrations" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1223,10 +1258,10 @@ test "planDryRun returns pending and rollback migrations" {
 
 test "metricsSnapshot returns ledger metrics plus lock steal count" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 5;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1237,16 +1272,16 @@ test "metricsSnapshot returns ledger metrics plus lock steal count" {
     const m = try metricsSnapshot(alloc, cfg);
     try std.testing.expectEqual(@as(u64, 5), m.lock_steal_attempts_total);
 
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 test "acquireLock serializes concurrent access" {
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var acquired_count = std.atomic.Value(u32).init(0);
 
@@ -1267,10 +1302,10 @@ test "acquireLock serializes concurrent access" {
 
     try std.testing.expectEqual(@as(u32, 1), acquired_count.load(.monotonic));
 
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
 test "resumeDataMigration advances batches to completion" {
@@ -1528,10 +1563,10 @@ test "verifyMigrationSignature rejects when no hmac_key and not allow_unsigned" 
 
 test "applyUpMigrations rejects unsigned migration by default" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1551,10 +1586,10 @@ test "applyUpMigrations rejects unsigned migration by default" {
 
 test "applyUpMigrations succeeds with valid signature" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -1578,10 +1613,10 @@ test "applyUpMigrations succeeds with valid signature" {
 
 test "applyUpMigrations rejects tampered migration with valid sig for original" {
     const alloc = std.testing.allocator;
-    migration_mutex.lock();
+    migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     global_lock = null;
     lock_steal_count = 0;
-    migration_mutex.unlock();
+    migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();

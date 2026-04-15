@@ -1,4 +1,9 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const schema = @import("schema");
 
 const logging = @import("logging");
@@ -10,7 +15,7 @@ const log = logging.scoped("cluster_auth");
 /// Uses constant-time comparison with 256-byte padded buffers to prevent timing side-channels.
 /// Returns true only if the password matches the expected token.
 pub fn validateClusterToken(password: []const u8) bool {
-    const expected = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse return false;
+    const expected = posixGetenv("GEODE_CLUSTER_TOKEN") orelse return false;
     if (expected.len == 0 or password.len == 0) return false;
     // SEC-07: No early length check — pad both to 256 bytes and compare in constant time.
     // Different lengths produce different zero-padded buffers, caught by timing_safe.eql
@@ -28,7 +33,7 @@ pub fn validateClusterToken(password: []const u8) bool {
 /// Reads GEODE_CLUSTER_TOKEN from environment and sends as the "geode-cluster" user.
 /// Falls back to empty credentials if the token is not set (with warning).
 pub fn buildClusterHelloRequest(allocator: std.mem.Allocator) !schema.HelloRequest {
-    const token = std.posix.getenv("GEODE_CLUSTER_TOKEN") orelse {
+    const token = posixGetenv("GEODE_CLUSTER_TOKEN") orelse {
         log.warn("GEODE_CLUSTER_TOKEN not set — inter-node connections may be rejected by auth-enabled nodes", &.{});
         return schema.HelloRequest{
             .username = "",
@@ -53,7 +58,7 @@ pub fn buildClusterHelloRequest(allocator: std.mem.Allocator) !schema.HelloReque
 /// Check whether insecure mode (no TLS verification) is explicitly allowed.
 /// Returns true only if GEODE_CLUSTER_INSECURE environment variable is set to "1".
 pub fn isInsecureModeAllowed() bool {
-    const val = std.posix.getenv("GEODE_CLUSTER_INSECURE") orelse return false;
+    const val = posixGetenv("GEODE_CLUSTER_INSECURE") orelse return false;
     return std.mem.eql(u8, val, "1");
 }
 

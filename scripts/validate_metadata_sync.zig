@@ -17,22 +17,12 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const language_metadata = geode.language_metadata;
 
-fn getStdoutHandle() std.Io.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
-    } else {
-        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
-    }
-}
-
-fn getStderrHandle() std.Io.File {
-    if (builtin.os.tag == .windows) {
-        const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
-    } else {
-        return std.Io.File{ .handle = std.posix.STDERR_FILENO };
-    }
+fn writeStdout(msg: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var buf: [4096]u8 = undefined;
+    var writer = std.Io.File.stdout().writer(io, &buf);
+    try writer.interface.writeAll(msg);
+    try writer.interface.flush();
 }
 
 pub fn main() !void {
@@ -40,45 +30,42 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = getStdoutHandle();
-    const stderr = getStderrHandle();
-
     var all_valid = true;
 
     // Validate VSCode syntax
-    try stdout.writeAll("Checking VSCode syntax (gql.tmLanguage.json)... ");
+    try writeStdout("Checking VSCode syntax (gql.tmLanguage.json)... ");
     if (try validateVSCodeSyntax(allocator)) {
-        try stdout.writeAll("OK\n");
+        try writeStdout("OK\n");
     } else {
-        try stdout.writeAll("OUT OF SYNC\n");
-        try stderr.writeAll("  Run: zig build generate-syntax > editors/vscode/syntaxes/gql.tmLanguage.json\n");
+        try writeStdout("OUT OF SYNC\n");
+        std.debug.print("  Run: zig build generate-syntax > editors/vscode/syntaxes/gql.tmLanguage.json\n", .{});
         all_valid = false;
     }
 
     // Validate Vim syntax
-    try stdout.writeAll("Checking Vim syntax (gql.vim)... ");
+    try writeStdout("Checking Vim syntax (gql.vim)... ");
     if (try validateVimSyntax(allocator)) {
-        try stdout.writeAll("OK\n");
+        try writeStdout("OK\n");
     } else {
-        try stdout.writeAll("OUT OF SYNC\n");
-        try stderr.writeAll("  Run: zig build generate-vim-syntax > editors/vim/syntax/gql.vim\n");
+        try writeStdout("OUT OF SYNC\n");
+        std.debug.print("  Run: zig build generate-vim-syntax > editors/vim/syntax/gql.vim\n", .{});
         all_valid = false;
     }
 
     // Summary
-    try stdout.writeAll("\n");
+    try writeStdout("\n");
     if (all_valid) {
-        try stdout.writeAll("All generated files are in sync with language_metadata.zig\n");
+        try writeStdout("All generated files are in sync with language_metadata.zig\n");
     } else {
-        try stderr.writeAll("ERROR: Some generated files are out of sync!\n");
-        try stderr.writeAll("Please regenerate using the commands above.\n");
+        std.debug.print("ERROR: Some generated files are out of sync!\n", .{});
+        std.debug.print("Please regenerate using the commands above.\n", .{});
         std.process.exit(1);
     }
 }
 
 fn validateVSCodeSyntax(allocator: std.mem.Allocator) !bool {
     // Read existing file
-    const file = std.fs.cwd().openFile("editors/vscode/syntaxes/gql.tmLanguage.json", .{}) catch {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "editors/vscode/syntaxes/gql.tmLanguage.json", .{}) catch {
         return false; // File doesn't exist
     };
     defer file.close();
@@ -114,7 +101,7 @@ fn validateVSCodeSyntax(allocator: std.mem.Allocator) !bool {
 
 fn validateVimSyntax(allocator: std.mem.Allocator) !bool {
     // Read existing file
-    const file = std.fs.cwd().openFile("editors/vim/syntax/gql.vim", .{}) catch {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "editors/vim/syntax/gql.vim", .{}) catch {
         return false; // File doesn't exist
     };
     defer file.close();

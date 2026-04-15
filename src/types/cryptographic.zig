@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const hash_impl = @import("hash.zig");
 
 // CANARY: REQ=REQ-GQL-CRYPTO-TYPES-001; FEATURE="Cryptographic Types Implementation"; ASPECT=Types; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_CRYPTO_TYPES_001_All; OWNER=types; UPDATED=2025-01-03
@@ -285,7 +294,7 @@ pub const KeyPair = struct {
             .Ed25519 => {
                 // Generate Ed25519 key pair using stdlib's cryptographically secure implementation
                 var seed: [32]u8 = undefined;
-                std.crypto.random.bytes(&seed);
+                compat_fillRandom(&seed);
                 const key_pair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(seed);
 
                 // Allocate and copy keys

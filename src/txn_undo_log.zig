@@ -679,7 +679,7 @@ pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = try std.Io.Dir.cwd().createFile(file_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
     defer file.close();
 
     // Write number of entries
@@ -693,46 +693,46 @@ pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
     }
 }
 
-fn writeU32(file: std.fs.File, value: u32) !void {
+fn writeU32(file: std.Io.File, value: u32) !void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
     _ = try file.write(&buf);
 }
 
-fn writeU64(file: std.fs.File, value: u64) !void {
+fn writeU64(file: std.Io.File, value: u64) !void {
     var buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &buf, value, .little);
     _ = try file.write(&buf);
 }
 
-fn writeI64(file: std.fs.File, value: i64) !void {
+fn writeI64(file: std.Io.File, value: i64) !void {
     var buf: [8]u8 = undefined;
     std.mem.writeInt(i64, &buf, value, .little);
     _ = try file.write(&buf);
 }
 
-fn writeI128(file: std.fs.File, value: i128) !void {
+fn writeI128(file: std.Io.File, value: i128) !void {
     var buf: [16]u8 = undefined;
     std.mem.writeInt(i128, &buf, value, .little);
     _ = try file.write(&buf);
 }
 
-fn writeF64(file: std.fs.File, value: f64) !void {
+fn writeF64(file: std.Io.File, value: f64) !void {
     const bits: u64 = @bitCast(value);
     try writeU64(file, bits);
 }
 
-fn writeBool(file: std.fs.File, value: bool) !void {
+fn writeBool(file: std.Io.File, value: bool) !void {
     const byte: u8 = if (value) 1 else 0;
     _ = try file.write(&[_]u8{byte});
 }
 
-fn writeString(file: std.fs.File, value: []const u8) !void {
+fn writeString(file: std.Io.File, value: []const u8) !void {
     try writeU32(file, @intCast(value.len));
     _ = try file.write(value);
 }
 
-fn writeSerializedProperty(file: std.fs.File, prop: SerializedProperty) !void {
+fn writeSerializedProperty(file: std.Io.File, prop: SerializedProperty) !void {
     try writeString(file, prop.key);
     _ = try file.write(&[_]u8{prop.value_type});
     switch (prop.value_type) {
@@ -746,7 +746,7 @@ fn writeSerializedProperty(file: std.fs.File, prop: SerializedProperty) !void {
     }
 }
 
-fn writeUndoEntry(file: std.fs.File, entry: UndoEntry) !void {
+fn writeUndoEntry(file: std.Io.File, entry: UndoEntry) !void {
     // Write entry type
     const entry_type: u8 = @intFromEnum(std.meta.activeTag(entry));
     _ = try file.write(&[_]u8{entry_type});
@@ -819,7 +819,7 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
@@ -846,49 +846,49 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     return log;
 }
 
-fn readU32(file: std.fs.File) !u32 {
+fn readU32(file: std.Io.File) !u32 {
     var buf: [4]u8 = undefined;
     if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(u32, &buf, .little);
 }
 
-fn readU64(file: std.fs.File) !u64 {
+fn readU64(file: std.Io.File) !u64 {
     var buf: [8]u8 = undefined;
     if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(u64, &buf, .little);
 }
 
-fn readI64(file: std.fs.File) !i64 {
+fn readI64(file: std.Io.File) !i64 {
     var buf: [8]u8 = undefined;
     if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(i64, &buf, .little);
 }
 
-fn readI128(file: std.fs.File) !i128 {
+fn readI128(file: std.Io.File) !i128 {
     var buf: [16]u8 = undefined;
     if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return std.mem.readInt(i128, &buf, .little);
 }
 
-fn readF64(file: std.fs.File) !f64 {
+fn readF64(file: std.Io.File) !f64 {
     const bits = try readU64(file);
     return @bitCast(bits);
 }
 
-fn readBool(file: std.fs.File) !bool {
+fn readBool(file: std.Io.File) !bool {
     var buf: [1]u8 = undefined;
     if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
     return buf[0] != 0;
 }
 
-fn readString(allocator: std.mem.Allocator, file: std.fs.File) ![]u8 {
+fn readString(allocator: std.mem.Allocator, file: std.Io.File) ![]u8 {
     const len = try readU32(file);
     const buf = try allocator.alloc(u8, len);
     if ((try file.readAll(buf)) < len) return error.UnexpectedEndOfFile;
     return buf;
 }
 
-fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !SerializedProperty {
+fn readSerializedProperty(allocator: std.mem.Allocator, file: std.Io.File) !SerializedProperty {
     const key = try readString(allocator, file);
     var type_buf: [1]u8 = undefined;
     if ((try file.readAll(&type_buf)) < type_buf.len) return error.UnexpectedEndOfFile;
@@ -916,7 +916,7 @@ fn readSerializedProperty(allocator: std.mem.Allocator, file: std.fs.File) !Seri
     return prop;
 }
 
-fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
+fn readUndoEntry(allocator: std.mem.Allocator, file: std.Io.File) !?UndoEntry {
     var type_buf: [1]u8 = undefined;
     const bytes_read = try file.readAll(&type_buf);
     if (bytes_read == 0) return null;
@@ -1071,7 +1071,7 @@ test "undo log persistence roundtrip for complex entries" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile("undo.bin", .{ .read = true, .truncate = true });
+    const file = try tmp.dir.createFile(std.Io.Threaded.global_single_threaded.io(), "undo.bin", .{ .read = true, .truncate = true });
     defer file.close();
 
     const labels = [_][]const u8{ "Person", "Active" };

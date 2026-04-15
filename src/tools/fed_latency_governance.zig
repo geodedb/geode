@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=Tools; STATUS=EXEMPT; OWNER=tools; UPDATED=2026-01-24
@@ -28,7 +37,7 @@ const Governance = struct {
 };
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var file = try std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only });
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     var buf = try allocator.alloc(u8, @intCast(stat.size));
@@ -37,7 +46,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn lastLines(allocator: std.mem.Allocator, path: []const u8, tail: usize) ![][]const u8 {
-    var file = try std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only });
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     var buf = try allocator.alloc(u8, @intCast(stat.size));
@@ -146,7 +155,7 @@ pub fn main() !void {
     }
 
     const want_txt = blkfmt: {
-        if (std.process.getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
+        if (getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {
             defer allocator.free(fmt);
             if (std.mem.eql(u8, fmt, "txt")) break :blkfmt true;
         } else |_| {}
@@ -162,11 +171,11 @@ pub fn main() !void {
     }
     const written = fbs.getWritten();
     const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
             std.process.exit(1);
         } }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     try stdout.writeAll(written);
 
     if (!gov.readiness) std.process.exit(2);

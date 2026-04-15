@@ -7,7 +7,7 @@ pub const HistoryStore = struct {
     enabled: bool,
     entries: std.ArrayList([]u8),
     max_entries: usize = 5000,
-    file_mutex: std.Thread.Mutex = .{},
+    file_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator, path: ?[]const u8, enabled: bool) !HistoryStore {
         var store = HistoryStore{
@@ -38,10 +38,10 @@ pub const HistoryStore = struct {
     pub fn load(self: *HistoryStore) !void {
         if (!self.enabled or self.path == null) return;
 
-        self.file_mutex.lock();
-        defer self.file_mutex.unlock();
+        self.file_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.file_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const file = std.Io.Dir.cwd().openFile(self.path.?, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), self.path.?, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
         };
@@ -96,15 +96,15 @@ pub const HistoryStore = struct {
 
         // Persist to file
         if (self.path) |path| {
-            self.file_mutex.lock();
-            defer self.file_mutex.unlock();
+            self.file_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.file_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Ensure directory exists
             if (std.fs.path.dirname(path)) |dir| {
-                std.Io.Dir.cwd().makePath(dir) catch {};
+                std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir) catch {};
             }
 
-            const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false }) catch |err| {
+            const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = false }) catch |err| {
                 // If we can't save history, just continue without persisting
                 if (err == error.FileNotFound) return;
                 return err;
@@ -126,15 +126,15 @@ pub const HistoryStore = struct {
 
         // Clear file
         if (self.path) |path| {
-            self.file_mutex.lock();
-            defer self.file_mutex.unlock();
+            self.file_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.file_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Ensure directory exists
             if (std.fs.path.dirname(path)) |dir| {
-                std.Io.Dir.cwd().makePath(dir) catch {};
+                std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir) catch {};
             }
 
-            const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = true }) catch {
+            const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true }) catch {
                 // If we can't clear the file, just continue
                 return;
             };
@@ -174,7 +174,7 @@ test "history leading-space suppression" {
     try std.testing.expectEqualStrings("SELECT 1;", history.entries.items[0]);
 
     // Verify file content
-    const file = try std.Io.Dir.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
 
     var buf: [100]u8 = undefined;

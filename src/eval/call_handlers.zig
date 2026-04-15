@@ -13,6 +13,7 @@
 // - evalAggregateFunction() - handles aggregate functions (count, sum, avg, min, max)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const value_types = @import("../value_types.zig");
 const ast = @import("../gql/ast.zig");
 const evaluator_functions = @import("../types/evaluator_functions.zig");
@@ -531,7 +532,14 @@ pub fn evalMathFunction(
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return Value{ .Null = {} };
         var rand_bytes: [8]u8 = undefined;
-        std.crypto.random.bytes(&rand_bytes);
+        // Zig 0.16: std.posix.getrandom removed. Use Linux syscall or libc.
+        if (comptime builtin.os.tag == .linux) {
+            const rc = std.os.linux.getrandom(&rand_bytes, rand_bytes.len, 0);
+            if (@as(isize, @bitCast(rc)) < 0) return Value{ .Null = {} };
+        } else {
+            const rc = std.c.getrandom(&rand_bytes, rand_bytes.len, 0);
+            if (rc < 0) return Value{ .Null = {} };
+        }
         const rand_u64 = std.mem.readInt(u64, &rand_bytes, .little);
         const value = @as(f64, @floatFromInt(rand_u64 >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
         return Value{ .Decimal = .{ .coeff = @intFromFloat(value * 1000000), .scale = 6, .orig_scale = 6, .orig_repr = null } };
@@ -683,7 +691,7 @@ pub fn evalStringFunction(
             else => return Value{ .Null = {} },
         };
 
-        const trimmed = std.mem.trimLeft(u8, str, " \t\n\r");
+        const trimmed = std.mem.trimStart(u8, str, " \t\n\r");
         return Value{ .Str = trimmed };
     }
 
@@ -698,7 +706,7 @@ pub fn evalStringFunction(
             else => return Value{ .Null = {} },
         };
 
-        const trimmed = std.mem.trimRight(u8, str, " \t\n\r");
+        const trimmed = std.mem.trimEnd(u8, str, " \t\n\r");
         return Value{ .Str = trimmed };
     }
 

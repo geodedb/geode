@@ -1,4 +1,62 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
@@ -498,8 +556,8 @@ pub const SharedConnState = struct {
     active_streams: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// GAP-0274: Condition variable for stream drain — replaces sleep-polling.
     /// Handler threads signal on stream close; main thread waits instead of spinning.
-    streams_mu: std.Thread.Mutex = .{},
-    streams_cv: std.Thread.Condition = .{},
+    streams_mu: std.Io.Mutex = std.Io.Mutex.init,
+    streams_cv: std.Io.Condition = std.Io.Condition.init,
     /// Active QUIC stream IDs currently owned by handlers. The QUIC library may
     /// re-queue a stream ID whenever more data arrives, so the acceptor must not
     /// treat every accept notification as a new handler-worthy stream.
@@ -550,8 +608,8 @@ pub const SharedConnState = struct {
     }
 
     pub fn syncGraphFromState(self: *SharedConnState, state: *const ServerState) !void {
-        self.streams_mu.lock();
-        defer self.streams_mu.unlock();
+        self.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const usernames_equal = blk: {
             if (self.authenticated_user) |current| {
@@ -631,7 +689,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
         // GAP-0274: Signal the drain waiter that a stream closed.
         // PERF-P1-001: signal() not broadcast() — only one waiter
         // (either drain at shutdown or acceptor at stream limit).
-        cs.streams_cv.signal();
+        cs.streams_cv.signal(std.Io.Threaded.global_single_threaded.io());
         // PERF-P1-004: Release the global stream thread slot so another
         // connection's stream can proceed.
         g_stream_throttle.release();
@@ -663,13 +721,13 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     state.password_reset_required = cs.password_reset_required;
 
     // Bind to the same graph as the connection.
-    cs.streams_mu.lock();
+    cs.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     if (cs.current_graph) |graph_name| {
         if (state.exec_session) |*sess| {
             sess.graph = gpa.dupe(u8, graph_name) catch null;
         }
     }
-    cs.streams_mu.unlock();
+    cs.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Initialize evaluator callbacks (idempotent).
     execution.initEvaluator();
@@ -737,9 +795,9 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
         // stream that bootstraps the session before the acceptor starts.
         if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
             // GAP-0274: Wait for a stream to close instead of blind-sleeping
-            conn_state.streams_mu.lock();
+            conn_state.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             conn_state.streams_cv.timedWait(&conn_state.streams_mu, 5 * std.time.ns_per_ms) catch {};
-            conn_state.streams_mu.unlock();
+            conn_state.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
             continue;
         }
 
@@ -787,7 +845,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.signal(); // PERF-P1-001: signal, not broadcast
+                conn_state.streams_cv.signal(std.Io.Threaded.global_single_threaded.io()); // PERF-P1-001: signal, not broadcast
                 g_stream_throttle.release();
                 continue;
             };
@@ -811,7 +869,7 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 new_stream.close();
                 conn_state.unregisterActiveStream(new_stream.stream_id);
                 _ = conn_state.active_streams.fetchSub(1, .release);
-                conn_state.streams_cv.signal(); // PERF-P1-001: signal, not broadcast
+                conn_state.streams_cv.signal(std.Io.Threaded.global_single_threaded.io()); // PERF-P1-001: signal, not broadcast
                 g_stream_throttle.release();
                 gpa.destroy(handler_ctx);
                 continue;
@@ -1165,11 +1223,11 @@ pub fn handleQuicConnection(
         _ = conn_state.active_streams.fetchSub(1, .release);
         // GAP-0274: Wait for ALL additional stream handlers to finish before
         // freeing conn_state. Uses condition variable instead of busy-wait.
-        conn_state.streams_mu.lock();
+        conn_state.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         while (conn_state.active_streams.load(.acquire) > 0) {
-            conn_state.streams_cv.wait(&conn_state.streams_mu);
+            conn_state.streams_cv.waitUncancelable(std.Io.Threaded.global_single_threaded.io(), &conn_state.streams_mu);
         }
-        conn_state.streams_mu.unlock();
+        conn_state.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
         conn_state.deinit();
     }
 
@@ -1288,8 +1346,8 @@ fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
         if (adapter.getAuditLogger(graph_name)) |al| return al;
     }
     // Fallback to global audit logger.
-    audit_mod.global_audit_logger_mutex.lock();
-    defer audit_mod.global_audit_logger_mutex.unlock();
+    audit_mod.global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer audit_mod.global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     return audit_mod.global_audit_logger;
 }
 
@@ -1356,14 +1414,14 @@ fn updateTxnStateFromProgram(state: *ServerState, program: *const gql_ast.Progra
     if (has_start) {
         state.in_txn = true;
         if (state.txn_id == 0) {
-            state.txn_id = @intCast(std.time.milliTimestamp());
+            state.txn_id = @intCast(compat_milliTimestamp());
         }
     }
 }
 
 fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
     var entropy: [16]u8 = undefined;
-    std.crypto.random.bytes(&entropy);
+    compat_fillRandom(&entropy);
     const token = std.fmt.bytesToHex(entropy, .lower);
     return std.fmt.allocPrint(allocator, "sess_{s}", .{token});
 }
@@ -1374,7 +1432,7 @@ fn generateSessionId(allocator: std.mem.Allocator) ![]const u8 {
 // CANARY: REQ=REQ-GAP-0490-FEDERATION-SERVER-AUTH; FEATURE="FederationAuth"; ASPECT=ServerValidation; STATUS=TESTED; OWNER=security; UPDATED=2026-02-18
 fn validateFederationAuth(username: []const u8, password: []const u8) bool {
     if (!std.mem.eql(u8, username, "geode-cluster")) return false;
-    const expected = if (comptime builtin.os.tag != .windows) std.posix.getenv("GEODE_CLUSTER_TOKEN") else null;
+    const expected = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_CLUSTER_TOKEN") else null;
     const expected_tok = expected orelse return false;
     if (expected_tok.len == 0 or password.len == 0) return false;
     // SEC-07: No early length check — pad both independently to prevent length-leak timing
@@ -2088,8 +2146,8 @@ fn handleClientMessage(
                                     if (head.props) |props| {
                                         if (props.len > 0) {
                                             const prop_name = props[0].key;
-                                            catalog.rwlock.lockShared();
-                                            defer catalog.rwlock.unlockShared();
+                                            catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                                            defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
                                             var idx_iter = catalog.indexes.valueIterator();
                                             while (idx_iter.next()) |info| {
                                                 if (std.mem.eql(u8, info.table_name, label) and
@@ -2106,8 +2164,8 @@ fn handleClientMessage(
                                     if (!traits.has_index_seek) {
                                         if (q.where_clause) |where_expr| {
                                             if (head.name) |vn| {
-                                                catalog.rwlock.lockShared();
-                                                defer catalog.rwlock.unlockShared();
+                                                catalog.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                                                defer catalog.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
                                                 traits.has_index_seek = whereHasIndexedEq(where_expr, vn, label, catalog);
                                             }
                                         }
@@ -2634,7 +2692,7 @@ fn handleClientMessage(
                     const shared: *SharedConnState = @ptrCast(@alignCast(shared_ptr));
                     var wait_attempts: usize = 0;
                     while (wait_attempts < 100) : (wait_attempts += 1) {
-                        shared.streams_mu.lock();
+                        shared.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
                         const found_result = shared.pending_result != null;
                         const found_stream = shared.pending_node_scan_stream != null;
                         if (found_result) {
@@ -2653,7 +2711,7 @@ fn handleClientMessage(
                             shared.pending_node_scan_stream = null;
                             state.active_result = true;
                         }
-                        shared.streams_mu.unlock();
+                        shared.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
                         if (found_result or found_stream) break;
                         std.Thread.sleep(1 * std.time.ns_per_ms);
                     }
@@ -2773,7 +2831,7 @@ fn handleClientMessage(
             }
 
             state.in_txn = true;
-            state.txn_id = @intCast(std.time.milliTimestamp());
+            state.txn_id = @intCast(compat_milliTimestamp());
             state.session_snapshot_ts = state.global_commit_ts;
             txn_undo_log.getGlobalUndoLog(gpa).begin();
 
@@ -2892,7 +2950,7 @@ fn handleClientMessage(
                     .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
                     .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
                     .version = try gpa.dupe(u8, @import("build_options").version),
-                    .timestamp_ms = std.time.milliTimestamp(),
+                    .timestamp_ms = compat_milliTimestamp(),
                 };
                 try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
             }
@@ -2983,7 +3041,7 @@ fn handleClientMessage(
                 const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id });
                 defer gpa.free(backup_path);
 
-                if (std.Io.Dir.cwd().openFile(backup_path, .{})) |file| {
+                if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{})) |file| {
                     defer file.close();
                     var buf: [65536]u8 = undefined;
                     var remaining: u64 = metadata.size_bytes;
@@ -3061,11 +3119,11 @@ fn handleClientMessage(
             defer mgr.deinit();
 
             const target_time: i64 = if (restore_req.target_time.len > 0)
-                std.fmt.parseInt(i64, restore_req.target_time, 10) catch std.time.milliTimestamp()
+                std.fmt.parseInt(i64, restore_req.target_time, 10) catch compat_milliTimestamp()
             else
-                std.time.milliTimestamp();
+                compat_milliTimestamp();
 
-            const restore_dir = if (std.process.getEnvVarOwned(gpa, "GEODE_DATA_DIR")) |dir| blk: {
+            const restore_dir = if (getEnvVarOwned(gpa, "GEODE_DATA_DIR")) |dir| blk: {
                 defer gpa.free(dir);
                 break :blk try gpa.dupe(u8, dir);
             } else |_| try gpa.dupe(u8, "./data");
@@ -3077,7 +3135,7 @@ fn handleClientMessage(
                 return;
             };
 
-            const ts = std.time.milliTimestamp();
+            const ts = compat_milliTimestamp();
             try sendQuicMessage(gpa, stream, .{ .restore = .{
                 .success = true,
                 .message = try gpa.dupe(u8, "Restore completed"),
@@ -3114,10 +3172,10 @@ fn handleClientMessage(
                 return;
             }
 
-            std.Io.Dir.cwd().makePath("./uploaded_backups") catch {};
-            const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
+            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "./uploaded_backups") catch {};
+            const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
             // Create empty placeholder file
-            if (std.Io.Dir.cwd().createFile(path, .{})) |file| {
+            if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
                 file.close();
             } else |_| {}
 

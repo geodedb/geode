@@ -1,5 +1,40 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 // CANARY: REQ=REQ-GQL-010; FEATURE="Freshness Guard"; ASPECT=StatusFreshnessGuard; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_StatusFreshnessGuard; OWNER=tooling; UPDATED=2025-09-21
 
 pub const WarnThresholdDays: i64 = 50;
@@ -67,9 +102,9 @@ pub fn main() !void {
     defer args.deinit();
     _ = args.next(); // program name
     const path = args.next() orelse return error.MissingPath;
-    const now_ts = std.time.timestamp();
+    const now_ts = compat_timestamp();
     const now_days: i64 = @intCast(now_ts / 86400);
-    var file = try std.Io.Dir.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
     const data = try file.readToEndAlloc(allocator, 10_000_000);
     defer allocator.free(data);

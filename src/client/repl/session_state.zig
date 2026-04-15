@@ -121,14 +121,14 @@ pub const SessionState = struct {
         try json.appendSlice(allocator, "}\n");
 
         // Write to file
-        const file = try std.Io.Dir.cwd().createFile(path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
         defer file.close();
         try file.writeAll(json.items);
     }
 
     /// Load session state from file
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SessionState {
-        const file = try std.Io.Dir.cwd().openFile(path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
         defer file.close();
 
         const content = try file.readToEndAlloc(allocator, 1 << 20); // 1MB max
@@ -272,7 +272,7 @@ test "SessionState handles missing fields" {
     defer allocator.free(session_file);
 
     // Create minimal session file
-    const file = try std.Io.Dir.cwd().createFile(session_file, .{});
+    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{});
     defer file.close();
     try file.writeAll("{\"format\": \"json\"}");
 

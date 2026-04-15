@@ -44,7 +44,7 @@ pub const ReqScanner = struct {
     }
 
     fn walkRecursive(self: *ReqScanner, path: []const u8) !void {
-        var dir = std.fs.cwd().openDir(path, .{ .iterate = true }) catch return;
+        var dir = std.Io.Dir.cwd().openDir(path, .{ .iterate = true }) catch return;
         defer dir.close();
         var it = dir.iterate();
         while (true) {
@@ -58,7 +58,7 @@ pub const ReqScanner = struct {
             } else if (ent.kind == .file) {
                 if (!std.mem.endsWith(u8, ent.name, ".md") and !std.mem.endsWith(u8, ent.name, ".zig")) continue;
                 const full = try std.fs.path.join(self.allocator, &.{ path, ent.name });
-                const data = std.fs.cwd().readFileAlloc(self.allocator, full, 1 << 20) catch {
+                const data = std.Io.Dir.cwd().readFileAlloc(self.allocator, full, 1 << 20) catch {
                     self.allocator.free(full);
                     continue;
                 };

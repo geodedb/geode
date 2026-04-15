@@ -8,33 +8,33 @@ pub const StdioError = error{
 
 // Cross-platform stdio file handles with proper error handling
 // CANARY: REQ=REQ-QUALITY-GAP-406-001; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
-pub fn getStdin() StdioError!std.fs.File {
+pub fn getStdin() StdioError!std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE) catch return error.StdioUnavailable;
         if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDIN_FILENO };
+        return std.Io.File{ .handle = std.posix.STDIN_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
-pub fn getStdout() StdioError!std.fs.File {
+pub fn getStdout() StdioError!std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch return error.StdioUnavailable;
         if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
-pub fn getStderr() StdioError!std.fs.File {
+pub fn getStderr() StdioError!std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch return error.StdioUnavailable;
         if (handle == std.os.windows.INVALID_HANDLE_VALUE) return error.InvalidHandle;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        return std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 
@@ -49,6 +49,6 @@ pub fn isStdinTty() bool {
         }
         return false;
     } else {
-        return std.posix.isatty(std.posix.STDIN_FILENO);
+        return (std.Io.File.stdin().isTty(std.Io.Threaded.global_single_threaded.io()) catch false);
     }
 }

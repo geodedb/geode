@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const fle = @import("fle_lib");
 
 // Blind Index for Searchable Encrypted Fields — thin compatibility layer over external fle library
@@ -21,7 +30,7 @@ test "BlindIndex put and lookup" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
-    std.crypto.random.bytes(&bik);
+    compat_fillRandom(&bik);
 
     // Index two records with same email
     try index.put("Person", "email", bik, "alice@example.com", "person1");
@@ -54,7 +63,7 @@ test "BlindIndex normalization handles case and whitespace" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
-    std.crypto.random.bytes(&bik);
+    compat_fillRandom(&bik);
 
     // Index with different casing/whitespace
     try index.put("Person", "email", bik, "  Alice@EXAMPLE.com  ", "person1");
@@ -76,7 +85,7 @@ test "BlindIndex remove" {
     defer index.deinit();
 
     var bik: [32]u8 = undefined;
-    std.crypto.random.bytes(&bik);
+    compat_fillRandom(&bik);
 
     try index.put("Person", "email", bik, "alice@example.com", "person1");
     try index.put("Person", "email", bik, "alice@example.com", "person2");

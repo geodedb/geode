@@ -129,7 +129,7 @@ fn badgeColor(total: usize, tested: usize, partial: usize, pending: usize) []con
 }
 
 fn writeBadge(alloc: std.mem.Allocator, path: []const u8, total: usize, tested: usize, partial: usize, pending: usize) !void {
-    const f = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
+    const f = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true, .read = false, .mode = 0o644 });
     defer f.close();
     const label = "security";
     const value_buf = try std.fmt.allocPrint(alloc, "{d}T {d}P {d}N", .{ tested, partial, pending });
@@ -147,7 +147,7 @@ fn writeBadge(alloc: std.mem.Allocator, path: []const u8, total: usize, tested: 
 }
 
 fn writeJson(alloc: std.mem.Allocator, path: []const u8, rows: []const Row, canaries: []const Canary) !void {
-    const f = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
+    const f = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true, .read = false, .mode = 0o644 });
     defer f.close();
     var w = f.writer();
     try w.writeAll("{\n  \"areas\": [\n");

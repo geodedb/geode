@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const geode = @import("geode");
 const ast = geode.ast;
@@ -2517,11 +2552,11 @@ fn evaluateVectorIndexForQuery(
                 .selectivity_estimation = stats.getSelectivityEstimation(),
                 .dimension_count = @intCast(query_vector.len),
                 .total_vectors_indexed = stats.total_entries,
-                .last_updated_timestamp = std.time.timestamp(),
+                .last_updated_timestamp = compat_timestamp(),
             };
 
             // Higher confidence if we have recent performance data
-            const age_hours = (@as(f64, @floatFromInt(std.time.timestamp())) - @as(f64, @floatFromInt(stats.last_access_time))) / 3600.0;
+            const age_hours = (@as(f64, @floatFromInt(compat_timestamp())) - @as(f64, @floatFromInt(stats.last_access_time))) / 3600.0;
             confidence_score = if (age_hours < 1.0) 0.95 else if (age_hours < 24.0) 0.8 else 0.6;
         }
     }
@@ -2633,7 +2668,7 @@ pub fn analyzeVectorIndexPerformance(
         .cache_misses = cache_stats.misses,
         .average_query_time_ns = 0,
         .memory_usage_bytes = 0,
-        .last_optimization_timestamp = std.time.timestamp(),
+        .last_optimization_timestamp = compat_timestamp(),
     };
 
     // Calculate average query time

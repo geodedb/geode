@@ -1,4 +1,22 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const fle = @import("fle_lib");
 const types = @import("fle_key_types");
 const fle_aead = @import("fle_aead");
@@ -11,7 +29,7 @@ pub const KeyManager = fle.KeyManager;
 
 pub fn loadMasterKeyFromEnv(allocator: std.mem.Allocator) ![32]u8 {
     var master_key: [32]u8 = undefined;
-    if (std.process.getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
+    if (getEnvVarOwned(allocator, "GEODE_MASTER_KEY")) |env_key| {
         defer {
             std.crypto.secureZero(u8, env_key);
             allocator.free(env_key);
@@ -91,7 +109,7 @@ pub fn rewrapSchemaKey(
     }
 
     var new_trk: [32]u8 = undefined;
-    std.crypto.random.bytes(&new_trk);
+    compat_fillRandom(&new_trk);
 
     var rewrapped_sk = try wrapKey(allocator, unwrapped_sk, &new_trk);
     defer rewrapped_sk.deinit(allocator);
@@ -117,7 +135,7 @@ pub fn rewrapTenantRootKey(
     }
 
     var new_master: [32]u8 = undefined;
-    std.crypto.random.bytes(&new_master);
+    compat_fillRandom(&new_master);
 
     var rewrapped_trk = try wrapKey(allocator, unwrapped_trk, &new_master);
     defer rewrapped_trk.deinit(allocator);

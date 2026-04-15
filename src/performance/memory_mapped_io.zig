@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 // CANARY: REQ=REQ-PERF-MMAP-001; FEATURE="MemoryMappedIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_MemoryMappedIO; OWNER=performance; UPDATED=2025-10-04
@@ -7,7 +42,7 @@ const Allocator = std.mem.Allocator;
 /// Addresses file I/O bottlenecks by providing zero-copy access to persistent data
 /// Memory-mapped file wrapper with platform-specific optimizations
 pub const MemoryMappedFile = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     mapping: []u8,
     allocator: Allocator,
     read_only: bool,
@@ -36,9 +71,9 @@ pub const MemoryMappedFile = struct {
     /// Initialize memory-mapped file with advanced options
     pub fn init(allocator: Allocator, file_path: []const u8, options: MappingOptions) !Self {
         const file = if (options.read_only)
-            try std.Io.Dir.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{})
         else
-            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
         if (file_size == 0) {
@@ -239,7 +274,7 @@ pub fn MemoryMappedArray(comptime T: type) type {
 /// Chunk-based memory-mapped file for very large files
 pub const ChunkedMemoryMap = struct {
     allocator: Allocator,
-    file: std.fs.File,
+    file: std.Io.File,
     file_size: u64,
     chunk_size: u64,
     chunks: std.AutoHashMap(u64, Chunk),
@@ -259,9 +294,9 @@ pub const ChunkedMemoryMap = struct {
 
     pub fn init(allocator: Allocator, file_path: []const u8, chunk_size: u64, max_chunks: usize, read_only: bool) !Self {
         const file = if (read_only)
-            try std.Io.Dir.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{})
         else
-            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
 
@@ -345,7 +380,7 @@ pub const ChunkedMemoryMap = struct {
     fn getChunk(self: *Self, chunk_index: u64) !*Chunk {
         // Update access time for existing chunk (cache hit)
         if (self.chunks.getPtr(chunk_index)) |chunk| {
-            chunk.last_access = @intCast(std.time.milliTimestamp());
+            chunk.last_access = @intCast(compat_milliTimestamp());
             self.cache_hits += 1;
             return chunk;
         }
@@ -376,7 +411,7 @@ pub const ChunkedMemoryMap = struct {
             .data = chunk_data,
             .offset = chunk_offset,
             .dirty = false,
-            .last_access = @intCast(std.time.milliTimestamp()),
+            .last_access = @intCast(compat_milliTimestamp()),
         };
 
         try self.chunks.put(chunk_index, chunk);
@@ -470,7 +505,7 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -510,7 +545,7 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
     defer allocator.free(buffer);
 
     for (0..iterations) |_| {
-        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
 
         timer.reset();
@@ -553,7 +588,7 @@ test "Memory-mapped file basic operations" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -587,7 +622,7 @@ test "Memory-mapped array functionality" {
     const test_data = [_]u32{ 1, 2, 3, 4, 5 };
 
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         const bytes = std.mem.sliceAsBytes(&test_data);
         _ = try file.writeAll(bytes);
@@ -634,7 +669,7 @@ test "ChunkedMemoryMap cache hit tracking" {
     const total_size: usize = 192; // 3 chunks
 
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         var data: [total_size]u8 = undefined;
         for (&data, 0..) |*b, i| {
@@ -691,7 +726,7 @@ test "ChunkedMemoryMap cache eviction tracks misses" {
     const total_size: usize = 128;
 
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         var data: [total_size]u8 = undefined;
         for (&data, 0..) |*b, i| {
@@ -749,7 +784,7 @@ test "ChunkedMemoryMap zero accesses returns zero ratio" {
     defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         const data = [_]u8{0} ** 64;
         _ = try file.writeAll(&data);

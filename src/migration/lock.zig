@@ -9,8 +9,8 @@ const LockHandle = root.LockHandle;
 const max_script_bytes = root.max_script_bytes;
 
 pub fn acquireLock(ttl_ms: u64) MigrationError!LockHandle {
-    root.migration_mutex.lock();
-    defer root.migration_mutex.unlock();
+    root.migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer root.migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const now = root.nowMs();
     if (root.global_lock) |lh| {
         if (lh.expires_at_ms > now) return error.AlreadyLocked;
@@ -23,8 +23,8 @@ pub fn acquireLock(ttl_ms: u64) MigrationError!LockHandle {
 }
 
 pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
-    root.migration_mutex.lock();
-    defer root.migration_mutex.unlock();
+    root.migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer root.migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     const now = root.nowMs();
     if (root.global_lock) |*lh| {
         if (lh.id != h.id) return error.NoLockHeld;
@@ -36,8 +36,8 @@ pub fn heartbeatLock(h: *LockHandle) MigrationError!void {
 }
 
 pub fn releaseLock(h: *LockHandle) MigrationError!void {
-    root.migration_mutex.lock();
-    defer root.migration_mutex.unlock();
+    root.migration_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer root.migration_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
     if (root.global_lock) |lh| {
         if (lh.id != h.id) return error.NoLockHeld;
         root.global_lock = null;
@@ -46,19 +46,19 @@ pub fn releaseLock(h: *LockHandle) MigrationError!void {
 
 // CANARY: REQ=REQ-SEC-MIG-04; FEATURE="CrossProcessMigrationLock"; ASPECT=FileLock; STATUS=TESTED; OWNER=migration; UPDATED=2026-04-10
 pub const FileLock = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     pub fn acquire(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!FileLock {
         ledger_mod.ensureDir(cfg) catch return error.FileSystemError;
         const path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, root.lock_filename }) catch return error.OutOfMemory;
         defer alloc.free(path);
-        const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false, .read = true }) catch return error.FileSystemError;
+        const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = false, .read = true }) catch return error.FileSystemError;
         errdefer file.close();
         if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
         if (builtin.os.tag != .windows) file.lock(.exclusive) catch return error.AlreadyLocked;
         return .{ .file = file };
     }
     pub fn release(self: *FileLock) void {
-        if (builtin.os.tag != .windows) self.file.unlock();
+        if (builtin.os.tag != .windows) self.file.unlock(std.Io.Threaded.global_single_threaded.io());
         self.file.close();
     }
 };
@@ -109,7 +109,7 @@ pub fn signMigrationFile(alloc: std.mem.Allocator, cfg: MigrationConfig, name: [
     defer alloc.free(sig_name);
     const sig_path = root.joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
     defer alloc.free(sig_path);
-    var file = std.Io.Dir.cwd().createFile(sig_path, .{ .truncate = true }) catch return error.FileSystemError;
+    var file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), sig_path, .{ .truncate = true }) catch return error.FileSystemError;
     defer file.close();
     if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
     file.writeAll(&hex_sig) catch return error.FileSystemError;

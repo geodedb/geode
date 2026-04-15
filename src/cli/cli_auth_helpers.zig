@@ -8,6 +8,24 @@
 //! - `generateSecurePassword` — generate a cryptographically secure random password
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 const geode = @import("geode");
 const graph_store = geode.graph_store;
@@ -18,7 +36,7 @@ pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";
 
-fn secureChmod(path: []const u8, mode: std.fs.File.Mode) void {
+fn secureChmod(path: []const u8, mode: std.Io.File.Mode) void {
     if (builtin.os.tag == .windows) return;
     if (std.fs.openFileAbsolute(path, .{})) |file| {
         defer file.close();
@@ -34,7 +52,7 @@ fn secureChmod(path: []const u8, mode: std.fs.File.Mode) void {
 }
 
 fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
-    if (std.process.getEnvVarOwned(allocator, STATE_DIR_ENV)) |raw| {
+    if (getEnvVarOwned(allocator, STATE_DIR_ENV)) |raw| {
         defer allocator.free(raw);
         if (std.fs.path.isAbsolute(raw)) return allocator.dupe(u8, raw);
 
@@ -43,12 +61,12 @@ fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
         return std.fs.path.join(allocator, &.{ cwd, raw });
     } else |_| {}
 
-    if (std.process.getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
+    if (getEnvVarOwned(allocator, "XDG_STATE_HOME")) |xdg_state_home| {
         defer allocator.free(xdg_state_home);
         return std.fs.path.join(allocator, &.{ xdg_state_home, "geode" });
     } else |_| {}
 
-    if (std.process.getEnvVarOwned(allocator, "HOME")) |home| {
+    if (getEnvVarOwned(allocator, "HOME")) |home| {
         defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".local", "state", "geode" });
     } else |_| {}
@@ -66,7 +84,7 @@ pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u
     const state_dir = try resolveStateDir(allocator);
     defer allocator.free(state_dir);
 
-    try std.Io.Dir.cwd().makePath(state_dir);
+    try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), state_dir);
     secureChmod(state_dir, 0o700);
 
     return std.fs.path.join(allocator, &.{ state_dir, filename });
@@ -93,7 +111,7 @@ pub fn isPasswordStrong(password: []const u8) bool {
 /// Returns a 32-character hex string (16 random bytes converted to hex).
 pub fn generateSecurePassword() [32]u8 {
     var random_bytes: [16]u8 = undefined;
-    std.crypto.random.bytes(&random_bytes);
+    compat_fillRandom(&random_bytes);
     return std.fmt.bytesToHex(random_bytes, .lower);
 }
 
@@ -109,7 +127,7 @@ pub fn initCliAuthManager(allocator: std.mem.Allocator, data_dir: ?[]const u8) !
     // Resolve the data directory from the flag, env var, or default
     const resolved_dir: []const u8 = if (data_dir) |dir|
         dir
-    else if (std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |env_dir|
+    else if (getEnvVarOwned(allocator, "GEODE_DATA_DIR")) |env_dir|
         env_dir
     else |_|
         "/var/lib/geode";

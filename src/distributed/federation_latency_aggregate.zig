@@ -50,7 +50,7 @@ const Archive = struct {
     filled: bool = false,
 };
 
-var g_mutex: std.Thread.Mutex = .{};
+var g_mutex: std.Io.Mutex = std.Io.Mutex.init;
 var g_current: Current = .{};
 var g_archive: Archive = .{};
 
@@ -81,8 +81,8 @@ fn resetCycle() void {
 }
 
 pub fn recordLatency(ns: u64, mismatch: bool) void {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (mismatch) {
         // propagate flag for external observation
@@ -110,8 +110,8 @@ pub fn recordLatency(ns: u64, mismatch: bool) void {
 }
 
 pub fn finalizeCycle() Snapshot {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const p95 = p95Estimate(&g_current);
     const snap = Snapshot{
@@ -136,8 +136,8 @@ pub fn variance(current: *const Current) f128 {
 }
 
 pub fn snapshotCurrent() Snapshot {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     return Snapshot{
         .cycle_id = g_current.cycle_id,
@@ -151,8 +151,8 @@ pub fn snapshotCurrent() Snapshot {
 }
 
 pub fn findSnapshot(cycle_id: u64) ?Snapshot {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     const limit = if (g_archive.filled) g_archive.ring.len else g_archive.next;
     var i: usize = 0;
@@ -165,8 +165,8 @@ pub fn findSnapshot(cycle_id: u64) ?Snapshot {
 }
 
 pub fn resetAll() void {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     g_current = .{};
     g_archive = .{};
@@ -175,15 +175,15 @@ pub fn resetAll() void {
 }
 
 pub fn archiveLen() usize {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     return if (g_archive.filled) g_archive.ring.len else g_archive.next;
 }
 
 pub fn schemaValidate() bool {
-    g_mutex.lock();
-    defer g_mutex.unlock();
+    g_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     // Basic invariants: cycle_id monotonic across snapshots; counts non-negative; p95 within [min,max].
     const len = if (g_archive.filled) g_archive.ring.len else g_archive.next;

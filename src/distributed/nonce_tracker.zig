@@ -1,5 +1,14 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
 // CANARY: REQ=REQ-SEC-NONCE-001; FEATURE="Nonce Replay Protection"; ASPECT=NonceTracker; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
 // SEC-D009: Ring-buffer backed nonce tracker for replay protection on Raft frames.
 // Provides O(1) lookup via a HashSet and bounded memory via a ring buffer that
@@ -8,7 +17,7 @@ const std = @import("std");
 /// Thread-safe nonce tracker with bounded memory.
 /// Uses a ring buffer of capacity `max_nonces` and a HashSet for O(1) lookup.
 pub const NonceTracker = struct {
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
     ring: []u64,
     seen: std.AutoHashMap(u64, void),
     head: usize = 0,
@@ -41,8 +50,8 @@ pub const NonceTracker = struct {
     pub fn checkAndRecord(self: *Self, nonce: u64) bool {
         if (nonce == 0) return false;
 
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Already seen => replay.
         if (self.seen.contains(nonce)) return false;
@@ -67,7 +76,7 @@ pub const NonceTracker = struct {
 
     /// Generate a cryptographically random nonce suitable for embedding in a frame.
     pub fn generateNonce() u64 {
-        return std.crypto.random.int(u64);
+        return blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
     }
 };
 

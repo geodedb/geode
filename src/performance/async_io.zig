@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const pooled = @import("transport/thread_pool");
 
@@ -9,20 +44,20 @@ const pooled = @import("transport/thread_pool");
 /// Asynchronous I/O operation types
 pub const IOOperation = union(enum) {
     read: struct {
-        file: std.fs.File,
+        file: std.Io.File,
         buffer: []u8,
         offset: u64,
     },
     write: struct {
-        file: std.fs.File,
+        file: std.Io.File,
         data: []const u8,
         offset: u64,
     },
     sync: struct {
-        file: std.fs.File,
+        file: std.Io.File,
     },
     close: struct {
-        file: std.fs.File,
+        file: std.Io.File,
     },
 };
 
@@ -77,7 +112,7 @@ pub const AsyncIOManager = struct {
     pending_operations: std.HashMap(u64, *CompletionEntry, std.hash_map.AutoContext(u64), 80),
     next_operation_id: std.atomic.Value(u64),
     running: std.atomic.Value(bool),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     const Self = @This();
     const WorkItem = struct {
@@ -105,8 +140,8 @@ pub const AsyncIOManager = struct {
 
         // Cancel pending operations
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
             var it = self.pending_operations.iterator();
             while (it.next()) |entry| {
@@ -144,14 +179,14 @@ pub const AsyncIOManager = struct {
             .result = null,
             .callback = callback,
             .user_data = user_data,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .timeout_ms = timeout_ms,
         };
 
         // Register pending operation
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             try self.pending_operations.put(operation_id, completion_entry);
         }
 
@@ -174,8 +209,8 @@ pub const AsyncIOManager = struct {
 
     /// Cancel pending operation
     pub fn cancelOperation(self: *Self, operation_id: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.pending_operations.fetchRemove(operation_id)) |removed| {
             const completion_entry = removed.value;
@@ -200,8 +235,8 @@ pub const AsyncIOManager = struct {
         var processed: u32 = 0;
         const limit = max_completions orelse std.math.maxInt(u32);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         while (processed < limit and self.completion_queue.items.len > 0) {
             const completion = self.completion_queue.orderedRemove(0);
@@ -219,8 +254,8 @@ pub const AsyncIOManager = struct {
 
     /// Get statistics about pending operations
     pub fn getStatistics(self: *Self) IOStatistics {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var read_ops: u32 = 0;
         var write_ops: u32 = 0;
@@ -249,8 +284,8 @@ pub const AsyncIOManager = struct {
 
     /// Internal: Notify completion of I/O operation
     fn notifyCompletion(self: *Self, completion: CompletionEntry) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Remove from pending operations
         if (self.pending_operations.fetchRemove(completion.operation_id)) |removed| {
@@ -322,13 +357,13 @@ fn executeIOOperation(operation: IOOperation) IOResult {
 
 /// High-level asynchronous file operations
 pub const AsyncFile = struct {
-    file: std.fs.File,
+    file: std.Io.File,
     io_manager: *AsyncIOManager,
     allocator: Allocator,
 
     const Self = @This();
 
-    pub fn init(io_manager: *AsyncIOManager, file: std.fs.File, allocator: Allocator) Self {
+    pub fn init(io_manager: *AsyncIOManager, file: std.Io.File, allocator: Allocator) Self {
         return Self{
             .file = file,
             .io_manager = io_manager,
@@ -532,7 +567,7 @@ pub fn benchmarkAsyncIO(
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -550,7 +585,7 @@ pub fn benchmarkAsyncIO(
     var async_io_manager = try AsyncIOManager.init(allocator, 4);
     defer async_io_manager.deinit();
 
-    const file = try std.Io.Dir.cwd().openFile(test_file, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
     defer file.close();
 
     var async_file = AsyncFile.init(&async_io_manager, file, allocator);
@@ -610,14 +645,14 @@ test "Asynchronous I/O basic operations" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
     }
 
     // Test async read
-    const file = try std.Io.Dir.cwd().openFile(test_file, .{});
+    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
     defer file.close();
 
     var async_file = AsyncFile.init(&io_manager, file, allocator);
@@ -649,7 +684,7 @@ test "Batched asynchronous operations" {
     };
 
     try batch.addOperation(
-        IOOperation{ .sync = .{ .file = std.fs.File{ .handle = 0 } } },
+        IOOperation{ .sync = .{ .file = std.Io.File{ .handle = 0 } }, .flags = .{ .nonblocking = false } },
         CompletionCallbackType.callback,
         null,
     );

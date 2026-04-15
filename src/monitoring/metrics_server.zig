@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const Allocator = std.mem.Allocator;
 const prometheus = @import("prometheus.zig");
 const pooled = @import("transport/thread_pool");
@@ -166,7 +175,7 @@ fn resolveMetricsBindAddress() [4]u8 {
     var gpa_alloc = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_alloc.deinit();
     const alloc = gpa_alloc.allocator();
-    const env_val = std.process.getEnvVarOwned(alloc, "GEODE_METRICS_BIND") catch null;
+    const env_val = getEnvVarOwned(alloc, "GEODE_METRICS_BIND") catch null;
     defer if (env_val) |v| alloc.free(v);
     if (env_val) |val| {
         return parseIp4Addr(val) orelse .{ 127, 0, 0, 1 };

@@ -1,20 +1,55 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const auth = @import("geode_auth");
 const rls = @import("rls");
 const user_manager = @import("user_manager");
 const user_storage = @import("user_storage");
 const graph_store = @import("geode").graph_store;
 
-pub fn main() !void {
+pub fn main(proc_init: std.process.Init.Minimal) !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const raw_argv = std.posix.argv;
+    const raw_argv = proc_init.args.vector;
     const args = try allocator.alloc([:0]u8, raw_argv.len);
     defer allocator.free(args);
     for (raw_argv, 0..) |arg, i| {
-        args[i] = std.mem.span(arg);
+        args[i] = @constCast(std.mem.span(arg));
     }
 
     if (args.len < 2) {
@@ -244,7 +279,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.username, args[1])) {
                 entry.value_ptr.is_active = true;
-                entry.value_ptr.updated_at = std.time.milliTimestamp();
+                entry.value_ptr.updated_at = compat_milliTimestamp();
                 found = true;
                 break;
             }
@@ -267,7 +302,7 @@ fn handleUserCommand(mgr: *user_manager.UserManager, args: []const [:0]const u8)
         while (it.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.username, args[1])) {
                 entry.value_ptr.is_active = false;
-                entry.value_ptr.updated_at = std.time.milliTimestamp();
+                entry.value_ptr.updated_at = compat_milliTimestamp();
                 found = true;
                 break;
             }

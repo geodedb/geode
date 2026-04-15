@@ -93,16 +93,16 @@ pub fn main() !void {
 
 fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 fn failUsage(msg: []const u8) noreturn {
@@ -124,7 +124,7 @@ fn failUsageFmt(comptime fmt: []const u8, args: anytype) noreturn {
 }
 
 fn countVarianceEnvelopes(path: []const u8) !usize {
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
     var read_buf: [16 * 1024]u8 = undefined;
     var reader = file.reader(&read_buf);
@@ -172,7 +172,7 @@ const PhraseInfo = struct {
 };
 
 fn scanReadme(alloc: std.mem.Allocator, path: []const u8) !PhraseInfo {
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
     defer file.close();
     const data = try file.readToEndAlloc(alloc, 2 * 1024 * 1024); // up to 2MB
     defer alloc.free(data);

@@ -3,6 +3,41 @@
 // Extends RBAC, FLE, and Audit with graph-scoped access control
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 
@@ -283,7 +318,7 @@ pub const GraphTypeKey = struct {
 /// Manages per-graph type encryption metadata
 pub const GraphSchemaCatalog = struct {
     allocator: Allocator,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     /// Map of "graph.type" -> type metadata
     schemas: std.StringHashMap(*@import("../schema/annotations.zig").TypeMetadata),
@@ -298,8 +333,8 @@ pub const GraphSchemaCatalog = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var it = self.schemas.iterator();
         while (it.next()) |entry| {
@@ -317,8 +352,8 @@ pub const GraphSchemaCatalog = struct {
         type_name: []const u8,
         type_meta: @import("../schema/annotations.zig").TypeMetadata,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const key = try std.fmt.allocPrint(self.allocator, "{s}.{s}", .{ graph_name, type_name });
         errdefer self.allocator.free(key);
@@ -340,8 +375,8 @@ pub const GraphSchemaCatalog = struct {
         type_name: []const u8,
         field_name: []const u8,
     ) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ graph_name, type_name }) catch return false;
@@ -360,8 +395,8 @@ pub const GraphSchemaCatalog = struct {
         field_name: []const u8,
         role: []const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}.{s}", .{ graph_name, type_name }) catch return error.InvalidKey;
@@ -440,7 +475,7 @@ pub const GraphAuditLog = struct {
         const graph_copy = if (graph_name) |g| try self.allocator.dupe(u8, g) else null;
 
         try self.entries.append(.{
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
             .event_type = event_type,
             .user_id = user_id,
             .graph_name = graph_copy,

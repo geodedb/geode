@@ -157,7 +157,7 @@ const NodePropertyExactIndex = struct {
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
-        const file = try std.Io.Dir.cwd().createFile(idx_path, .{ .truncate = true });
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), idx_path, .{ .truncate = true });
         defer file.close();
 
         const writer = file.deprecatedWriter();
@@ -196,7 +196,7 @@ const NodePropertyExactIndex = struct {
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
-        const file = std.Io.Dir.cwd().openFile(idx_path, .{}) catch return false;
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), idx_path, .{}) catch return false;
         defer file.close();
 
         const reader = file.deprecatedReader();
@@ -465,7 +465,7 @@ pub const ManagedGraph = struct {
     fts_dir: ?[]const u8 = null,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
-    rwlock: std.Io.RwLock = .{},
+    rwlock: std.Io.RwLock = std.Io.RwLock.init,
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -610,7 +610,7 @@ pub const StorageAdapter = struct {
         // Ensure the graphs root directory exists.
         const graphs_dir = try std.fmt.allocPrint(allocator, "{s}/graphs", .{owned_dir});
         defer allocator.free(graphs_dir);
-        std.Io.Dir.cwd().makePath(graphs_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), graphs_dir) catch |err| {
             log.err("failed to create graphs directory {s}: {}", .{ graphs_dir, err });
             return err;
         };
@@ -640,7 +640,7 @@ pub const StorageAdapter = struct {
 
     /// Shut down all engines, release every allocation.
     pub fn deinit(self: *StorageAdapter) void {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
 
         var it = self.engines.iterator();
         while (it.next()) |entry| {
@@ -652,15 +652,15 @@ pub const StorageAdapter = struct {
         self.registry.deinit();
         self.allocator.free(self.registry_path);
         self.allocator.free(self.data_dir);
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.allocator.destroy(self);
     }
 
     /// Return the `ManagedGraph` for `name`, creating a new `GraphEngine` if
     /// the graph has not been opened yet.
     pub fn getOrCreateGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.engines.get(name)) |mg| {
             return mg;
@@ -676,8 +676,8 @@ pub const StorageAdapter = struct {
     /// Open an existing graph by name and UUID. Uses `GraphEngine.open()` to
     /// recover the persisted on-disk data directory.
     pub fn openGraphWithUuid(self: *StorageAdapter, name: []const u8, graph_uuid: [16]u8) !*ManagedGraph {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.engines.get(name)) |mg| {
             return mg;
@@ -688,8 +688,8 @@ pub const StorageAdapter = struct {
 
     /// Return the stored UUID for a loaded graph, or null if not loaded.
     pub fn getGraphUuid(self: *StorageAdapter, name: []const u8) ?[16]u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.engines.get(name)) |mg| {
             return mg.uuid;
@@ -704,9 +704,9 @@ pub const StorageAdapter = struct {
     /// does not exist or audit was not initialised.  Holds `self.mutex`
     /// only for the hash-map lookup.
     pub fn getAuditLogger(self: *StorageAdapter, name: []const u8) ?*audit.AuditLogger {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(name);
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return if (mg) |m| m.audit_logger else null;
     }
@@ -715,9 +715,9 @@ pub const StorageAdapter = struct {
     /// does not exist or timeseries was not initialised.  Holds `self.mutex`
     /// only for the hash-map lookup.
     pub fn getTimeseriesStore(self: *StorageAdapter, name: []const u8) ?*ts_mod.Store {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(name);
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return if (mg) |m| m.ts_store else null;
     }
@@ -726,9 +726,9 @@ pub const StorageAdapter = struct {
     /// graph does not exist or FTS was not initialised.  Holds `self.mutex`
     /// only for the hash-map lookup.
     pub fn getFulltextIndex(self: *StorageAdapter, name: []const u8) ?*fulltext.FullTextIndex {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(name);
-        self.mutex.unlock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return if (mg) |m| m.fts_index else null;
     }
@@ -736,16 +736,16 @@ pub const StorageAdapter = struct {
     /// Check whether a graph with the given name exists either in memory or in
     /// the persisted registry.
     pub fn graphExists(self: *StorageAdapter, name: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         return self.engines.contains(name) or self.findRegistryEntryLocked(name) != null;
     }
 
     /// Close and remove the graph identified by `name`.
     pub fn dropGraph(self: *StorageAdapter, name: []const u8) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var dropped_uuid: ?[16]u8 = null;
         if (self.engines.fetchRemove(name)) |kv| {
@@ -781,8 +781,8 @@ pub const StorageAdapter = struct {
     /// Return the names of all known graphs. Caller owns the returned slice and
     /// each name string inside it.
     pub fn listGraphNames(self: *StorageAdapter, allocator: Allocator) ![][]const u8 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var names = std.ArrayList([]const u8){};
         errdefer {
@@ -827,8 +827,8 @@ pub const StorageAdapter = struct {
 
     /// Return the default graph, creating one named "default" if none exists.
     pub fn getDefaultGraph(self: *StorageAdapter) !*ManagedGraph {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.default_engine) |mg| {
             return mg;
@@ -884,8 +884,8 @@ pub const StorageAdapter = struct {
     /// Delete a node by ID in the named graph.
     pub fn deleteNode(self: *StorageAdapter, graph_name: []const u8, node_id: u64) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
 
@@ -901,8 +901,8 @@ pub const StorageAdapter = struct {
     /// slice and must free both the slice and each string inside it.
     pub fn getNodeLabels(self: *StorageAdapter, graph_name: []const u8, node_id: u64, allocator: Allocator) ![][]const u8 {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -941,8 +941,8 @@ pub const StorageAdapter = struct {
     /// Delete an edge by its endpoints and edge ID.
     pub fn deleteEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try mg.engine.removeEdge(from_id, to_id, edge_id);
@@ -956,8 +956,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) !gs.interface.EdgeIterator {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.storage().expandOut(node_id, null, allocator);
@@ -971,8 +971,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) !gs.interface.EdgeIterator {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.storage().expandIn(node_id, null, allocator);
@@ -1021,8 +1021,8 @@ pub const StorageAdapter = struct {
     /// that must be written back to the node record.
     pub fn setNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, value: graph_store.PropertyValue) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -1066,8 +1066,8 @@ pub const StorageAdapter = struct {
     /// servicing queries against the same StorageAdapter.
     pub fn setNodePropertiesBatch(self: *StorageAdapter, graph_name: []const u8, node_id: u64, entries: []const BatchPropertyEntry) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -1114,8 +1114,8 @@ pub const StorageAdapter = struct {
     /// Remove a property from a node by writing a null tombstone.
     pub fn removeNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -1144,8 +1144,8 @@ pub const StorageAdapter = struct {
     /// Get a property from a node, returned in graph-storage representation.
     pub fn getNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -1237,8 +1237,8 @@ pub const StorageAdapter = struct {
         _ = g_exact_node_property_lookup_count.fetchAdd(1, .monotonic);
 
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const label_id = mg.label_dict.getId(label) orelse return try allocator.alloc(u64, 0);
@@ -1276,8 +1276,8 @@ pub const StorageAdapter = struct {
         value: graph_store.PropertyValue,
     ) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const storage_val = try toStorageProperty(self.allocator, value);
@@ -1296,8 +1296,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) !?gs.PropertyValue {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.getEdgeProperty(from_id, edge_id, key, allocator);
@@ -1321,8 +1321,8 @@ pub const StorageAdapter = struct {
         // The ManagedGraph pointer is heap-allocated and only freed by
         // dropGraph (under mutex), so using it after unlock is safe.
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
 
@@ -1367,8 +1367,8 @@ pub const StorageAdapter = struct {
     /// the graph is not loaded.
     pub fn getGraphStats(self: *StorageAdapter, graph_name: []const u8) ?GraphStats {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.requireExistingGraphLocked(graph_name) catch return null;
         };
         const m = &mg.engine.manifest;
@@ -1401,8 +1401,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -1442,8 +1442,8 @@ pub const StorageAdapter = struct {
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
 
@@ -1475,8 +1475,8 @@ pub const StorageAdapter = struct {
     /// Begin a new transaction in the named graph.
     pub fn beginTransaction(self: *StorageAdapter, graph_name: []const u8) !u64 {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.beginTxn();
@@ -1485,8 +1485,8 @@ pub const StorageAdapter = struct {
     /// Commit a transaction.
     pub fn commitTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try mg.engine.commitTxn(txn_id);
@@ -1495,8 +1495,8 @@ pub const StorageAdapter = struct {
     /// Abort (rollback) a transaction.
     pub fn abortTransaction(self: *StorageAdapter, graph_name: []const u8, txn_id: u64) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try mg.engine.abortTxn(txn_id);
@@ -1508,8 +1508,8 @@ pub const StorageAdapter = struct {
         var graphs_buf: [64]*ManagedGraph = undefined;
         var graph_count: usize = 0;
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             var it = self.engines.valueIterator();
             while (it.next()) |mg| {
                 if (graph_count < graphs_buf.len) {
@@ -1528,7 +1528,7 @@ pub const StorageAdapter = struct {
         // (label_index, edge_index) that mutations can resize concurrently,
         // causing use-after-free and GPA size mismatch errors.
         for (graphs_buf[0..graph_count]) |mg| {
-            mg.rwlock.lockShared();
+            mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
@@ -1541,7 +1541,7 @@ pub const StorageAdapter = struct {
             } else |err| {
                 log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
             }
-            mg.rwlock.unlockShared();
+            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
 
         // Collect manifest counts under per-graph read lock (no mutex),
@@ -1551,18 +1551,18 @@ pub const StorageAdapter = struct {
         //   Thread B (checkpoint): holds mutex → wants rwlock (here)
         var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
-            mg.rwlock.lockShared();
+            mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
             counts_buf[i] = .{
                 .name = mg.name,
                 .uuid = mg.uuid,
                 .node_count = mg.engine.manifest.node_count,
                 .edge_count = mg.engine.manifest.edge_count,
             };
-            mg.rwlock.unlockShared();
+            mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             for (counts_buf[0..graph_count]) |c| {
                 self.upsertRegistryEntryLocked(c.name, c.uuid, c.node_count, c.edge_count);
             }
@@ -1579,8 +1579,8 @@ pub const StorageAdapter = struct {
     /// Return the number of nodes in the named graph.
     pub fn nodeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.nodeCount();
@@ -1589,8 +1589,8 @@ pub const StorageAdapter = struct {
     /// Return the number of edges in the named graph.
     pub fn edgeCount(self: *StorageAdapter, graph_name: []const u8) !u64 {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.edgeCount();
@@ -1617,7 +1617,7 @@ pub const StorageAdapter = struct {
         const free_store_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
         defer allocator.free(free_store_path);
 
-        const file = std.Io.Dir.cwd().openFile(free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
             error.FileNotFound => return false,
             else => return err,
         };
@@ -1646,7 +1646,7 @@ pub const StorageAdapter = struct {
         const free_store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
         defer self.allocator.free(free_store_path);
 
-        const file = std.Io.Dir.cwd().openFile(free_store_path, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return true,
             else => return err,
         };
@@ -1773,7 +1773,7 @@ pub const StorageAdapter = struct {
         errdefer allocator.free(fts_dir);
 
         // Ensure the FTS subdirectory exists.
-        std.Io.Dir.cwd().makePath(fts_dir) catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), fts_dir) catch |err| {
             log.warn("failed to create FTS dir '{s}': {}", .{ fts_dir, err });
             return null;
         };
@@ -1946,8 +1946,8 @@ pub const StorageAdapter = struct {
         // rwlock, so iterator-backed scans do not need the adapter mutex.
         // Holding mutex during scans caused ABBA deadlocks with concurrent
         // ingest (QUIC handler: rwlock → mutex; ingest: mutex → rwlock).
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const mg = try self.requireExistingGraphLocked(graph_name);
         const label_id = mg.label_dict.getId(label) orelse return null;
@@ -2042,8 +2042,8 @@ pub const StorageAdapter = struct {
     /// this is the first time the label has been seen.
     pub fn addNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -2056,8 +2056,8 @@ pub const StorageAdapter = struct {
     /// per-graph dictionary then there is nothing to remove.
     pub fn removeNodeLabel(self: *StorageAdapter, graph_name: []const u8, node_id: u64, label: []const u8) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
@@ -2081,8 +2081,8 @@ pub const StorageAdapter = struct {
         key: []const u8,
     ) !void {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         try mg.engine.removeEdgeProperty(from_id, edge_id, key);
@@ -2095,8 +2095,8 @@ pub const StorageAdapter = struct {
     /// Return storage-level statistics for the named graph.
     pub fn getStorageStats(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.StorageStats {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.getStorageStats();
@@ -2105,8 +2105,8 @@ pub const StorageAdapter = struct {
     /// Run an integrity check on the named graph and return the report.
     pub fn checkIntegrity(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.IntegrityReport {
         const mg = blk: {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         return mg.engine.checkIntegrity();
@@ -2119,35 +2119,35 @@ pub const StorageAdapter = struct {
     /// Acquire a shared (read) lock on the named graph.
     /// Caller MUST call releaseGraphReadLock when done.
     pub fn acquireGraphReadLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock();
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return error.GraphNotFound;
         };
-        self.mutex.unlock();
-        mg.rwlock.lockShared();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         return mg;
     }
 
     pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph) void {
-        mg.rwlock.unlockShared();
+        mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Acquire an exclusive (write) lock on the named graph.
     /// Caller MUST call releaseGraphWriteLock when done.
     pub fn acquireGraphWriteLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
-        self.mutex.lock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(graph_name) orelse {
-            self.mutex.unlock();
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             return error.GraphNotFound;
         };
-        self.mutex.unlock();
-        mg.rwlock.lock();
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         return mg;
     }
 
     pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
-        mg.rwlock.unlock();
+        mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.
@@ -2867,7 +2867,7 @@ test "StorageAdapter: reopen repairs corrupted free.store" {
     defer allocator.free(free_store_path);
 
     {
-        const file = try std.Io.Dir.cwd().createFile(free_store_path, .{ .truncate = true });
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{ .truncate = true });
         defer file.close();
         try file.writeAll(&([_]u8{0xFF} ** 64));
     }

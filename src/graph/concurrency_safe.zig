@@ -8,7 +8,7 @@ const builders = @import("builders.zig");
 
 pub const ConcurrencySafeGraph = struct {
     g: builders.Graph,
-    rw: std.Thread.RwLock = .{},
+    rw: std.Io.RwLock = std.Io.RwLock.init,
 
     pub fn init(allocator: std.mem.Allocator) ConcurrencySafeGraph {
         return .{ .g = builders.Graph.init(allocator) };
@@ -19,26 +19,26 @@ pub const ConcurrencySafeGraph = struct {
     }
 
     pub fn addNode(self: *ConcurrencySafeGraph, id: u64) void {
-        self.rw.lock();
-        defer self.rw.unlock();
+        self.rw.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rw.unlock(std.Io.Threaded.global_single_threaded.io());
         self.g.addNode(id);
     }
 
     pub fn addEdge(self: *ConcurrencySafeGraph, src: u64, dst: u64, w: builders.Weight) !void {
-        self.rw.lock();
-        defer self.rw.unlock();
+        self.rw.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rw.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.g.addEdge(src, dst, w);
     }
 
     pub const Edge = builders.Edge;
 
     pub fn snapshotOutEdges(self: *ConcurrencySafeGraph, allocator: std.mem.Allocator, node: u64) ![]Edge {
-        self.rw.lockShared();
+        self.rw.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         const it = self.g.outEdges(node);
         const slice = it.edges; // underlying slice
         const dup = try allocator.alloc(Edge, slice.len);
         std.mem.copy(Edge, dup, slice);
-        self.rw.unlockShared();
+        self.rw.unlockShared(std.Io.Threaded.global_single_threaded.io());
         return dup;
     }
 };

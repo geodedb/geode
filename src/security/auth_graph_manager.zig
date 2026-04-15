@@ -10,6 +10,59 @@
 //! - HMAC-aware user creation
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const Allocator = std.mem.Allocator;
 const geode = @import("geode");
 const graph_store = geode.graph_store;
@@ -186,7 +239,7 @@ pub const AuthGraphManager = struct {
     /// 5. error.NoHmacKeyAvailable (only if no data_dir provided)
     pub fn resolveHmacKey(allocator: Allocator, data_dir: ?[]const u8) !HmacKeyResult {
         // 1. Try GEODE_AUTH_HMAC_KEY env var
-        if (std.process.getEnvVarOwned(allocator, "GEODE_AUTH_HMAC_KEY")) |env_val| {
+        if (getEnvVarOwned(allocator, "GEODE_AUTH_HMAC_KEY")) |env_val| {
             defer allocator.free(env_val);
             if (env_val.len == 64) {
                 var key: [32]u8 = undefined;
@@ -203,7 +256,7 @@ pub const AuthGraphManager = struct {
         } else |_| {}
 
         // 2. Try GEODE_TDE_KEY env var -> HKDF derivation
-        if (std.process.getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |tde_val| {
+        if (getEnvVarOwned(allocator, "GEODE_TDE_KEY")) |tde_val| {
             defer allocator.free(tde_val);
             if (tde_val.len == 64) {
                 var tde_key: [32]u8 = undefined;
@@ -222,7 +275,7 @@ pub const AuthGraphManager = struct {
                 return error.NoHmacKeyAvailable;
             defer allocator.free(path);
 
-            const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
+            const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |err| {
                 switch (err) {
                     error.FileNotFound => {
                         // 4. Auto-generate a random 256-bit HMAC key and write to file
@@ -542,16 +595,16 @@ pub const AuthGraphManager = struct {
     /// 6. Return BootstrapResult (caller prints password to stderr)
     pub fn bootstrapDefaultAdmin(self: *Self, hmac_key: *const [32]u8) !BootstrapResult {
         // 1. Resolve admin username
-        const username = if (std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
+        const username = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 
         // 2. Use GEODE_ADMIN_PASSWORD from env if set, otherwise generate random 32-char hex password
         var password_from_env = false;
-        const password = if (std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| pw_blk: {
+        const password = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| pw_blk: {
             password_from_env = true;
             break :pw_blk env_pw;
         } else |_| blk: {
             var random_bytes: [16]u8 = undefined;
-            std.crypto.random.bytes(&random_bytes);
+            compat_fillRandom(&random_bytes);
             const pw = try self.allocator.alloc(u8, 32);
             const hex_chars = "0123456789abcdef";
             for (random_bytes, 0..) |byte, i| {
@@ -578,7 +631,7 @@ pub const AuthGraphManager = struct {
         record.is_default_user = true;
         record.password_reset_required = !password_from_env;
         record.hash_algorithm_len = UserStorageBackend.copyIntoField(&record.hash_algorithm, "argon2id");
-        record.password_changed_at = std.time.milliTimestamp();
+        record.password_changed_at = compat_milliTimestamp();
         try self.storage.user_cache.put(user_id, record);
         try self.storage.upsertUserNode(record);
 
@@ -727,7 +780,7 @@ pub const AuthGraphManager = struct {
         var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
         record.failed_login_attempts = failed_attempts;
         record.lockout_until = lockout_until;
-        record.updated_at = std.time.milliTimestamp();
+        record.updated_at = compat_milliTimestamp();
         try self.storage.user_cache.put(user_id, record);
         try self.storage.upsertUserNode(record);
         try self.recomputeAndStoreUserHmac(user_id, hmac_key);
@@ -740,8 +793,8 @@ pub const AuthGraphManager = struct {
     pub fn updateUserPassword(self: *Self, hmac_key: *const [32]u8, user_id: u64, new_password_hash: []const u8) !u64 {
         var record = self.storage.user_cache.get(user_id) orelse return error.UserNotFound;
         record.password_hash_len = UserStorageBackend.copyIntoField(&record.password_hash, new_password_hash);
-        record.password_changed_at = std.time.milliTimestamp();
-        record.updated_at = std.time.milliTimestamp();
+        record.password_changed_at = compat_milliTimestamp();
+        record.updated_at = compat_milliTimestamp();
         record.auth_version += 1;
         try self.storage.user_cache.put(user_id, record);
         try self.storage.upsertUserNode(record);
@@ -760,13 +813,13 @@ pub const AuthGraphManager = struct {
 fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
     // Generate cryptographically random 32-byte key
     var key: [32]u8 = undefined;
-    std.crypto.random.bytes(&key);
+    compat_fillRandom(&key);
 
     // Convert to hex for human-readable file format
     const hex = auth_hmac.hmacToHex(&key);
 
     // Write to file with restricted permissions
-    const file = std.Io.Dir.cwd().createFile(path, .{ .mode = 0o600 }) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = 0o600 }) catch |err| {
         log.warn("Failed to create HMAC key file", &.{
             Attr.string("path", path),
             Attr.string("error", @errorName(err)),

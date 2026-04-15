@@ -292,8 +292,8 @@ pub const Catalog = struct {
         defer self.allocator.free(data);
 
         // Lock for modifying catalog state
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Create stream to read from decrypted data
         var stream = std.io.fixedBufferStream(data);
@@ -480,8 +480,8 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-CONSTRAINT-002; FEATURE="ConstraintManagement"; ASPECT=CatalogMethods; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; OWNER=schema; UPDATED=2026-01-09
     /// Add a constraint to the catalog
     pub fn addConstraint(self: *Catalog, info: ConstraintInfo) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Create scoped key
         const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ info.label, info.name });
@@ -521,8 +521,8 @@ pub const Catalog = struct {
 
     /// Remove a constraint from the catalog
     pub fn removeConstraint(self: *Catalog, label: []const u8, name: []const u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const scoped_key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ label, name });
         defer self.allocator.free(scoped_key);
@@ -543,8 +543,8 @@ pub const Catalog = struct {
 
     /// Get a constraint by label and name
     pub fn getConstraint(self: *Catalog, label: []const u8, name: []const u8) !?ConstraintInfo {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var key_buf: [512]u8 = undefined;
         const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, name }) catch return null;
@@ -554,8 +554,8 @@ pub const Catalog = struct {
 
     /// Get all constraints for a label
     pub fn getConstraintsForLabel(self: *Catalog, label: []const u8) ![]ConstraintInfo {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList(ConstraintInfo).init(self.allocator);
         errdefer result.deinit();
@@ -572,8 +572,8 @@ pub const Catalog = struct {
 
     /// Add a schema to the catalog and persist
     pub fn addSchema(self: *Catalog, name: []const u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.schemas.contains(name)) {
             return error.DuplicateSchema;
@@ -588,8 +588,8 @@ pub const Catalog = struct {
 
     /// Remove a schema from the catalog and persist
     pub fn removeSchema(self: *Catalog, name: []const u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const entry = self.schemas.fetchRemove(name) orelse return error.SchemaNotFound;
         self.allocator.free(entry.key);
@@ -598,8 +598,8 @@ pub const Catalog = struct {
 
     /// Check if schema exists in the catalog
     pub fn hasSchema(self: *Catalog, name: []const u8) bool {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         return self.schemas.contains(name);
     }
@@ -608,8 +608,8 @@ pub const Catalog = struct {
     /// Add a graph to the catalog without persisting it yet. Call
     /// `updateGraphUuid()` or `addGraphWithUuid()` before saving.
     pub fn addGraph(self: *Catalog, name: []const u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Check if graph already exists
         if (self.graphs.contains(name)) {
@@ -625,8 +625,8 @@ pub const Catalog = struct {
 
     /// Add a graph to the catalog with its assigned storage UUID and persist it.
     pub fn addGraphWithUuid(self: *Catalog, name: []const u8, uuid: [16]u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
         if (self.graphs.contains(name)) return error.GraphAlreadyExists;
@@ -643,8 +643,8 @@ pub const Catalog = struct {
     pub fn updateGraphUuid(self: *Catalog, name: []const u8, uuid: [16]u8) !void {
         if (isZeroUuid(uuid)) return error.GraphUuidUnavailable;
 
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.graphs.getPtr(name)) |ptr| {
             ptr.* = uuid;
@@ -657,8 +657,8 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-GRAPH-META-002; FEATURE="GraphMetadataPersistence"; ASPECT=RemoveGraph; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Remove a graph from the catalog and persist
     pub fn removeGraph(self: *Catalog, name: []const u8) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const entry = self.graphs.fetchRemove(name) orelse return error.GraphNotFound;
 
@@ -671,8 +671,8 @@ pub const Catalog = struct {
     // CANARY: REQ=REQ-GRAPH-META-003; FEATURE="GraphMetadataPersistence"; ASPECT=GraphExists; STATUS=EXEMPT; OWNER=catalog; UPDATED=2026-01-09
     /// Check if a graph exists in the catalog
     pub fn graphExists(self: *Catalog, name: []const u8) bool {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         return self.graphs.contains(name);
     }
@@ -685,8 +685,8 @@ pub const Catalog = struct {
     /// List all graphs in the catalog
     /// Returns an owned slice of graph names. Caller must free each name and the slice.
     pub fn listGraphs(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList([]const u8).empty;
         errdefer {
@@ -712,8 +712,8 @@ pub const Catalog = struct {
         const index_name = try std.fmt.allocPrint(self.allocator, "auto_idx_{s}_id", .{label});
         const scoped_key = try getScopedIndexKey(self.allocator, label, index_name);
 
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.indexes.contains(scoped_key)) {
             self.allocator.free(scoped_key);
@@ -748,8 +748,8 @@ pub const Catalog = struct {
 
     /// Add an index to the catalog and persist
     pub fn addIndex(self: *Catalog, info: IndexInfo) !void {
-        self.rwlock.lock();
-        defer self.rwlock.unlock();
+        self.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const scoped_key = try getScopedIndexKey(self.allocator, info.table_name, info.name);
         errdefer self.allocator.free(scoped_key);
@@ -785,8 +785,8 @@ pub const Catalog = struct {
 
     /// Get index metadata by label and name (scoped key)
     pub fn getIndex(self: *Catalog, label: []const u8, index_name: []const u8) !?IndexInfo {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var key_buf: [512]u8 = undefined;
         const scoped_key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ label, index_name }) catch {
@@ -802,8 +802,8 @@ pub const Catalog = struct {
     /// List all indexes in the catalog
     /// Returns a dynamically allocated slice of IndexInfo. Caller owns the returned slice.
     pub fn listAllIndexes(self: *Catalog, allocator: std.mem.Allocator) ![]IndexInfo {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList(IndexInfo).empty;
         errdefer result.deinit(allocator);
@@ -821,8 +821,8 @@ pub const Catalog = struct {
     /// List all constraints in the catalog
     /// Returns a dynamically allocated slice of ConstraintInfo. Caller owns the returned slice.
     pub fn listAllConstraints(self: *Catalog, allocator: std.mem.Allocator) ![]ConstraintInfo {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList(ConstraintInfo).empty;
         errdefer result.deinit(allocator);
@@ -840,8 +840,8 @@ pub const Catalog = struct {
     /// List all schemas in the catalog
     /// Returns a dynamically allocated slice of schema names. Caller owns the returned slice.
     pub fn listAllSchemas(self: *Catalog, allocator: std.mem.Allocator) ![][]const u8 {
-        self.rwlock.lockShared();
-        defer self.rwlock.unlockShared();
+        self.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
         var result = std.ArrayList([]const u8).empty;
         errdefer {

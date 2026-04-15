@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const testing = std.testing;
 
 // FLE Enforcement Tests
@@ -447,7 +456,7 @@ test "TestFLE_Algorithm_ChaCha20Poly1305Parameters" {
 // CANARY: REQ=REQ-FLE-ENFORCE-026; FEATURE="FLEEnforcement"; ASPECT=NonceRandomness; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
 test "TestFLE_Algorithm_NonceMustBeCryptographicallyRandom" {
     // Nonces MUST be cryptographically random (not predictable)
-    // aead.zig:133-134: std.crypto.random.bytes(&nonce);
+    // aead.zig:133-134: compat_fillRandom(&nonce);
 
     // Nonce reuse with same key is CATASTROPHIC for AES-GCM
     // 96-bit random nonce has negligible collision probability

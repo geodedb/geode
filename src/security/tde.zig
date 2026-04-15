@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const crypto = std.crypto;
 const flags_mod = @import("feature_flags");
 const key_manager = @import("tde_key_manager.zig");
@@ -120,7 +164,7 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
     unencrypted_files: u32,
     verification_time_ms: u64,
 } {
-    const start_time = std.time.milliTimestamp();
+    const start_time = compat_milliTimestamp();
 
     var data_files_checked: u32 = 0;
     var unencrypted_files: u32 = 0;
@@ -147,7 +191,7 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
 
             // Check for encryption header (in production)
             // For now, simulate by checking file exists
-            const file = std.Io.Dir.cwd().openFile(entry.name, .{}) catch {
+            const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), entry.name, .{}) catch {
                 unencrypted_files += 1;
                 continue;
             };
@@ -166,7 +210,7 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
         }
     }
 
-    const verification_time_ms: u64 = @intCast(std.time.milliTimestamp() - start_time);
+    const verification_time_ms: u64 = @intCast(compat_milliTimestamp() - start_time);
     const all_encrypted = unencrypted_files == 0 and data_files_checked > 0;
 
     return .{
@@ -199,9 +243,9 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
         defer allocator.free(test_data);
 
         // Fill with random data
-        std.crypto.random.bytes(test_data);
+        compat_fillRandom(test_data);
 
-        const start = std.time.microTimestamp();
+        const start = compat_microTimestamp();
 
         // Perform encryption operations
         var i: u32 = 0;
@@ -215,7 +259,7 @@ pub fn benchmarkEncryption(allocator: std.mem.Allocator) !struct {
             total_bytes += size * 2; // Count both encrypt and decrypt
         }
 
-        total_time_us += @intCast(std.time.microTimestamp() - start);
+        total_time_us += @intCast(compat_microTimestamp() - start);
     }
 
     const throughput_mbps = @as(f64, @floatFromInt(total_bytes)) / @as(f64, @floatFromInt(total_time_us));
@@ -243,11 +287,11 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
     var files_backed_up: u32 = 0;
 
     // Create backup file
-    const backup_file = std.Io.Dir.cwd().createFile(backup_path, .{}) catch |err| {
+    const backup_file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{}) catch |err| {
         // If file exists, try again with .bak extension
         const alt_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{backup_path});
         defer allocator.free(alt_path);
-        return std.Io.Dir.cwd().createFile(alt_path, .{}) catch err;
+        return std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), alt_path, .{}) catch err;
     };
     defer backup_file.close();
 
@@ -258,7 +302,7 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
         // Generate simulated data for each file
         const file_data = try allocator.alloc(u8, 10240); // 10KB per file
         defer allocator.free(file_data);
-        std.crypto.random.bytes(file_data);
+        compat_fillRandom(file_data);
 
         original_size += file_data.len;
 
@@ -309,7 +353,7 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
     connection_tested: bool,
     latency_ms: u32,
 } {
-    const start = std.time.milliTimestamp();
+    const start = compat_milliTimestamp();
 
     // Parse and validate provider configuration
     const provider_type = if (std.mem.eql(u8, provider, "aws"))
@@ -360,7 +404,7 @@ pub fn configureKeyProvider(allocator: std.mem.Allocator, provider: []const u8) 
 
     // Connection test passed - KMS can successfully wrap/unwrap keys
     connection_tested = true;
-    const latency_ms: u32 = @intCast(std.time.milliTimestamp() - start);
+    const latency_ms: u32 = @intCast(compat_milliTimestamp() - start);
 
     log.info("KMS connection test passed", &.{
         Attr.string("provider", provider_type),
@@ -392,13 +436,13 @@ pub fn deriveBackupKey(allocator: std.mem.Allocator, key_id: u32) !key_manager.D
 
 /// Global TenantKeyManager instance, lazily initialized from master key.
 var global_tenant_key_mgr: ?key_manager.TenantKeyManager = null;
-var tenant_key_mgr_mu: std.Thread.Mutex = .{};
+var tenant_key_mgr_mu: std.Io.Mutex = std.Io.Mutex.init;
 
 /// Get or initialize the global TenantKeyManager.
 /// Thread-safe: uses a mutex to prevent double-init.
 fn getOrInitTenantKeyManager(allocator: std.mem.Allocator) !*key_manager.TenantKeyManager {
-    tenant_key_mgr_mu.lock();
-    defer tenant_key_mgr_mu.unlock();
+    tenant_key_mgr_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer tenant_key_mgr_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_tenant_key_mgr != null) {
         return &global_tenant_key_mgr.?;
@@ -483,8 +527,8 @@ pub fn rotateTenantKey(allocator: std.mem.Allocator, tenant_id: []const u8) !u16
 
 /// Deinitialize the global tenant key manager (cleanup on shutdown).
 pub fn deinitTenantKeyManager() void {
-    tenant_key_mgr_mu.lock();
-    defer tenant_key_mgr_mu.unlock();
+    tenant_key_mgr_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer tenant_key_mgr_mu.unlock(std.Io.Threaded.global_single_threaded.io());
 
     if (global_tenant_key_mgr) |*mgr| {
         mgr.deinit();
@@ -601,7 +645,7 @@ pub fn testKeyEscrow(allocator: std.mem.Allocator) !struct {
     // Generate shares for each byte of the secret
     for (0..32) |byte_idx| {
         // Random coefficients for polynomial (coeffs[0] will be set to secret byte)
-        std.crypto.random.bytes(coeffs[1..threshold]);
+        compat_fillRandom(coeffs[1..threshold]);
 
         // Create share values for this byte
         var share_bytes: [5]u8 = undefined;
@@ -663,12 +707,12 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         .{ .name = "VECTOR", .size = 512 },
     };
 
-    const baseline_time = std.time.microTimestamp();
+    const baseline_time = compat_microTimestamp();
 
     for (test_types) |test_type| {
         const data = try allocator.alloc(u8, test_type.size);
         defer allocator.free(data);
-        std.crypto.random.bytes(data);
+        compat_fillRandom(data);
 
         // Encrypt transparently
         const encrypted = encrypt(allocator, data, test_type.name) catch {
@@ -692,7 +736,7 @@ pub fn testTransparentEncryption(allocator: std.mem.Allocator) !struct {
         types_tested += 1;
     }
 
-    const elapsed_time: u64 = @intCast(std.time.microTimestamp() - baseline_time);
+    const elapsed_time: u64 = @intCast(compat_microTimestamp() - baseline_time);
     const baseline_estimate: u64 = 1000; // Estimated unencrypted time in microseconds
     const performance_impact = (@as(f64, @floatFromInt(elapsed_time)) / @as(f64, @floatFromInt(baseline_estimate)) - 1.0) * 100.0;
 
@@ -736,7 +780,7 @@ pub fn encryptPageTest(allocator: std.mem.Allocator) !struct {
     const page_size: usize = 8192;
     const page_data = try allocator.alloc(u8, page_size);
     defer allocator.free(page_data);
-    std.crypto.random.bytes(page_data);
+    compat_fillRandom(page_data);
 
     // Actually encrypt the page
     const encrypted = try encrypt(allocator, page_data, "page_encryption");
@@ -767,7 +811,7 @@ pub fn encryptBackupTest(allocator: std.mem.Allocator) !struct {
     const backup_size: usize = 65536; // 64KB
     const backup_data = try allocator.alloc(u8, backup_size);
     defer allocator.free(backup_data);
-    std.crypto.random.bytes(backup_data);
+    compat_fillRandom(backup_data);
 
     // Actually encrypt the backup payload
     const encrypted = try encrypt(allocator, backup_data, "backup_encryption");
@@ -830,7 +874,7 @@ pub fn createEncryptedBackup(allocator: std.mem.Allocator, backup_path: []const 
     // Simulate backup data
     const backup_data = try allocator.alloc(u8, 1048576); // 1MB
     defer allocator.free(backup_data);
-    std.crypto.random.bytes(backup_data);
+    compat_fillRandom(backup_data);
 
     // Actually encrypt backup
     const encrypted = try encrypt(allocator, backup_data, "backup");
@@ -863,7 +907,7 @@ pub fn restoreWithKeys(allocator: std.mem.Allocator, backup_path: []const u8, ma
     // Simulate actual restore process
     const test_data = try allocator.alloc(u8, 1000);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     // Verify keys work
     const encrypted = try encrypt(allocator, test_data, "restore_test");
@@ -893,24 +937,24 @@ pub fn measureOverhead(allocator: std.mem.Allocator) !struct {
     const iterations: usize = 1000;
     const test_data = try allocator.alloc(u8, 1024);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     // Baseline (no encryption)
-    const baseline_start = std.time.microTimestamp();
+    const baseline_start = compat_microTimestamp();
     for (0..iterations) |_| {
         const copy = try allocator.alloc(u8, test_data.len);
         @memcpy(copy, test_data);
         allocator.free(copy);
     }
-    const baseline_time = std.time.microTimestamp() - baseline_start;
+    const baseline_time = compat_microTimestamp() - baseline_start;
 
     // With encryption
-    const encrypted_start = std.time.microTimestamp();
+    const encrypted_start = compat_microTimestamp();
     for (0..iterations) |_| {
         const enc = try encrypt(allocator, test_data, "overhead_test");
         allocator.free(enc.data);
     }
-    const encrypted_time = std.time.microTimestamp() - encrypted_start;
+    const encrypted_time = compat_microTimestamp() - encrypted_start;
 
     // Calculate ops/sec
     const baseline_ops = (@as(f64, iterations) / @as(f64, @floatFromInt(baseline_time))) * 1000000.0;
@@ -938,28 +982,28 @@ pub fn simulateOLTPWorkload(allocator: std.mem.Allocator, duration_seconds: u32,
 
     const test_data = try allocator.alloc(u8, 256);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     const iterations = duration_seconds * 10; // Simulate transactions
 
     // Without encryption
-    const unencrypted_start = std.time.milliTimestamp();
+    const unencrypted_start = compat_milliTimestamp();
     for (0..iterations) |_| {
         const copy = try allocator.alloc(u8, test_data.len);
         @memcpy(copy, test_data);
         allocator.free(copy);
     }
-    const unencrypted_time = std.time.milliTimestamp() - unencrypted_start;
+    const unencrypted_time = compat_milliTimestamp() - unencrypted_start;
 
     // With encryption
-    const encrypted_start = std.time.milliTimestamp();
+    const encrypted_start = compat_milliTimestamp();
     for (0..iterations) |_| {
         const enc = try encrypt(allocator, test_data, "oltp_test");
         const dec = try decrypt(allocator, enc, "oltp_test");
         allocator.free(enc.data);
         allocator.free(dec);
     }
-    const encrypted_time = std.time.milliTimestamp() - encrypted_start;
+    const encrypted_time = compat_milliTimestamp() - encrypted_start;
 
     const tps_unencrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(unencrypted_time))) * 1000.0;
     const tps_encrypted = (@as(f64, @floatFromInt(iterations)) / @as(f64, @floatFromInt(encrypted_time))) * 1000.0;
@@ -985,7 +1029,7 @@ pub fn testKeyZeroization(allocator: std.mem.Allocator) !struct {
     // Create test keys
     var keys: [5][32]u8 = undefined;
     for (&keys) |*key| {
-        std.crypto.random.bytes(key);
+        compat_fillRandom(key);
     }
 
     // Zeroize keys using crypto-safe wipe (compiler cannot elide)
@@ -1083,11 +1127,11 @@ pub fn testKmsWrapUnwrap(allocator: std.mem.Allocator) !struct {
 } {
     if (!enabled()) return error.FeatureDisabled;
 
-    const start = std.time.milliTimestamp();
+    const start = compat_milliTimestamp();
 
     // Generate test key
     var test_key: [32]u8 = undefined;
-    std.crypto.random.bytes(&test_key);
+    compat_fillRandom(&test_key);
 
     // Simulate wrap (encrypt key with KEK)
     const wrapped = try encrypt(allocator, &test_key, "kms_wrap");
@@ -1097,7 +1141,7 @@ pub fn testKmsWrapUnwrap(allocator: std.mem.Allocator) !struct {
     const unwrapped = try decrypt(allocator, wrapped, "kms_wrap");
     defer allocator.free(unwrapped);
 
-    const latency = std.time.milliTimestamp() - start;
+    const latency = compat_milliTimestamp() - start;
     const verified = std.mem.eql(u8, &test_key, unwrapped);
 
     return .{
@@ -1128,8 +1172,8 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;
-    std.crypto.random.bytes(attestation_data[0..32]); // nonce
-    const timestamp = std.time.milliTimestamp();
+    compat_fillRandom(attestation_data[0..32]); // nonce
+    const timestamp = compat_milliTimestamp();
     std.mem.writeInt(i64, attestation_data[32..40], timestamp, .little);
     @memset(attestation_data[40..64], 0); // padding
 
@@ -1299,7 +1343,7 @@ pub fn testKeyRecovery(allocator: std.mem.Allocator) !struct {
     // Test recovery process
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     // Encrypt with current key
     const encrypted = try encrypt(allocator, test_data, "recovery_test");
@@ -1325,7 +1369,7 @@ pub fn evaluateRotationSchedule(allocator: std.mem.Allocator) !struct {
     rotation_reason: ?[]const u8,
     age_hours: i64,
 } {
-    const now = std.time.milliTimestamp();
+    const now = compat_milliTimestamp();
     const last_rotation = rotation_state.last_rotation_time;
     const age_ms = now - last_rotation;
     const age_hours_val = @divTrunc(age_ms, (1000 * 3600));
@@ -1374,7 +1418,7 @@ pub fn testCorruptedKeyHandling(allocator: std.mem.Allocator) !struct {
     // Create test data
     const test_data = try allocator.alloc(u8, 128);
     defer allocator.free(test_data);
-    std.crypto.random.bytes(test_data);
+    compat_fillRandom(test_data);
 
     // Encrypt with valid key
     const encrypted = try encrypt(allocator, test_data, "corruption_test");

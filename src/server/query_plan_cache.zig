@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const gql_ast = @import("../gql/ast.zig");
 
 // CANARY: REQ=REQ-PERF-LRU-O1-002; FEATURE="O1LRUEviction"; ASPECT=PlanCacheEviction; STATUS=TESTED; OWNER=engine; UPDATED=2026-02-17
@@ -37,7 +72,7 @@ pub const QueryPlanCache = struct {
         if (self.cache.getPtr(query_hash)) |plan| {
             self.hit_count += 1;
             plan.access_count += 1;
-            plan.last_accessed = std.time.timestamp();
+            plan.last_accessed = compat_timestamp();
             self.lruPromote(query_hash);
             return plan;
         }
@@ -55,8 +90,8 @@ pub const QueryPlanCache = struct {
         const cached_plan = CachedPlan{
             .query_text = try self.allocator.dupe(u8, query_text),
             .plan = plan,
-            .created_at = std.time.timestamp(),
-            .last_accessed = std.time.timestamp(),
+            .created_at = compat_timestamp(),
+            .last_accessed = compat_timestamp(),
             .access_count = 1,
         };
 
@@ -413,7 +448,7 @@ pub const SharedQueryOptimizer = struct {
     max_size: usize,
     hit_count: u64 = 0,
     miss_count: u64 = 0,
-    lock: std.Thread.Mutex = .{},
+    lock: std.Io.Mutex = std.Io.Mutex.init,
     schema_epoch: u64 = 0,
     lru_head: ?u64 = null,
     lru_tail: ?u64 = null,
@@ -429,8 +464,8 @@ pub const SharedQueryOptimizer = struct {
     }
 
     pub fn deinit(self: *SharedQueryOptimizer) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         var iter = self.plan_cache.iterator();
         while (iter.next()) |entry| {
             self.allocator.free(entry.value_ptr.query_text);
@@ -451,14 +486,14 @@ pub const SharedQueryOptimizer = struct {
         const current_epoch = self.schema_epoch;
 
         // Fast path: check cache under lock
-        self.lock.lock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         if (self.plan_cache.getPtr(key)) |cached| {
             if (std.mem.eql(u8, cached.query_text, query_text) and
                 cached.schema_epoch >= current_epoch)
             {
                 self.hit_count += 1;
                 cached.access_count += 1;
-                cached.last_accessed = std.time.timestamp();
+                cached.last_accessed = compat_timestamp();
                 cached.ref_count += 1;
                 self.lruPromoteUnlocked(key);
                 const handle = SharedPlanHandle{
@@ -466,7 +501,7 @@ pub const SharedQueryOptimizer = struct {
                     .key = key,
                     .plan = &cached.plan,
                 };
-                self.lock.unlock();
+                self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
                 return handle;
             }
 
@@ -480,14 +515,14 @@ pub const SharedQueryOptimizer = struct {
             }
         }
         self.miss_count += 1;
-        self.lock.unlock();
+        self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Generate plan outside the lock to avoid blocking concurrent lookups
         const plan = try generateRealPlan(self.allocator, &self.cost_model, program, stats, current_epoch);
 
         // Insert into cache under lock (double-check for races)
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
 
         if (self.plan_cache.getPtr(key)) |existing| {
             if (std.mem.eql(u8, existing.query_text, query_text) and
@@ -496,7 +531,7 @@ pub const SharedQueryOptimizer = struct {
                 // Another thread inserted; discard ours, use theirs
                 self.allocator.free(plan.operators);
                 existing.access_count += 1;
-                existing.last_accessed = std.time.timestamp();
+                existing.last_accessed = compat_timestamp();
                 existing.ref_count += 1;
                 self.lruPromoteUnlocked(key);
                 return SharedPlanHandle{
@@ -514,8 +549,8 @@ pub const SharedQueryOptimizer = struct {
         const cached_plan = SharedCachedPlan{
             .query_text = try self.allocator.dupe(u8, query_text),
             .plan = plan,
-            .created_at = std.time.timestamp(),
-            .last_accessed = std.time.timestamp(),
+            .created_at = compat_timestamp(),
+            .last_accessed = compat_timestamp(),
             .access_count = 1,
             .ref_count = 1,
             .schema_epoch = current_epoch,
@@ -537,8 +572,8 @@ pub const SharedQueryOptimizer = struct {
 
     /// Decrement ref_count for a cached entry (called by SharedPlanHandle.release)
     pub fn release(self: *SharedQueryOptimizer, key: u64) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.plan_cache.getPtr(key)) |entry| {
             if (entry.ref_count > 0) entry.ref_count -= 1;
         }
@@ -546,23 +581,23 @@ pub const SharedQueryOptimizer = struct {
 
     /// Invalidate all cached plans (e.g., after CREATE/DROP INDEX)
     pub fn invalidateAll(self: *SharedQueryOptimizer) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         self.schema_epoch += 1;
         // Entries will be lazily evicted on next miss (epoch check fails)
     }
 
     /// Increment schema epoch without clearing cache (lazy invalidation)
     pub fn bumpSchemaEpoch(self: *SharedQueryOptimizer) void {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         self.schema_epoch += 1;
     }
 
     /// Get cache statistics
     pub fn getStats(self: *SharedQueryOptimizer) CacheStats {
-        self.lock.lock();
-        defer self.lock.unlock();
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
         const total_requests = self.hit_count + self.miss_count;
         const hit_rate = if (total_requests > 0)
             @as(f64, @floatFromInt(self.hit_count)) / @as(f64, @floatFromInt(total_requests)) * 100.0

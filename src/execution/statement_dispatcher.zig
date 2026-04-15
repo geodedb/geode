@@ -470,8 +470,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const label = ci.label;
 
             // Phase 3: Write lock for CREATE INDEX
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Generate scoped key: "label:index_name"
             // This allows the same index name on different labels (e.g., Person:idx and Company:idx)
@@ -571,8 +571,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const cat = getCatalog(allocator, context);
 
             // Phase 3: Write lock for CREATE CONSTRAINT
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Create scoped key for constraint lookup
             var key_buf: [512]u8 = undefined;
@@ -658,8 +658,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const index_name = di.name;
 
             // Phase 3: Write lock for DROP INDEX
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Search for index by name across all labels
             // Since we use scoped keys ("label:index_name"), we need to find the matching entry
@@ -722,8 +722,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const cat = getCatalog(allocator, context);
 
             // Phase 3: Write lock for DROP CONSTRAINT
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Search for constraint by name across all labels
             var found_key: ?[]const u8 = null;
@@ -840,8 +840,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             });
 
             // Phase 3: Write lock for CREATE GRAPH
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Handle OR REPLACE
             if (cg.or_replace) {
@@ -975,8 +975,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const graph_name = dg.name;
 
             // Phase 3: Write lock for DROP GRAPH
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Check if graph exists in either catalog or storage (unless IF EXISTS is used)
             const in_catalog = cat.graphs.contains(graph_name);
@@ -1036,8 +1036,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const schema_name = cs.name;
 
             // Phase 3: Write lock for CREATE SCHEMA
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Check if schema already exists
             if (!cs.if_not_exists and cat.schemas.contains(schema_name)) {
@@ -1076,8 +1076,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const schema_name = ds.name;
 
             // Phase 3: Write lock for DROP SCHEMA
-            cat.rwlock.lock();
-            defer cat.rwlock.unlock();
+            cat.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 
             // Check if schema exists (unless IF EXISTS is used)
             if (!ds.if_exists and !cat.schemas.contains(schema_name)) {
@@ -1105,8 +1105,8 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
 
             // Verify graph exists in catalog
             const cat = getCatalog(allocator, context);
-            cat.rwlock.lockShared();
-            defer cat.rwlock.unlockShared();
+            cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
             if (!cat.graphs.contains(graph_name)) {
                 return error.GraphNotFound;

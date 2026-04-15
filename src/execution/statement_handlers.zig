@@ -103,8 +103,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
     var rows_list = std.ArrayList([]Value).empty;
 
     // Phase 3: Shared lock for SHOW (read-only, allows concurrent access)
-    cat.rwlock.lockShared();
-    defer cat.rwlock.unlockShared();
+    cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
     switch (s.show_type) {
         .indexes => {
@@ -807,8 +807,8 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
                         // M2: Get catalog from context via dependency injection
                         const cat = getCatalog(allocator, context);
                         // Phase 3: Shared lock for EXPLAIN (read-only, allows concurrent query planning)
-                        cat.rwlock.lockShared();
-                        defer cat.rwlock.unlockShared();
+                        cat.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                        defer cat.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
                         var index_iter = cat.indexes.valueIterator();
                         while (index_iter.next()) |index_info| {
@@ -829,8 +829,8 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
                         if (q.where_clause) |where_expr| {
                             if (head.name) |vn| {
                                 const cat_w = getCatalog(allocator, context);
-                                cat_w.rwlock.lockShared();
-                                defer cat_w.rwlock.unlockShared();
+                                cat_w.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+                                defer cat_w.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
 
                                 use_index_seek = whereHasIndexedEquality(where_expr, vn, head.labels[0], cat_w);
                             }

@@ -45,7 +45,7 @@ pub fn main() !void {
 
     const allow_delta = envFlagEnabled(allocator, cfg.allow_env);
 
-    const next_data = std.fs.cwd().readFileAlloc(allocator, cfg.next_path, 2 * 1024 * 1024) catch {
+    const next_data = std.Io.Dir.cwd().readFileAlloc(allocator, cfg.next_path, 2 * 1024 * 1024) catch {
         return fail(2, "slice_delta_guard: unable to read docs/NEXT.md");
     };
     defer allocator.free(next_data);
@@ -79,7 +79,7 @@ fn countSlices(data: []const u8) usize {
 }
 
 fn readBaseline(allocator: std.mem.Allocator, path: []const u8) !usize {
-    const bytes = try std.fs.cwd().readFileAlloc(allocator, path, 256);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(allocator, path, 256);
     defer allocator.free(bytes);
     const trimmed = std.mem.trim(u8, bytes, " \t\r\n");
     if (trimmed.len == 0) return error.InvalidBaseline;
@@ -87,7 +87,7 @@ fn readBaseline(allocator: std.mem.Allocator, path: []const u8) !usize {
 }
 
 fn writeBaseline(allocator: std.mem.Allocator, path: []const u8, value: usize) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = true });
     defer file.close();
     const body = try std.fmt.allocPrint(allocator, "{d}\n", .{value});
     defer allocator.free(body);
@@ -159,16 +159,16 @@ fn fail(code: u8, msg: []const u8) noreturn {
 
 fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable, .flags = .{ .nonblocking = false } }
     else
-        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
 }
 
 test "countSlices counts markdown slice headings" {

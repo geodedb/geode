@@ -18,9 +18,9 @@ const language_metadata = geode.language_metadata;
 fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.Io.File{ .handle = handle };
+        return std.Io.File{ .handle = handle, .flags = .{ .nonblocking = false } };
     } else {
-        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     }
 }
 

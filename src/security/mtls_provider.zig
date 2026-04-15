@@ -12,6 +12,41 @@
 // 4. Subject Distinguished Name (DN)
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const crypto = std.crypto;
 const Allocator = std.mem.Allocator;
 
@@ -58,7 +93,7 @@ pub const MtlsProvider = struct {
     mappings: std.ArrayList(CertificateMapping),
     /// Fingerprint-based fast lookup cache
     fingerprint_cache: std.StringHashMap(u64),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     /// Default identity extraction method
     default_method: IdentityMethod,
     /// Require exact fingerprint match (strictest security)
@@ -69,15 +104,15 @@ pub const MtlsProvider = struct {
             .allocator = allocator,
             .mappings = std.ArrayList(CertificateMapping).empty,
             .fingerprint_cache = std.StringHashMap(u64).init(allocator),
-            .mutex = std.Thread.Mutex{},
+            .mutex = std.Io.Mutex.init,
             .default_method = .fingerprint,
             .strict_mode = true,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.mappings.items) |mapping| {
             self.allocator.free(mapping.pattern);
@@ -106,8 +141,8 @@ pub const MtlsProvider = struct {
         roles: []const []const u8,
         description: []const u8,
     ) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const pattern_dup = try self.allocator.dupe(u8, pattern);
         errdefer self.allocator.free(pattern_dup);
@@ -127,7 +162,7 @@ pub const MtlsProvider = struct {
             .user_id = user_id,
             .roles = roles_dup,
             .enabled = true,
-            .created_at = std.time.timestamp(),
+            .created_at = compat_timestamp(),
             .description = desc_dup,
         };
 
@@ -142,8 +177,8 @@ pub const MtlsProvider = struct {
 
     /// Remove a mapping by pattern
     pub fn removeMapping(self: *Self, method: IdentityMethod, pattern: []const u8) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var idx: usize = 0;
         while (idx < self.mappings.items.len) {
@@ -175,11 +210,11 @@ pub const MtlsProvider = struct {
     /// Authenticate a certificate and return the user ID
     /// CANARY: REQ=REQ-AUTH-MTLS-003; FEATURE="CertificateAuthentication"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/test_mtls_provider.zig; OWNER=security; UPDATED=2026-01-29
     pub fn authenticate(self: *Self, identity: *const CertificateIdentity) !?AuthResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Check certificate validity period
-        const now = std.time.timestamp();
+        const now = compat_timestamp();
         if (now < identity.not_before or now > identity.not_after) {
             return error.CertificateExpired;
         }
@@ -237,8 +272,8 @@ pub const MtlsProvider = struct {
 
     /// Enable/disable a mapping
     pub fn setMappingEnabled(self: *Self, method: IdentityMethod, pattern: []const u8, enabled: bool) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.mappings.items) |*mapping| {
             if (mapping.method == method and std.mem.eql(u8, mapping.pattern, pattern)) {
@@ -251,8 +286,8 @@ pub const MtlsProvider = struct {
 
     /// List all mappings
     pub fn listMappings(self: *Self, allocator: Allocator) ![]CertificateMapping {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const list = try allocator.alloc(CertificateMapping, self.mappings.items.len);
         @memcpy(list, self.mappings.items);

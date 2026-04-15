@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const quic = @import("transport/quic");
 const protobuf = @import("protobuf");
 const dist_schema = @import("distributed_schema");
@@ -14,7 +49,7 @@ pub const NetworkTransport = struct {
     quic_transport: *quic.QuicTransport,
     peers: std.AutoHashMap(u32, PeerConnection),
     message_handler: ?MessageHandler,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub const PeerConnection = struct {
         node_id: u32,
@@ -48,15 +83,15 @@ pub const NetworkTransport = struct {
     }
 
     pub fn addPeer(self: *NetworkTransport, node_id: u32, address: []const u8) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const addr_copy = try self.allocator.dupe(u8, address);
         try self.peers.put(node_id, .{
             .node_id = node_id,
             .address = addr_copy,
             .connection = null,
-            .last_seen = std.time.milliTimestamp(),
+            .last_seen = compat_milliTimestamp(),
             .retry_count = 0,
         });
     }
@@ -77,8 +112,8 @@ pub const NetworkTransport = struct {
         var existing_conn: ?*quic.QuicConnection = null;
         var peer_address: []const u8 = undefined;
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             const peer = self.peers.get(node_id) orelse return error.PeerNotFound;
             existing_conn = peer.connection;
             peer_address = peer.address;
@@ -109,11 +144,11 @@ pub const NetworkTransport = struct {
 
                 // Update peer connection state under lock
                 {
-                    self.mutex.lock();
-                    defer self.mutex.unlock();
+                    self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                    defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
                     if (self.peers.getPtr(node_id)) |updated_peer| {
                         updated_peer.connection = conn;
-                        updated_peer.last_seen = std.time.milliTimestamp();
+                        updated_peer.last_seen = compat_milliTimestamp();
                     }
                 }
                 existing_conn = conn;
@@ -134,8 +169,8 @@ pub const NetworkTransport = struct {
     }
 
     pub fn onMessage(self: *NetworkTransport, handler: MessageHandler) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.message_handler = handler;
     }
 
@@ -155,10 +190,10 @@ pub const NetworkTransport = struct {
     }
 
     pub fn checkHealth(self: *NetworkTransport) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         var it = self.peers.iterator();
 
         while (it.next()) |entry| {

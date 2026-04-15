@@ -58,59 +58,59 @@ inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
 /// correct and broadcast() is unnecessary. This eliminates the fragile
 /// requirement that broadcast() must be used to avoid cross-wakeup stalls.
 pub const PollSync = struct {
-    mu: std.Thread.Mutex = .{},
+    mu: std.Io.Mutex = std.Io.Mutex.init,
     /// Wakes handler threads blocked in enterIo (waiting for poll to finish).
-    io_cv: std.Thread.Condition = .{},
+    io_cv: std.Io.Condition = std.Io.Condition.init,
     /// Wakes the poll thread blocked in enterPoll (waiting for I/O to drain).
-    drain_cv: std.Thread.Condition = .{},
+    drain_cv: std.Io.Condition = std.Io.Condition.init,
     /// Wakes handler threads waiting for new data after a poll cycle.
-    poll_cv: std.Thread.Condition = .{},
+    poll_cv: std.Io.Condition = std.Io.Condition.init,
     poll_requested: bool = false,
     active_io_count: u32 = 0,
 
     /// Called by handler threads before I/O. Blocks until safe to proceed.
     pub fn enterIo(self: *PollSync) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         while (self.poll_requested) {
-            self.io_cv.wait(&self.mu);
+            self.io_cv.waitUncancelable(std.Io.Threaded.global_single_threaded.io(), &self.mu);
         }
         self.active_io_count += 1;
     }
 
     /// Called by handler threads after I/O.
     pub fn leaveIo(self: *PollSync) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.active_io_count > 0) self.active_io_count -= 1;
         // signal() is safe: only the poll thread waits on drain_cv.
-        if (self.active_io_count == 0) self.drain_cv.signal();
+        if (self.active_io_count == 0) self.drain_cv.signal(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Called by the main thread before poll(). Blocks until all I/O finishes.
     pub fn enterPoll(self: *PollSync) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         self.poll_requested = true;
         while (self.active_io_count > 0) {
-            self.drain_cv.wait(&self.mu);
+            self.drain_cv.waitUncancelable(std.Io.Threaded.global_single_threaded.io(), &self.mu);
         }
     }
 
     /// Called by the main thread after poll().
     pub fn leavePoll(self: *PollSync) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         self.poll_requested = false;
-        self.io_cv.broadcast(); // Wake all handlers waiting to enter I/O
-        self.poll_cv.broadcast(); // Wake handlers waiting for data after poll
+        self.io_cv.broadcast(std.Io.Threaded.global_single_threaded.io()); // Wake all handlers waiting to enter I/O
+        self.poll_cv.broadcast(std.Io.Threaded.global_single_threaded.io()); // Wake handlers waiting for data after poll
     }
 
     /// Handler threads call this instead of blind Thread.sleep().
     /// Blocks until the next poll cycle completes or timeout expires.
     pub fn waitForPoll(self: *PollSync, timeout_ns: u64) void {
-        self.mu.lock();
-        defer self.mu.unlock();
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         self.poll_cv.timedWait(&self.mu, timeout_ns) catch {}; // timeout is expected
     }
 };
@@ -126,13 +126,13 @@ pub const QuicTransport = struct {
     endpoint: ?*Endpoint = null,
     connections: std.ArrayList(*QuicConnection),
     // GAP-0202: Mutex for thread-safe connection list access in async mode
-    connections_mutex: std.Thread.Mutex = .{},
+    connections_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-0203: Deferred connection destruction to prevent use-after-free.
     // Handler threads add inner connections here after sending CONNECTION_CLOSE;
     // the main accept loop thread processes them via drainPendingDestroy()
     // where endpoint bookkeeping can be safely updated without racing with poll().
     pending_destroy: std.ArrayList(*Connection),
-    pending_destroy_mutex: std.Thread.Mutex = .{},
+    pending_destroy_mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Readers-writer sync: handler threads are "readers" (concurrent I/O),
     /// main thread is the "writer" (exclusive poll). See PollSync docs.
     poll_sync: PollSync = .{},
@@ -173,10 +173,10 @@ pub const QuicTransport = struct {
         // These are inner connections queued by handler threads via destroyConnection().
         self.drainPendingDestroy();
 
-        self.connections_mutex.lock();
+        self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         var conns = self.connections;
         self.connections = .empty;
-        self.connections_mutex.unlock();
+        self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (conns.items) |conn| {
             conn.close();
@@ -211,15 +211,15 @@ pub const QuicTransport = struct {
     /// GAP-0203: Fix use-after-free race condition between handler threads
     /// calling deinit() and the main thread's poll() accessing freed memory.
     pub fn drainPendingDestroy(self: *QuicTransport) void {
-        self.pending_destroy_mutex.lock();
-        defer self.pending_destroy_mutex.unlock();
+        self.pending_destroy_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.pending_destroy_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         if (self.pending_destroy.items.len == 0) return;
 
         // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
         // without acquiring ep.mu. Acquire it here to prevent racing with poll().
         if (self.endpoint) |ep| {
-            ep.mu.lock();
-            defer ep.mu.unlock();
+            ep.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer ep.mu.unlock(std.Io.Threaded.global_single_threaded.io());
             for (self.pending_destroy.items) |inner_conn| {
                 api.destroy(ep, inner_conn);
             }
@@ -256,7 +256,7 @@ pub const QuicTransport = struct {
         };
 
         // Load and parse certificate file (convert to DER for inline TLS material)
-        const cert_file = try std.Io.Dir.cwd().openFile(self.config.cert_path, .{});
+        const cert_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), self.config.cert_path, .{});
         defer cert_file.close();
         const cert_pem = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(cert_pem);
@@ -269,7 +269,7 @@ pub const QuicTransport = struct {
         };
 
         // Load and parse private key (DER inline for TLS)
-        const key_file = try std.Io.Dir.cwd().openFile(self.config.key_path, .{});
+        const key_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), self.config.key_path, .{});
         defer key_file.close();
         const key_pem = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(key_pem);
@@ -351,7 +351,7 @@ pub const QuicTransport = struct {
             // for the poll call itself. We still signal poll_cv so handlers
             // waiting for data delivery wake up promptly.
             try api.poll(ep, timeout_i32);
-            self.poll_sync.poll_cv.broadcast();
+            self.poll_sync.poll_cv.broadcast(std.Io.Threaded.global_single_threaded.io());
         }
     }
 
@@ -400,8 +400,8 @@ pub const QuicTransport = struct {
                 .poll_sync = &self.poll_sync,
             };
             // GAP-0202: Thread-safe connection list append
-            self.connections_mutex.lock();
-            defer self.connections_mutex.unlock();
+            self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             try self.connections.append(self.allocator, wrapper);
             return wrapper;
         }
@@ -410,8 +410,8 @@ pub const QuicTransport = struct {
 
     /// #49: Returns the current number of tracked connections for admission control.
     pub fn getConnectionCount(self: *QuicTransport) usize {
-        self.connections_mutex.lock();
-        defer self.connections_mutex.unlock();
+        self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.connections.items.len;
     }
 
@@ -421,7 +421,7 @@ pub const QuicTransport = struct {
             ep.poll(0) catch {
                 return null;
             };
-            self.poll_sync.poll_cv.broadcast();
+            self.poll_sync.poll_cv.broadcast(std.Io.Threaded.global_single_threaded.io());
             const conn = api.tryAccept(ep) orelse return null;
             const wrapper = self.allocator.create(QuicConnection) catch return null;
             wrapper.* = QuicConnection{
@@ -432,8 +432,8 @@ pub const QuicTransport = struct {
                 .poll_sync = &self.poll_sync,
             };
             // GAP-0202: Thread-safe connection list append
-            self.connections_mutex.lock();
-            defer self.connections_mutex.unlock();
+            self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             self.connections.append(self.allocator, wrapper) catch {
                 self.allocator.destroy(wrapper);
                 return null;
@@ -452,7 +452,7 @@ pub const QuicTransport = struct {
     /// GAP-0203: Defer inner connection deinit to main thread to prevent use-after-free
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
         // GAP-0202: Lock mutex for thread-safe list modification
-        self.connections_mutex.lock();
+        self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         // Remove connection from the tracked list using O(1) swapRemove
         var idx: usize = 0;
         while (idx < self.connections.items.len) {
@@ -462,7 +462,7 @@ pub const QuicTransport = struct {
             }
             idx += 1;
         }
-        self.connections_mutex.unlock();
+        self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Close streams and send CONNECTION_CLOSE frame, but DO NOT call
         // inner.deinit() here. The inner connection is still referenced by
@@ -484,13 +484,13 @@ pub const QuicTransport = struct {
         // from all endpoint bookkeeping before freeing.
         // Use quic_connection (nullable, nulled by close()) with inner as fallback.
         const inner_conn = conn.quic_connection orelse conn.inner;
-        self.pending_destroy_mutex.lock();
+        self.pending_destroy_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.pending_destroy.append(self.allocator, inner_conn) catch {
             // If append fails (OOM), fall back to direct deinit.
             // This risks a crash but avoids a resource leak.
             conn.inner.deinit();
         };
-        self.pending_destroy_mutex.unlock();
+        self.pending_destroy_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Destroy the wrapper struct (safe - no other thread references it)
         self.allocator.destroy(conn);
@@ -498,7 +498,7 @@ pub const QuicTransport = struct {
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
         // Ensure cert directory exists
-        std.Io.Dir.cwd().makePath("certs") catch |err| {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), "certs") catch |err| {
             tlog.warn("failed to create certs directory", &.{Attr.string("error", @errorName(err))});
         };
 
@@ -1212,9 +1212,9 @@ test "PollSync: waitForPoll wakes on leavePoll broadcast" {
     const t = try std.Thread.spawn(.{}, struct {
         fn run(sync: *PollSync) void {
             std.Thread.sleep(5 * std.time.ns_per_ms);
-            sync.mu.lock();
-            defer sync.mu.unlock();
-            sync.poll_cv.broadcast();
+            sync.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer sync.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+            sync.poll_cv.broadcast(std.Io.Threaded.global_single_threaded.io());
         }
     }.run, .{&ps});
     const start = std.time.nanoTimestamp();

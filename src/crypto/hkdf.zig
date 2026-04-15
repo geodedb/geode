@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const fle = @import("fle_lib");
 
 // HKDF Key Derivation — thin compatibility layer over external fle library
@@ -66,7 +75,7 @@ test "Key hierarchy derivation" {
     const testing = std.testing;
 
     var master: [32]u8 = undefined;
-    std.crypto.random.bytes(&master);
+    compat_fillRandom(&master);
 
     const tenant_id = "tenant-123";
     const schema = "Person";

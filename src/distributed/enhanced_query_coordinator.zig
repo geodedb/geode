@@ -2,6 +2,41 @@
 // CANARY: REQ=REQ-DIST-QUERY-COORD-002; FEATURE="Query Optimization"; ASPECT=DistributedOptimization; STATUS=IMPL; OWNER=dist; UPDATED=2026-04-05
 
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const protocol = @import("../protocol.zig");
 const federation = @import("federation.zig");
 const query_transport = @import("query_transport.zig");
@@ -84,7 +119,7 @@ pub const EnhancedQueryCoordinator = struct {
         params: []const protocol.Value,
         options: QueryOptions,
     ) !federation.QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Check query cache first
         const query_hash = try self.cache.hashQuery(query, params);
@@ -112,7 +147,7 @@ pub const EnhancedQueryCoordinator = struct {
             try self.cache.put(query_hash, result, options.cache_ttl_ms);
         }
 
-        const exec_time = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const exec_time = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordQuery(exec_time, optimized_plan.fragments.len);
 
         return result;
@@ -177,7 +212,7 @@ pub const EnhancedQueryCoordinator = struct {
         params: []const protocol.Value,
         options: QueryOptions,
     ) !federation.QueryResults {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Prepare node queries for parallel execution
         var node_queries = try self.allocator.alloc(query_transport.NodeQuery, plan.fragments.len);
@@ -208,7 +243,7 @@ pub const EnhancedQueryCoordinator = struct {
         // Merge results according to plan
         const merged_result = try self.mergeResults(shard_results, plan.merge_strategy, options);
 
-        const merge_time = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const merge_time = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordMergeTime(merge_time);
 
         return merged_result;

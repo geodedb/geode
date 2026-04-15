@@ -1,4 +1,48 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const backup = @import("backup.zig");
 const graph_store = @import("../graph_store.zig");
 
@@ -48,7 +92,7 @@ pub const S3BackupManager = struct {
         store: *graph_store.GraphStore,
         backup_dir: []const u8,
     ) !backup.BackupMetadata {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         var mgr = try backup.BackupManager.init(self.allocator, backup_dir, self.backup_config, store);
         defer mgr.deinit();
@@ -85,7 +129,7 @@ pub const S3BackupManager = struct {
 
         try self.uploadMetadata(metadata, metadata_key);
 
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordBackup(.full, metadata.size_bytes, duration);
 
         return metadata;
@@ -98,13 +142,13 @@ pub const S3BackupManager = struct {
         target_dir: []const u8,
         store: *graph_store.GraphStore,
     ) !void {
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         const metadata = try self.downloadMetadata(backup_id);
 
         const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
         defer self.allocator.free(tmp_dir);
-        std.Io.Dir.cwd().makePath(tmp_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), tmp_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
@@ -130,7 +174,7 @@ pub const S3BackupManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{tmp_dir});
         defer self.allocator.free(metadata_path);
         {
-            const file = try std.Io.Dir.cwd().createFile(metadata_path, .{});
+            const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), metadata_path, .{});
             defer file.close();
             const json_str = try std.json.Stringify.valueAlloc(self.allocator, &[_]backup.BackupMetadata{metadata}, .{});
             defer self.allocator.free(json_str);
@@ -141,13 +185,13 @@ pub const S3BackupManager = struct {
         defer mgr.deinit();
         try mgr.restoreToPointInTime(target_dir, metadata.timestamp);
 
-        const duration = @as(u64, @intCast(std.time.milliTimestamp() - start_time));
+        const duration = @as(u64, @intCast(compat_milliTimestamp() - start_time));
         self.metrics.recordRestore(1, duration);
     }
 
     /// Multipart upload for large files
     fn multipartUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
         defer file.close();
 
         const file_size = (try file.stat()).size;
@@ -187,7 +231,7 @@ pub const S3BackupManager = struct {
 
                     // Exponential backoff with jitter
                     const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                    const jitter = std.crypto.random.int(u64) % (delay / 2);
+                    const jitter = blk: { var _rng_buf: [8]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2); };
                     std.time.sleep((delay + jitter) * 1_000_000);
                     continue;
                 };
@@ -211,7 +255,7 @@ pub const S3BackupManager = struct {
 
     /// Simple upload for smaller files
     fn simpleUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
         defer file.close();
 
         const content = try file.readToEndAlloc(self.allocator, 1024 * 1024 * 100); // Max 100MB
@@ -225,7 +269,7 @@ pub const S3BackupManager = struct {
 
                 // Exponential backoff with jitter
                 const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                const jitter = std.crypto.random.int(u64) % (delay / 2);
+                const jitter = blk: { var _rng_buf: [8]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2); };
                 std.time.sleep((delay + jitter) * 1_000_000);
                 continue;
             };
@@ -328,7 +372,7 @@ pub const S3BackupManager = struct {
 
     /// Helper to get RFC 2822 date string
     fn getDateString(self: *Self) ![]const u8 {
-        const timestamp = std.time.timestamp();
+        const timestamp = compat_timestamp();
         const epoch_seconds = @as(u64, @intCast(timestamp));
 
         // Simple date formatting - in production use proper RFC 2822 formatting
@@ -431,7 +475,7 @@ pub const S3BackupManager = struct {
         const data = try self.getObject(s3_key);
         defer self.allocator.free(data);
 
-        const file = try std.Io.Dir.cwd().createFile(local_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), local_path, .{});
         defer file.close();
 
         try file.writeAll(data);

@@ -1,4 +1,13 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
 const external_kms = @import("external_kms_client.zig");
 const kms_remote = @import("kms_remote.zig");
 const logging = @import("logging");
@@ -172,7 +181,7 @@ pub const KMSProvider = struct {
 
         // Use cryptographically random nonce (required for AES-GCM security)
         var nonce: [12]u8 = undefined;
-        std.crypto.random.bytes(&nonce);
+        compat_fillRandom(&nonce);
 
         // AES-256-GCM encrypt with authentication tag
         // Output format: nonce (12) || ciphertext || tag (16)

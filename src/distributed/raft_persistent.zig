@@ -154,7 +154,7 @@ pub const RaftNode = struct {
         defer dir.close();
 
         // Read term file
-        if (dir.openFile("current_term", .{})) |f| {
+        if (dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term", .{})) |f| {
             defer f.close();
             var buf: [32]u8 = undefined;
             const n = try f.readAll(&buf);
@@ -168,7 +168,7 @@ pub const RaftNode = struct {
     // SEC-D014: Atomic file write — write to temp file, fsync, then rename.
     // This ensures that either the old or new file exists, never a partial write.
     fn savePersistentState(self: *RaftNode) !void {
-        std.Io.Dir.cwd().makePath(self.storage_path) catch {};
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), self.storage_path) catch {};
         var dir = try std.Io.Dir.cwd().openDir(self.storage_path, .{});
         defer dir.close();
 
@@ -185,7 +185,7 @@ pub const RaftNode = struct {
         const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
 
         // Write to temp file.
-        const f = try dir.createFile(tmp_name, .{});
+        const f = try dir.createFile(std.Io.Threaded.global_single_threaded.io(), tmp_name, .{});
         errdefer {
             f.close();
             dir.deleteFile(tmp_name) catch {};
@@ -211,14 +211,14 @@ test "raft_persistent: atomic write creates file with correct content" {
     try RaftNode.atomicWriteFile(tmp.dir, "test_file", "hello123");
 
     // Verify the file exists and has the correct content.
-    const f = try tmp.dir.openFile("test_file", .{});
+    const f = try tmp.dir.openFile(std.Io.Threaded.global_single_threaded.io(), "test_file", .{});
     defer f.close();
     var buf: [64]u8 = undefined;
     const n = try f.readAll(&buf);
     try std.testing.expectEqualStrings("hello123", buf[0..n]);
 
     // Verify that the temp file does NOT exist (it was renamed).
-    if (tmp.dir.openFile("test_file.tmp", .{})) |tf| {
+    if (tmp.dir.openFile(std.Io.Threaded.global_single_threaded.io(), "test_file.tmp", .{})) |tf| {
         tf.close();
         return error.TestUnexpectedResult; // temp file should not exist
     } else |err| {
@@ -236,7 +236,7 @@ test "raft_persistent: atomic write overwrites existing file" {
     // Overwrite with new content.
     try RaftNode.atomicWriteFile(tmp.dir, "state", "new_data");
 
-    const f = try tmp.dir.openFile("state", .{});
+    const f = try tmp.dir.openFile(std.Io.Threaded.global_single_threaded.io(), "state", .{});
     defer f.close();
     var buf: [64]u8 = undefined;
     const n = try f.readAll(&buf);
@@ -260,14 +260,14 @@ test "raft_persistent: savePersistentState writes current_term atomically" {
     try node.savePersistentState();
 
     // Verify the file.
-    const f = try tmp.dir.openFile("current_term", .{});
+    const f = try tmp.dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term", .{});
     defer f.close();
     var buf: [64]u8 = undefined;
     const n = try f.readAll(&buf);
     try std.testing.expectEqualStrings("42", buf[0..n]);
 
     // No temp file should remain.
-    if (tmp.dir.openFile("current_term.tmp", .{})) |tf| {
+    if (tmp.dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term.tmp", .{})) |tf| {
         tf.close();
         return error.TestUnexpectedResult;
     } else |err| {

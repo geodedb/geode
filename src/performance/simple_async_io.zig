@@ -1,4 +1,39 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
 const Allocator = std.mem.Allocator;
 
 // CANARY: REQ=REQ-PERF-ASYNC-001; FEATURE="SimpleAsynchronousIO"; ASPECT=Performance; STATUS=TESTED; TEST=TestCANARY_SimpleAsynchronousIO; OWNER=performance; UPDATED=2025-10-04
@@ -67,7 +102,7 @@ pub const SimpleAsyncIOManager = struct {
     allocator: Allocator,
     pending_operations: std.ArrayList(AsyncOperation),
     next_operation_id: u64,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     const Self = @This();
 
@@ -91,8 +126,8 @@ pub const SimpleAsyncIOManager = struct {
         callback: CompletionCallback,
         user_data: ?*anyopaque,
     ) !u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const operation_id = self.next_operation_id;
         self.next_operation_id += 1;
@@ -104,7 +139,7 @@ pub const SimpleAsyncIOManager = struct {
             .user_data = user_data,
             .completed = false,
             .result = null,
-            .timestamp = std.time.milliTimestamp(),
+            .timestamp = compat_milliTimestamp(),
         };
 
         try self.pending_operations.append(self.allocator, async_operation);
@@ -117,8 +152,8 @@ pub const SimpleAsyncIOManager = struct {
 
     /// Process completed operations and execute callbacks
     pub fn processCompletions(self: *Self, max_completions: ?usize) u32 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var processed: u32 = 0;
         const limit = max_completions orelse std.math.maxInt(u32);
@@ -146,8 +181,8 @@ pub const SimpleAsyncIOManager = struct {
 
     /// Cancel pending operation
     pub fn cancelOperation(self: *Self, operation_id: u64) bool {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.pending_operations.items, 0..) |*operation, _| {
             if (operation.id == operation_id and !operation.completed) {
@@ -166,8 +201,8 @@ pub const SimpleAsyncIOManager = struct {
 
     /// Get statistics about pending operations
     pub fn getStatistics(self: *Self) IOStatistics {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         var pending: u32 = 0;
         var completed: u32 = 0;
@@ -212,8 +247,8 @@ pub const SimpleAsyncIOManager = struct {
 
     /// Complete an operation (called by worker threads)
     pub fn completeOperation(self: *Self, operation_id: u64, result: IOResult) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         for (self.pending_operations.items) |*operation| {
             if (operation.id == operation_id) {
@@ -240,7 +275,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         .read => |read_op| {
             var bytes_read: usize = 0;
             const status: IOStatus = blk: {
-                const file = std.Io.Dir.cwd().openFile(read_op.file_path, .{}) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), read_op.file_path, .{}) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.seekTo(read_op.offset) catch break :blk .error_io_error;
@@ -252,7 +287,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         .write => |write_op| {
             var bytes_written: usize = 0;
             const status: IOStatus = blk: {
-                const file = std.Io.Dir.cwd().openFile(write_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), write_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.seekTo(write_op.offset) catch break :blk .error_io_error;
@@ -263,7 +298,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         },
         .sync => |sync_op| {
             const status: IOStatus = blk: {
-                const file = std.Io.Dir.cwd().openFile(sync_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), sync_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.sync() catch break :blk .error_io_error;
@@ -387,7 +422,7 @@ pub fn benchmarkSimpleAsyncIO(
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -424,7 +459,7 @@ pub fn benchmarkSimpleAsyncIO(
     // Sync benchmark
     timer.reset();
     for (0..iterations) |_| {
-        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         try file.seekTo(0);
         _ = try file.readAll(buffer);
@@ -459,7 +494,7 @@ test "Simple asynchronous I/O basic operations" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -502,7 +537,7 @@ test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple asynchronous I/O integration" {
 
     // Create test file
     {
-        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();

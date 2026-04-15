@@ -2,6 +2,59 @@
 // CANARY: REQ=REQ-0005; FEATURE="Security Requirements"; ASPECT=Security; STATUS=TESTED; TEST=tests/e2e_protocol.zig; OWNER=security; UPDATED=2026-01-15
 // Clean reconstructed auth.zig with consolidated definitions (RBAC, ABAC, RLS, Sessions, MFA Policies)
 const std = @import("std");
+
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const crypto = std.crypto;
@@ -173,19 +226,15 @@ pub const PasswordPolicy = struct {
 
     pub fn geodeSecure() PasswordPolicy {
         // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
-        var gpa = std.heap.DebugAllocator(.{}){};
-        defer _ = gpa.deinit();
-        const allocator = gpa.allocator();
-        const min_length_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_LENGTH") catch null;
-        defer if (min_length_env) |env| allocator.free(env);
+        // Zig 0.16: std.process.getEnvVarOwned removed; use std.c.getenv (no allocation)
+        const min_length_env: ?[:0]const u8 = if (std.c.getenv("GEODE_PASSWORD_MIN_LENGTH")) |p| std.mem.span(p) else null;
         const min_length = if (min_length_env) |len_str| blk: {
             const parsed = std.fmt.parseInt(usize, len_str, 10) catch 20;
             // Enforce absolute minimum of 20 characters for security
             break :blk if (parsed < 20) 20 else parsed;
         } else 20;
 
-        const min_words_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_WORDS") catch null;
-        defer if (min_words_env) |env| allocator.free(env);
+        const min_words_env: ?[:0]const u8 = if (std.c.getenv("GEODE_PASSWORD_MIN_WORDS")) |p| std.mem.span(p) else null;
         const min_words = if (min_words_env) |words_str| blk: {
             const parsed = std.fmt.parseInt(usize, words_str, 10) catch 3;
             // Enforce minimum of 2 words
@@ -248,7 +297,7 @@ pub const AuditLog = struct {
         self.entries.deinit(self.allocator);
     }
     fn append(self: *AuditLog, ev: AuditEventType, user_id: UserId, comptime fmt: []const u8, args: anytype) !void {
-        try self.entries.append(self.allocator, .{ .timestamp = std.time.milliTimestamp(), .event_type = ev, .user_id = user_id, .details = try std.fmt.allocPrint(self.allocator, fmt, args) });
+        try self.entries.append(self.allocator, .{ .timestamp = compat_milliTimestamp(), .event_type = ev, .user_id = user_id, .details = try std.fmt.allocPrint(self.allocator, fmt, args) });
     }
     pub fn logMfaPolicyAdded(self: *AuditLog, id: u64, enabled: bool) !void {
         try self.append(.policy_created, 0, "MFA policy added id={} enabled={}", .{ id, enabled });
@@ -445,8 +494,8 @@ pub const SecurityManager = struct {
             .username = try self.allocator.dupe(u8, username),
             .email = try self.allocator.dupe(u8, email),
             .password_hash = try self.allocator.dupe(u8, password_hash),
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = is_active,
             .is_superuser = is_superuser,
@@ -587,7 +636,7 @@ pub const SecurityManager = struct {
     }
     // Backwards-compatible simple evaluation (no session/env context). Uses current time and null session.
     pub fn evaluateMfaPolicies(self: *Self, u: *User) bool {
-        return self.evaluateMfaPoliciesAdvanced(u, null, std.time.milliTimestamp());
+        return self.evaluateMfaPoliciesAdvanced(u, null, compat_milliTimestamp());
     }
 
     // Extended evaluation considering dynamic conditions (time window, risk, reauth interval).
@@ -821,7 +870,7 @@ pub const SecurityManager = struct {
         const enc = std.base64.url_safe_no_pad.Encoder;
         const token = try self.allocator.alloc(u8, enc.calcSize(raw.len));
         _ = enc.encode(token, &raw);
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         const session = Session{
             .token = token,
             .user_id = user_id,
@@ -842,7 +891,7 @@ pub const SecurityManager = struct {
     /// CANARY: REQ=REQ-GQL-MFA-008; FEATURE="Session step-up requirement"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
     pub fn requireStepUp(self: *Self, token: []const u8, action: []const u8) bool {
         const s = self.sessions.get(token) orelse return true; // unknown session => demand step-up / re-auth
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         if (s.elevation_expires_at) |exp| {
             if (now <= exp) {
                 return false; // still elevated
@@ -859,13 +908,13 @@ pub const SecurityManager = struct {
     /// CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow; OWNER=security; UPDATED=2025-09-26
     pub fn markStepUp(self: *Self, token: []const u8, lifetime_ms: i64) !void {
         var s = self.sessions.getPtr(token) orelse return error.InvalidSession;
-        const now = std.time.milliTimestamp();
+        const now = compat_milliTimestamp();
         s.last_mfa_ts = now;
         s.elevation_expires_at = now + lifetime_ms;
     }
     pub fn validateSession(self: *Self, token: []const u8) !UserId {
         const s = self.sessions.get(token) orelse return error.InvalidSession;
-        if (std.time.milliTimestamp() > s.expires_at) {
+        if (compat_milliTimestamp() > s.expires_at) {
             _ = self.sessions.remove(token);
             return error.SessionExpired;
         }
@@ -877,7 +926,7 @@ pub const SecurityManager = struct {
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         if (user.is_superuser) return true;
         if (self.rbac.hasPermission(user_id, resource, action)) return true;
-        var ctx = SecurityContext{ .user = user, .roles = &[_]Role{}, .session_attributes = std.StringHashMap([]const u8).init(self.allocator), .request_attributes = std.StringHashMap([]const u8).init(self.allocator), .environment = .{ .timestamp = std.time.milliTimestamp(), .ip_address = "127.0.0.1", .user_agent = "geode-client", .location = null, .device_id = null } };
+        var ctx = SecurityContext{ .user = user, .roles = &[_]Role{}, .session_attributes = std.StringHashMap([]const u8).init(self.allocator), .request_attributes = std.StringHashMap([]const u8).init(self.allocator), .environment = .{ .timestamp = compat_milliTimestamp(), .ip_address = "127.0.0.1", .user_agent = "geode-client", .location = null, .device_id = null } };
         defer {
             ctx.session_attributes.deinit();
             ctx.request_attributes.deinit();
@@ -889,7 +938,7 @@ pub const SecurityManager = struct {
     pub fn createRole(self: *Self, name: []const u8, description: []const u8) !*Role {
         const id = @as(RoleId, @intCast(self.roles.count() + 1));
         // GAP-0220 FIX: Use try for proper error propagation
-        const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = try std.ArrayList(PermissionId).initCapacity(self.allocator, 0), .created_at = std.time.milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
+        const role = Role{ .id = id, .name = try self.allocator.dupe(u8, name), .description = try self.allocator.dupe(u8, description), .permissions = try std.ArrayList(PermissionId).initCapacity(self.allocator, 0), .created_at = compat_milliTimestamp(), .is_system = false, .priority = 100, .parent_role = null };
         try self.roles.put(id, role);
         return self.roles.getPtr(id).?;
     }
@@ -907,7 +956,7 @@ pub const SecurityManager = struct {
             } else {
                 user.auth_version += 1;
             }
-            user.updated_at = std.time.milliTimestamp();
+            user.updated_at = compat_milliTimestamp();
         }
         try self.audit_log.logRoleAssigned(user_id, role_id);
     }
@@ -922,7 +971,7 @@ pub const SecurityManager = struct {
                     } else {
                         user.auth_version += 1;
                     }
-                    user.updated_at = std.time.milliTimestamp();
+                    user.updated_at = compat_milliTimestamp();
                 }
                 try self.audit_log.logRoleRevoked(user_id, role_id);
                 return;
@@ -932,7 +981,7 @@ pub const SecurityManager = struct {
     }
     pub fn createPermission(self: *Self, name: []const u8, resource: []const u8, action: Action) !*Permission {
         const id = @as(PermissionId, @intCast(self.permissions.count() + 1));
-        const perm = Permission{ .id = id, .name = try self.allocator.dupe(u8, name), .resource = try self.allocator.dupe(u8, resource), .action = action, .conditions = null, .created_at = std.time.milliTimestamp() };
+        const perm = Permission{ .id = id, .name = try self.allocator.dupe(u8, name), .resource = try self.allocator.dupe(u8, resource), .action = action, .conditions = null, .created_at = compat_milliTimestamp() };
         try self.permissions.put(id, perm);
         return self.permissions.getPtr(id).?;
     }
@@ -966,7 +1015,7 @@ pub const SecurityManager = struct {
         const entry = self.users.getPtr(user_id) orelse return error.UserNotFound;
         self.allocator.free(entry.password_hash);
         entry.password_hash = try self.allocator.dupe(u8, new_hash);
-        entry.updated_at = std.time.milliTimestamp();
+        entry.updated_at = compat_milliTimestamp();
     }
 
     /// Constant-time comparison for 32-byte arrays (Argon2id/Blake2b digests). GAP-0440.
@@ -1061,8 +1110,8 @@ pub const SecurityManager = struct {
             .username = try self.allocator.dupe(u8, username),
             .email = try self.allocator.dupe(u8, email),
             .password_hash = hash,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = true,
             .is_superuser = is_superuser,
@@ -1170,9 +1219,8 @@ pub const SecurityManager = struct {
     // CANARY: REQ=REQ-AUTH-DEFAULT-001; FEATURE="Default User Creation"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_DEFAULT_001_DefaultUser; OWNER=security; UPDATED=2025-09-30
     fn initializeDefaultUser(self: *Self) !void {
         // Get configurable admin username from environment or use default
-        const admin_username_env = std.process.getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME") catch null;
-        defer if (admin_username_env) |env| self.allocator.free(env);
-        const admin_username = admin_username_env orelse "geode";
+        // Zig 0.16: std.process.getEnvVarOwned removed; use std.c.getenv (no allocation)
+        const admin_username: []const u8 = if (std.c.getenv("GEODE_ADMIN_USERNAME")) |p| std.mem.span(p) else "geode";
 
         // Check if default user already exists
         var it = self.users.iterator();
@@ -1184,7 +1232,7 @@ pub const SecurityManager = struct {
 
         // GAP-0146: Generate random password in production if env var not set
         // CANARY: REQ=REQ-DEFAULT-PASSWORD-001; FEATURE="Secure Default Password"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=security; UPDATED=2026-01-13
-        const default_password_env = std.process.getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
+        const default_password_env = getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
         const password_from_env = default_password_env != null;
 
         // Generate or use provided password
@@ -1196,12 +1244,12 @@ pub const SecurityManager = struct {
             }
             // SEC-04: Generate cryptographically random password in ALL build modes.
             // No hardcoded fallback — always random when env var is not set.
-            std.crypto.random.bytes(&generated_password_buf);
+            compat_fillRandom(&generated_password_buf);
             generated_password_hex = std.fmt.bytesToHex(generated_password_buf, .lower);
 
             // SEC-05: Write generated password to a file instead of stderr.
             // This prevents password leakage into log aggregators or terminal scrollback.
-            const data_dir = std.process.getEnvVarOwned(self.allocator, "GEODE_DATA_DIR") catch null;
+            const data_dir = getEnvVarOwned(self.allocator, "GEODE_DATA_DIR") catch null;
             defer if (data_dir) |d| self.allocator.free(d);
             const pw_dir = data_dir orelse ".";
             const pw_path = std.fmt.allocPrint(self.allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
@@ -1211,7 +1259,7 @@ pub const SecurityManager = struct {
             };
             defer self.allocator.free(pw_path);
 
-            if (std.Io.Dir.cwd().createFile(pw_path, .{ .mode = 0o600 })) |file| {
+            if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), pw_path, .{ .mode = 0o600 })) |file| {
                 defer file.close();
                 file.writeAll(generated_password_hex[0..64]) catch |err| {
                     log.warn("Failed to write admin password file", &.{
@@ -1255,8 +1303,8 @@ pub const SecurityManager = struct {
             .username = try self.allocator.dupe(u8, admin_username),
             .email = try self.allocator.dupe(u8, "admin@geode.local"),
             .password_hash = password_hash,
-            .created_at = std.time.milliTimestamp(),
-            .updated_at = std.time.milliTimestamp(),
+            .created_at = compat_milliTimestamp(),
+            .updated_at = compat_milliTimestamp(),
             .last_login = null,
             .is_active = true,
             .is_superuser = true,
@@ -1297,7 +1345,7 @@ pub const SecurityManager = struct {
     pub fn forcePasswordReset(self: *Self, user_id: UserId) !void {
         const user = self.users.getPtr(user_id) orelse return error.UserNotFound;
         user.password_reset_required = true;
-        user.updated_at = std.time.milliTimestamp();
+        user.updated_at = compat_milliTimestamp();
         try self.audit_log.append(.user_updated, user_id, "Password reset forced", .{});
     }
 
@@ -1329,7 +1377,7 @@ pub const SecurityManager = struct {
         // Update user
         user.password_hash = new_hash;
         user.password_reset_required = false;
-        user.updated_at = std.time.milliTimestamp();
+        user.updated_at = compat_milliTimestamp();
         user.auth_version += 1;
 
         // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-005; FEATURE="Runtime Auth Graph Persistence"; ASPECT=PasswordChange; STATUS=IMPL; OWNER=security; UPDATED=2026-02-24
@@ -1387,7 +1435,7 @@ pub const SecurityManager = struct {
         if (!user.is_active) return error.UserDisabled;
 
         // Rate limiting: check if account is currently locked out
-        const now_ms = std.time.milliTimestamp();
+        const now_ms = compat_milliTimestamp();
         if (user.lockout_until > 0 and now_ms < user.lockout_until) {
             try self.audit_log.append(.login_failed, user.id, "Authentication blocked: account temporarily locked due to too many failed attempts", .{});
             return error.AccountLocked;
@@ -1457,7 +1505,7 @@ pub const SecurityManager = struct {
         if (!password_meets_policy) {
             // Force password reset for policy violation
             user.password_reset_required = true;
-            user.updated_at = std.time.milliTimestamp();
+            user.updated_at = compat_milliTimestamp();
             try self.audit_log.append(.user_updated, user.id, "Password reset forced due to policy violation after successful authentication", .{});
         }
 
@@ -1547,7 +1595,7 @@ pub const SecurityManager = struct {
         }
         if (!used_recovery) {
             // Verify TOTP code (30s step, 6 digits, +/-1 window)
-            const now = @as(u64, @intCast(std.time.milliTimestamp()));
+            const now = @as(u64, @intCast(compat_milliTimestamp()));
             if (!try ext_mfa.verifyCode(self.allocator, user.mfa_secret.?, now, code, mfa_policy.codeConfig(30, 6, 1))) {
                 try self.audit_log.logMfaChallengeFailure(user.id, "totp", "invalid_code");
                 return error.MFAInvalidCode;
@@ -1584,7 +1632,7 @@ pub const SecurityManager = struct {
 pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const u8 {
     // Generate cryptographically random 16-byte salt
     var salt: [16]u8 = undefined;
-    std.crypto.random.bytes(&salt);
+    compat_fillRandom(&salt);
 
     // OWASP recommended Argon2id parameters (ASVS 2.4.1)
     const argon2_params = std.crypto.pwhash.argon2.Params{

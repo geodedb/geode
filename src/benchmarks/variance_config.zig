@@ -1,5 +1,14 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
 // Shared helper for variance benchmarks: parses environment overrides, provides
 // minimal JSON emission, and trimming utility.
 // CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigHelper; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_VarianceConfigHelper; OWNER=tooling; UPDATED=2025-09-22
@@ -31,7 +40,7 @@ pub const ThresholdSet = struct {
 };
 
 fn envFloat(allocator: std.mem.Allocator, name: []const u8, def: f128) f128 {
-    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+    if (getEnvVarOwned(allocator, name)) |val| {
         defer allocator.free(val);
         return std.fmt.parseFloat(f128, val) catch def;
     } else |_| return def;
@@ -59,14 +68,14 @@ fn buildName(allocator: std.mem.Allocator, a: []const u8, b: []const u8) ![]u8 {
 }
 
 fn envInt(allocator: std.mem.Allocator, name: []const u8, def: usize) usize {
-    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+    if (getEnvVarOwned(allocator, name)) |val| {
         defer allocator.free(val);
         return std.fmt.parseInt(usize, val, 10) catch def;
     } else |_| return def;
 }
 
 fn envBool(allocator: std.mem.Allocator, name: []const u8, def: bool) bool {
-    if (std.process.getEnvVarOwned(allocator, name)) |val| {
+    if (getEnvVarOwned(allocator, name)) |val| {
         defer allocator.free(val);
         return std.mem.eql(u8, val, "1") or std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "on");
     } else |_| return def;

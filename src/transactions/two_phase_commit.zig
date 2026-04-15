@@ -1,5 +1,49 @@
 const std = @import("std");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+    }
+}
+
+// Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_timestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+
 // Two-Phase Commit (2PC) - Complete Implementation.
 // Runtime gated by GEODE_ENABLE_DISTRIBUTED_WRITES. Provides coordinator & participant state machines.
 // CANARY: REQ=REQ-GQL-2PC-001; FEATURE="Distributed 2PC"; ASPECT=TXN; STATUS=TESTED; TEST=tests/e2e_2pc_distributed.zig:1; OWNER=txn; UPDATED=2025-12-30
@@ -10,7 +54,7 @@ pub const Xid = struct {
 
     pub fn generate() Xid {
         var xid: Xid = undefined;
-        std.crypto.random.bytes(&xid.bytes);
+        compat_fillRandom(&xid.bytes);
         return xid;
     }
 
@@ -82,7 +126,7 @@ pub const Participant = struct {
         if (self.state != .init) return error.InvalidState;
 
         self.state = .preparing;
-        self.last_message_time = std.time.timestamp();
+        self.last_message_time = compat_timestamp();
 
         // Validate resources are available (simulate)
         // In production, this would acquire locks and validate constraints
@@ -96,14 +140,14 @@ pub const Participant = struct {
         if (self.state != .init) return error.InvalidState;
 
         self.state = .preparing;
-        const start_time = std.time.milliTimestamp();
+        const start_time = compat_milliTimestamp();
 
         // Simulate prepare operation with timeout check
-        while (std.time.milliTimestamp() - start_time < @as(i64, @intCast(timeout_ms))) {
+        while (compat_milliTimestamp() - start_time < @as(i64, @intCast(timeout_ms))) {
             // In production, this would be async with actual network I/O
             self.state = .prepared;
             self.vote = .vote_commit;
-            self.last_message_time = std.time.timestamp();
+            self.last_message_time = compat_timestamp();
             return .vote_commit;
         }
 
@@ -118,7 +162,7 @@ pub const Participant = struct {
         if (self.state != .prepared) return error.InvalidState;
 
         self.state = .committing;
-        self.last_message_time = std.time.timestamp();
+        self.last_message_time = compat_timestamp();
 
         // Apply changes permanently (simulate)
         self.state = .committed;
@@ -134,7 +178,7 @@ pub const Participant = struct {
 
         while (self.retry_count < max_retries) : (self.retry_count += 1) {
             // Attempt commit
-            self.last_message_time = std.time.timestamp();
+            self.last_message_time = compat_timestamp();
             // In production, send commit message and wait for ack
             self.state = .committed;
             return;
@@ -150,7 +194,7 @@ pub const Participant = struct {
         if (self.state == .committed) return error.InvalidState;
 
         self.state = .aborting;
-        self.last_message_time = std.time.timestamp();
+        self.last_message_time = compat_timestamp();
 
         // Rollback changes (simulate)
         self.state = .aborted;
@@ -159,7 +203,7 @@ pub const Participant = struct {
     /// Check if participant has timed out
     pub fn isTimedOut(self: *Participant, timeout_ms: u64) bool {
         if (self.last_message_time == 0) return false;
-        const current_time = std.time.timestamp();
+        const current_time = compat_timestamp();
         const elapsed_ms: u64 = @intCast((current_time - self.last_message_time) * 1000);
         return elapsed_ms > timeout_ms;
     }
@@ -181,7 +225,7 @@ pub const Coordinator = struct {
             .participants = parts,
             .recovery_log = std.ArrayList(RecoveryLogEntry).init(allocator),
             .allocator = allocator,
-            .start_time = std.time.timestamp(),
+            .start_time = compat_timestamp(),
         };
     }
 
@@ -193,7 +237,7 @@ pub const Coordinator = struct {
     fn logRecoveryEvent(self: *Coordinator, participant_id: u32, event: RecoveryLogEntry.RecoveryEvent, state: ParticipantState) !void {
         try self.recovery_log.append(.{
             .xid = self.xid,
-            .timestamp = std.time.timestamp(),
+            .timestamp = compat_timestamp(),
             .event = event,
             .participant_id = participant_id,
             .state = state,

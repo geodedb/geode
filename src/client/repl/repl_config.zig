@@ -1,17 +1,31 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+
+// Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
+fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
+    return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
+}
 const builtin = @import("builtin");
 // CANARY: REQ=REQ-LIB-MIGRATION-CONFIG-001; FEATURE="Config Library Migration"; ASPECT=ReplConfigXdg; STATUS=EXEMPT; OWNER=client; UPDATED=2026-01-25
 const config_lib = @import("config");
 
 pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
     // Check GEODE_HISTORY environment variable first (user override)
-    if (std.process.getEnvVarOwned(allocator, "GEODE_HISTORY")) |path| {
+    if (getEnvVarOwned(allocator, "GEODE_HISTORY")) |path| {
         return path;
     } else |_| {}
 
     // Primary: Try ~/.geode_history as the default preference
     if (comptime builtin.os.tag != .windows) {
-        if (std.posix.getenv("HOME")) |home| {
+        if (posixGetenv("HOME")) |home| {
             return std.fs.path.join(allocator, &[_][]const u8{ home, ".geode_history" });
         }
     }
@@ -28,13 +42,13 @@ pub fn getHistoryPath(allocator: std.mem.Allocator) ![]u8 {
 pub fn shouldUseColor() bool {
     // Check NO_COLOR environment variable (uses non-owning getenv)
     if (comptime builtin.os.tag != .windows) {
-        if (std.posix.getenv("NO_COLOR") != null) {
+        if (posixGetenv("NO_COLOR") != null) {
             return false;
         }
     }
 
     // Check if stdout is a TTY
-    const stdout = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+    const stdout = std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
     return stdout.isTty();
 }
 
@@ -54,7 +68,7 @@ pub const Config = struct {
         const config_path = try getConfigPath(allocator);
         defer allocator.free(config_path);
 
-        const file = std.Io.Dir.cwd().openFile(config_path, .{}) catch {
+        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{}) catch {
             return config;
         };
         defer file.close();
@@ -105,9 +119,9 @@ pub const Config = struct {
 
         // Ensure directory exists
         const dir_path = std.fs.path.dirname(config_path) orelse ".";
-        try std.Io.Dir.cwd().makePath(dir_path);
+        try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir_path);
 
-        const file = try std.Io.Dir.cwd().createFile(config_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{});
         defer file.close();
 
         const writer = file.writer();
@@ -122,7 +136,7 @@ pub const Config = struct {
 
 fn getConfigPath(allocator: std.mem.Allocator) ![]u8 {
     // Check GEODE_CONFIG environment variable (user override)
-    if (std.process.getEnvVarOwned(allocator, "GEODE_CONFIG")) |path| {
+    if (getEnvVarOwned(allocator, "GEODE_CONFIG")) |path| {
         return path;
     } else |_| {}
 
