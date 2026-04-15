@@ -222,7 +222,7 @@ pub const AuthGraphManager = struct {
                 return error.NoHmacKeyAvailable;
             defer allocator.free(path);
 
-            const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+            const file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
                 switch (err) {
                     error.FileNotFound => {
                         // 4. Auto-generate a random 256-bit HMAC key and write to file
@@ -766,7 +766,7 @@ fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
     const hex = auth_hmac.hmacToHex(&key);
 
     // Write to file with restricted permissions
-    const file = std.fs.cwd().createFile(path, .{ .mode = 0o600 }) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(path, .{ .mode = 0o600 }) catch |err| {
         log.warn("Failed to create HMAC key file", &.{
             Attr.string("path", path),
             Attr.string("error", @errorName(err)),

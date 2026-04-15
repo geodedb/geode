@@ -52,7 +52,7 @@ fn writeDecompTable(writer: anytype, map: *const std.AutoHashMap(u32, []u32)) !v
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -65,7 +65,7 @@ pub fn main() !void {
     const unicode_path = argv[1];
     const out_dir = argv[2];
 
-    const data = try std.fs.cwd().readFileAlloc(alloc, unicode_path, 1024 * 1024);
+    const data = try std.Io.Dir.cwd().readFileAlloc(alloc, unicode_path, 1024 * 1024);
     defer alloc.free(data);
 
     var decomp_map = try parseUnicodeData(alloc, data);
@@ -75,7 +75,7 @@ pub fn main() !void {
         decomp_map.deinit();
     }
 
-    var out_dir_handle = try std.fs.cwd().openDir(out_dir, .{ .iterate = true });
+    var out_dir_handle = try std.Io.Dir.cwd().openDir(out_dir, .{ .iterate = true });
     defer out_dir_handle.close();
 
     var file = try out_dir_handle.createFile("decomp.zig", .{ .read = true });

@@ -45,7 +45,7 @@ pub fn status() GPUStatus {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUFlaggerUnsupported" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const findings = try detect(alloc);

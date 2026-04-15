@@ -3,7 +3,7 @@ const std = @import("std");
 const jsonb = @import("jsonb.zig");
 
 test "JSONB: rejects deeply nested input at depth > 64 (GAP-0436)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -19,7 +19,7 @@ test "JSONB: rejects deeply nested input at depth > 64 (GAP-0436)" {
 }
 
 test "JSONB: accepts normally nested input (depth <= 64) (GAP-0436)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     // 3-level nesting is fine
@@ -28,7 +28,7 @@ test "JSONB: accepts normally nested input (depth <= 64) (GAP-0436)" {
 }
 
 test "JSONB: accepts input nested exactly at depth 64 (GAP-0436)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -44,7 +44,7 @@ test "JSONB: accepts input nested exactly at depth 64 (GAP-0436)" {
 }
 
 test "JSONB: rejects input nested at depth 65 (GAP-0436)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

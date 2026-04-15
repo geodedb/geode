@@ -106,7 +106,7 @@ fn runBenchmark(config: TestConfig, gpu_enabled: bool, allocator: std.mem.Alloca
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

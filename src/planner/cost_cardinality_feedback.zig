@@ -51,7 +51,7 @@ pub const Registry = struct {
 };
 
 test "TestCANARY_REQ_GQL_075_CostModelCardinalityCalibrationFeedback" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var reg = Registry.init(gpa.allocator());
     defer reg.deinit();

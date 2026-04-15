@@ -21,7 +21,7 @@ pub const Sink = union(enum) {
 var g_sink: Sink = .stderr;
 
 /// P2-3: Static GPA for logger buffer sink
-var logger_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var logger_gpa: std.heap.DebugAllocator(.{}) = .{};
 var logger_gpa_init = false;
 
 pub fn setLevel(l: Level) void {

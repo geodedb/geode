@@ -125,7 +125,7 @@ pub fn import(allocator: std.mem.Allocator, blob: []const u8) !ImportResult {
 }
 
 test "TestCANARY_REQ_GQL_TDE_BACKUP_KEY_001_RoundTrip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const a = gpa.allocator();
     var entries = [_]Entry{

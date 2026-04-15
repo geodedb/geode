@@ -128,7 +128,7 @@ pub const BackupManager = struct {
         store: *graph_store.GraphStore,
     ) !BackupManager {
         // Ensure backup directory exists
-        std.fs.cwd().makePath(backup_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().makePath(backup_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
@@ -201,7 +201,7 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        const file = try std.fs.cwd().createFile(backup_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(backup_path, .{});
         defer file.close();
 
         const header = BackupHeader{
@@ -246,7 +246,7 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        var file = try std.fs.cwd().openFile(backup_path, .{ .mode = .read_only });
+        var file = try std.Io.Dir.cwd().openFile(backup_path, .{ .mode = .read_only });
         defer file.close();
 
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
@@ -322,7 +322,7 @@ pub const BackupManager = struct {
             }
             const path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, entry.backup_id });
             defer self.allocator.free(path);
-            std.fs.cwd().deleteFile(path) catch |err| {
+            std.Io.Dir.cwd().deleteFile(path) catch |err| {
                 log.warn("Failed to delete expired backup", &.{
                     Attr.string("path", path),
                     Attr.string("error", @errorName(err)),
@@ -340,7 +340,7 @@ pub const BackupManager = struct {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
 
-        const file = std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return self.metadata_log.items,
             else => return err,
         };
@@ -363,7 +363,7 @@ pub const BackupManager = struct {
     fn writeMetadata(self: *BackupManager) !void {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
-        const file = try std.fs.cwd().createFile(path, .{});
+        const file = try std.Io.Dir.cwd().createFile(path, .{});
         defer file.close();
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
         defer self.allocator.free(json_str);
@@ -403,7 +403,7 @@ fn generateBackupId() u64 {
 
 /// Append a single file entry (name + data) into the archive buffer.
 fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
-    const file = try std.fs.cwd().openFile(file_path, .{ .mode = .read_only });
+    const file = try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     const data = try file.readToEndAlloc(allocator, @intCast(stat.size));
@@ -424,7 +424,7 @@ fn appendDirectoryTree(
 ) !u32 {
     var file_count: u32 = 0;
 
-    var dir = std.fs.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return 0;
         return err;
     };
@@ -479,7 +479,7 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
     // Include graph_registry.dat if it exists.
     const reg_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
     defer allocator.free(reg_path);
-    const has_registry = if (std.fs.cwd().access(reg_path, .{})) |_| true else |_| false;
+    const has_registry = if (std.Io.Dir.cwd().access(reg_path, .{})) |_| true else |_| false;
     if (has_registry) {
         try appendFileEntry(&buffer, allocator, reg_path, "graph_registry.dat");
         file_count += 1;
@@ -538,10 +538,10 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
         defer allocator.free(full_path);
 
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
-            std.fs.cwd().makePath(full_path[0..last_slash]) catch {};
+            std.Io.Dir.cwd().makePath(full_path[0..last_slash]) catch {};
         }
 
-        const out = try std.fs.cwd().createFile(full_path, .{});
+        const out = try std.Io.Dir.cwd().createFile(full_path, .{});
         defer out.close();
         try out.writeAll(data);
     }

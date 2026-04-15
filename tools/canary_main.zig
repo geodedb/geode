@@ -20,7 +20,7 @@ const domain_persist = geode.index.domain_trie_persist;
 
 pub fn main() !void {
     // CANARY: REQ=REQ-0007; FEATURE="Tooling & Governance Requirements"; ASPECT=Tooling; STATUS=TESTED; TEST=tools/canary_main.zig; OWNER=tools; UPDATED=2026-01-15
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

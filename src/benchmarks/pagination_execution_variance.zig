@@ -36,7 +36,7 @@ fn simulatePageExecution(page_size: usize, inner_work_scale: usize) u64 {
 }
 
 pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     fabricatePlannedQuery(); // placeholder (future: real plan + exec state integration)

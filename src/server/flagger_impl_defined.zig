@@ -133,7 +133,7 @@ pub fn freeFindings(allocator: std.mem.Allocator, findings: []ImplDefinedFinding
 }
 
 test "TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // All boolean opts default to true; zero_length_paths_excluded=true adds 1 extra
@@ -150,7 +150,7 @@ test "TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy" {
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Conformance Flagger"; ASPECT=ImplDefinedCollationAndNullOrdering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering; OWNER=engine; UPDATED=2025-09-21
 test "TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const findings = try collect(alloc, .{ .zero_length_paths_excluded = false });
@@ -167,7 +167,7 @@ test "TestCANARY_REQ_GQL_024_ImplDefinedCollationAndNullOrdering" {
 }
 
 test "TestCANARY_GQL39075_RQ_0003_AnnexBComplete" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // With zero_length_paths_excluded=false we get exactly the 15 Annex B items

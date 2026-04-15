@@ -613,7 +613,7 @@ pub const RecursiveQueryProcessor = struct {
 
         if (!execution.result_accumulator.spilled_to_disk) {
             // Create temporary file with unique name
-            const temp_dir = std.fs.cwd();
+            const temp_dir = std.Io.Dir.cwd();
             var rand_buf: [8]u8 = undefined;
             std.crypto.random.bytes(&rand_buf);
             var filename_buf: [64]u8 = undefined;

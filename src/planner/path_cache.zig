@@ -178,7 +178,7 @@ pub const PathCache = struct {
 };
 
 test "TestCANARY_REQ_GQL_021_PathCacheEviction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try PathCache.init(gpa.allocator(), 3);
     defer cache.deinit();
@@ -195,7 +195,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheEviction" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCacheMetricsExport" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try PathCache.init(gpa.allocator(), 2);
     defer cache.deinit();

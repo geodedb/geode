@@ -3,7 +3,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="RealityDocs"; ASPECT=ImplementationRealityDeltaTool; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_ImplementationRealityDeltaTool; OWNER=tooling; UPDATED=2025-09-21
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -18,7 +18,7 @@ pub fn main() !void {
     defer allocator.free(curr_json);
     var prev_json: []u8 = &[_]u8{};
     var prev_exists = true;
-    std.fs.cwd().access(prev_path, .{}) catch |err| switch (err) {
+    std.Io.Dir.cwd().access(prev_path, .{}) catch |err| switch (err) {
         error.FileNotFound => prev_exists = false,
         else => prev_exists = false,
     };
@@ -64,7 +64,7 @@ pub fn main() !void {
     }
 
     // Append delta section
-    var out_file = try std.fs.cwd().createFile(out_path, .{ .read = true, .truncate = false, .mode = 0o666 });
+    var out_file = try std.Io.Dir.cwd().createFile(out_path, .{ .read = true, .truncate = false, .mode = 0o666 });
     defer out_file.close();
     try out_file.seekFromEnd(0);
     const line = try std.fmt.allocPrint(allocator, "\n\n## Delta {d}\nAdded: {d}\n", .{ now_ts, added_idx.items.len });
@@ -93,7 +93,7 @@ pub fn main() !void {
     }
 
     // Persist simplified snapshot with aspects array for future fast diff
-    var prev_file = try std.fs.cwd().createFile(prev_path, .{ .read = true, .truncate = true });
+    var prev_file = try std.Io.Dir.cwd().createFile(prev_path, .{ .read = true, .truncate = true });
     defer prev_file.close();
     try prev_file.writeAll("{\n  \"aspects\": [\n");
     var first = true;
@@ -110,7 +110,7 @@ pub fn main() !void {
 }
 
 fn readFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const data = try std.fs.cwd().readFileAlloc(allocator, path, 10_000_000);
+    const data = try std.Io.Dir.cwd().readFileAlloc(allocator, path, 10_000_000);
     return data;
 }
 
@@ -165,10 +165,10 @@ fn collectRows(v: *std.json.Value, ally2: std.mem.Allocator) ![]Row {
 test "TestCANARY_REQ_GQL_010_ImplementationRealityDeltaTool" {
     // smoke: create status.json in new schema (requirements/features)
     const sample = "{\n  \"requirements\": [ { \"id\": \"REQ-GQL-000\", \"features\": [ { \"feature\": \"Feature\", \"aspect\": \"Aspect\", \"status\": \"TESTED\" } ] } ]\n}";
-    var tmp = try std.fs.cwd().createFile("status.json", .{ .read = true, .truncate = true });
+    var tmp = try std.Io.Dir.cwd().createFile("status.json", .{ .read = true, .truncate = true });
     defer tmp.close();
     _ = try tmp.write(sample);
     // Ensure prev snapshot removed
-    std.fs.cwd().deleteFile("docs/.implementation_reality_prev.json") catch {};
+    std.Io.Dir.cwd().deleteFile("docs/.implementation_reality_prev.json") catch {};
     try main();
 }

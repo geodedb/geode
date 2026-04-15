@@ -163,7 +163,7 @@ pub const MetricsServer = struct {
 /// Resolve the metrics bind address from GEODE_METRICS_BIND env var,
 /// defaulting to 127.0.0.1 (localhost only).
 fn resolveMetricsBindAddress() [4]u8 {
-    var gpa_alloc = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_alloc = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_alloc.deinit();
     const alloc = gpa_alloc.allocator();
     const env_val = std.process.getEnvVarOwned(alloc, "GEODE_METRICS_BIND") catch null;

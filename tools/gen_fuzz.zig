@@ -29,13 +29,13 @@ pub fn main() !void {
     const target_path = try std.fs.path.join(std.heap.page_allocator, &.{ "fuzz", "targets", target_name });
     defer std.heap.page_allocator.free(target_path);
 
-    try std.fs.cwd().makePath("fuzz/targets");
+    try std.Io.Dir.cwd().makePath("fuzz/targets");
     const corp_dir = try std.fs.path.join(std.heap.page_allocator, &.{ "fuzz", "corpora", derived });
     defer std.heap.page_allocator.free(corp_dir);
-    try std.fs.cwd().makePath(corp_dir);
+    try std.Io.Dir.cwd().makePath(corp_dir);
 
     if (!exists(target_path)) {
-        var f = try std.fs.cwd().createFile(target_path, .{});
+        var f = try std.Io.Dir.cwd().createFile(target_path, .{});
         defer f.close();
         const tmpl = try scaffold(derived);
         defer std.heap.page_allocator.free(tmpl);
@@ -61,7 +61,7 @@ fn usage(code: u8) noreturn {
 }
 
 fn exists(path: []const u8) bool {
-    _ = std.fs.cwd().statFile(path) catch return false;
+    _ = std.Io.Dir.cwd().statFile(path) catch return false;
     return true;
 }
 

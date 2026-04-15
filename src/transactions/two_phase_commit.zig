@@ -361,7 +361,7 @@ pub const Coordinator = struct {
 };
 
 // P2-3: Use static GPA for env var check
-var enabled_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var enabled_gpa: std.heap.DebugAllocator(.{}) = .{};
 var enabled_gpa_init = false;
 
 fn enabled() bool {

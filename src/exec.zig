@@ -1236,7 +1236,7 @@ pub const HashAggregator = struct {
         var i: usize = 0;
         while (i < self.spill_segments.items.len) : (i += 1) {
             // Best effort cleanup
-            std.fs.cwd().deleteFile(self.spill_segments.items[i]) catch |err| {
+            std.Io.Dir.cwd().deleteFile(self.spill_segments.items[i]) catch |err| {
                 log.warn("Failed to delete spill segment (disk space leak possible)", &.{
                     Attr.string("segment", self.spill_segments.items[i]),
                     Attr.string("error", @errorName(err)),
@@ -1369,7 +1369,7 @@ pub const HashAggregator = struct {
         if (self.groups.count() == 0) return; // nothing to flush
         const filename = try std.fmt.allocPrint(self.allocator, "geode_agg_spill_{d}.bin", .{self.segment_counter});
         errdefer self.allocator.free(filename);
-        var file = try std.fs.cwd().createFile(filename, .{ .read = true });
+        var file = try std.Io.Dir.cwd().createFile(filename, .{ .read = true });
         defer file.close();
         self.segment_counter += 1;
         self.spilled = true;
@@ -1693,7 +1693,7 @@ pub const HashAggregator = struct {
         const filename_list = self.spill_segments.items; // alias
         var i: usize = 0;
         while (i < filename_list.len) : (i += 1) {
-            var file = std.fs.cwd().openFile(filename_list[i], .{}) catch continue;
+            var file = std.Io.Dir.cwd().openFile(filename_list[i], .{}) catch continue;
             defer file.close();
             const gcount = try file.reader().readInt(u32, .little);
             var gi: u32 = 0;
@@ -1728,7 +1728,7 @@ pub const HashAggregator = struct {
         // After loading, remove files (they are no longer needed)
         i = 0;
         while (i < filename_list.len) : (i += 1) {
-            std.fs.cwd().deleteFile(filename_list[i]) catch |err| {
+            std.Io.Dir.cwd().deleteFile(filename_list[i]) catch |err| {
                 log.warn("Failed to delete reloaded spill file (disk space leak possible)", &.{
                     Attr.string("file", filename_list[i]),
                     Attr.string("error", @errorName(err)),
@@ -1891,7 +1891,7 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
             break :blk3 if (lc < rc) .lt else .gt;
         },
         .Str => |as| std.mem.order(u8, as, b.Str),
-        .List => |_| .eq, // Lists compare equal for now
+        .List => .eq, // Lists compare equal for now
         // GAP-0045: Complex types compare by pointer identity
         .Node => |an| blk_node: {
             const bn = b.Node;
@@ -1903,9 +1903,9 @@ fn valueOrder(a: BindingValue, b: BindingValue) std.math.Order {
             if (@intFromPtr(ae) == @intFromPtr(be)) break :blk_edge .eq;
             break :blk_edge if (@intFromPtr(ae) < @intFromPtr(be)) .lt else .gt;
         },
-        .Path => |_| .eq, // Paths compare equal for now
-        .Map => |_| .eq, // Maps compare equal for now
-        .ExtValue => |_| .eq, // ExtValues compare equal for now
+        .Path => .eq, // Paths compare equal for now
+        .Map => .eq, // Maps compare equal for now
+        .ExtValue => .eq, // ExtValues compare equal for now
     };
 }
 
@@ -2013,9 +2013,9 @@ fn valueEq(a: BindingValue, b: BindingValue) bool {
         // GAP-0045: Complex types compare by pointer identity
         .Node => |an| return b == .Node and @intFromPtr(an) == @intFromPtr(b.Node),
         .Edge => |ae| return b == .Edge and @intFromPtr(ae) == @intFromPtr(b.Edge),
-        .Path => |_| return b == .Path, // Paths compare equal for now
-        .Map => |_| return b == .Map, // Maps compare equal for now
-        .ExtValue => |_| return b == .ExtValue, // ExtValues compare equal for now
+        .Path => return b == .Path, // Paths compare equal for now
+        .Map => return b == .Map, // Maps compare equal for now
+        .ExtValue => return b == .ExtValue, // ExtValues compare equal for now
     }
 }
 
@@ -2063,9 +2063,9 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
             try buf.append(allocator, 'e');
             try buf.writer(allocator).print("{x};", .{@intFromPtr(e)});
         },
-        .Path => |_| try buf.append(allocator, 'p'), // Paths get fixed encoding
-        .Map => |_| try buf.append(allocator, 'm'), // Maps get fixed encoding
-        .ExtValue => |_| try buf.append(allocator, 'x'), // ExtValues get fixed encoding
+        .Path => try buf.append(allocator, 'p'), // Paths get fixed encoding
+        .Map => try buf.append(allocator, 'm'), // Maps get fixed encoding
+        .ExtValue => try buf.append(allocator, 'x'), // ExtValues get fixed encoding
     }
 }
 
@@ -2102,9 +2102,9 @@ fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
         // GAP-0045: Complex types use pointer-based keys for distinction
         .Node => |node| try buf.writer(allocator).print("node@{x}", .{@intFromPtr(node)}),
         .Edge => |edge| try buf.writer(allocator).print("edge@{x}", .{@intFromPtr(edge)}),
-        .Path => |_| try buf.appendSlice(allocator, "path"),
-        .Map => |_| try buf.appendSlice(allocator, "map"),
-        .ExtValue => |_| try buf.appendSlice(allocator, "ext"),
+        .Path => try buf.appendSlice(allocator, "path"),
+        .Map => try buf.appendSlice(allocator, "map"),
+        .ExtValue => try buf.appendSlice(allocator, "ext"),
     }
     return buf.toOwnedSlice(allocator);
 }

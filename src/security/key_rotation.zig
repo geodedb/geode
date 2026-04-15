@@ -278,7 +278,7 @@ pub const KeyRegistry = struct {
     }
 
     pub fn saveState(self: *KeyRegistry, path: []const u8) !void {
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        var file = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
         var w = file.writer();
         // Compute checksum over stored representation (envelope JSON if wrapped else plaintext material)
@@ -323,7 +323,7 @@ pub const KeyRegistry = struct {
     }
 
     pub fn loadState(self: *KeyRegistry, path: []const u8) !void {
-        const file = std.fs.cwd().openFile(path, .{}) catch |e| switch (e) {
+        const file = std.Io.Dir.cwd().openFile(path, .{}) catch |e| switch (e) {
             error.FileNotFound => return, // nothing to load
             else => return e,
         };
@@ -650,7 +650,7 @@ pub const KeyRegistry = struct {
 // Simple unit test for scaffold ensuring rotate increases key id and history grows.
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-001; FEATURE="KeyRotationScaffold"; ASPECT=TEST; STATUS=TESTED; TEST=tests/test_key_rotation.zig; OWNER=security; UPDATED=2025-09-26
 test "key rotation scaffold increments id" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
     var reg = KeyRegistry.init(alloc);

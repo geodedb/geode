@@ -668,7 +668,7 @@ pub fn computeBlindIndex(
 test "FLE integration placeholder" {
     const testing = std.testing;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     defer fle_catalog.resetGlobalCatalog(allocator);

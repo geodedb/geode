@@ -2892,10 +2892,10 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
         return encodeMessage(allocator, resp);
     }
 
-    std.fs.cwd().makePath("./uploaded_backups") catch {};
+    std.Io.Dir.cwd().makePath("./uploaded_backups") catch {};
     const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
     // Create empty placeholder file for upload slot
-    if (std.fs.cwd().createFile(path, .{})) |file| {
+    if (std.Io.Dir.cwd().createFile(path, .{})) |file| {
         file.close();
     } else |_| {}
 

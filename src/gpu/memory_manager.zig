@@ -121,7 +121,7 @@ test "TestCANARY_REQ_GQL_051_GPUMemoryManager" {
         return;
     }
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

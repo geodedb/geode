@@ -360,7 +360,7 @@ test "TestCANARY_REQ_GQL_021_PlannerPhaseRealTimingIntegration" {
 // ----------------- Tests (Integration) -----------------
 
 test "TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 8);
     defer cache.deinit();
@@ -371,7 +371,7 @@ test "TestCANARY_REQ_GQL_021_PlannerPhaseTimingIntegration" {
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerRewritePreValidationTiming; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerPreValidationTiming; OWNER=planner; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerGroupValidationTiming; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming; OWNER=planner; UPDATED=2025-09-21
 test "TestCANARY_REQ_GQL_021_PlannerPreValidationTiming" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
     defer cache.deinit();
@@ -380,7 +380,7 @@ test "TestCANARY_REQ_GQL_021_PlannerPreValidationTiming" {
 }
 
 test "TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
     defer cache.deinit();
@@ -389,7 +389,7 @@ test "TestCANARY_REQ_GQL_021_PlannerGroupValidationTiming" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCachePlannerIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
     defer cache.deinit();
@@ -401,7 +401,7 @@ test "TestCANARY_REQ_GQL_021_PathCachePlannerIntegration" {
 }
 
 test "TestCANARY_REQ_GQL_021_AdaptiveReplanExecutionIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 2);
     defer cache.deinit();
@@ -413,7 +413,7 @@ test "TestCANARY_REQ_GQL_021_AdaptiveReplanExecutionIntegration" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCachePlannerHook" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 8);
     defer cache.deinit();
@@ -477,7 +477,7 @@ test "TestCANARY_REQ_GQL_024_PlanCostModelCalibrationRanking" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Two queries differing in property literal values but same property key counts
     var q1: planner_root.ast.Query = .{
@@ -516,7 +516,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyEquivalence" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Two queries differing only in property KEY sets should yield different structural keys.
     var q1: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
@@ -543,7 +543,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDifferentiation" {
 }
 
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Two queries identical except value type (Int vs String) for same property key
     var q1: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
@@ -571,7 +571,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyValueShapeDifferentiation" {
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeySelectivityEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding; OWNER=planner; UPDATED=2025-09-21
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Build three queries with 0,1,2,4 properties to exercise Z,L,M,H classes on left node.
     const base: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
@@ -630,7 +630,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeySelectivityClassEncoding" {
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheStructuralKeyDegreeBucketEnrichment; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; OWNER=planner; UPDATED=2025-09-21
 test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Single hop pattern; ensure DB<bucket> appears twice (left/right) in key (L for single occurrence).
     var q: planner_root.ast.Query = .{ .optional_match = false, .match = .{ .chains = &.{} }, .where_clause = null, .with_clause = null, .group_by = null, .having = null, .ret = .{ .items = &.{}, .distinct = false }, .order_by = null, .limit = null, .offset = null };
@@ -649,7 +649,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding" {
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheDegreeBucketDiscrimination; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination; OWNER=planner; UPDATED=2025-09-21
 test "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Build two queries: one with a node appearing once (degree=1 -> L), another where same named node appears in three hops (degree=3 -> M).
     // Query A: (a)-[]->(b)
@@ -684,7 +684,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheDegreeBucketDiscrimination" {
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=PlannerProjectionPruneVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 test "BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 16);
     defer cache.deinit();
@@ -729,7 +729,7 @@ test "BenchmarkCANARY_REQ_GQL_021_PlannerProjectionPruneVarianceEnvelope" {
 
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheDegreeBucketUtilizationVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_021_PathCacheStructuralKeyDegreeBucketEncoding; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
     const total_variants: usize = 96;

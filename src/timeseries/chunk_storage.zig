@@ -35,7 +35,7 @@ test "chunk_storage: compression and stats" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_chunks_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{});
     defer storage.deinit();
@@ -68,7 +68,7 @@ test "chunk_storage: retention" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var path_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&path_buf, "/tmp/ts_test_retention_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(test_dir) catch {};
 
     var storage = try ChunkStorage.init(ally, test_dir, .{ .retention_days = 1 });
     defer storage.deinit();

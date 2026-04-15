@@ -54,7 +54,7 @@ pub const Config = struct {
         const config_path = try getConfigPath(allocator);
         defer allocator.free(config_path);
 
-        const file = std.fs.cwd().openFile(config_path, .{}) catch {
+        const file = std.Io.Dir.cwd().openFile(config_path, .{}) catch {
             return config;
         };
         defer file.close();
@@ -105,9 +105,9 @@ pub const Config = struct {
 
         // Ensure directory exists
         const dir_path = std.fs.path.dirname(config_path) orelse ".";
-        try std.fs.cwd().makePath(dir_path);
+        try std.Io.Dir.cwd().makePath(dir_path);
 
-        const file = try std.fs.cwd().createFile(config_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(config_path, .{});
         defer file.close();
 
         const writer = file.writer();

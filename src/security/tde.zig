@@ -127,7 +127,7 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
     const tde_file = @import("../storage/tde_file_encryption.zig");
 
     // Check data files for encryption markers
-    const data_dir = std.fs.cwd().openDir(".", .{ .iterate = true }) catch {
+    const data_dir = std.Io.Dir.cwd().openDir(".", .{ .iterate = true }) catch {
         // If directory doesn't exist, consider it verified
         return .{
             .all_encrypted = true,
@@ -147,7 +147,7 @@ pub fn verifyEncryptedState(_: std.mem.Allocator) !struct {
 
             // Check for encryption header (in production)
             // For now, simulate by checking file exists
-            const file = std.fs.cwd().openFile(entry.name, .{}) catch {
+            const file = std.Io.Dir.cwd().openFile(entry.name, .{}) catch {
                 unencrypted_files += 1;
                 continue;
             };
@@ -243,11 +243,11 @@ pub fn backupEncrypted(allocator: std.mem.Allocator, backup_path: []const u8) !s
     var files_backed_up: u32 = 0;
 
     // Create backup file
-    const backup_file = std.fs.cwd().createFile(backup_path, .{}) catch |err| {
+    const backup_file = std.Io.Dir.cwd().createFile(backup_path, .{}) catch |err| {
         // If file exists, try again with .bak extension
         const alt_path = try std.fmt.allocPrint(allocator, "{s}.bak", .{backup_path});
         defer allocator.free(alt_path);
-        return std.fs.cwd().createFile(alt_path, .{}) catch err;
+        return std.Io.Dir.cwd().createFile(alt_path, .{}) catch err;
     };
     defer backup_file.close();
 

@@ -18,13 +18,13 @@ pub fn precommit(b: *std.Build) void {
 
 /// Helper function to configure Vulkan paths from environment variables (for Nix) or use defaults
 fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
-    exe.linkLibC();
+    exe.root_module.link_libc = true;
 
     const target_info = exe.root_module.resolved_target.?.result;
 
     // dl library only exists on Unix-like systems
     if (target_info.os.tag != .windows) {
-        exe.linkSystemLibrary("dl");
+        exe.root_module.linkSystemLibrary("dl", .{});
     }
 
     // Enable Position Independent Code for Vulkan dynamic linking (not needed on Windows)
@@ -33,11 +33,11 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
     }
 
     // Check for Nix-style environment variables first
-    const vulkan_include = b.graph.env_map.get("VULKAN_INCLUDE_DIR");
-    const vulkan_lib = b.graph.env_map.get("VULKAN_LIB_DIR");
+    const vulkan_include = b.graph.environ_map.get("VULKAN_INCLUDE_DIR");
+    const vulkan_lib = b.graph.environ_map.get("VULKAN_LIB_DIR");
 
     if (vulkan_include) |include_path| {
-        exe.addIncludePath(.{ .cwd_relative = include_path });
+        exe.root_module.addIncludePath(.{ .cwd_relative = include_path });
     } else {
         // Platform-specific include paths
         switch (target_info.os.tag) {
@@ -47,13 +47,13 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
             },
             else => {
                 // Unix-like systems
-                exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+                exe.root_module.addIncludePath(.{ .cwd_relative = "/usr/include" });
             },
         }
     }
 
     if (vulkan_lib) |lib_path| {
-        exe.addLibraryPath(.{ .cwd_relative = lib_path });
+        exe.root_module.addLibraryPath(.{ .cwd_relative = lib_path });
     } else {
         // Platform-specific fallback paths
         switch (target_info.os.tag) {
@@ -64,26 +64,26 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
             },
             .macos => {
                 // MoltenVK paths on macOS (if installed via Homebrew)
-                exe.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
-                exe.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
+                exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/local/lib" });
+                exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/lib" });
             },
             .linux => {
                 // Try common Linux paths based on architecture
                 if (target_info.cpu.arch == .aarch64) {
-                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
+                    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/aarch64-linux-gnu" });
                 } else {
-                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
-                    exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+                    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib/x86_64-linux-gnu" });
+                    exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
                 }
             },
             else => {
                 // Generic fallback
-                exe.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
+                exe.root_module.addLibraryPath(.{ .cwd_relative = "/usr/lib" });
             },
         }
     }
 
-    exe.linkSystemLibrary("vulkan");
+    exe.root_module.linkSystemLibrary("vulkan", .{});
 }
 
 /// Get version string from git tags.
@@ -91,7 +91,7 @@ fn configureVulkanPaths(b: *std.Build, exe: *std.Build.Step.Compile) void {
 /// Falls back to commit hash or "unknown" if git is unavailable.
 fn getGitVersion(b: *std.Build) []const u8 {
     var exit_code: u8 = 0;
-    const result = b.runAllowFail(&.{ "git", "describe", "--tags", "--always" }, &exit_code, .Inherit) catch {
+    const result = b.runAllowFail(&.{ "git", "describe", "--tags", "--always" }, &exit_code, .inherit) catch {
         return "unknown";
     };
     if (exit_code != 0) return "unknown";
@@ -507,16 +507,16 @@ pub fn build(b: *std.Build) void {
     // Link with OpenSSL for QUIC/TLS crypto operations (external library)
     // Defaults to true on native non-Windows builds; can be forced on for Docker
     // builds that cross-compile to the host arch (e.g. -Dtarget=x86_64-linux-gnu).
-    geode_exe.linkLibC();
+    geode_exe.root_module.link_libc = true;
     const is_native = target.query.isNative();
     const enable_openssl = b.option(bool, "enable-openssl", "Link OpenSSL for gRPC TLS (default: auto-detect)") orelse
         (is_native and target.result.os.tag != .windows);
     if (enable_openssl) {
-        geode_exe.linkSystemLibrary("ssl");
-        geode_exe.linkSystemLibrary("crypto");
+        geode_exe.root_module.linkSystemLibrary("ssl", .{});
+        geode_exe.root_module.linkSystemLibrary("crypto", .{});
     }
     if (target.result.os.tag == .linux and (is_native or enable_openssl)) {
-        geode_exe.linkSystemLibrary("dl");
+        geode_exe.root_module.linkSystemLibrary("dl", .{});
     }
 
     // Pass OpenSSL availability to grpc_tls.zig via build options
@@ -575,7 +575,7 @@ pub fn build(b: *std.Build) void {
     // Legacy storage stress test removed (GraphStore-only storage).
 
     if (target.result.os.tag == .windows) {
-        geode_exe.linkLibC();
+        geode_exe.root_module.link_libc = true;
     }
     b.installArtifact(geode_exe);
 
@@ -650,7 +650,7 @@ pub fn build(b: *std.Build) void {
 
     gql_exe.root_module.addImport("geode", root_mod);
     if (target.result.os.tag == .windows) {
-        gql_exe.linkLibC();
+        gql_exe.root_module.link_libc = true;
     }
 
     // Create gql module but don't use it as a separate import to avoid conflicts
@@ -755,7 +755,7 @@ pub fn build(b: *std.Build) void {
     graph_store_mod.addImport("transport/thread_pool", thread_pool_mod);
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
-    graph_algo_tests.linkLibC();
+    graph_algo_tests.root_module.link_libc = true;
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
 
     // Recover graph_store unit tests that were previously included transitively via
@@ -777,14 +777,14 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("rtree_lib", rtree_ext_mod);
     graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
     graph_store_unit_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
-    graph_store_unit_tests.linkLibC();
+    graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
     // Graph algorithm unit tests for centrality_algorithms.zig and graph_algorithms.zig helpers
     const algo_unit_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_algo_unit.zig"), .target = target, .optimize = optimize }) });
     algo_unit_tests.root_module.addImport("geode", root_mod);
     algo_unit_tests.root_module.addImport("json", json_mod);
-    algo_unit_tests.linkLibC();
+    algo_unit_tests.root_module.link_libc = true;
     const run_algo_unit_tests = b.addRunArtifact(algo_unit_tests);
 
     // Storage migration removed (Phase 2: engine-backed persistence)
@@ -934,13 +934,13 @@ pub fn build(b: *std.Build) void {
     // No separate transport/quic import needed here to avoid duplicate module conflicts
 
     // Link with OpenSSL (skip on Windows where it's not available in CI)
-    custom_tests.linkLibC();
+    custom_tests.root_module.link_libc = true;
     if (target.result.os.tag != .windows) {
-        custom_tests.linkSystemLibrary("ssl");
-        custom_tests.linkSystemLibrary("crypto");
+        custom_tests.root_module.linkSystemLibrary("ssl", .{});
+        custom_tests.root_module.linkSystemLibrary("crypto", .{});
     }
     if (target.result.os.tag == .linux) {
-        custom_tests.linkSystemLibrary("dl");
+        custom_tests.root_module.linkSystemLibrary("dl", .{});
     }
 
     // Pass OpenSSL availability to grpc_tls.zig via build options (tests always native)
@@ -1471,7 +1471,7 @@ pub fn build(b: *std.Build) void {
     // allocator page-retention regressions (e.g. GPA default never_unmap=true).
     // Uses only std + libc mkdtemp, so no geode module imports are needed.
     const server_mem_pressure_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/integration/test_server_memory_pressure.zig"), .target = target, .optimize = optimize }) });
-    server_mem_pressure_tests.linkLibC();
+    server_mem_pressure_tests.root_module.link_libc = true;
     const run_server_mem_pressure_tests = b.addRunArtifact(server_mem_pressure_tests);
     test_e2e_step.dependOn(&run_server_mem_pressure_tests.step);
 
@@ -1570,7 +1570,7 @@ pub fn build(b: *std.Build) void {
 
     const quic_tls_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_quic_tls_comprehensive.zig"), .target = target, .optimize = optimize }) });
     if (target.result.os.tag == .windows) {
-        quic_tls_tests.linkLibC();
+        quic_tls_tests.root_module.link_libc = true;
     }
 
     // Note: Zig client tests moved to separate geode-client-zig repository
@@ -1736,7 +1736,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("transport/thread_pool", thread_pool_mod);
     const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
     merge_throughput_bench.root_module.addImport("graph_store", merge_bench_gs_mod);
-    merge_throughput_bench.linkLibC();
+    merge_throughput_bench.root_module.link_libc = true;
     const run_merge_throughput_bench = b.addRunArtifact(merge_throughput_bench);
     const merge_throughput_bench_step = b.step("bench-merge", "Run bulk MERGE throughput benchmarks");
     merge_throughput_bench_step.dependOn(&run_merge_throughput_bench.step);
@@ -1816,7 +1816,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("json", json_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
-        remote_kms_tests.linkLibC();
+        remote_kms_tests.root_module.link_libc = true;
     }
     test_step.dependOn(&remote_kms_tests.step);
 
@@ -1826,7 +1826,7 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
-        remote_kms_hardening_tests.linkLibC();
+        remote_kms_hardening_tests.root_module.link_libc = true;
     }
     test_step.dependOn(&remote_kms_hardening_tests.step);
 
@@ -1836,7 +1836,7 @@ pub fn build(b: *std.Build) void {
     remote_kms_concurrency_bench.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_concurrency_bench.root_module.addImport("security/kms_remote", kms_remote_mod);
     if (target.result.os.tag == .windows) {
-        remote_kms_concurrency_bench.linkLibC();
+        remote_kms_concurrency_bench.root_module.link_libc = true;
     }
     const run_remote_kms_concurrency_bench = b.addRunArtifact(remote_kms_concurrency_bench);
     test_e2e_step.dependOn(&run_remote_kms_concurrency_bench.step);
@@ -2373,7 +2373,7 @@ pub fn build(b: *std.Build) void {
     const gpu_memory_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/memory_manager.zig"), .target = target, .optimize = optimize }),
     });
-    gpu_memory_test.linkLibC();
+    gpu_memory_test.root_module.link_libc = true;
 
     // GPU kernel sources test
     const gpu_kernels_test = b.addTest(.{
@@ -2384,13 +2384,13 @@ pub fn build(b: *std.Build) void {
     const gpu_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/cuda_loader.zig"), .target = target, .optimize = optimize }),
     });
-    gpu_loader_test.linkLibC();
+    gpu_loader_test.root_module.link_libc = true;
 
     // GPU module_loader test
     const gpu_module_loader_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/gpu/module_loader.zig"), .target = target, .optimize = optimize }),
     });
-    gpu_module_loader_test.linkLibC();
+    gpu_module_loader_test.root_module.link_libc = true;
 
     // GPU tests (optional, requires Vulkan - not run by default)
     // Run with: zig build test-gpu
@@ -2485,7 +2485,7 @@ pub fn build(b: *std.Build) void {
     auth_enforcement_test_mod.addImport("logging", logging_mod);
     auth_enforcement_test_mod.addImport("geode_auth", auth_mod);
     const auth_enforcement_tests = b.addTest(.{ .root_module = auth_enforcement_test_mod });
-    auth_enforcement_tests.linkLibC();
+    auth_enforcement_tests.root_module.link_libc = true;
     test_step.dependOn(&auth_enforcement_tests.step);
 
     // CANARY: REQ=REQ-TDE-ENFORCE-015; FEATURE="TDEEnforcement"; ASPECT=BuildIntegration; STATUS=TESTED; OWNER=security; UPDATED=2026-01-28
@@ -2690,16 +2690,16 @@ pub fn build(b: *std.Build) void {
         .root_module = zig_client_root,
         .linkage = .static,
     });
-    zig_client_lib.linkLibC();
+    zig_client_lib.root_module.link_libc = true;
     if (target.result.os.tag != .windows) {
-        zig_client_lib.linkSystemLibrary("ssl");
-        zig_client_lib.linkSystemLibrary("crypto");
+        zig_client_lib.root_module.linkSystemLibrary("ssl", .{});
+        zig_client_lib.root_module.linkSystemLibrary("crypto", .{});
     }
     if (target.result.os.tag == .linux) {
-        zig_client_lib.linkSystemLibrary("dl");
+        zig_client_lib.root_module.linkSystemLibrary("dl", .{});
     }
     if (target.result.os.tag == .windows) {
-        zig_client_lib.linkSystemLibrary("ws2_32");
+        zig_client_lib.root_module.linkSystemLibrary("ws2_32", .{});
     }
     // Client artifacts are NOT in the default install — they require system
     // SSL libraries that aren't available during cross-compilation.  Build
@@ -2717,16 +2717,16 @@ pub fn build(b: *std.Build) void {
         }),
     });
     zig_client_example.root_module.addImport("geode-client", zig_client_lib.root_module);
-    zig_client_example.linkLibC();
+    zig_client_example.root_module.link_libc = true;
     if (target.result.os.tag != .windows) {
-        zig_client_example.linkSystemLibrary("ssl");
-        zig_client_example.linkSystemLibrary("crypto");
+        zig_client_example.root_module.linkSystemLibrary("ssl", .{});
+        zig_client_example.root_module.linkSystemLibrary("crypto", .{});
     }
     if (target.result.os.tag == .linux) {
-        zig_client_example.linkSystemLibrary("dl");
+        zig_client_example.root_module.linkSystemLibrary("dl", .{});
     }
     if (target.result.os.tag == .windows) {
-        zig_client_example.linkSystemLibrary("ws2_32");
+        zig_client_example.root_module.linkSystemLibrary("ws2_32", .{});
     }
     const install_client_example = b.addInstallArtifact(zig_client_example, .{});
     client_step.dependOn(&install_client_example.step);

@@ -240,7 +240,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         .read => |read_op| {
             var bytes_read: usize = 0;
             const status: IOStatus = blk: {
-                const file = std.fs.cwd().openFile(read_op.file_path, .{}) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(read_op.file_path, .{}) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.seekTo(read_op.offset) catch break :blk .error_io_error;
@@ -252,7 +252,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         .write => |write_op| {
             var bytes_written: usize = 0;
             const status: IOStatus = blk: {
-                const file = std.fs.cwd().openFile(write_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(write_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.seekTo(write_op.offset) catch break :blk .error_io_error;
@@ -263,7 +263,7 @@ pub fn executeIOOperation(operation: IOOperation) IOResult {
         },
         .sync => |sync_op| {
             const status: IOStatus = blk: {
-                const file = std.fs.cwd().openFile(sync_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
+                const file = std.Io.Dir.cwd().openFile(sync_op.file_path, .{ .mode = .read_write }) catch break :blk .error_file_not_found;
                 defer file.close();
 
                 file.sync() catch break :blk .error_io_error;
@@ -383,11 +383,11 @@ pub fn benchmarkSimpleAsyncIO(
     iterations: u32,
 ) !struct { async_latency_ns: u64, sync_latency_ns: u64, async_advantage: f64 } {
     const test_file = "benchmark_simple_async_test.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -424,7 +424,7 @@ pub fn benchmarkSimpleAsyncIO(
     // Sync benchmark
     timer.reset();
     for (0..iterations) |_| {
-        const file = try std.fs.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
         defer file.close();
         try file.seekTo(0);
         _ = try file.readAll(buffer);
@@ -453,13 +453,13 @@ test "Simple asynchronous I/O basic operations" {
     defer io_manager.deinit();
 
     const test_file = "test_simple_async.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "Hello, simple async world!";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -496,13 +496,13 @@ test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple asynchronous I/O integration" {
     defer io_manager.deinit();
 
     const test_file = "canary_simple_async_test.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "CANARY: Simple async I/O validation for REQ=REQ-PERF-ASYNC-001";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();

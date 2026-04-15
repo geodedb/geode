@@ -69,7 +69,7 @@ pub const S3BackupManager = struct {
         );
         defer self.allocator.free(s3_key);
 
-        const file_info = try std.fs.cwd().statFile(backup_path);
+        const file_info = try std.Io.Dir.cwd().statFile(backup_path);
         if (file_info.size > self.config.multipart_threshold) {
             try self.multipartUpload(backup_path, s3_key, metadata.checksum);
         } else {
@@ -104,11 +104,11 @@ pub const S3BackupManager = struct {
 
         const tmp_dir = try std.fmt.allocPrint(self.allocator, "/tmp/geode_s3_restore_{x}", .{backup_id});
         defer self.allocator.free(tmp_dir);
-        std.fs.cwd().makePath(tmp_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().makePath(tmp_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
-        defer std.fs.cwd().deleteTree(tmp_dir) catch {};
+        defer std.Io.Dir.cwd().deleteTree(tmp_dir) catch {};
 
         const s3_key = try std.fmt.allocPrint(
             self.allocator,
@@ -130,7 +130,7 @@ pub const S3BackupManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{tmp_dir});
         defer self.allocator.free(metadata_path);
         {
-            const file = try std.fs.cwd().createFile(metadata_path, .{});
+            const file = try std.Io.Dir.cwd().createFile(metadata_path, .{});
             defer file.close();
             const json_str = try std.json.Stringify.valueAlloc(self.allocator, &[_]backup.BackupMetadata{metadata}, .{});
             defer self.allocator.free(json_str);
@@ -147,7 +147,7 @@ pub const S3BackupManager = struct {
 
     /// Multipart upload for large files
     fn multipartUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.fs.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
         defer file.close();
 
         const file_size = (try file.stat()).size;
@@ -211,7 +211,7 @@ pub const S3BackupManager = struct {
 
     /// Simple upload for smaller files
     fn simpleUpload(self: *Self, file_path: []const u8, s3_key: []const u8, expected_checksum: u64) !void {
-        const file = try std.fs.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
         defer file.close();
 
         const content = try file.readToEndAlloc(self.allocator, 1024 * 1024 * 100); // Max 100MB
@@ -431,7 +431,7 @@ pub const S3BackupManager = struct {
         const data = try self.getObject(s3_key);
         defer self.allocator.free(data);
 
-        const file = try std.fs.cwd().createFile(local_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(local_path, .{});
         defer file.close();
 
         try file.writeAll(data);

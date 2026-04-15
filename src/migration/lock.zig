@@ -51,7 +51,7 @@ pub const FileLock = struct {
         ledger_mod.ensureDir(cfg) catch return error.FileSystemError;
         const path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, root.lock_filename }) catch return error.OutOfMemory;
         defer alloc.free(path);
-        const file = std.fs.cwd().createFile(path, .{ .truncate = false, .read = true }) catch return error.FileSystemError;
+        const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false, .read = true }) catch return error.FileSystemError;
         errdefer file.close();
         if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
         if (builtin.os.tag != .windows) file.lock(.exclusive) catch return error.AlreadyLocked;
@@ -82,7 +82,7 @@ pub fn verifyMigrationSignature(alloc: std.mem.Allocator, cfg: MigrationConfig, 
     defer alloc.free(sig_name);
     const sig_path = root.joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
     defer alloc.free(sig_path);
-    const sig_contents = std.fs.cwd().readFileAlloc(alloc, sig_path, 128) catch return error.MigrationSignatureMissing;
+    const sig_contents = std.Io.Dir.cwd().readFileAlloc(alloc, sig_path, 128) catch return error.MigrationSignatureMissing;
     defer alloc.free(sig_contents);
     const sig_hex = std.mem.trim(u8, sig_contents, " \t\r\n");
     if (sig_hex.len != 64) return error.MigrationSignatureInvalid;
@@ -102,14 +102,14 @@ pub fn signMigrationFile(alloc: std.mem.Allocator, cfg: MigrationConfig, name: [
     const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
     const path = root.joinPath(alloc, cfg, name) catch return error.OutOfMemory;
     defer alloc.free(path);
-    const script = std.fs.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
+    const script = std.Io.Dir.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
     defer alloc.free(script);
     const hex_sig = computeHmacSha256(hmac_key, script);
     const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
     defer alloc.free(sig_name);
     const sig_path = root.joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
     defer alloc.free(sig_path);
-    var file = std.fs.cwd().createFile(sig_path, .{ .truncate = true }) catch return error.FileSystemError;
+    var file = std.Io.Dir.cwd().createFile(sig_path, .{ .truncate = true }) catch return error.FileSystemError;
     defer file.close();
     if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
     file.writeAll(&hex_sig) catch return error.FileSystemError;

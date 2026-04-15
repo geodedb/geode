@@ -43,8 +43,8 @@
 
         // Vulkan compute library
         .vulkan = .{
-            .url = "git+https://gitlab.com/devnw/zig/vulkan.git#a83ac8fdfe5d3c8b75db0b21a95ad146d6a70ab9",
-            .hash = "vulkan-0.1.0-zh1htT5mEQBA8V28Hvyl52AYL4RVF1AUaqxFUuF0_cyJ",
+            .url = "git+https://gitlab.com/devnw/zig/vulkan.git#ccd7679b1411e605e38e079bb6e911ea5b4a819b",
+            .hash = "vulkan-0.1.0-zh1htQ1lEQDl9u0wV9KyHmoNQIGCqPw_2WPgQ0DOWxLt",
         },
 
         // =======================================================================
@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#eb0733871abdb55164f4ff46320af60e59b991d1",
-            .hash = "quic-0.1.11-gBIqUdXhNQBVyrCunVVidzwvUSQPcP1kTDT7MYWGAiep",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#0d4178eac097db0012437e40ad33dad9a9b28c67",
+            .hash = "quic-0.1.11-gBIqUV_iNQCxxXGcginIT8nclBglP6tPzKF530LrWLka",
         },
 
         // =======================================================================
@@ -115,20 +115,20 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#53ece58213b7c212d63ba95cf923ddaf1eb3cf4c",
-            .hash = "protobuf-3.0.0-0e82alVdKQAeG_KZQVDXKUNSeMH2vbT1c-ceP6Iz5g10",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#c02f3aa0abc445eb033ac9bbe0cc914e44e2c70b",
+            .hash = "protobuf-3.0.0-0e82ar5fKQCTVWPjChWGJ2esh1wKBDTVX_UfmQy7XRPO",
         },
 
         // gRPC for Zig
         // Updated 2026-02-11: concurrent connections, HPACK Huffman, TLS errdefer
         // GAP-0443: Use git+https URL with full commit hash for supply chain auditability
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#4aec372a74e347df12116c8b02045d8d4aacca5e",
-            .hash = "grpc_zig-0.1.0-7FnvpBK7AQC4AVHr2XAYWXthWv1jH2BaPeydPS2J9rfK",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#b2bd249737ec6b041947597676db102df2a10067",
+            .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#dda2a4897ec0e41ab3f83c114fe50c233a2e7e03",
-            .hash = "geode_client_zig-0.2.1-8ysbVx6LCACnKMYCKmZoEzObtUDi-oPTMzWDNAD5j2Em",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#863bcb0d6b1e8de1f10b7b7464b85e09bda3c5d4",
+            .hash = "geode_client_zig-0.2.1-8ysbV3SLCACgsIA2z44vUuvhYzttLtapwwi8_X7zdopD",
         },
 
         // =======================================================================
@@ -198,8 +198,8 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git#805ae1d7c78f4a3685b4a70bb4984eec0a4c1dc8",
-            .hash = "gql-0.1.0-T1ANDYaLCACAXSOwFR6zExiNbIUxHPHQim8JsG02YvsS",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git#c9145b8aae3a57eb3436a380f332deb60aea753c",
+            .hash = "gql-0.1.0-T1ANDYqLCAAJHOhJBVqrV_KBvQwXsobgpLIGoiBRFqCV",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection

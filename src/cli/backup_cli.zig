@@ -122,7 +122,7 @@ fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std
     const key_path = std.fs.path.join(allocator, &.{ migrations_dir, ".hmac_key" }) catch return null;
     defer allocator.free(key_path);
 
-    const file = std.fs.cwd().openFile(key_path, .{}) catch return null;
+    const file = std.Io.Dir.cwd().openFile(key_path, .{}) catch return null;
     defer file.close();
 
     var hex_buf: [64]u8 = undefined;
@@ -398,7 +398,7 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     // Scan each directory for backup files
     for (dirs_to_scan) |backup_dir| {
-        var dir = std.fs.cwd().openDir(backup_dir, .{ .iterate = true }) catch continue;
+        var dir = std.Io.Dir.cwd().openDir(backup_dir, .{ .iterate = true }) catch continue;
         defer dir.close();
 
         var dir_iter = dir.iterate();
@@ -529,7 +529,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     const filepath = backup_file.?;
 
     // Open the backup file
-    const file = std.fs.cwd().openFile(filepath, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(filepath, .{}) catch |err| {
         std.debug.print("Error: Cannot open backup file '{s}': {}\n", .{ filepath, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1291,7 +1291,7 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     // Scan migrations directory for .gql files (excluding .down.gql rollback files)
     // GAP-0200: Treat non-existent directory as empty (no migrations to run)
-    var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             // Directory doesn't exist - treat as empty (no migrations)
             printStdout("No migration files found in '{s}'\n", .{migrations_dir});
@@ -1452,7 +1452,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
 
     // Ensure migrations directory exists
-    std.fs.cwd().makePath(migrations_dir) catch |err| {
+    std.Io.Dir.cwd().makePath(migrations_dir) catch |err| {
         if (err != error.PathAlreadyExists) {
             std.debug.print("Error: Cannot create migrations directory '{s}': {}\n", .{ migrations_dir, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1460,7 +1460,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
 
     // Find next version number by scanning existing migrations
-    var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
         std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1520,7 +1520,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     defer allocator.free(template);
 
     // Write the file
-    const file = std.fs.cwd().createFile(filename, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(filename, .{}) catch |err| {
         std.debug.print("Error: Cannot create migration file '{s}': {}\n", .{ filename, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1607,7 +1607,7 @@ fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     if (sign_all) {
         // Sign all .gql files (excluding .down.gql and .sig files)
-        var dir = std.fs.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
             std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
@@ -1754,7 +1754,7 @@ fn executeRemoteBackup(
     std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
 
     // Create destination file
-    const output_file = try std.fs.cwd().createFile(dest, .{});
+    const output_file = try std.Io.Dir.cwd().createFile(dest, .{});
     defer output_file.close();
 
     // Receive backup data chunks
@@ -1834,7 +1834,7 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
     defer allocator.free(created_path);
 
     if (!std.mem.eql(u8, created_path, dest)) {
-        std.fs.cwd().copyFile(created_path, std.fs.cwd(), dest, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(created_path, std.Io.Dir.cwd(), dest, .{}) catch |err| {
             std.debug.print("Warning: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
         };
     }
@@ -2120,7 +2120,7 @@ const SimplifiedRestoreManager = struct {
     /// Restore from a backup file to the restore directory
     fn restoreFromBackup(self: SimplifiedRestoreManager, backup_path: []const u8) !RestoreMetadata {
         // Open backup file
-        const file = std.fs.cwd().openFile(backup_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(backup_path, .{}) catch |err| {
             std.debug.print("RESTORE: Failed to open backup file '{s}': {}\n", .{ backup_path, err });
             return error.BackupFileNotFound;
         };
@@ -2178,7 +2178,7 @@ const SimplifiedRestoreManager = struct {
         defer self.allocator.free(decompressed);
 
         // Ensure restore directory exists
-        std.fs.cwd().makePath(self.restore_dir) catch |err| switch (err) {
+        std.Io.Dir.cwd().makePath(self.restore_dir) catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => {
                 std.debug.print("RESTORE: Failed to create restore directory: {}\n", .{err});
@@ -2228,7 +2228,7 @@ const SimplifiedRestoreManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
         defer self.allocator.free(metadata_path);
 
-        const file = std.fs.cwd().openFile(metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return error.BackupMetadataNotFound,
             else => return err,
         };

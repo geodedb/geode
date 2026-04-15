@@ -193,7 +193,7 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
     const encrypted = try encrypt(allocator, data);
     defer allocator.free(encrypted);
 
-    const file = try std.fs.cwd().createFile(path, .{});
+    const file = try std.Io.Dir.cwd().createFile(path, .{});
     defer file.close();
     try file.writeAll(encrypted);
 }
@@ -201,7 +201,7 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
 /// Read and decrypt file
 /// If file is not encrypted, returns plaintext
 pub fn readDecryptedFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(path, .{});
     defer file.close();
 
     const file_size = try file.getEndPos();

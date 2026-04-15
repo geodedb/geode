@@ -381,7 +381,7 @@ fn sendMessage(endpoint: []const u8, msg: TwoPhaseMessage, timeout_ms: u64) !Two
     const port = std.fmt.parseInt(u16, port_str, 10) catch return error.InvalidPort;
 
     // Create allocator for this operation
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -524,7 +524,7 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                     Attr.int("prop_count", @intCast(props.items.len)),
                 });
                 // Use a scratch allocator for transient proto→PropertyValue conversions.
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                var gpa = std.heap.DebugAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const scratch = gpa.allocator();
                 value_convert.applyMapEntriesToNode(gs, scratch, node_op.node_id, props.items) catch |err| {
@@ -560,7 +560,7 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                     });
                     return;
                 };
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                var gpa = std.heap.DebugAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const scratch = gpa.allocator();
                 value_convert.applyMapEntriesToNode(gs, scratch, node_op.node_id, props.items) catch |err| {
@@ -590,7 +590,7 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                     Attr.int("edge_id", @intCast(edge_op.edge_id)),
                     Attr.int("prop_count", @intCast(props.items.len)),
                 });
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                var gpa = std.heap.DebugAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const scratch = gpa.allocator();
                 value_convert.applyMapEntriesToEdge(gs, scratch, edge_op.edge_id, props.items) catch |err| {
@@ -628,7 +628,7 @@ fn applyUndoOperation(store: ?*graph_store.GraphStore, entry: UndoEntry) void {
                     });
                     return;
                 };
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                var gpa = std.heap.DebugAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const scratch = gpa.allocator();
                 value_convert.applyMapEntriesToEdge(gs, scratch, edge_op.edge_id, props.items) catch |err| {
@@ -1104,7 +1104,7 @@ pub const Coordinator = struct {
     }
 
     pub fn recoverFromLog(self: *Coordinator, log_file: []const u8) !void {
-        const file = try std.fs.cwd().openFile(log_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(log_file, .{});
         defer file.close();
 
         var buf_reader = std.io.bufferedReader(file.reader());

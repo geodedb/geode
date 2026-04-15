@@ -123,5 +123,5 @@ pub fn checkpoint(trie: *const patricia.PatriciaTrie, snapshot_path: []const u8)
 
     try saveSnapshot(trie, temp_path);
 
-    try std.fs.cwd().rename(temp_path, snapshot_path);
+    try std.Io.Dir.cwd().rename(temp_path, snapshot_path);
 }

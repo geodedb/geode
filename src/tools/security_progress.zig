@@ -32,7 +32,7 @@ const Canary = struct {
 };
 
 /// P2-3: Static GPA for status parsing
-var parse_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var parse_gpa: std.heap.DebugAllocator(.{}) = .{};
 var parse_gpa_init = false;
 
 fn parseStatus(s: []const u8) !AreaStatus {
@@ -129,7 +129,7 @@ fn badgeColor(total: usize, tested: usize, partial: usize, pending: usize) []con
 }
 
 fn writeBadge(alloc: std.mem.Allocator, path: []const u8, total: usize, tested: usize, partial: usize, pending: usize) !void {
-    const f = try std.fs.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
+    const f = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
     defer f.close();
     const label = "security";
     const value_buf = try std.fmt.allocPrint(alloc, "{d}T {d}P {d}N", .{ tested, partial, pending });
@@ -147,7 +147,7 @@ fn writeBadge(alloc: std.mem.Allocator, path: []const u8, total: usize, tested: 
 }
 
 fn writeJson(alloc: std.mem.Allocator, path: []const u8, rows: []const Row, canaries: []const Canary) !void {
-    const f = try std.fs.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
+    const f = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true, .read = false, .mode = 0o644 });
     defer f.close();
     var w = f.writer();
     try w.writeAll("{\n  \"areas\": [\n");
@@ -203,7 +203,7 @@ fn validate(rows: []const Row, canaries: []const Canary, stderr: anytype) !void 
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -230,7 +230,7 @@ pub fn main() !void {
         }
     }
 
-    var md_buf = try std.fs.cwd().readFileAlloc(alloc, md_path, 1024 * 1024);
+    var md_buf = try std.Io.Dir.cwd().readFileAlloc(alloc, md_path, 1024 * 1024);
     defer alloc.free(md_buf);
 
     var rows = std.ArrayList(Row).init(alloc);

@@ -6,7 +6,7 @@ const user_storage = @import("user_storage");
 const graph_store = @import("geode").graph_store;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

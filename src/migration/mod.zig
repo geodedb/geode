@@ -737,7 +737,7 @@ test "acquireFileLock creates lockfile and blocks concurrent processes" {
     // Verify lockfile was created
     const lock_path = try std.fs.path.join(alloc, &.{ tmp_path, lock_filename });
     defer alloc.free(lock_path);
-    const stat = std.fs.cwd().statFile(lock_path);
+    const stat = std.Io.Dir.cwd().statFile(lock_path);
     try std.testing.expect(stat != error.FileNotFound);
 
     // Release lock

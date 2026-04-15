@@ -44,7 +44,7 @@ pub fn loadSession(allocator: std.mem.Allocator) !?TransactionSession {
     defer allocator.free(session_file);
 
     // Use cwd().openFile to support both relative and absolute paths
-    const file = std.fs.cwd().openFile(session_file, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(session_file, .{}) catch |err| {
         if (err == error.FileNotFound) {
             return null;
         }
@@ -81,7 +81,7 @@ pub fn saveSession(allocator: std.mem.Allocator, session: TransactionSession) !v
     defer allocator.free(session_file);
 
     // Use cwd().createFile to support both relative and absolute paths
-    const file = try std.fs.cwd().createFile(session_file, .{});
+    const file = try std.Io.Dir.cwd().createFile(session_file, .{});
     defer file.close();
 
     const state_str = switch (session.state) {
@@ -103,7 +103,7 @@ pub fn clearSession(allocator: std.mem.Allocator) !void {
     defer allocator.free(session_file);
 
     // Use cwd().deleteFile to support both relative and absolute paths
-    std.fs.cwd().deleteFile(session_file) catch |err| {
+    std.Io.Dir.cwd().deleteFile(session_file) catch |err| {
         if (err == error.FileNotFound) {
             return;
         }
@@ -117,7 +117,7 @@ pub fn hasActiveSession(allocator: std.mem.Allocator) bool {
     defer allocator.free(session_file);
 
     // Use cwd().openFile to support both relative and absolute paths
-    const file = std.fs.cwd().openFile(session_file, .{}) catch {
+    const file = std.Io.Dir.cwd().openFile(session_file, .{}) catch {
         return false;
     };
     defer file.close();

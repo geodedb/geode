@@ -49,7 +49,7 @@ pub const UserStorage = struct {
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !Self {
         // Ensure data directory exists
-        std.fs.cwd().makePath(data_dir) catch |err| {
+        std.Io.Dir.cwd().makePath(data_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -59,7 +59,7 @@ pub const UserStorage = struct {
         defer allocator.free(key_path);
 
         // Try to load existing key or generate new one
-        if (std.fs.cwd().openFile(key_path, .{})) |key_file| {
+        if (std.Io.Dir.cwd().openFile(key_path, .{})) |key_file| {
             // File exists, read the key
             defer key_file.close();
             const bytes_read = try key_file.readAll(&encryption_key);
@@ -72,7 +72,7 @@ pub const UserStorage = struct {
                 std.crypto.random.bytes(&encryption_key);
 
                 // Save it
-                const file = try std.fs.cwd().createFile(key_path, .{ .mode = 0o600 });
+                const file = try std.Io.Dir.cwd().createFile(key_path, .{ .mode = 0o600 });
                 defer file.close();
                 try file.writeAll(&encryption_key);
             },
@@ -233,7 +233,7 @@ pub const UserStorage = struct {
         defer self.allocator.free(data_path);
 
         // Try to load encrypted data
-        const file = std.fs.cwd().openFile(data_path, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(data_path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
                 // No users yet, return empty array
                 return try self.allocator.alloc(User, 0);
@@ -348,7 +348,7 @@ pub const UserStorage = struct {
         defer self.allocator.free(encrypted_data);
 
         // Write to file
-        const file = try std.fs.cwd().createFile(data_path, .{ .mode = 0o600 });
+        const file = try std.Io.Dir.cwd().createFile(data_path, .{ .mode = 0o600 });
         defer file.close();
         try file.writeAll(encrypted_data);
     }

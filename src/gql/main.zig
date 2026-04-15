@@ -11,7 +11,7 @@ const status = gql.gql.status;
 
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
     const args = try std.process.argsAlloc(gpa);
@@ -160,7 +160,7 @@ pub fn main() !void {
         return;
     }
     const path = args[idx];
-    const src = std.fs.cwd().readFileAlloc(gpa, path, 1 << 20) catch |e| {
+    const src = std.Io.Dir.cwd().readFileAlloc(gpa, path, 1 << 20) catch |e| {
         std.debug.print("io error: failed to read {s}: {any}\n", .{ path, e });
         std.process.exit(2);
     };
@@ -478,14 +478,14 @@ pub fn main() !void {
                                     .Int => |n| try w.print("{d}", .{n}),
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
-                                    .Decimal => |_| try w.print("<dec>", .{}),
-                                    .List => |_| try w.print("<list>", .{}),
+                                    .Decimal => try w.print("<dec>", .{}),
+                                    .List => try w.print("<list>", .{}),
                                     // GAP-0045: Handle complex graph types in output
-                                    .Node => |_| try w.print("<node>", .{}),
-                                    .Edge => |_| try w.print("<edge>", .{}),
-                                    .Path => |_| try w.print("<path>", .{}),
-                                    .Map => |_| try w.print("<map>", .{}),
-                                    .ExtValue => |_| try w.print("<ext>", .{}),
+                                    .Node => try w.print("<node>", .{}),
+                                    .Edge => try w.print("<edge>", .{}),
+                                    .Path => try w.print("<path>", .{}),
+                                    .Map => try w.print("<map>", .{}),
+                                    .ExtValue => try w.print("<ext>", .{}),
                                 }
                             }
                             try w.print("\n", .{});
@@ -539,13 +539,13 @@ pub fn main() !void {
                                     .Int => |n| try w.print("{d}", .{n}),
                                     .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                     .Str => |sval| try w.print("\"{s}\"", .{sval}),
-                                    .Decimal => |_| try w.print("<dec>", .{}),
-                                    .List => |_| try w.print("<list>", .{}),
-                                    .Node => |_| try w.print("<node>", .{}),
-                                    .Edge => |_| try w.print("<edge>", .{}),
-                                    .Map => |_| try w.print("<map>", .{}),
-                                    .ExtValue => |_| try w.print("<extvalue>", .{}),
-                                    .Path => |_| try w.print("<path>", .{}),
+                                    .Decimal => try w.print("<dec>", .{}),
+                                    .List => try w.print("<list>", .{}),
+                                    .Node => try w.print("<node>", .{}),
+                                    .Edge => try w.print("<edge>", .{}),
+                                    .Map => try w.print("<map>", .{}),
+                                    .ExtValue => try w.print("<extvalue>", .{}),
+                                    .Path => try w.print("<path>", .{}),
                                     else => try w.print("<unknown>", .{}),
                                 }
                             }
@@ -643,7 +643,7 @@ pub fn main() !void {
                         }
                     }.go;
                     for (q.ret.items) |it| switch (it.expr) {
-                        .Call => |_| addAggFromCall(gpa, &aggs, &v_idxs, &labels, it.expr),
+                        .Call => addAggFromCall(gpa, &aggs, &v_idxs, &labels, it.expr),
                         else => {},
                     };
                     if (q.having) |hv| {
@@ -651,7 +651,7 @@ pub fn main() !void {
                         const walk = struct {
                             fn go(ally_inner: std.mem.Allocator, aggs_out: *std.ArrayList(exec.Agg), v_idxs_out: *std.ArrayList(usize), labels_out: *std.ArrayList([]const u8), e: ast.Expr) void {
                                 switch (e) {
-                                    .Call => |_| addAggFromCall(ally_inner, aggs_out, v_idxs_out, labels_out, e),
+                                    .Call => addAggFromCall(ally_inner, aggs_out, v_idxs_out, labels_out, e),
                                     .Unary => |u| go(ally_inner, aggs_out, v_idxs_out, labels_out, u.expr.*),
                                     .Binary => |b| {
                                         go(ally_inner, aggs_out, v_idxs_out, labels_out, b.left.*);
@@ -773,7 +773,7 @@ pub fn main() !void {
                             switch (v) {
                                 .Null => try w.print("NULL", .{}),
                                 .Int => |n| try w.print("{d}", .{n}),
-                                .List => |_| try w.print("<list>", .{}),
+                                .List => try w.print("<list>", .{}),
                                 .Decimal => |d| {
                                     const abs: i128 = if (d.coeff < 0) -d.coeff else d.coeff;
                                     var scale_p: i128 = 1;
@@ -809,11 +809,11 @@ pub fn main() !void {
                                 .Str => |sval| try w.print("\"{s}\"", .{sval}),
                                 .Bool => |b| try w.print("{s}", .{if (b) "true" else "false"}),
                                 // GAP-0045: Handle complex graph types in aggregate output
-                                .Node => |_| try w.print("<node>", .{}),
-                                .Edge => |_| try w.print("<edge>", .{}),
-                                .Path => |_| try w.print("<path>", .{}),
-                                .Map => |_| try w.print("<map>", .{}),
-                                .ExtValue => |_| try w.print("<ext>", .{}),
+                                .Node => try w.print("<node>", .{}),
+                                .Edge => try w.print("<edge>", .{}),
+                                .Path => try w.print("<path>", .{}),
+                                .Map => try w.print("<map>", .{}),
+                                .ExtValue => try w.print("<ext>", .{}),
                             }
                         }
                         try w.print("\n", .{});

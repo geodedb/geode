@@ -60,7 +60,7 @@ pub fn evaluate(entries: []Entry, now_days: i64) FreshnessReport {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var args = try std.process.argsWithAllocator(allocator);
@@ -69,7 +69,7 @@ pub fn main() !void {
     const path = args.next() orelse return error.MissingPath;
     const now_ts = std.time.timestamp();
     const now_days: i64 = @intCast(now_ts / 86400);
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(path, .{});
     defer file.close();
     const data = try file.readToEndAlloc(allocator, 10_000_000);
     defer allocator.free(data);

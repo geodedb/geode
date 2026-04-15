@@ -89,7 +89,7 @@ pub fn estimatePlanCostWithStats(root: enumerator.LogicalPlan, factors: cost_mod
 }
 
 test "TestCANARY_REQ_GQL_024_PlanStatisticsRegistry" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var reg = StatsRegistry.init(gpa.allocator());
     defer reg.deinit();

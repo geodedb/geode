@@ -59,7 +59,7 @@ fn cpuBfsFrontierCount(csr: CSR, start: u32, max_depth: u32, allocator: std.mem.
 }
 
 test "TestCANARY_REQ_GQL_051_GPUPhase1BfsFrontier" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Graph: 0->1,2 ; 1->3 ; 2->3 ; 3-> (none)
@@ -71,7 +71,7 @@ test "TestCANARY_REQ_GQL_051_GPUPhase1BfsFrontier" {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUPhase1BfsTelemetry" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Same graph

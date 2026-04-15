@@ -88,14 +88,14 @@ pub const Checkpoint = struct {
             self.edges_loaded,
             std.time.milliTimestamp(),
         });
-        const file = try std.fs.cwd().createFile(path, .{});
+        const file = try std.Io.Dir.cwd().createFile(path, .{});
         defer file.close();
         try file.writeAll(json);
         _ = allocator;
     }
 
     pub fn restore(allocator: std.mem.Allocator, path: []const u8) !Checkpoint {
-        const file = try std.fs.cwd().openFile(path, .{});
+        const file = try std.Io.Dir.cwd().openFile(path, .{});
         defer file.close();
         var buf: [4096]u8 = undefined;
         const bytes_read = try file.readAll(&buf);
@@ -291,7 +291,7 @@ pub const BulkLoader = struct {
 
         // Open input file or use stdin
         const input_file = if (self.config.input_path) |path|
-            try std.fs.cwd().openFile(path, .{})
+            try std.Io.Dir.cwd().openFile(path, .{})
         else
             getStdIn();
         defer if (self.config.input_path != null) input_file.close();
@@ -391,7 +391,7 @@ fn getStdErr() std.fs.File {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

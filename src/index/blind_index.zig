@@ -13,7 +13,7 @@ pub const BlindIndex = fle.blind_index.BlindIndex;
 
 test "BlindIndex put and lookup" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -46,7 +46,7 @@ test "BlindIndex put and lookup" {
 
 test "BlindIndex normalization handles case and whitespace" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -68,7 +68,7 @@ test "BlindIndex normalization handles case and whitespace" {
 
 test "BlindIndex remove" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -150,7 +150,7 @@ pub const RaftNode = struct {
 
     fn loadPersistentState(self: *RaftNode) !void {
         // Use external raft library's FileStorage for persistent state
-        var dir = std.fs.cwd().openDir(self.storage_path, .{}) catch return;
+        var dir = std.Io.Dir.cwd().openDir(self.storage_path, .{}) catch return;
         defer dir.close();
 
         // Read term file
@@ -168,8 +168,8 @@ pub const RaftNode = struct {
     // SEC-D014: Atomic file write — write to temp file, fsync, then rename.
     // This ensures that either the old or new file exists, never a partial write.
     fn savePersistentState(self: *RaftNode) !void {
-        std.fs.cwd().makePath(self.storage_path) catch {};
-        var dir = try std.fs.cwd().openDir(self.storage_path, .{});
+        std.Io.Dir.cwd().makePath(self.storage_path) catch {};
+        var dir = try std.Io.Dir.cwd().openDir(self.storage_path, .{});
         defer dir.close();
 
         const term_str = try std.fmt.allocPrint(self.allocator, "{d}", .{self.current_term});

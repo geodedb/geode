@@ -118,7 +118,7 @@ pub const SimpleAsyncIO = struct {
     fn executeRead(self: *Self, file_path: []const u8, buffer: []u8) AsyncResult {
         _ = self;
 
-        const file = std.fs.cwd().openFile(file_path, .{}) catch {
+        const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch {
             return AsyncResult{ .bytes_processed = 0, .status = .error_file_not_found };
         };
         defer file.close();
@@ -210,11 +210,11 @@ pub fn benchmarkAsyncIO(
     iterations: u32,
 ) !struct { async_ns: u64, sync_ns: u64, advantage: f64 } {
     const test_file = "benchmark_async.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -250,7 +250,7 @@ pub fn benchmarkAsyncIO(
     // Benchmark sync
     timer.reset();
     for (0..iterations) |_| {
-        const file = try std.fs.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
         defer file.close();
         _ = try file.readAll(buffer);
     }
@@ -277,13 +277,13 @@ test "Simple async I/O basic functionality" {
     defer async_io.deinit();
 
     const test_file = "test_async_basic.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "Hello async world!";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -331,13 +331,13 @@ test "CANARY: REQ=REQ-PERF-ASYNC-001 - Simple async I/O validation" {
     defer async_io.deinit();
 
     const test_file = "canary_async.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "CANARY: Async I/O validation for REQ=REQ-PERF-ASYNC-001";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();

@@ -2755,7 +2755,7 @@ fn handleClientMessage(
                 state.resetResult();
             }
         },
-        .ping => |_| {
+        .ping => {
             try sendQuicMessage(gpa, stream, .{ .ping = .{ .ok = true } });
         },
         .begin => |bg| {
@@ -2780,7 +2780,7 @@ fn handleClientMessage(
             const tx_id_str = try std.fmt.allocPrint(gpa, "{d}", .{state.txn_id});
             try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, "sess"), .tx_id = tx_id_str } });
         },
-        .commit => |_| {
+        .commit => {
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {
@@ -2811,7 +2811,7 @@ fn handleClientMessage(
                 try sendQuicMessage(gpa, stream, .{ .commit = .{ .success = false } });
             }
         },
-        .rollback => |_| {
+        .rollback => {
             switch (try validateSessionAuth(gpa, state)) {
                 .ok => {},
                 else => {
@@ -2881,7 +2881,7 @@ fn handleClientMessage(
                 try sendQuicMessage(gpa, stream, .{ .rollback_to = .{ .success = true } });
             }
         },
-        .cdc_diag => |_| {
+        .cdc_diag => {
             if (state.cdc_engine) |eng| {
                 const payload = try eng.exportDiagnostics(gpa);
                 try sendQuicMessage(gpa, stream, .{ .cdc_diag = payload });
@@ -2983,7 +2983,7 @@ fn handleClientMessage(
                 const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id });
                 defer gpa.free(backup_path);
 
-                if (std.fs.cwd().openFile(backup_path, .{})) |file| {
+                if (std.Io.Dir.cwd().openFile(backup_path, .{})) |file| {
                     defer file.close();
                     var buf: [65536]u8 = undefined;
                     var remaining: u64 = metadata.size_bytes;
@@ -3114,10 +3114,10 @@ fn handleClientMessage(
                 return;
             }
 
-            std.fs.cwd().makePath("./uploaded_backups") catch {};
+            std.Io.Dir.cwd().makePath("./uploaded_backups") catch {};
             const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{std.time.milliTimestamp()});
             // Create empty placeholder file
-            if (std.fs.cwd().createFile(path, .{})) |file| {
+            if (std.Io.Dir.cwd().createFile(path, .{})) |file| {
                 file.close();
             } else |_| {}
 

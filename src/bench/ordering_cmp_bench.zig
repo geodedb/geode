@@ -3,7 +3,7 @@ const std = @import("std");
 // Micro-benchmark for ordering comparator: previous vs index-based
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator for benchmark
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const allocator = gpa_instance.allocator();
     const N = 100000;

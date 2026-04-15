@@ -198,7 +198,7 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
     // Write configuration to disk for persistence
     const config_path = "audit_config.json";
-    const config_file = try std.fs.cwd().createFile(config_path, .{});
+    const config_file = try std.Io.Dir.cwd().createFile(config_path, .{});
     defer config_file.close();
 
     var json_buf = try std.ArrayList(u8).initCapacity(allocator, 512);
@@ -400,7 +400,7 @@ fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure
     var valid = true;
 
     // Read audit log file if it exists
-    if (std.fs.cwd().openFile(global_audit_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().openFile(global_audit_file_path, .{})) |file| {
         defer file.close();
 
         var prev_hash: [32]u8 = [_]u8{0} ** 32; // Genesis hash
@@ -543,7 +543,7 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
     defer leaves.deinit(allocator);
 
     // Read audit events and create leaf hashes
-    if (std.fs.cwd().openFile(global_audit_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().openFile(global_audit_file_path, .{})) |file| {
         defer file.close();
 
         const content = try file.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
@@ -666,7 +666,7 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
     var events_written: i64 = 0;
 
     // Write test audit events to file
-    if (std.fs.cwd().createFile(test_file_path, .{})) |file| {
+    if (std.Io.Dir.cwd().createFile(test_file_path, .{})) |file| {
         defer file.close();
 
         // Write sample audit events in JSONL format
@@ -1655,7 +1655,7 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
     };
 
     for (test_audit_paths) |path| {
-        std.fs.cwd().deleteFile(path) catch {
+        std.Io.Dir.cwd().deleteFile(path) catch {
             // Ignore errors if files don't exist
             continue;
         };

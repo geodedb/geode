@@ -36,7 +36,7 @@ pub fn printProgramHumanWith(w: anytype, prog: ast.Program, opts: PrintOptions) 
 pub const PrintJsonOptions = struct { verbose_temporals: bool = false, session_offset_minutes: ?i16 = null };
 
 /// P2-3: Static GPA for convenience wrapper
-var print_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var print_gpa: std.heap.DebugAllocator(.{}) = .{};
 var print_gpa_init = false;
 
 pub fn printProgramJson(w: anytype, prog: ast.Program) !void {
@@ -239,7 +239,7 @@ fn collectTemporalsList(allocator: std.mem.Allocator, prog: ast.Program) !std.Ar
                     try walkExpr(ally_inner, dst, b.right.*);
                 },
                 .Member => |m| try walkExpr(ally_inner, dst, m.target.*),
-                .PropertyAccess => |_| {}, // No nested expressions to walk
+                .PropertyAccess => {}, // No nested expressions to walk
                 .Index => |idx| {
                     try walkExpr(ally_inner, dst, idx.target.*);
                     try walkExpr(ally_inner, dst, idx.index.*);
@@ -681,7 +681,7 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
                 try w.print(" IS UNKNOWN", .{});
             }
         },
-        .Map => |_| try w.print("{{…}}", .{}),
+        .Map => try w.print("{{…}}", .{}),
         .PatternComp => |pc| {
             if (pc.alias) |al| try w.print("{s} = ", .{al});
             try w.writeByte('[');

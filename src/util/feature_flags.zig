@@ -6,7 +6,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-FLAGS-001; FEATURE="Shared Feature Flag Wrapper"; ASPECT=INFRA; STATUS=TESTED; TEST=tests/unit_feature_flags.zig:1; OWNER=core; UPDATED=2025-09-26
 
 /// P2-3: Static GPA for env var checks in feature flags
-var flags_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var flags_gpa: std.heap.DebugAllocator(.{}) = .{};
 var flags_gpa_init = false;
 
 pub const Flag = struct {

@@ -476,7 +476,7 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
     defer allocator.free(catalog_path);
 
     // Check if file exists first
-    std.fs.cwd().access(catalog_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(catalog_path, .{}) catch |err| {
         if (err == error.FileNotFound) return; // No catalog file yet
         return err;
     };
@@ -604,7 +604,7 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
 test "Schema catalog basic operations" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -634,7 +634,7 @@ test "Schema catalog basic operations" {
 
 test "Schema catalog thread safety" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -651,7 +651,7 @@ test "Schema catalog thread safety" {
 
 test "Schema catalog global singleton" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     defer resetGlobalCatalog(allocator);

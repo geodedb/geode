@@ -498,7 +498,7 @@ pub fn evalBinary(alloc: std.mem.Allocator, op: ast.BinOp, l: Value, r: Value) E
                 // Unicode-aware comparison: normalize both operands to NFC then compare byte-wise.
                 // CANARY: REQ=REQ-GQL-UNICODE-009; FEATURE="UnicodeEval"; ASPECT=CompareNfc; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_009_EvalCompareNfc; OWNER=unicode; UPDATED=2025-09-27
                 const unicode = @import("unicode/geode_unicode.zig");
-                var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+                var gpa = std.heap.DebugAllocator(.{}){};
                 defer _ = gpa.deinit();
                 const gpa_alloc = gpa.allocator();
                 const ln = unicode.nfcNormalize(gpa_alloc, l.Str) catch return EvalError.Unsupported;
@@ -1812,7 +1812,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
                         const converted = property_codec.propertyValueToProjectedValue(allocator, val) catch Value{ .Null = {} };
                         break :blk_edge converted;
                     },
-                    .ExtValue => |_| blk_ext: {
+                    .ExtValue => blk_ext: {
                         // ExtValue types don't support property access
                         break :blk_ext Value{ .Null = {} };
                     },

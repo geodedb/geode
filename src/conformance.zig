@@ -173,7 +173,7 @@ test "conformance json outputs expected keys" {
 }
 
 test "TestCANARY_REQ_GQL_026_FlaggerCompleteness" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);
@@ -191,7 +191,7 @@ test "TestCANARY_REQ_GQL_026_FlaggerCompleteness" {
 }
 
 test "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);
@@ -204,7 +204,7 @@ test "TestCANARY_REQ_GQL_026_FlaggerNegativeMissing" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_026_FlaggerGenerationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const iterations: usize = 64;
@@ -296,7 +296,7 @@ test "TestCANARY_GQL39075_RQ_0024_ConformanceJsonIncludesIsoFeatures" {
 }
 
 test "TestCANARY_GQL39075_RQ_0024_ImplDefinedFlagsComplete" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);
@@ -312,7 +312,7 @@ test "TestCANARY_GQL39075_RQ_0024_ImplDefinedFlagsComplete" {
 test "TestCANARY_GQL39075_RQ_0007_MinPropertyTypes" {
     // RQ-0007: Implementation declares support for minimum required property types
     // (STRING, BOOLEAN, SIGNED INTEGER, FLOAT) per ISO 39075 §7.2
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);
@@ -330,7 +330,7 @@ test "TestCANARY_GQL39075_RQ_0007_MinPropertyTypes" {
 test "TestCANARY_GQL39075_RQ_0008_CharRepertoire" {
     // RQ-0008: Implementation declares the source text character repertoire
     // per ISO 39075 §5.1
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);
@@ -348,7 +348,7 @@ test "TestCANARY_GQL39075_RQ_0008_CharRepertoire" {
 test "TestCANARY_GQL39075_RQ_0014_TemporalFormat" {
     // RQ-0014: Implementation declares temporal literal format (ISO 8601)
     // per ISO 39075 §8.4
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try collectImplDefinedFlags(alloc);

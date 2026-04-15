@@ -41,7 +41,7 @@ pub const HistoryStore = struct {
         self.file_mutex.lock();
         defer self.file_mutex.unlock();
 
-        const file = std.fs.cwd().openFile(self.path.?, .{}) catch |err| switch (err) {
+        const file = std.Io.Dir.cwd().openFile(self.path.?, .{}) catch |err| switch (err) {
             error.FileNotFound => return,
             else => return err,
         };
@@ -101,10 +101,10 @@ pub const HistoryStore = struct {
 
             // Ensure directory exists
             if (std.fs.path.dirname(path)) |dir| {
-                std.fs.cwd().makePath(dir) catch {};
+                std.Io.Dir.cwd().makePath(dir) catch {};
             }
 
-            const file = std.fs.cwd().createFile(path, .{ .truncate = false }) catch |err| {
+            const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false }) catch |err| {
                 // If we can't save history, just continue without persisting
                 if (err == error.FileNotFound) return;
                 return err;
@@ -131,10 +131,10 @@ pub const HistoryStore = struct {
 
             // Ensure directory exists
             if (std.fs.path.dirname(path)) |dir| {
-                std.fs.cwd().makePath(dir) catch {};
+                std.Io.Dir.cwd().makePath(dir) catch {};
             }
 
-            const file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch {
+            const file = std.Io.Dir.cwd().createFile(path, .{ .truncate = true }) catch {
                 // If we can't clear the file, just continue
                 return;
             };
@@ -159,7 +159,7 @@ test "history leading-space suppression" {
 
     // Create temp file
     const path = "test_history.tmp";
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(path) catch {};
 
     var history = try HistoryStore.init(allocator, path, true);
     defer history.deinit();
@@ -174,7 +174,7 @@ test "history leading-space suppression" {
     try std.testing.expectEqualStrings("SELECT 1;", history.entries.items[0]);
 
     // Verify file content
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(path, .{});
     defer file.close();
 
     var buf: [100]u8 = undefined;

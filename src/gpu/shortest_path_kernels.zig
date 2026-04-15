@@ -169,7 +169,7 @@ test "TestCANARY_REQ_GQL_051_GPUDijkstraSmall" {
     const col_indices = &[_]u32{ 1, 2, 2, 3, 3 };
     const weights = &[_]f64{ 1.0, 4.0, 2.0, 5.0, 1.0 };
     const g = SPGraph{ .row_offsets = row_offsets, .col_indices = col_indices, .weights = weights, .num_nodes = 4 };
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const cpu = try dijkstraCPU(g, 0, alloc);

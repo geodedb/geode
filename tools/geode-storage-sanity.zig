@@ -4,7 +4,7 @@ const fsm = @import("fsm");
 const page_vacuum = @import("page_vacuum");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     const allocator = gpa.allocator();
 
     const args = try std.process.argsAlloc(allocator);
@@ -26,7 +26,7 @@ pub fn main() !void {
 
         // Test durable rename
         // Check preconditions
-        const cwd = std.fs.cwd();
+        const cwd = std.Io.Dir.cwd();
         _ = cwd.createFile("sanity_test_a", .{}) catch |e| {
             std.debug.print("Setup fail: {any}\n", .{e});
             return;

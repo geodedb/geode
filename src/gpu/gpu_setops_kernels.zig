@@ -217,7 +217,7 @@ fn gpuIntersectImpl(a: []const u32, b: []const u32, allocator: std.mem.Allocator
 }
 
 test "TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const a = &[_]u32{ 1, 2, 3, 3 };
@@ -242,7 +242,7 @@ test "TestCANARY_REQ_GQL_051_GPUUnionDistinctSmall" {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUIntersectSmall" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const a = &[_]u32{ 1, 2, 3, 4 };

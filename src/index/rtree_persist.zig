@@ -148,5 +148,5 @@ pub fn checkpoint(tree: *const rtree.RTree, snapshot_path: []const u8) !void {
 
     try saveSnapshot(tree, temp_path);
 
-    try std.fs.cwd().rename(temp_path, snapshot_path);
+    try std.Io.Dir.cwd().rename(temp_path, snapshot_path);
 }

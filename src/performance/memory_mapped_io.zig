@@ -36,9 +36,9 @@ pub const MemoryMappedFile = struct {
     /// Initialize memory-mapped file with advanced options
     pub fn init(allocator: Allocator, file_path: []const u8, options: MappingOptions) !Self {
         const file = if (options.read_only)
-            try std.fs.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(file_path, .{})
         else
-            try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
         if (file_size == 0) {
@@ -259,9 +259,9 @@ pub const ChunkedMemoryMap = struct {
 
     pub fn init(allocator: Allocator, file_path: []const u8, chunk_size: u64, max_chunks: usize, read_only: bool) !Self {
         const file = if (read_only)
-            try std.fs.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(file_path, .{})
         else
-            try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
 
@@ -470,7 +470,7 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -484,7 +484,7 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
         try file.sync();
     }
 
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Benchmark memory-mapped reads
     var timer = try std.time.Timer.start();
@@ -510,7 +510,7 @@ pub fn benchmarkMemoryMappedIO(allocator: Allocator, file_size: u64, iterations:
     defer allocator.free(buffer);
 
     for (0..iterations) |_| {
-        const file = try std.fs.cwd().openFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().openFile(test_file, .{});
         defer file.close();
 
         timer.reset();
@@ -547,13 +547,13 @@ test "Memory-mapped file basic operations" {
     const allocator = testing.allocator;
 
     const test_file = "test_mmap.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "Hello, memory-mapped world!";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
@@ -581,13 +581,13 @@ test "Memory-mapped array functionality" {
     const allocator = testing.allocator;
 
     const test_file = "test_array.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file with array of u32 values
     const test_data = [_]u32{ 1, 2, 3, 4, 5 };
 
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         const bytes = std.mem.sliceAsBytes(&test_data);
         _ = try file.writeAll(bytes);
@@ -627,14 +627,14 @@ test "ChunkedMemoryMap cache hit tracking" {
     const allocator = testing.allocator;
 
     const test_file = "test_chunked_cache.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file with 3 chunks worth of data (chunk_size = 64)
     const chunk_size: u64 = 64;
     const total_size: usize = 192; // 3 chunks
 
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         var data: [total_size]u8 = undefined;
         for (&data, 0..) |*b, i| {
@@ -684,14 +684,14 @@ test "ChunkedMemoryMap cache eviction tracks misses" {
     const allocator = testing.allocator;
 
     const test_file = "test_eviction.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file with 4 chunks
     const chunk_size: u64 = 32;
     const total_size: usize = 128;
 
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         var data: [total_size]u8 = undefined;
         for (&data, 0..) |*b, i| {
@@ -746,10 +746,10 @@ test "ChunkedMemoryMap zero accesses returns zero ratio" {
     const allocator = testing.allocator;
 
     const test_file = "test_zero_ratio.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         const data = [_]u8{0} ** 64;
         _ = try file.writeAll(&data);

@@ -60,7 +60,7 @@ pub var global_audit_logger_mutex: std.Thread.Mutex = .{};
 // audit events created on this thread carry the correct tenant context.
 // CANARY: REQ=REQ-AUDIT-TENANT-001; FEATURE="AuditTenantId"; ASPECT=PerThreadTenant; STATUS=IMPL; OWNER=security; UPDATED=2026-04-05
 var audit_tenant_mutex: std.Thread.Mutex = .{};
-var audit_tenant_gpa: std.heap.GeneralPurposeAllocator(.{}) = std.heap.GeneralPurposeAllocator(.{}){};
+var audit_tenant_gpa: std.heap.DebugAllocator(.{}) = std.heap.DebugAllocator(.{}){};
 var per_thread_audit_tenants: std.AutoHashMap(std.Thread.Id, []const u8) = std.AutoHashMap(std.Thread.Id, []const u8).init(audit_tenant_gpa.allocator());
 
 /// Set the current tenant_id for audit events on this thread.
@@ -199,7 +199,7 @@ pub const AuditLogger = struct {
 
         if (config.enabled) {
             // 1. Open File
-            logger.file = std.fs.cwd().createFile(config.file_path, .{
+            logger.file = std.Io.Dir.cwd().createFile(config.file_path, .{
                 .truncate = false,
                 .read = true, // Needed for initFromTail
                 .exclusive = false,
@@ -228,7 +228,7 @@ pub const AuditLogger = struct {
         errdefer allocator.free(file_path);
 
         // Ensure the graph directory exists so the file create succeeds.
-        std.fs.cwd().makePath(graph_dir) catch |err| {
+        std.Io.Dir.cwd().makePath(graph_dir) catch |err| {
             log.warn("failed to create graph audit dir", &.{
                 Attr.string("path", graph_dir),
                 Attr.string("error", @errorName(err)),
@@ -301,13 +301,13 @@ pub const AuditLogger = struct {
         const sec_path = try std.fmt.allocPrint(self.allocator, "{s}.key", .{self.config.file_path});
         defer self.allocator.free(sec_path);
 
-        const pub_hex = std.fs.cwd().readFileAlloc(self.allocator, pub_path, 64) catch |err| switch (err) {
+        const pub_hex = std.Io.Dir.cwd().readFileAlloc(self.allocator, pub_path, 64) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
         defer if (pub_hex) |bytes| self.allocator.free(bytes);
 
-        const sec_hex = std.fs.cwd().readFileAlloc(self.allocator, sec_path, 128) catch |err| switch (err) {
+        const sec_hex = std.Io.Dir.cwd().readFileAlloc(self.allocator, sec_path, 128) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
@@ -328,11 +328,11 @@ pub const AuditLogger = struct {
         const generated_pub = std.fmt.bytesToHex(kp.public_key.bytes, .lower);
         const generated_sec = std.fmt.bytesToHex(kp.secret_key.bytes, .lower);
 
-        const pub_file = try std.fs.cwd().createFile(pub_path, .{ .truncate = true, .mode = 0o600 });
+        const pub_file = try std.Io.Dir.cwd().createFile(pub_path, .{ .truncate = true, .mode = 0o600 });
         defer pub_file.close();
         try pub_file.writeAll(&generated_pub);
 
-        const sec_file = try std.fs.cwd().createFile(sec_path, .{ .truncate = true, .mode = 0o600 });
+        const sec_file = try std.Io.Dir.cwd().createFile(sec_path, .{ .truncate = true, .mode = 0o600 });
         defer sec_file.close();
         try sec_file.writeAll(&generated_sec);
 
@@ -634,10 +634,10 @@ pub const AuditLogger = struct {
                 const timestamp = std.time.milliTimestamp();
                 var buf: [256]u8 = undefined;
                 const new_path = try std.fmt.bufPrint(&buf, "{s}.{d}", .{ self.config.file_path, timestamp });
-                try std.fs.cwd().rename(self.config.file_path, new_path);
+                try std.Io.Dir.cwd().rename(self.config.file_path, new_path);
 
                 // Open new file
-                self.file = try std.fs.cwd().createFile(self.config.file_path, .{
+                self.file = try std.Io.Dir.cwd().createFile(self.config.file_path, .{
                     .truncate = false,
                     .exclusive = false,
                 });
@@ -655,7 +655,7 @@ pub const AuditLogger = struct {
         var bytes_freed: u64 = 0;
 
         // Scan for old log files
-        var dir = try std.fs.cwd().openDir(".", .{ .iterate = true });
+        var dir = try std.Io.Dir.cwd().openDir(".", .{ .iterate = true });
         defer dir.close();
 
         var iter = dir.iterate();
@@ -670,12 +670,12 @@ pub const AuditLogger = struct {
 
                 if (timestamp < cutoff_time) {
                     // Get file size before deletion
-                    const file = try std.fs.cwd().openFile(entry.name, .{});
+                    const file = try std.Io.Dir.cwd().openFile(entry.name, .{});
                     const stat = try file.stat();
                     file.close();
 
                     // Delete old file
-                    try std.fs.cwd().deleteFile(entry.name);
+                    try std.Io.Dir.cwd().deleteFile(entry.name);
                     files_deleted += 1;
                     bytes_freed += stat.size;
 
@@ -1343,7 +1343,7 @@ pub const AuditLogger = struct {
         _ = allocator;
 
         // Simulate disk space check - in production would use system calls
-        _ = std.fs.cwd();
+        _ = std.Io.Dir.cwd();
 
         // Simulate disk usage percentage (80% used for testing)
         const used_percent: u64 = 80;
@@ -1372,7 +1372,7 @@ pub const AuditLogger = struct {
                 self.file = null;
 
                 // Simulate compression by creating a new compressed file
-                const compressed_file = std.fs.cwd().createFile("audit_compressed.gz", .{}) catch {
+                const compressed_file = std.Io.Dir.cwd().createFile("audit_compressed.gz", .{}) catch {
                     // Can't create compressed file, use fallback
                     fallback_used = true;
                     events_dropped = 5; // Simulate dropping some events
@@ -1388,7 +1388,7 @@ pub const AuditLogger = struct {
             }
         } else {
             // Normal disk space - test handling of sudden fill
-            const test_file = std.fs.cwd().createFile("disk_test.tmp", .{ .truncate = true }) catch |err| {
+            const test_file = std.Io.Dir.cwd().createFile("disk_test.tmp", .{ .truncate = true }) catch |err| {
                 disk_full_handled = true;
                 fallback_used = true;
                 std.debug.print("DISK_TEST create failed: {}\n", .{err});
@@ -1400,7 +1400,7 @@ pub const AuditLogger = struct {
                 };
             };
             defer test_file.close();
-            defer std.fs.cwd().deleteFile("disk_test.tmp") catch {};
+            defer std.Io.Dir.cwd().deleteFile("disk_test.tmp") catch {};
 
             // Try to write large amount of data
             const large_buffer = [_]u8{'A'} ** (1024 * 1024); // 1MB
@@ -1468,7 +1468,7 @@ pub const AuditLogger = struct {
         // Create a test file with valid data
         const test_file_path = "corruption_test.jsonl";
         {
-            const file = try std.fs.cwd().createFile(test_file_path, .{});
+            const file = try std.Io.Dir.cwd().createFile(test_file_path, .{});
             defer file.close();
 
             // Write some valid audit events
@@ -1488,10 +1488,10 @@ pub const AuditLogger = struct {
                 try file.writeAll(json);
             }
         }
-        defer std.fs.cwd().deleteFile(test_file_path) catch {};
+        defer std.Io.Dir.cwd().deleteFile(test_file_path) catch {};
 
         // Try to read and validate the file
-        const file = try std.fs.cwd().openFile(test_file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(test_file_path, .{});
         defer file.close();
 
         // Read entire file
@@ -1581,14 +1581,14 @@ pub const AuditLogger = struct {
         // Create backup of recovered data
         if (corruption_detected and recovery_successful) {
             const backup_path = "corruption_test.recovered";
-            const backup_file = try std.fs.cwd().createFile(backup_path, .{});
+            const backup_file = try std.Io.Dir.cwd().createFile(backup_path, .{});
             defer backup_file.close();
 
             var recovery_buf: [256]u8 = undefined;
             const recovery_info = try std.fmt.bufPrint(&recovery_buf, "{{\"recovery_timestamp\":{d},\"original_lines\":{d},\"recovered_lines\":{d},\"data_loss\":{d}}}\n", .{ std.time.milliTimestamp(), total_expected, recovered, data_loss });
             try backup_file.writeAll(recovery_info);
 
-            std.fs.cwd().deleteFile(backup_path) catch {};
+            std.Io.Dir.cwd().deleteFile(backup_path) catch {};
         }
 
         std.debug.print("CORRUPTION_HANDLING detected={} attempted={} successful={} data_loss={d}\n", .{ corruption_detected, recovery_attempted, recovery_successful, data_loss });
@@ -1681,14 +1681,14 @@ pub const AuditLogger = struct {
         }
 
         // Write configuration validation report
-        const report_file = try std.fs.cwd().createFile("config_validation.json", .{});
+        const report_file = try std.Io.Dir.cwd().createFile("config_validation.json", .{});
         defer report_file.close();
 
         var buffer: [512]u8 = undefined;
         const report = try std.fmt.bufPrint(&buffer, "{{\"timestamp\":{d},\"validated\":{},\"errors\":{d},\"warnings\":{d},\"auto_fixed\":{d}}}\n", .{ std.time.milliTimestamp(), config_validated, errors_found, warnings_found, auto_fixed });
         try report_file.writeAll(report);
 
-        std.fs.cwd().deleteFile("config_validation.json") catch {};
+        std.Io.Dir.cwd().deleteFile("config_validation.json") catch {};
 
         std.debug.print("CONFIG_VALIDATION validated={} errors={d} warnings={d} auto_fixed={d}\n", .{ config_validated, errors_found, warnings_found, auto_fixed });
 
@@ -1732,7 +1732,7 @@ pub const AuditLogger = struct {
 
         // Generate report file
         const report_path = try allocator.dupe(u8, "compliance_report.json");
-        const report_file = try std.fs.cwd().createFile(report_path, .{});
+        const report_file = try std.Io.Dir.cwd().createFile(report_path, .{});
         defer report_file.close();
 
         // Write JSON report using type-safe encoding
@@ -1780,7 +1780,7 @@ pub const AuditLogger = struct {
         }
 
         // Add additional forensic data using type-safe JSON encoding
-        const forensic_file = try std.fs.cwd().createFile("forensic_metadata.json", .{});
+        const forensic_file = try std.Io.Dir.cwd().createFile("forensic_metadata.json", .{});
         defer forensic_file.close();
 
         const metadata = ForensicMetadataJson{
@@ -1827,7 +1827,7 @@ pub const AuditLogger = struct {
             try allocator.dupe(u8, "audit_export.json");
 
         // Create export file
-        const export_file = try std.fs.cwd().createFile(export_path, .{});
+        const export_file = try std.Io.Dir.cwd().createFile(export_path, .{});
         defer export_file.close();
 
         var records_exported: u64 = 0;

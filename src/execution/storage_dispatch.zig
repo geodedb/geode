@@ -726,7 +726,7 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
     // Store mock KMS configuration for later use
     const config_path = "mock_kms_config.json";
-    const config_file = try std.fs.cwd().createFile(config_path, .{});
+    const config_file = try std.Io.Dir.cwd().createFile(config_path, .{});
     defer config_file.close();
 
     var json_buf = try std.ArrayList(u8).initCapacity(allocator, 256);

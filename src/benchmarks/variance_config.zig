@@ -148,7 +148,7 @@ pub fn computeStatsF128(allocator: std.mem.Allocator, data: []const f128) Stats 
 
 pub fn thresholdsForBenchmark(name: []const u8) ThresholdSet {
     // P2-3: Use GeneralPurposeAllocator for arena backing
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     var gpa = std.heap.ArenaAllocator.init(gpa_instance.allocator());
     defer gpa.deinit();

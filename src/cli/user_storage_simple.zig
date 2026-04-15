@@ -48,7 +48,7 @@ pub const UserStorage = struct {
 
     pub fn init(allocator: Allocator, data_dir: []const u8) !Self {
         // Ensure data directory exists
-        std.fs.cwd().makePath(data_dir) catch |err| {
+        std.Io.Dir.cwd().makePath(data_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -66,7 +66,7 @@ pub const UserStorage = struct {
         const file_path = try self.getUsersFilePath();
         defer self.allocator.free(file_path);
 
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // No users file yet, return empty list
                 return self.allocator.alloc(User, 0);
@@ -120,7 +120,7 @@ pub const UserStorage = struct {
         const tmp_path = try std.fmt.allocPrint(self.allocator, "{s}.tmp", .{file_path});
         defer self.allocator.free(tmp_path);
 
-        const file = try std.fs.cwd().createFile(tmp_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(tmp_path, .{});
         defer file.close();
 
         // Encode users to JSON using json library
@@ -131,7 +131,7 @@ pub const UserStorage = struct {
         try file.writeAll("\n");
 
         // Atomic rename
-        try std.fs.cwd().rename(tmp_path, file_path);
+        try std.Io.Dir.cwd().rename(tmp_path, file_path);
     }
 
     pub fn findUser(self: *Self, username: []const u8) !?User {

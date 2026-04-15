@@ -1379,7 +1379,7 @@ test "integration - MATCH pattern variables should be defined" {
             }
             try std.testing.expectEqual(@as(usize, 0), errors.len);
         },
-        .Err => |_| {
+        .Err => {
             try std.testing.expect(false); // Parse should succeed
         },
     }
@@ -1409,7 +1409,7 @@ test "integration - MATCH with WHERE referencing pattern variable" {
             // Should have no errors - e is defined in MATCH
             try std.testing.expectEqual(@as(usize, 0), errors.len);
         },
-        .Err => |_| {
+        .Err => {
             try std.testing.expect(false);
         },
     }
@@ -1473,7 +1473,7 @@ test "integration - list concatenation should not error" {
             // List concatenation should be allowed
             try std.testing.expectEqual(@as(usize, 0), errors.len);
         },
-        .Err => |_| {
+        .Err => {
             try std.testing.expect(false);
         },
     }
@@ -1612,7 +1612,7 @@ test "integration - empty list concatenation" {
             // Empty list concatenation should not error
             try std.testing.expectEqual(@as(usize, 0), errors.len);
         },
-        .Err => |_| {
+        .Err => {
             try std.testing.expect(false);
         },
     }

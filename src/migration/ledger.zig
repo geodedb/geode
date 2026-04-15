@@ -30,7 +30,7 @@ pub fn ledgerPath(alloc: std.mem.Allocator, cfg: MigrationConfig) ![]u8 {
 }
 
 pub fn ensureDir(cfg: MigrationConfig) !void {
-    std.fs.cwd().makePath(cfg.migrations_dir) catch |err| {
+    std.Io.Dir.cwd().makePath(cfg.migrations_dir) catch |err| {
         if (err != error.PathAlreadyExists) return err;
     };
 }
@@ -44,7 +44,7 @@ pub fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
 pub fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
-    var file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    var file = std.Io.Dir.cwd().openFile(path, .{}) catch |err| {
         if (err == error.FileNotFound) return initLedger(alloc, cfg);
         return error.FileSystemError;
     };
@@ -84,7 +84,7 @@ pub fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const
     const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.{s}.tmp", .{ root.nowMs(), rand_hex }) catch return error.OutOfMemory;
     const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
-    var tmp = std.fs.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
+    var tmp = std.Io.Dir.cwd().createFile(tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
     errdefer tmp.close();
     if (builtin.os.tag != .windows) tmp.chmod(0o600) catch {};
     var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
@@ -93,8 +93,8 @@ pub fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const
     tmp.writeAll(buffer.items) catch return error.FileSystemError;
     tmp.sync() catch return error.FileSystemError;
     tmp.close();
-    std.fs.cwd().rename(tmp_path, path) catch {
-        std.fs.cwd().deleteFile(tmp_path) catch {};
+    std.Io.Dir.cwd().rename(tmp_path, path) catch {
+        std.Io.Dir.cwd().deleteFile(tmp_path) catch {};
         return error.FileSystemError;
     };
 }

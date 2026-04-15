@@ -56,7 +56,7 @@ fn fieldString(field: []const u8, line: []const u8, buf: *[128]u8) ?[]const u8 {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
@@ -86,7 +86,7 @@ pub fn main() !void {
     // Use stdin's reader directly when no file path provided.
     var reader = blk_reader: {
         if (file_path) |p| {
-            file = try std.fs.cwd().openFile(p, .{ .mode = .read_only });
+            file = try std.Io.Dir.cwd().openFile(p, .{ .mode = .read_only });
             break :blk_reader file.?.reader(&file_buf);
         } else {
             break :blk_reader stdin_file.reader(&stdin_buf2);

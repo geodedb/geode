@@ -954,7 +954,7 @@ pub fn envelopeFromJson(json: []const u8) !Envelope {
 // ============================================================================
 
 test "external kms client wrap/unwrap round trip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // GAP-0216: Handle error union from init (succeeds in test mode)
     var client = try Client.init(gpa.allocator(), 0xDEEFA55E);

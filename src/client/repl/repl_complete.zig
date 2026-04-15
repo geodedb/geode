@@ -396,7 +396,7 @@ fn generateFilePathCandidates(state: anytype, prefix: []const u8) !void {
     // else: search in current directory with prefix as file prefix
 
     // Open directory
-    var dir = std.fs.cwd().openDir(search_dir, .{ .iterate = true }) catch return;
+    var dir = std.Io.Dir.cwd().openDir(search_dir, .{ .iterate = true }) catch return;
     defer dir.close();
 
     // Iterate directory entries

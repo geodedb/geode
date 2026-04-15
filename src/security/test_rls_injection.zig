@@ -33,7 +33,7 @@ fn makePolicy(raw: []const u8) rls_core.RLSEngine.Policy {
 }
 
 test "QueryRewriter: rejects expr.raw with semicolons (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -48,7 +48,7 @@ test "QueryRewriter: rejects expr.raw with semicolons (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with SQL line comment (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -63,7 +63,7 @@ test "QueryRewriter: rejects expr.raw with SQL line comment (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with block comment (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -78,7 +78,7 @@ test "QueryRewriter: rejects expr.raw with block comment (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with UNION (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -93,7 +93,7 @@ test "QueryRewriter: rejects expr.raw with UNION (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with lowercase union (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -108,7 +108,7 @@ test "QueryRewriter: rejects expr.raw with lowercase union (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with INTERSECT (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -123,7 +123,7 @@ test "QueryRewriter: rejects expr.raw with INTERSECT (GAP-0496)" {
 }
 
 test "QueryRewriter: rejects expr.raw with EXCEPT (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -138,7 +138,7 @@ test "QueryRewriter: rejects expr.raw with EXCEPT (GAP-0496)" {
 }
 
 test "QueryRewriter: accepts valid simple equality (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -153,7 +153,7 @@ test "QueryRewriter: accepts valid simple equality (GAP-0496)" {
 }
 
 test "QueryRewriter: accepts valid multi-condition expression (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -168,7 +168,7 @@ test "QueryRewriter: accepts valid multi-condition expression (GAP-0496)" {
 }
 
 test "QueryRewriter: word 'exceptional' does not trigger EXCEPT guard (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -183,7 +183,7 @@ test "QueryRewriter: word 'exceptional' does not trigger EXCEPT guard (GAP-0496)
 }
 
 test "QueryRewriter: word 'intersection_count' does not trigger INTERSECT guard (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);
@@ -198,7 +198,7 @@ test "QueryRewriter: word 'intersection_count' does not trigger INTERSECT guard 
 }
 
 test "QueryRewriter: word 'union_id' does not trigger UNION guard (GAP-0496)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rewriter = try rls_core.QueryRewriter.init(allocator);

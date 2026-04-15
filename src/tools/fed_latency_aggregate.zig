@@ -120,7 +120,7 @@ fn parseRun(json: []const u8) RunMetrics {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
@@ -408,8 +408,8 @@ pub fn main() !void {
             } else |_| {}
         }
         // Open (create if missing) for append.
-        var file = std.fs.cwd().createFile(ap, .{ .truncate = false, .read = true, .mode = 0o666 }) catch |e| switch (e) {
-            error.PathAlreadyExists => std.fs.cwd().openFile(ap, .{ .mode = .read_write }) catch return, // open existing
+        var file = std.Io.Dir.cwd().createFile(ap, .{ .truncate = false, .read = true, .mode = 0o666 }) catch |e| switch (e) {
+            error.PathAlreadyExists => std.Io.Dir.cwd().openFile(ap, .{ .mode = .read_write }) catch return, // open existing
             else => return,
         };
         defer file.close();
@@ -441,11 +441,11 @@ pub fn main() !void {
                 tmp_name_buf[ap.len + 1] = '1';
                 const rot_name = tmp_name_buf[0 .. ap.len + 2];
                 // Best effort remove existing .1
-                _ = std.fs.cwd().deleteFile(rot_name) catch {};
-                _ = std.fs.cwd().rename(ap, rot_name) catch {};
+                _ = std.Io.Dir.cwd().deleteFile(rot_name) catch {};
+                _ = std.Io.Dir.cwd().rename(ap, rot_name) catch {};
                 // Recreate fresh file
                 file.close();
-                file = std.fs.cwd().createFile(ap, .{ .truncate = true, .read = true, .mode = 0o666 }) catch return;
+                file = std.Io.Dir.cwd().createFile(ap, .{ .truncate = true, .read = true, .mode = 0o666 }) catch return;
             }
         }
         // Append line.

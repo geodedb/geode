@@ -282,7 +282,7 @@ pub const Catalog = struct {
         defer self.allocator.free(catalog_path);
 
         // Check if file exists first
-        std.fs.cwd().access(catalog_path, .{}) catch |err| {
+        std.Io.Dir.cwd().access(catalog_path, .{}) catch |err| {
             if (err == error.FileNotFound) return;
             return err;
         };

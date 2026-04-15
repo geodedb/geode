@@ -12,7 +12,7 @@ const QueryCase = struct {
 
 fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
     // P2-3: Use GeneralPurposeAllocator for benchmark arena backing
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
 

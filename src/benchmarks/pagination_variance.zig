@@ -28,7 +28,7 @@ fn planOrdered(qtext: []const u8) !phase_timing.PhaseTimings {
 
 pub fn benchmarkPaginationOrderedVarianceEnvelope() !void {
     const iterations = 64;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var samples = try gpa.allocator().alloc(u64, iterations);
     defer gpa.allocator().free(samples);

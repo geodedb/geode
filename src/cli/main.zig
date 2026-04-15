@@ -1126,7 +1126,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         } else filepath;
 
         // Open and read the file
-        const file = std.fs.cwd().openFile(resolved_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(resolved_path, .{}) catch |err| {
             std.debug.print("Error: Cannot open file '{s}': {s}\n", .{ resolved_path, @errorName(err) });
             std.process.exit(@intFromEnum(ExitCode.usage_error));
         };
@@ -3043,7 +3043,7 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 // CANARY: REQ=REQ-M4.4-CLI-MAIN-ENTRY-001; FEATURE="CLI Modularization"; ASPECT=MinimalEntryPoint; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: Minimal main() entry point - delegates to cli_dispatcher for all routing
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

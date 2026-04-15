@@ -45,7 +45,7 @@ pub const EarlyDetector = struct {
 };
 
 pub fn demoUsage() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var det = EarlyDetector.init(gpa.allocator());
     defer det.deinit();

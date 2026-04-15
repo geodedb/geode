@@ -4,7 +4,7 @@
 // Server top-level allocator selection.
 //
 // PROBLEM (fixed by this module):
-// std.heap.GeneralPurposeAllocator(.{}){}  defaults never_unmap=true and
+// std.heap.DebugAllocator(.{}){}  defaults never_unmap=true and
 // retain_metadata=true in Debug and ReleaseSafe builds.  Freed pages remain
 // mapped so the allocator can detect use-after-free.  Under sustained QUIC
 // load the server's RSS grows ~19MB per connection and eventually trips
@@ -44,15 +44,15 @@ pub const mode: Mode = if (build_options.enable_gpa_debug) .gpa_debug else .smp;
 /// a heap-allocated GeneralPurposeAllocator instance that must be
 /// deinitialised on exit.
 pub const Handle = struct {
-    gpa_ptr: ?*std.heap.GeneralPurposeAllocator(.{}) = null,
+    gpa_ptr: ?*std.heap.DebugAllocator(.{}) = null,
     allocator: std.mem.Allocator,
 
     pub fn init() !Handle {
         switch (mode) {
             .smp => return .{ .allocator = std.heap.smp_allocator },
             .gpa_debug => {
-                const gpa_ptr = try std.heap.smp_allocator.create(std.heap.GeneralPurposeAllocator(.{}));
-                gpa_ptr.* = std.heap.GeneralPurposeAllocator(.{}){};
+                const gpa_ptr = try std.heap.smp_allocator.create(std.heap.DebugAllocator(.{}));
+                gpa_ptr.* = std.heap.DebugAllocator(.{}){};
                 return .{
                     .gpa_ptr = gpa_ptr,
                     .allocator = gpa_ptr.allocator(),

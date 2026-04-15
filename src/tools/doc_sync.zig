@@ -24,7 +24,7 @@ const ReqSet = struct {
 };
 
 fn scanReqIds(allocator: std.mem.Allocator, path: []const u8, out: *ReqSet) !void {
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = try std.Io.Dir.cwd().openFile(path, .{});
     defer file.close();
 
     // Read entire file into memory for simplicity
@@ -43,7 +43,7 @@ fn scanReqIds(allocator: std.mem.Allocator, path: []const u8, out: *ReqSet) !voi
 
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator for tool main
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
 

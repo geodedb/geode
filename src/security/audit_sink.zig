@@ -51,7 +51,7 @@ pub const FileSink = struct {
     mutex: std.Thread.Mutex,
 
     pub fn init(file_path: []const u8) !FileSink {
-        const file = try std.fs.cwd().createFile(file_path, .{
+        const file = try std.Io.Dir.cwd().createFile(file_path, .{
             .truncate = false,
             .exclusive = false,
         });
@@ -110,7 +110,7 @@ pub fn writeToWindowsEventLog(
     var events_written: u32 = 0;
 
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(output_path, .{});
     defer file.close();
 
     // Write XML header
@@ -145,7 +145,7 @@ pub fn writeToSyslog(
     var events_sent: u32 = 0;
 
     // Create output file
-    const file = try std.fs.cwd().createFile(output_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(output_path, .{});
     defer file.close();
 
     // Write each event
@@ -233,13 +233,13 @@ test "FileSink - basic write" {
     try iface.flush();
 
     // Verify file was created
-    const file = try std.fs.cwd().openFile("test_audit_sink.log", .{});
+    const file = try std.Io.Dir.cwd().openFile("test_audit_sink.log", .{});
     defer file.close();
     const stat = try file.stat();
     try testing.expect(stat.size > 0);
 
     // Cleanup
-    try std.fs.cwd().deleteFile("test_audit_sink.log");
+    try std.Io.Dir.cwd().deleteFile("test_audit_sink.log");
 }
 
 test "writeToWindowsEventLog - creates valid XML" {
@@ -266,7 +266,7 @@ test "writeToWindowsEventLog - creates valid XML" {
     try testing.expectEqual(@as(u32, 1), events_written);
 
     // Verify file exists and contains valid XML
-    const file = try std.fs.cwd().openFile("test_windows.xml", .{});
+    const file = try std.Io.Dir.cwd().openFile("test_windows.xml", .{});
     defer file.close();
     const content = try file.readToEndAlloc(testing.allocator, 10000);
     defer testing.allocator.free(content);
@@ -276,7 +276,7 @@ test "writeToWindowsEventLog - creates valid XML" {
     try testing.expect(std.mem.indexOf(u8, content, "</Events>") != null);
 
     // Cleanup
-    try std.fs.cwd().deleteFile("test_windows.xml");
+    try std.Io.Dir.cwd().deleteFile("test_windows.xml");
 }
 
 test "writeToSyslog - creates valid syslog entries" {
@@ -303,7 +303,7 @@ test "writeToSyslog - creates valid syslog entries" {
     try testing.expectEqual(@as(u32, 1), events_sent);
 
     // Verify file exists and contains syslog format
-    const file = try std.fs.cwd().openFile("test_syslog.log", .{});
+    const file = try std.Io.Dir.cwd().openFile("test_syslog.log", .{});
     defer file.close();
     const content = try file.readToEndAlloc(testing.allocator, 10000);
     defer testing.allocator.free(content);
@@ -312,7 +312,7 @@ test "writeToSyslog - creates valid syslog entries" {
     try testing.expect(std.mem.indexOf(u8, content, "event_type=policy_violation") != null);
 
     // Cleanup
-    try std.fs.cwd().deleteFile("test_syslog.log");
+    try std.Io.Dir.cwd().deleteFile("test_syslog.log");
 }
 
 test "MultiSink - writes to multiple destinations" {
@@ -335,17 +335,17 @@ test "MultiSink - writes to multiple destinations" {
     try iface.flush();
 
     // Verify both files exist and contain data
-    const file1 = try std.fs.cwd().openFile("test_multi1.log", .{});
+    const file1 = try std.Io.Dir.cwd().openFile("test_multi1.log", .{});
     defer file1.close();
     const stat1 = try file1.stat();
     try testing.expect(stat1.size > 0);
 
-    const file2 = try std.fs.cwd().openFile("test_multi2.log", .{});
+    const file2 = try std.Io.Dir.cwd().openFile("test_multi2.log", .{});
     defer file2.close();
     const stat2 = try file2.stat();
     try testing.expect(stat2.size > 0);
 
     // Cleanup
-    try std.fs.cwd().deleteFile("test_multi1.log");
-    try std.fs.cwd().deleteFile("test_multi2.log");
+    try std.Io.Dir.cwd().deleteFile("test_multi1.log");
+    try std.Io.Dir.cwd().deleteFile("test_multi2.log");
 }

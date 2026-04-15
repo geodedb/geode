@@ -528,11 +528,11 @@ pub fn benchmarkAsyncIO(
 ) !struct { async_throughput_mbps: f64, sync_throughput_mbps: f64, async_latency_ns: u64, sync_latency_ns: u64, async_advantage: f64 } {
     _ = concurrent_operations; // Suppress unused parameter warning
     const test_file = "benchmark_async_test.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
 
         const test_data = try allocator.alloc(u8, file_size);
@@ -550,7 +550,7 @@ pub fn benchmarkAsyncIO(
     var async_io_manager = try AsyncIOManager.init(allocator, 4);
     defer async_io_manager.deinit();
 
-    const file = try std.fs.cwd().openFile(test_file, .{});
+    const file = try std.Io.Dir.cwd().openFile(test_file, .{});
     defer file.close();
 
     var async_file = AsyncFile.init(&async_io_manager, file, allocator);
@@ -604,20 +604,20 @@ test "Asynchronous I/O basic operations" {
     defer io_manager.deinit();
 
     const test_file = "test_async.dat";
-    defer std.fs.cwd().deleteFile(test_file) catch {};
+    defer std.Io.Dir.cwd().deleteFile(test_file) catch {};
 
     const test_data = "Hello, async world!";
 
     // Create test file
     {
-        const file = try std.fs.cwd().createFile(test_file, .{});
+        const file = try std.Io.Dir.cwd().createFile(test_file, .{});
         defer file.close();
         _ = try file.writeAll(test_data);
         try file.sync();
     }
 
     // Test async read
-    const file = try std.fs.cwd().openFile(test_file, .{});
+    const file = try std.Io.Dir.cwd().openFile(test_file, .{});
     defer file.close();
 
     var async_file = AsyncFile.init(&io_manager, file, allocator);

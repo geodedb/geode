@@ -324,7 +324,7 @@ pub const AdvancedIndexManager = struct {
     }
 
     pub fn loadAll(self: *AdvancedIndexManager, dir_path: []const u8) !void {
-        var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+        var dir = std.Io.Dir.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
         defer dir.close();
 
         var iter = dir.iterate();

@@ -519,7 +519,7 @@ fn executionResponseToJson(
                     try root.put("profile", .{ .string = profile_json });
                 }
             },
-            .heartbeat => |_| {
+            .heartbeat => {
                 try root.put("heartbeat", .{ .bool = true });
             },
         }
@@ -2686,7 +2686,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     } else filename;
 
     // Open the file
-    const file = std.fs.cwd().openFile(resolved_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(resolved_path, .{}) catch |err| {
         var buf: [512]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
         try stderr.writeAll(msg);

@@ -137,9 +137,9 @@ pub const WriteAheadLog = struct {
         const dir_path = if (sep) |s| path[0..s] else ".";
         const filename = if (sep) |s| path[s + 1 ..] else path;
 
-        const dir = std.fs.cwd().openDir(dir_path, .{}) catch |err| {
+        const dir = std.Io.Dir.cwd().openDir(dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
-                try std.fs.cwd().makePath(dir_path);
+                try std.Io.Dir.cwd().makePath(dir_path);
                 return init(allocator, path);
             }
             return err;
@@ -557,7 +557,7 @@ pub fn initGlobalWal(allocator: std.mem.Allocator, data_dir: ?[]const u8) !void 
     defer allocator.free(wal_path);
 
     // Ensure the directory exists
-    std.fs.cwd().makePath(dir) catch |err| {
+    std.Io.Dir.cwd().makePath(dir) catch |err| {
         log.err("WAL: failed to create data directory", &.{Attr.string("error", @errorName(err))});
     };
 

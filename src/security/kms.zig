@@ -395,7 +395,7 @@ pub fn vaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, va
 
 // Legacy function for backward compatibility
 // P2-3: Use static GPA instead of page_allocator for global provider
-var default_provider_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var default_provider_gpa: std.heap.DebugAllocator(.{}) = .{};
 var default_provider_init = false;
 
 pub fn defaultProvider() !KMSProvider {

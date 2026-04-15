@@ -247,9 +247,9 @@ pub const MemoryMappedFile = struct {
 
     pub fn init(allocator: Allocator, file_path: []const u8, read_only: bool) !Self {
         const file = if (read_only)
-            try std.fs.cwd().openFile(file_path, .{})
+            try std.Io.Dir.cwd().openFile(file_path, .{})
         else
-            try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
+            try std.Io.Dir.cwd().openFile(file_path, .{ .mode = .read_write });
 
         const file_size = try file.getEndPos();
 
@@ -354,18 +354,18 @@ pub const BatchFileOperations = struct {
         for (self.operations.items) |operation| {
             switch (operation) {
                 .write => |write_op| {
-                    const file = try std.fs.cwd().createFile(write_op.path, .{});
+                    const file = try std.Io.Dir.cwd().createFile(write_op.path, .{});
                     defer file.close();
                     _ = try file.writeAll(write_op.data);
                     try file.sync();
                 },
                 .read => |read_op| {
-                    const file = try std.fs.cwd().openFile(read_op.path, .{});
+                    const file = try std.Io.Dir.cwd().openFile(read_op.path, .{});
                     defer file.close();
                     _ = try file.readAll(read_op.buffer);
                 },
                 .delete => |delete_op| {
-                    try std.fs.cwd().deleteFile(delete_op.path);
+                    try std.Io.Dir.cwd().deleteFile(delete_op.path);
                 },
             }
         }
@@ -463,13 +463,13 @@ pub const FileIOManager = struct {
 
     /// Create optimized file writer
     pub fn createWriter(self: *Self, file_path: []const u8) !BufferedFileWriter {
-        const file = try std.fs.cwd().createFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().createFile(file_path, .{});
         return BufferedFileWriter.init(self.allocator, file, self.buffer_size);
     }
 
     /// Create optimized file reader
     pub fn createReader(self: *Self, file_path: []const u8) !BufferedFileReader {
-        const file = try std.fs.cwd().openFile(file_path, .{});
+        const file = try std.Io.Dir.cwd().openFile(file_path, .{});
         return BufferedFileReader.init(self.allocator, file, self.buffer_size);
     }
 

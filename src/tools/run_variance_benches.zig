@@ -455,7 +455,7 @@ fn runSyntheticRaftCommitVariance(allocator: std.mem.Allocator) !void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     // Dummy usage to ensure geode root module isn't optimized as unused

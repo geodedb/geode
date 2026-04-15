@@ -364,7 +364,7 @@ pub const ConstraintManager = struct {
         // Normalize label_or_type to NFC for deterministic uniqueness key namespace
         // CANARY: REQ=REQ-GQL-UNICODE-011; FEATURE="UnicodeUniqueKeys"; ASPECT=NormalizeLabel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize; OWNER=unicode; UPDATED=2025-09-27
         const unicode = @import("../unicode/geode_unicode.zig");
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var gpa = std.heap.DebugAllocator(.{}){};
         defer _ = gpa.deinit();
         const alloc_tmp = gpa.allocator();
         const norm_label = unicode.nfcNormalize(alloc_tmp, label_or_type) catch label_or_type;

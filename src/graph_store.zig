@@ -3877,7 +3877,7 @@ pub const GraphStore = struct {
         const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return null;
         const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
         const uuid_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
-        std.fs.cwd().access(uuid_path, .{}) catch |err| {
+        std.Io.Dir.cwd().access(uuid_path, .{}) catch |err| {
             self.allocator.free(uuid_path);
             if (err == error.FileNotFound) return null;
             return err;
@@ -3889,7 +3889,7 @@ pub const GraphStore = struct {
         const graph_dir_path = (try self.resolveGraphStorageDirPath(graph_name)) orelse return null;
         defer self.allocator.free(graph_dir_path);
 
-        var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(graph_dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
@@ -3917,7 +3917,7 @@ pub const GraphStore = struct {
         const graph_dir_path = self.resolveGraphStorageDirPath(graph_name) catch return orelse return;
         defer self.allocator.free(graph_dir_path);
 
-        var dir = std.fs.cwd().openDir(graph_dir_path, .{}) catch return;
+        var dir = std.Io.Dir.cwd().openDir(graph_dir_path, .{}) catch return;
         defer dir.close();
 
         const stale_files = [_][]const u8{
@@ -5104,7 +5104,7 @@ pub fn releaseStoreWriteLock() void {
 }
 
 /// P2-3: Global allocator for persistent graph store data (better than page_allocator)
-var global_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var global_gpa: std.heap.DebugAllocator(.{}) = .{};
 var global_allocator_init = false;
 
 /// Start a background thread that periodically flushes dirty data to disk.
@@ -5889,7 +5889,7 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     const graph_dir_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}", .{ dir_path, std.fmt.bytesToHex(graph_uuid, .lower) });
     defer testing.allocator.free(graph_dir_path);
 
-    var graph_dir = try std.fs.cwd().openDir(graph_dir_path, .{});
+    var graph_dir = try std.Io.Dir.cwd().openDir(graph_dir_path, .{});
     defer graph_dir.close();
     try testing.expectError(error.FileNotFound, graph_dir.access("id_map.dat", .{}));
     try testing.expectError(error.FileNotFound, graph_dir.access("adapter_labels.dat", .{}));

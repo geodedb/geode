@@ -81,7 +81,7 @@ pub fn shouldUseGpu(edge_count: usize, selectivity: f64) bool {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUPhase0DeviceEnum" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const infos = try enumerate(alloc);

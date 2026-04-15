@@ -2,7 +2,7 @@ const std = @import("std");
 const tde = @import("tde_file_encryption");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -79,7 +79,7 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     std.crypto.random.bytes(&key_data);
 
     if (output_path) |path| {
-        const file = try std.fs.cwd().createFile(path, .{ .mode = 0o600 });
+        const file = try std.Io.Dir.cwd().createFile(path, .{ .mode = 0o600 });
         defer file.close();
 
         try file.writeAll(&key_data);
@@ -132,19 +132,19 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 
     // Read old key
-    const old_key_file = try std.fs.cwd().openFile(old_key_path.?, .{});
+    const old_key_file = try std.Io.Dir.cwd().openFile(old_key_path.?, .{});
     defer old_key_file.close();
     var old_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try old_key_file.read(&old_key_data);
 
     // Read new key
-    const new_key_file = try std.fs.cwd().openFile(new_key_path.?, .{});
+    const new_key_file = try std.Io.Dir.cwd().openFile(new_key_path.?, .{});
     defer new_key_file.close();
     var new_key_data: [tde.KEY_BYTES]u8 = undefined;
     _ = try new_key_file.read(&new_key_data);
 
     // Read input file
-    const in_file = try std.fs.cwd().openFile(input_path.?, .{});
+    const in_file = try std.Io.Dir.cwd().openFile(input_path.?, .{});
     defer in_file.close();
     const in_size = try in_file.getEndPos();
     const raw = try allocator.alloc(u8, @intCast(in_size));
@@ -160,7 +160,7 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     defer allocator.free(encrypted);
 
     // Write output
-    const out_file = try std.fs.cwd().createFile(output_path.?, .{});
+    const out_file = try std.Io.Dir.cwd().createFile(output_path.?, .{});
     defer out_file.close();
     try out_file.writeAll(encrypted);
 
@@ -194,7 +194,7 @@ fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         return;
     }
 
-    const file = try std.fs.cwd().openFile(file_path.?, .{});
+    const file = try std.Io.Dir.cwd().openFile(file_path.?, .{});
     defer file.close();
 
     var header: [tde.MAGIC.len]u8 = undefined;

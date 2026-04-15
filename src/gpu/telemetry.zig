@@ -268,7 +268,7 @@ pub fn serializeToJson(diag: GPUDiagnostics, allocator: std.mem.Allocator) ![]u8
 }
 
 test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const metrics = recordKernelMetrics("test_bfs", 0, 5.5);
@@ -283,7 +283,7 @@ test "TestCANARY_REQ_GQL_051_GPUTelemetryStruct" {
 }
 
 test "TestCANARY_REQ_GQL_051_GPUTelemetryFallback" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const diag = createDiagnostics(false, null, "no device");

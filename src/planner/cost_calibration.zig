@@ -85,7 +85,7 @@ pub fn simulateSamples(cal: *Calibration) !void {
 }
 
 test "TestCANARY_REQ_GQL_024_PlanCostModelCalibration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cal = Calibration.init(gpa.allocator());
     defer cal.deinit();
@@ -97,7 +97,7 @@ test "TestCANARY_REQ_GQL_024_PlanCostModelCalibration" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanCostModelCalibrationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const Runs = 55;
     var samples: [Runs]u64 = undefined;

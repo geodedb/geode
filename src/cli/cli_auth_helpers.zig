@@ -66,7 +66,7 @@ pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u
     const state_dir = try resolveStateDir(allocator);
     defer allocator.free(state_dir);
 
-    try std.fs.cwd().makePath(state_dir);
+    try std.Io.Dir.cwd().makePath(state_dir);
     secureChmod(state_dir, 0o700);
 
     return std.fs.path.join(allocator, &.{ state_dir, filename });

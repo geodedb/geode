@@ -9,7 +9,7 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
     const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
 
     // Create certificate directory if it doesn't exist
-    std.fs.cwd().makePath(cert_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().makePath(cert_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
@@ -49,7 +49,7 @@ pub fn ensureCertificates(allocator: std.mem.Allocator) !void {
 
 pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const u8, key_path: []const u8) !void {
     // Check if certificates already exist
-    std.fs.cwd().access(cert_path, .{}) catch {
+    std.Io.Dir.cwd().access(cert_path, .{}) catch {
         // Generate new certificates
         try generateSelfSignedCert(allocator, "geode.local", cert_path, key_path);
 
@@ -57,11 +57,11 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
         //   server.key  → 0600 (owner-only read/write)
         //   server.crt  → 0644 (world-readable public cert)
         if (builtin.os.tag != .windows) {
-            if (std.fs.cwd().openFile(key_path, .{})) |f| {
+            if (std.Io.Dir.cwd().openFile(key_path, .{})) |f| {
                 defer f.close();
                 f.chmod(0o600) catch {};
             } else |_| {}
-            if (std.fs.cwd().openFile(cert_path, .{})) |f| {
+            if (std.Io.Dir.cwd().openFile(cert_path, .{})) |f| {
                 defer f.close();
                 f.chmod(0o644) catch {};
             } else |_| {}
@@ -72,7 +72,7 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

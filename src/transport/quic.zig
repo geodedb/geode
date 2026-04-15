@@ -233,7 +233,7 @@ pub const QuicTransport = struct {
 
     pub fn listen(self: *QuicTransport) !void {
         // Verify certificates exist or generate them
-        std.fs.cwd().access(self.config.cert_path, .{}) catch |err| {
+        std.Io.Dir.cwd().access(self.config.cert_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // Try to generate self-signed certificates
                 if (self.generateSelfSignedCert()) {
@@ -256,7 +256,7 @@ pub const QuicTransport = struct {
         };
 
         // Load and parse certificate file (convert to DER for inline TLS material)
-        const cert_file = try std.fs.cwd().openFile(self.config.cert_path, .{});
+        const cert_file = try std.Io.Dir.cwd().openFile(self.config.cert_path, .{});
         defer cert_file.close();
         const cert_pem = try cert_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(cert_pem);
@@ -269,7 +269,7 @@ pub const QuicTransport = struct {
         };
 
         // Load and parse private key (DER inline for TLS)
-        const key_file = try std.fs.cwd().openFile(self.config.key_path, .{});
+        const key_file = try std.Io.Dir.cwd().openFile(self.config.key_path, .{});
         defer key_file.close();
         const key_pem = try key_file.readToEndAlloc(self.allocator, 1024 * 1024);
         defer self.allocator.free(key_pem);
@@ -498,7 +498,7 @@ pub const QuicTransport = struct {
 
     fn generateSelfSignedCert(self: *QuicTransport) !void {
         // Ensure cert directory exists
-        std.fs.cwd().makePath("certs") catch |err| {
+        std.Io.Dir.cwd().makePath("certs") catch |err| {
             tlog.warn("failed to create certs directory", &.{Attr.string("error", @errorName(err))});
         };
 

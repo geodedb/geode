@@ -300,7 +300,7 @@ pub const PersistentStorage = struct {
     /// Atomically write current_term to {data_dir}/current_term.
     pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
         try ensureDir(self.data_dir);
-        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        var dir = try std.Io.Dir.cwd().openDir(self.data_dir, .{});
         defer dir.close();
         var buf: [32]u8 = undefined;
         const str = std.fmt.bufPrint(&buf, "{d}", .{term}) catch unreachable;
@@ -315,7 +315,7 @@ pub const PersistentStorage = struct {
     /// Atomically write voted_for to {data_dir}/voted_for, or delete the file if null.
     pub fn saveVotedFor(self: *PersistentStorage, voter: ?u64) !void {
         try ensureDir(self.data_dir);
-        var dir = try std.fs.cwd().openDir(self.data_dir, .{});
+        var dir = try std.Io.Dir.cwd().openDir(self.data_dir, .{});
         defer dir.close();
         if (voter) |v| {
             var buf: [32]u8 = undefined;
@@ -349,13 +349,13 @@ pub const PersistentStorage = struct {
     // ---- Internal helpers ----
 
     fn ensureDir(path: []const u8) !void {
-        std.fs.cwd().makePath(path) catch |err| {
+        std.Io.Dir.cwd().makePath(path) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
     }
 
     fn readU64File(dir_path: []const u8, file_name: []const u8) !?u64 {
-        var dir = std.fs.cwd().openDir(dir_path, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
@@ -1176,7 +1176,7 @@ test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
     try std.testing.expectEqual(@as(?u64, null), voted_null);
 
     // Verify .tmp file does not persist (atomic rename should have cleaned up)
-    var dir = try std.fs.cwd().openDir(dir_path, .{});
+    var dir = try std.Io.Dir.cwd().openDir(dir_path, .{});
     defer dir.close();
     const tmp_exists = dir.openFile("current_term.tmp", .{});
     if (tmp_exists) |f| {

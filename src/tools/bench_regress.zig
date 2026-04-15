@@ -17,7 +17,7 @@ pub const Metric = struct {
 };
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const args = try std.process.argsAlloc(allocator);
@@ -134,7 +134,7 @@ const MetricMap = std.StringHashMap(std.StringHashMap(u64)); // kind -> (metric 
 
 fn loadFile(allocator: std.mem.Allocator, path: []const u8) !MetricMap {
     var map = MetricMap.init(allocator);
-    var file = try std.fs.cwd().openFile(path, .{});
+    var file = try std.Io.Dir.cwd().openFile(path, .{});
     defer file.close();
     const stat = try file.stat();
     const cap = @min(stat.size, 10_000_000); // 10MB safety
@@ -209,7 +209,7 @@ fn freeMetricMap(allocator: std.mem.Allocator, map: *MetricMap) void {
 }
 
 fn writeBaseline(path: []const u8, map: *MetricMap) !void {
-    var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+    var file = try std.Io.Dir.cwd().createFile(path, .{ .truncate = true });
     defer file.close();
     var it = map.iterator();
     while (it.next()) |entry| {
@@ -286,7 +286,7 @@ test "TestCANARY_REQ_GQL_010_BenchRegressionCompare" {
 
 test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummary" {
     // Build small in-memory metric maps and emit summary
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var baseline = MetricMap.init(allocator);

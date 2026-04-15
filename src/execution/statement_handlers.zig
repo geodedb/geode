@@ -897,7 +897,7 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
             total_cost += project_cost;
             try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "Project (cost: {})", .{project_cost}), .cost = project_cost });
         },
-        .Create => |_| {
+        .Create => {
             // CREATE costs
             const create_node_cost: i64 = 50;
             const create_rel_cost: i64 = 75;
@@ -906,7 +906,7 @@ pub fn executeExplain(allocator: std.mem.Allocator, exp: ast.ExplainStatement, c
             try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "CreateNodes (cost: {})", .{create_node_cost}), .cost = create_node_cost });
             try plan_steps.append(allocator, .{ .op = try formatPlanOp(allocator, "CreateRelationships (cost: {})", .{create_rel_cost}), .cost = create_rel_cost });
         },
-        .Delete => |_| {
+        .Delete => {
             // DELETE cost
             const delete_cost: i64 = 100;
             total_cost += delete_cost;

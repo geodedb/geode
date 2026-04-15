@@ -535,26 +535,26 @@ pub fn stringify(v: Value, buf: *[64]u8) EvalError![]const u8 {
         .Char => |c| c.data,
         .Varchar => |vc| vc.data,
         .Text => |t| t,
-        .Date => |_| "date", // Todo: implement formatting
-        .Time => |_| "time",
-        .TimeTZ => |_| "timetz",
-        .Timestamp => |_| "timestamp",
-        .TimestampTZ => |_| "timestamptz",
-        .Interval => |_| "interval",
-        .Bytea => |_| "bytea",
+        .Date => "date", // Todo: implement formatting
+        .Time => "time",
+        .TimeTZ => "timetz",
+        .Timestamp => "timestamp",
+        .TimestampTZ => "timestamptz",
+        .Interval => "interval",
+        .Bytea => "bytea",
         .Json => |j| j,
         .Jsonb => |j| j.data,
         .Xml => |x| x.data,
-        .Url => |_| "url", // Todo: call toString
-        .Domain => |_| "domain",
+        .Url => "url", // Todo: call toString
+        .Domain => "domain",
         .UUID => |u| blk3: {
             const s = std.fmt.bufPrint(buf[0..], "{x:0>2}{x:0>2}{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}-{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}{x:0>2}", .{ u.bytes[0], u.bytes[1], u.bytes[2], u.bytes[3], u.bytes[4], u.bytes[5], u.bytes[6], u.bytes[7], u.bytes[8], u.bytes[9], u.bytes[10], u.bytes[11], u.bytes[12], u.bytes[13], u.bytes[14], u.bytes[15] }) catch return EvalError.Unsupported;
             break :blk3 s;
         },
-        .Enum => |_| "enum",
-        .BitString => |_| "bitstring",
-        .VarBit => |_| "varbit",
-        .IntRange => |_| "range",
+        .Enum => "enum",
+        .BitString => "bitstring",
+        .VarBit => "varbit",
+        .IntRange => "range",
         else => return EvalError.TypeMismatch,
     };
 }

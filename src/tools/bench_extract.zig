@@ -6,7 +6,7 @@ const builtin = @import("builtin");
 
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator for tool main
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const allocator = gpa_instance.allocator();
     var stdin_file = if (builtin.os.tag == .windows)

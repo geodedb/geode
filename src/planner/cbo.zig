@@ -304,7 +304,7 @@ pub const CostBasedOptimizer = struct {
 // simple invocation without constructing a full optimizer instance. These return
 // FeatureDisabled when GEODE_ENABLE_CBO is not set to "1".
 // P2-3: Use static GPA for legacy stub function
-var choosePlanAPI_gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+var choosePlanAPI_gpa: std.heap.DebugAllocator(.{}) = .{};
 var choosePlanAPI_gpa_init = false;
 
 pub fn choosePlanAPI() !void {

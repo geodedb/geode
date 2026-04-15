@@ -173,7 +173,7 @@ pub const PasswordPolicy = struct {
 
     pub fn geodeSecure() PasswordPolicy {
         // CANARY: REQ=REQ-AUTH-CONFIG-001; FEATURE="Configurable Password Policy"; ASPECT=Security; STATUS=TESTED; TEST=TestCANARY_REQ_AUTH_CONFIG_001_ConfigurablePolicy; OWNER=security; UPDATED=2025-09-30
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        var gpa = std.heap.DebugAllocator(.{}){};
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
         const min_length_env = std.process.getEnvVarOwned(allocator, "GEODE_PASSWORD_MIN_LENGTH") catch null;
@@ -1211,7 +1211,7 @@ pub const SecurityManager = struct {
             };
             defer self.allocator.free(pw_path);
 
-            if (std.fs.cwd().createFile(pw_path, .{ .mode = 0o600 })) |file| {
+            if (std.Io.Dir.cwd().createFile(pw_path, .{ .mode = 0o600 })) |file| {
                 defer file.close();
                 file.writeAll(generated_password_hex[0..64]) catch |err| {
                     log.warn("Failed to write admin password file", &.{
@@ -1720,7 +1720,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
 // ============================================================================
 
 test "SecurityManager.deinit releases default startup allocations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
 
     var sm = try SecurityManager.init(gpa.allocator());
@@ -1728,7 +1728,7 @@ test "SecurityManager.deinit releases default startup allocations" {
 }
 
 test "SecurityManager.deinit releases hydrated runtime state" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
 
     const allocator = gpa.allocator();

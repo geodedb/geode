@@ -1096,16 +1096,16 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
 
         // Create directory if it doesn't exist
         if (std.fs.path.dirname(path)) |dir| {
-            std.fs.cwd().makePath(dir) catch |err| switch (err) {
+            std.Io.Dir.cwd().makePath(dir) catch |err| switch (err) {
                 error.PathAlreadyExists => {},
                 else => return err,
             };
         }
 
-        global_audit_file = std.fs.cwd().createFile(path, .{ .truncate = false }) catch |err| switch (err) {
+        global_audit_file = std.Io.Dir.cwd().createFile(path, .{ .truncate = false }) catch |err| switch (err) {
             error.FileNotFound => blk: {
                 // Try to create the file
-                break :blk try std.fs.cwd().createFile(path, .{});
+                break :blk try std.Io.Dir.cwd().createFile(path, .{});
             },
             else => return err,
         };

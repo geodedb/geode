@@ -679,7 +679,7 @@ pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = try std.fs.cwd().createFile(file_path, .{});
+    const file = try std.Io.Dir.cwd().createFile(file_path, .{});
     defer file.close();
 
     // Write number of entries
@@ -819,7 +819,7 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+    const file = std.Io.Dir.cwd().openFile(file_path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
@@ -1035,7 +1035,7 @@ fn readUndoEntry(allocator: std.mem.Allocator, file: std.fs.File) !?UndoEntry {
 pub fn clearUndoLogFile(allocator: std.mem.Allocator) !void {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
-    std.fs.cwd().deleteFile(file_path) catch |err| {
+    std.Io.Dir.cwd().deleteFile(file_path) catch |err| {
         if (err != error.FileNotFound) return err;
     };
 }

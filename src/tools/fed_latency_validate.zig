@@ -77,7 +77,7 @@ fn makeKey(buf: *[64]u8, field: []const u8) []const u8 {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
     var args = try std.process.argsWithAllocator(allocator);
@@ -94,7 +94,7 @@ pub fn main() !void {
     var buf: [8192]u8 = undefined;
     var file_reader = blk: {
         if (file_path) |p| {
-            const f = std.fs.cwd().openFile(p, .{ .mode = .read_only }) catch return error.OpenFileFailed;
+            const f = std.Io.Dir.cwd().openFile(p, .{ .mode = .read_only }) catch return error.OpenFileFailed;
             break :blk f.reader(&buf);
         } else {
             const stdin_file: std.fs.File = if (builtin.os.tag == .windows)

@@ -152,7 +152,7 @@ pub const FileSink = struct {
     pub fn send(self: *FileSink, events: []const ChangeEvent) !void {
         // Lazy initialization
         if (self.file == null) {
-            self.file = try std.fs.cwd().createFile(self.path, .{
+            self.file = try std.Io.Dir.cwd().createFile(self.path, .{
                 .truncate = false,
             });
             try self.file.?.seekFromEnd(0);
@@ -249,13 +249,13 @@ test "FileSink - writes events to file" {
     try sink.send(&events);
 
     // Verify file exists
-    const file = try std.fs.cwd().openFile("test_cdc_sink.log", .{});
+    const file = try std.Io.Dir.cwd().openFile("test_cdc_sink.log", .{});
     defer file.close();
     const stat = try file.stat();
     try testing.expect(stat.size > 0);
 
     // Cleanup
-    try std.fs.cwd().deleteFile("test_cdc_sink.log");
+    try std.Io.Dir.cwd().deleteFile("test_cdc_sink.log");
 }
 
 test "SinkRegistry - register and retrieve sinks" {

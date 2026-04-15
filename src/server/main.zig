@@ -340,7 +340,7 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
-    var gpa_instance = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     // The server dispatches transport work on multiple threads. Wrap the
     // process allocator so request parsing/execution can safely allocate

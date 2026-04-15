@@ -130,7 +130,7 @@ pub const History = struct {
         };
         try h.path_buf.appendSlice(path);
         // Try to open existing file (ignore if not found)
-        var file = std.fs.cwd().openFile(path, .{ .mode = .read_only }) catch |e| switch (e) {
+        var file = std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only }) catch |e| switch (e) {
             error.FileNotFound => return h,
             else => return e,
         };
@@ -164,7 +164,7 @@ pub const History = struct {
         std.mem.copyForwards(u8, dup, stmt);
         try self.entries.append(dup);
         // Append to file with trailing newline
-        var file = try std.fs.cwd().createFile(self.path_buf.items, .{ .read = true, .append = true });
+        var file = try std.Io.Dir.cwd().createFile(self.path_buf.items, .{ .read = true, .append = true });
         defer file.close();
         try file.writeAll(stmt);
         try file.writeAll("\n");
@@ -181,7 +181,7 @@ pub fn runOnce(in_stream: anytype, out_stream: anytype) !void {
 }
 
 test "repl.runOnce prompt basic" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var in_mem = std.io.fixedBufferStream("RETURN 1\n");
     var out_buf: [256]u8 = undefined;
@@ -191,7 +191,7 @@ test "repl.runOnce prompt basic" {
 }
 
 test "TestCANARY_REQ_GQL_086_MultilineBuffering basic semicolon termination" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var repl_state = Repl.init(gpa.allocator());
     defer repl_state.deinit();
@@ -203,7 +203,7 @@ test "TestCANARY_REQ_GQL_086_MultilineBuffering basic semicolon termination" {
 }
 
 test "TestCANARY_REQ_GQL_086_MultilineBuffering blank line flush" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var repl_state = Repl.init(gpa.allocator());
     defer repl_state.deinit();
@@ -216,7 +216,7 @@ test "TestCANARY_REQ_GQL_086_MultilineBuffering blank line flush" {
 }
 
 test "TestCANARY_REQ_GQL_086_HistoryPersistence basic load append" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var tmp_dir = try std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();

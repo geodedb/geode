@@ -80,7 +80,7 @@ pub fn runSimulation(allocator: std.mem.Allocator, cfg: PrefetchConfig, seed: u6
 }
 
 test "TestCANARY_REQ_GQL_004_PaginationPrefetchSimulation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const cfg: PrefetchConfig = .{ .window = 3, .pages = 16, .page_size = 64 };
     const metrics = try runSimulation(gpa.allocator(), cfg, 12345);

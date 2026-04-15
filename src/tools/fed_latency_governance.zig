@@ -28,7 +28,7 @@ const Governance = struct {
 };
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    var file = try std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     var buf = try allocator.alloc(u8, @intCast(stat.size));
@@ -37,7 +37,7 @@ fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
 }
 
 fn lastLines(allocator: std.mem.Allocator, path: []const u8, tail: usize) ![][]const u8 {
-    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    var file = try std.Io.Dir.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
     const stat = try file.stat();
     var buf = try allocator.alloc(u8, @intCast(stat.size));
@@ -70,7 +70,7 @@ fn lastLines(allocator: std.mem.Allocator, path: []const u8, tail: usize) ![][]c
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
     var args = try std.process.argsWithAllocator(allocator);

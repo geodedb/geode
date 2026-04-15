@@ -32,18 +32,18 @@ pub const LogStorage = struct {
 
     /// Open or create the log file at `file_path`.
     pub fn init(allocator: Allocator, file_path: []const u8) !LogStorage {
-        const file = std.fs.cwd().createFile(file_path, .{
+        const file = std.Io.Dir.cwd().createFile(file_path, .{
             .truncate = false,
             .read = true,
         }) catch |err| {
             if (err == error.FileNotFound) {
                 // Parent directory may not exist — try to create it.
                 if (std.mem.lastIndexOfScalar(u8, file_path, '/')) |sep| {
-                    try std.fs.cwd().makePath(file_path[0..sep]);
+                    try std.Io.Dir.cwd().makePath(file_path[0..sep]);
                     return LogStorage{
                         .allocator = allocator,
                         .file_path = file_path,
-                        .file = try std.fs.cwd().createFile(file_path, .{
+                        .file = try std.Io.Dir.cwd().createFile(file_path, .{
                             .truncate = false,
                             .read = true,
                         }),

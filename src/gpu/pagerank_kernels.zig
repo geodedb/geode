@@ -317,7 +317,7 @@ test "TestCANARY_REQ_GQL_051_GPUPageRankSmallGraph" {
     const row_offsets = &[_]u32{ 0, 2, 3, 5, 6 };
     const col_indices = &[_]u32{ 1, 2, 2, 0, 3, 2 };
     const g = PRGraph{ .row_offsets = row_offsets, .col_indices = col_indices, .num_nodes = 4 };
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const cpu = try pagerankCPU(g, 20, 0.85, alloc);

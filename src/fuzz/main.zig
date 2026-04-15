@@ -6,7 +6,7 @@ const geode = @import("geode");
 // GAP-0204 FIX: Implemented functional fuzz harness that exercises the GQL parser
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -70,7 +70,7 @@ fn validateStatement(stmt: geode.ast.Statement) void {
 pub export fn LLVMFuzzerTestOneInput(data: [*]const u8, size: usize) c_int {
     if (size == 0) return 0;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -83,7 +83,7 @@ pub export fn LLVMFuzzerTestOneInput(data: [*]const u8, size: usize) c_int {
 }
 
 test "fuzz harness compiles and runs with empty input" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -92,7 +92,7 @@ test "fuzz harness compiles and runs with empty input" {
 }
 
 test "fuzz harness handles valid GQL" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -109,7 +109,7 @@ test "fuzz harness handles valid GQL" {
 }
 
 test "fuzz harness handles malformed input" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

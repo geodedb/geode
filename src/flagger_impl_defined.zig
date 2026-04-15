@@ -16,7 +16,7 @@ pub fn collect(allocator: std.mem.Allocator, opts: struct { zero_length_paths_ex
 }
 
 test "TestCANARY_REQ_GQL_024_ImplDefinedZeroLengthPathPolicy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const findings = try collect(alloc, .{ .zero_length_paths_excluded = true });
