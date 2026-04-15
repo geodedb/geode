@@ -233,6 +233,7 @@ geodetestlab/venv/
 geodetestlab/**/__pycache__/
 geodetestlab/**/*.egg-info/
 reports/
+harness-reports/
 *.backup
 scratch_*.zig
 .worktrees/
