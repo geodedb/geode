@@ -126,6 +126,9 @@
             .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#4aec372a74e347df12116c8b02045d8d4aacca5e",
             .hash = "grpc_zig-0.1.0-7FnvpBK7AQC4AVHr2XAYWXthWv1jH2BaPeydPS2J9rfK",
         },
+        .geode_client_zig = .{
+            .path = "../geode-client-zig",
+        },
 
         // =======================================================================
         // Phase 6: Extracted Core Libraries

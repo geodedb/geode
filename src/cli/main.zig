@@ -23,6 +23,8 @@ const schema = @import("schema");
 const query_runner = geode.query_runner;
 const query_scope = geode.query_scope;
 const grpc_query_transport = geode.grpc_query_transport;
+const zig_quic_bridge = geode.zig_quic_bridge;
+const zig_client = zig_quic_bridge.zig_client;
 const pooled = @import("transport/thread_pool");
 const stdio_util = @import("../utils/stdio.zig");
 
@@ -82,9 +84,6 @@ const ExitCode = cli_dispatcher.ExitCode;
 const getEnvVar = cli_dispatcher.getEnvVar;
 const logAuditEvent = cli_dispatcher.logAuditEvent;
 const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
-
-// Import QUIC modules for real transport implementation
-const quic = @import("transport/quic");
 
 const VERSION = build_options.version;
 
@@ -252,65 +251,6 @@ fn printQueryUsage() void {
 // (server-only helpers removed; unified CLI delegates to src/server/main.zig)
 
 // (embedded server state/types removed)
-
-// CANARY: REQ=REQ-PERF-WRITE-STALL-001; FEATURE="WriteStallOptimization"; ASPECT=StreamWrite; STATUS=TESTED; TEST=test_performance_optimizations.zig; OWNER=cli; UPDATED=2026-01-30
-// GAP-0203: Three-phase write stall handling:
-//   Phase 1 (stalls 1-3): Spin with poll only (zero sleep, sub-microsecond)
-//   Phase 2 (stalls 4-8): Poll + yield to OS scheduler (minimal latency)
-//   Phase 3 (stalls 9+):  Exponential backoff sleep (10-100μs, prevents CPU burn)
-fn writeAllToStream(
-    transport: *quic.QuicTransport,
-    conn: *quic.QuicConnection,
-    stream_id: u64,
-    data: []const u8,
-) !void {
-    var written: usize = 0;
-    var stalled: usize = 0;
-    const max_retries: usize = 1000;
-    const spin_threshold: usize = 3; // Phase 1: spin-poll only
-    const yield_threshold: usize = 8; // Phase 2: yield to scheduler
-    const initial_sleep_us: u64 = 10;
-    const max_sleep_us: u64 = 100;
-
-    while (written < data.len) {
-        const n = conn.inner.writeStream(stream_id, data[written..], false) catch |err| switch (err) {
-            error.FlowControlBlocked, error.WouldBlock => {
-                stalled += 1;
-                if (stalled > max_retries) return error.WriteError;
-                transport.poll(0) catch {};
-                if (stalled > yield_threshold) {
-                    // Phase 3: exponential backoff sleep
-                    const backoff: u6 = @intCast(@min(stalled - yield_threshold, 4));
-                    const sleep_us: u64 = @min(initial_sleep_us << backoff, max_sleep_us);
-                    std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
-                } else if (stalled > spin_threshold) {
-                    // Phase 2: yield to OS scheduler (0ns sleep = yield)
-                    std.Thread.sleep(0);
-                }
-                // Phase 1 (stalled <= spin_threshold): poll only, no sleep
-                continue;
-            },
-            else => return err,
-        };
-
-        if (n == 0) {
-            stalled += 1;
-            if (stalled > max_retries) return error.WriteError;
-            transport.poll(0) catch {};
-            if (stalled > yield_threshold) {
-                const backoff: u6 = @intCast(@min(stalled - yield_threshold, 4));
-                const sleep_us: u64 = @min(initial_sleep_us << backoff, max_sleep_us);
-                std.Thread.sleep(sleep_us * @as(u64, std.time.ns_per_us));
-            } else if (stalled > spin_threshold) {
-                std.Thread.sleep(0);
-            }
-            continue;
-        }
-
-        written += n;
-        stalled = 0;
-    }
-}
 
 fn printShellUsage() void {
     std.debug.print("geode shell - Interactive GQL shell\n" ++
@@ -1761,6 +1701,7 @@ fn executeQueryOnGrpc(
     // 2. Process-level deadline watchdog thread started in cmdQuery
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
     // 1. Handshake — send HelloRequest, read HelloResponse
     const hello_resp = grpc_query_transport.hello(
@@ -1769,7 +1710,7 @@ fn executeQueryOnGrpc(
         .{
             .username = username,
             .password = password,
-            .graph = graph_for_hello,
+            .graph = binding.graph_for_hello,
         },
         .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     ) catch |err| {
@@ -1807,11 +1748,11 @@ fn executeQueryOnGrpc(
 
     // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;"
     // When graph came from DSN, graph_for_prepend is null (server handles via HELLO)
-    var final_query: []const u8 = query_text;
+    var final_query: []const u8 = binding.query_text;
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
 
-    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
+    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, binding.query_text, graph);
     if (allocated_query) |scoped| final_query = scoped;
 
     const owned_params = params;
@@ -1884,49 +1825,50 @@ fn executeBatchQueries(
         return error.InvalidAddress;
     };
 
-    // Single QUIC connection for all queries
-    var quic_client = quic.QuicClient.init(allocator);
-    defer quic_client.deinit();
+    // Single QUIC connection for all queries via the shared Zig client library.
+    var raw_client = zig_quic_bridge.initClient(
+        allocator,
+        host,
+        port,
+        .{
+            .insecure = insecure,
+            .ca_cert_path = ca_cert_path,
+            .client_cert_path = client_cert_path,
+            .client_key_path = client_key_path,
+        },
+        null,
+        null,
+    ) catch |err| {
+        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
+        _ = stderr.writeAll(err_msg) catch {};
+        return error.ConnectionFailed;
+    };
+    defer raw_client.deinit();
 
-    const use_client_certs = client_cert_path != null or client_key_path != null;
-    const connect_err = if (use_client_certs)
-        quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
-    else if (insecure or ca_cert_path != null)
-        quic_client.connectInsecure(host, port, true)
-    else
-        quic_client.connectInsecure(host, port, true);
-
-    if (connect_err) |_| {
-        const handshake_timeout = @max(1, timeout_secs);
-        if (quic_client.waitForHandshake(handshake_timeout)) |_| {
-            // Connected — execute all queries over this single connection
-            var executed: usize = 0;
-            var error_count: usize = 0;
-            const empty_params = std.ArrayList(schema.Param){};
-
-            for (queries.items) |query_line| {
-                executeQueryOnConnection(allocator, &quic_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role) catch |err| {
-                    std.debug.print("Error executing query: {}\n", .{err});
-                    error_count += 1;
-                };
-                executed += 1;
-            }
-
-            std.debug.print("\nBatch execution complete: {d} queries executed", .{executed});
-            if (error_count > 0) {
-                std.debug.print(", {d} errors", .{error_count});
-            }
-            std.debug.print("\n", .{});
-            return;
-        } else |_| {
-            _ = stderr.writeAll("Error: Connection handshake timeout\n") catch {};
-        }
-    } else |err| {
+    raw_client.connect() catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {}\n", .{err}) catch "Error: Failed to connect\n";
         _ = stderr.writeAll(err_msg) catch {};
+        return error.ConnectionFailed;
+    };
+
+    // Connected — execute all queries over this single connection
+    var executed: usize = 0;
+    var error_count: usize = 0;
+    const empty_params = std.ArrayList(schema.Param){};
+
+    for (queries.items) |query_line| {
+        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role) catch |err| {
+            std.debug.print("Error executing query: {}\n", .{err});
+            error_count += 1;
+        };
+        executed += 1;
     }
 
-    return error.ConnectionFailed;
+    std.debug.print("\nBatch execution complete: {d} queries executed", .{executed});
+    if (error_count > 0) {
+        std.debug.print(", {d} errors", .{error_count});
+    }
+    std.debug.print("\n", .{});
 }
 
 // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-005; FEATURE="ChunkedExecution"; ASPECT=OptionsStruct; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
@@ -2210,9 +2152,6 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         return error.InvalidAddress;
     };
 
-    // GAP-0113: Determine connection mode based on certificate options.
-    const use_client_certs = client_cert_path != null or client_key_path != null;
-
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
         _ = stderr.writeAll("Error: Both --client-cert and --client-key must be provided for mutual TLS\n") catch {};
@@ -2228,68 +2167,54 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     var last_error: ?[]const u8 = null;
 
     while (attempts < max_attempts) : (attempts += 1) {
-        var quic_client = quic.QuicClient.init(allocator);
-        defer quic_client.deinit();
-
-        // GAP-0113: Choose connection method based on security options
-        // Priority: mTLS client certs > CA cert / insecure flag > default secure TLS
-        //
-        // NOTE: The vendor QUIC library does not pass ca_path to the client-side
-        // TLS context, so file-based CA verification is not supported for clients.
-        // When --ca-cert is provided, we use connectInsecure(allow_insecure=true)
-        // because the user has explicitly indicated trust for this server.
-        // When mTLS client certs are provided, connectEx handles them correctly.
-        const connect_err = if (use_client_certs)
-            // Use explicit certificates for enterprise PKI/mutual TLS
-            quic_client.connectEx(host, port, ca_cert_path, client_cert_path, client_key_path)
-        else if (insecure or ca_cert_path != null)
-            // --insecure: skip verification explicitly
-            // --ca-cert without client certs: user trusts this server; the QUIC
-            //   library cannot do CA-file verification so we allow the handshake.
-            quic_client.connectInsecure(host, port, true)
-        else
-            // Default: allow self-signed certs for local/dev servers.
-            quic_client.connectInsecure(host, port, true);
-
-        if (connect_err) |_| {
-            const handshake_timeout = @max(1, timeout_secs);
-            const handshake_err = quic_client.waitForHandshake(handshake_timeout);
-            if (handshake_err) |_| {
-                // Handshake successful, proceed with query execution
-                params_transferred = true;
-                executeQueryOnConnection(allocator, &quic_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
-                    // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
-                    // transport can drop messages under rapid sequential
-                    // connections; retries resolve most transient failures
-                    // without requiring explicit --retry flag.
-                    if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
-                        last_error = "connection dropped, retrying";
-                        // GAP-0263/GAP-0272: Brief delay between retries to let the
-                        // server finish processing the previous connection's cleanup.
-                        // Increased from 10ms to 50ms to reduce failures during
-                        // rapid sequential bulk operations (e.g., stdin batches).
-                        std.Thread.sleep(50 * std.time.ns_per_ms);
-                        continue;
-                    }
-                    return err;
-                };
-                return;
-            } else |_| {
-                last_error = "connection timeout";
-            }
-        } else |err| {
+        var raw_client = zig_quic_bridge.initClient(
+            allocator,
+            host,
+            port,
+            .{
+                .insecure = insecure,
+                .ca_cert_path = ca_cert_path,
+                .client_cert_path = client_cert_path,
+                .client_key_path = client_key_path,
+            },
+            null,
+            null,
+        ) catch |err| {
             last_error = @errorName(err);
-            // If insecure mode is forbidden in release builds, report and exit immediately
-            if (err == error.InsecureForbiddenInRelease) {
-                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
-                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
-                break;
-            }
-            // If refused, stop retrying and fall back immediately
+            break;
+        };
+        defer raw_client.deinit();
+
+        raw_client.connect() catch |err| {
+            last_error = @errorName(err);
             if (std.mem.indexOf(u8, last_error.?, "ConnectionRefused") != null) {
                 break;
             }
-        }
+            if (attempts + 1 < max_attempts) {
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+            }
+            continue;
+        };
+
+        params_transferred = true;
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
+            // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
+            // transport can drop messages under rapid sequential
+            // connections; retries resolve most transient failures
+            // without requiring explicit --retry flag.
+            if (err == error.ConnectionFailed and attempts + 1 < max_attempts) {
+                last_error = "connection dropped, retrying";
+                // GAP-0263/GAP-0272: Brief delay between retries to let the
+                // server finish processing the previous connection's cleanup.
+                // Increased from 10ms to 50ms to reduce failures during
+                // rapid sequential bulk operations (e.g., stdin batches).
+                std.Thread.sleep(50 * std.time.ns_per_ms);
+                params_transferred = false;
+                continue;
+            }
+            return err;
+        };
+        return;
     }
 
     if (last_error) |le| {
@@ -2300,92 +2225,75 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     return error.ConnectionFailed;
 }
 
-// Helper to read length-prefixed protobuf message with polling
-fn readProtoMessage(allocator: std.mem.Allocator, stream: anytype, client: *quic.QuicClient, timeout_secs: u32) !schema.QuicServerMessage {
-    // Read length prefix
-    var len_buf: [4]u8 = undefined;
-    var total_read: usize = 0;
-    var attempts: usize = 0;
-    // Issue #479: Reduced poll interval from 10ms to 1ms (matching GAP-0200 handshake fix)
-    // to prevent QUIC message reads from consuming most of the watchdog timeout budget.
-    // Calculate max attempts based on timeout_secs (1ms sleep per attempt)
-    // timeout_secs * 1000ms / 1ms = timeout_secs * 1000
-    const max_attempts = timeout_secs * 1000;
-
-    while (total_read < 4) {
-        const n = stream.read(len_buf[total_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                attempts += 1;
-                if (attempts > max_attempts) return error.Timeout;
-                try client.poll(1);
-                std.Thread.sleep(1 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n == 0) return error.EndOfStream;
-        touchActiveQueryDeadlineWatchdog();
-        total_read += n;
-    }
-
-    const msg_len = std.mem.readInt(u32, &len_buf, .big);
-    if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
-
-    // Read message body
-    const msg_bytes = try allocator.alloc(u8, msg_len);
-    defer allocator.free(msg_bytes);
-
-    total_read = 0;
-    attempts = 0;
-    while (total_read < msg_len) {
-        const n = stream.read(msg_bytes[total_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                attempts += 1;
-                if (attempts > max_attempts) return error.Timeout;
-                try client.poll(1);
-                std.Thread.sleep(1 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n == 0) return error.EndOfStream;
-        touchActiveQueryDeadlineWatchdog();
-        total_read += n;
-    }
-
-    // Decode message using std.Io.Reader.fixed() for type-erased reader
-    var reader: std.Io.Reader = .fixed(msg_bytes);
-
-    // Decode ServerPacket wrapper
-    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
-    return packet.quic orelse error.InvalidMessage;
-}
-
-// Helper to write length-prefixed protobuf message
-fn writeProtoMessage(allocator: std.mem.Allocator, stream: anytype, msg: schema.QuicClientMessage) !void {
-    // Use std.Io.Writer.Allocating for type-erased allocating writer compatible with protobuf
+fn writeProtoMessageViaZigClient(allocator: std.mem.Allocator, client: *zig_client.GeodeClient, msg: schema.QuicClientMessage) !void {
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 4096);
     defer aw.deinit();
 
     const packet = schema.ClientPacket{ .quic = msg };
     try protobuf.encode(&aw.writer, allocator, packet);
 
-    // Get the written data
     const written_data = aw.writer.buffer[0..aw.writer.end];
+    const framed = try allocator.alloc(u8, written_data.len + 4);
+    defer allocator.free(framed);
 
-    // Write length prefix (4 bytes BE)
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(written_data.len), .big);
-    try stream.writeAll(&len_buf);
+    std.mem.writeInt(u32, framed[0..4], @intCast(written_data.len), .big);
+    @memcpy(framed[4..], written_data);
+    try client.sendRawFramed(framed);
+}
 
-    // Write message body
-    try stream.writeAll(written_data);
+fn readProtoMessageViaZigClient(allocator: std.mem.Allocator, client: *zig_client.GeodeClient, timeout_secs: u32) !schema.QuicServerMessage {
+    const body = client.receiveRawFrame(allocator, @as(u64, timeout_secs) * std.time.ms_per_s) catch |err| switch (err) {
+        error.ReceiveTimeout => return error.Timeout,
+        else => return err,
+    };
+    defer allocator.free(body);
+
+    var reader: std.Io.Reader = .fixed(body);
+    const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
+    return packet.quic orelse error.InvalidMessage;
+}
+
+const QueryGraphBinding = struct {
+    query_text: []const u8,
+    graph_for_hello: ?[]const u8,
+};
+
+fn resolveQueryGraphBinding(
+    query_text: []const u8,
+    graph_for_prepend: ?[]const u8,
+    graph_for_hello: ?[]const u8,
+) QueryGraphBinding {
+    if (graph_for_prepend != null or graph_for_hello != null) {
+        return .{
+            .query_text = query_text,
+            .graph_for_hello = graph_for_hello,
+        };
+    }
+
+    const extracted = query_scope.extractLeadingUseGraph(query_text) orelse {
+        return .{
+            .query_text = query_text,
+            .graph_for_hello = null,
+        };
+    };
+
+    if (extracted.remainder.len == 0 or query_scope.startsWithUseGraph(extracted.remainder)) {
+        return .{
+            .query_text = query_text,
+            .graph_for_hello = null,
+        };
+    }
+
+    return .{
+        .query_text = extracted.remainder,
+        .graph_for_hello = extracted.graph_name,
+    };
 }
 
 // CANARY: REQ=REQ-CLI-GRAPH-FLAG-005; FEATURE="GraphFlag"; ASPECT=ExecuteOnConnection; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
 fn executeQueryOnConnection(
     allocator: std.mem.Allocator,
-    quic_client: *quic.QuicClient,
+    raw_client: *zig_client.GeodeClient,
     query_text: []const u8,
     format: []const u8,
     username: ?[]const u8,
@@ -2400,18 +2308,11 @@ fn executeQueryOnConnection(
     // Get stdout and stderr handles for output
     const stdout = std.fs.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable };
     const stderr_handle = std.fs.File{ .handle = getStderrHandle() catch return error.StdioUnavailable };
+    const binding = resolveQueryGraphBinding(query_text, graph, graph_for_hello);
 
-    // Get a stream for communication
-    var stream = quic_client.getStream() catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to get stream: {}\n", .{err}) catch "Error: Failed to get stream\n";
-        _ = stderr_handle.writeAll(err_msg) catch {};
-        return error.ConnectionFailed;
-    };
-    // GAP-0260: Signal stream FIN before close to ensure clean QUIC teardown.
-    defer {
-        stream.finish() catch {};
-        stream.deinit();
-    }
+    // Start each standalone query on a fresh QUIC stream.
+    raw_client.closeStream();
+    defer raw_client.closeStream();
 
     // Send HELLO message with authentication credentials
     // CANARY: REQ=REQ-LIB-MIGRATION-PROTO-001; FEATURE="ProtoMigration"; ASPECT=HelloMessage; STATUS=TESTED; OWNER=cli; UPDATED=2026-02-02
@@ -2419,12 +2320,12 @@ fn executeQueryOnConnection(
         .username = username orelse "",
         .password = password orelse "",
         .tenant_id = null,
-        .graph = graph_for_hello,
+        .graph = binding.graph_for_hello,
         .role = fle_role,
     };
 
     log.debug("Client sending HELLO (Protobuf)", &.{});
-    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
+    writeProtoMessageViaZigClient(allocator, raw_client, .{ .hello = hello_req }) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
         _ = stderr_handle.writeAll(err_msg) catch {};
         return error.ConnectionFailed;
@@ -2434,7 +2335,7 @@ fn executeQueryOnConnection(
     var hello_arena = std.heap.ArenaAllocator.init(allocator);
     defer hello_arena.deinit();
 
-    const hello_resp_msg = readProtoMessage(hello_arena.allocator(), stream, quic_client, timeout_secs) catch |err| {
+    const hello_resp_msg = readProtoMessageViaZigClient(hello_arena.allocator(), raw_client, timeout_secs) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
         _ = stderr_handle.writeAll(err_msg) catch {};
         return error.ConnectionFailed;
@@ -2466,33 +2367,31 @@ fn executeQueryOnConnection(
     // CANARY: REQ=REQ-CLI-GRAPH-FLAG-006; FEATURE="GraphFlag"; ASPECT=PrependUseGraph; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
     // If a graph is specified via --graph flag, prepend "USE GRAPH graphname;" to the query
     // When graph came from DSN, caller passes null (server handles via HELLO)
-    var final_query: []const u8 = query_text;
+    var final_query: []const u8 = binding.query_text;
     var allocated_query: ?[]u8 = null;
     defer if (allocated_query) |q| allocator.free(q);
 
-    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, query_text, graph);
+    allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, binding.query_text, graph);
     if (allocated_query) |scoped| final_query = scoped;
 
     const QuicProtocolAdapter = struct {
-        quic_client: *quic.QuicClient,
-        stream: *quic.QuicClientStream,
+        raw_client: *zig_client.GeodeClient,
         timeout_secs: u32,
 
         fn sendClientMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
-            try writeProtoMessage(alloc, self.stream, msg);
+            try writeProtoMessageViaZigClient(alloc, self.raw_client, msg);
         }
 
         fn readServerMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, timeout: u32) !schema.QuicServerMessage {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
             const effective_timeout = if (timeout == 0) self.timeout_secs else timeout;
-            return try readProtoMessage(alloc, self.stream, self.quic_client, effective_timeout);
+            return try readProtoMessageViaZigClient(alloc, self.raw_client, effective_timeout);
         }
     };
 
     var adapter = QuicProtocolAdapter{
-        .quic_client = quic_client,
-        .stream = stream,
+        .raw_client = raw_client,
         .timeout_secs = timeout_secs,
     };
     var protocol_client = query_runner.ProtocolClient{
@@ -3293,55 +3192,32 @@ const AuthResult = struct {
 /// GAP-0150: Real QUIC authentication to server
 /// CANARY: REQ=REQ-AUTH-CLI-001; FEATURE="CLI QUIC Authentication"; ASPECT=ServerConnection; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: []const u8, password: []const u8, allow_insecure: bool) !AuthResult {
-    // GAP-0150 RESOLVED: Now uses real QUIC connection to server for authentication
-    // instead of simulating locally
-
-    // Parse server address
-    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse {
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
         std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
         return error.InvalidAddress;
     };
-    const host = server[0..colon_idx];
-    const port = std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10) catch {
-        std.debug.print("Error: Invalid port number\n", .{});
-        return error.InvalidAddress;
-    };
 
-    // Create QUIC client connection
-    const client = try allocator.create(quic.QuicClient);
-    client.* = quic.QuicClient.init(allocator);
+    // Create QUIC client connection via the shared Zig client library.
+    const client = try allocator.create(zig_client.GeodeClient);
     defer {
         client.deinit();
         allocator.destroy(client);
     }
 
-    // Connect to server (use explicit insecure flag, fall back to shell transport config)
     const insecure = allow_insecure or repl_quic_transport.getTlsConfig().insecure;
-    _ = client.connectInsecure(host, port, insecure) catch |err| {
-        if (err == error.InsecureForbiddenInRelease) {
-            std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
-            std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
-        } else {
-            std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
-        }
+    client.* = try zig_quic_bridge.initClientStrictTls(
+        allocator,
+        parsed.host,
+        parsed.port,
+        .{ .insecure = insecure },
+        null,
+        null,
+    );
+
+    client.connect() catch |err| {
+        std.debug.print("Error: Could not connect to server {s}:{d}: {s}\n", .{ parsed.host, parsed.port, @errorName(err) });
         return error.ConnectionFailed;
     };
-
-    // Wait for TLS handshake
-    _ = client.waitForHandshake(10) catch |err| {
-        std.debug.print("Error: TLS handshake failed: {s}\n", .{@errorName(err)});
-        // Connection may be in a bad state after handshake failure;
-        // null it out before deinit to avoid use-after-free in closeConnection
-        client.connection = null;
-        return error.HandshakeFailed;
-    };
-
-    // Get QUIC stream
-    var stream = client.getStream() catch |err| {
-        std.debug.print("Error: Could not open stream: {s}\n", .{@errorName(err)});
-        return error.StreamError;
-    };
-    defer stream.deinit();
 
     // Send authenticated HELLO handshake via Protobuf
     const hello_req = schema.HelloRequest{
@@ -3349,12 +3225,15 @@ fn connectToServer(allocator: std.mem.Allocator, server: []const u8, username: [
         .password = try allocator.dupe(u8, password),
         .tenant_id = null,
     };
+    defer {
+        allocator.free(hello_req.username);
+        allocator.free(hello_req.password);
+    }
 
-    // Wrap in QuicClientMessage
-    try writeProtoMessage(allocator, stream, .{ .hello = hello_req });
+    try writeProtoMessageViaZigClient(allocator, client, .{ .hello = hello_req });
 
     // Read HELLO response
-    const resp = try readProtoMessage(allocator, stream, client, 30);
+    const resp = try readProtoMessageViaZigClient(allocator, client, 30);
     switch (resp) {
         .hello => |h| {
             if (!h.success) {

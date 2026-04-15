@@ -2642,7 +2642,7 @@ REQ-LIB-MIGRATION-MCP-005,External Library Migration,MCPModule,TESTED,,,core,202
 REQ-LIB-MIGRATION-MCP-006,External Library Migration,MCPCommand,EXEMPT,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-MCP-006,External Library Migration,MCPModule,EXEMPT,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
 REQ-LIB-MIGRATION-MCP-007,External Library Migration,MCPCommandHandler,EXEMPT,,,cli,2026-01-24,src/cli/cli_dispatcher.zig
-REQ-LIB-MIGRATION-MCP-008,External Library Migration,MCPClient,EXEMPT,,,core,2026-01-24,src/mcp/client.zig
+REQ-LIB-MIGRATION-MCP-008,External Library Migration,MCPClient,IMPL,,,core,2026-04-14,src/mcp/client.zig
 REQ-LIB-MIGRATION-MCP-010,External Library Migration,MCPLSPTools,TESTED,,,core,2026-01-24,src/mcp/lsp.zig
 REQ-LIB-MIGRATION-PROTO-001,ProtoMigration,HelloMessage,TESTED,,,cli,2026-02-02,src/cli/main.zig
 REQ-LIB-MIGRATION-PROTOBUF-001,Protobuf Wire Protocol,WireProtocolCompatibility,TESTED,,,protocol,2026-02-03,tests/gql_conformance.zig
@@ -3375,7 +3375,6 @@ REQ-PERF-WAL-001,WriteAheadLog,UnitTest,TESTED,,,storage,2026-02-17,tests/test_w
 REQ-PERF-WAL-002,WriteAheadLog,MutationCallback,TESTED,,,storage,2026-02-17,src/graph_store.zig
 REQ-PERF-WAL-004,WriteAheadLog,PersistenceLoop,TESTED,,,storage,2026-02-17,src/graph_store.zig
 REQ-PERF-WAL-006,WriteAheadLog,LibExport,TESTED,,,storage,2026-02-17,src/lib.zig
-REQ-PERF-WRITE-STALL-001,WriteStallOptimization,StreamWrite,TESTED,,,cli,2026-01-30,src/cli/main.zig
 REQ-PHANTOM-READ-001,Phantom Read Prevention,Prevention,TESTED,,,txn,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-PHASE6-001,Phase6Modularization,ModuleSplit,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-PHASE6-002,Phase6Modularization,DependencyGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig

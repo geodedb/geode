@@ -8,13 +8,13 @@ const backup_types = @import("storage/backup");
 const BackupHeader = backup_types.BackupHeader;
 const BACKUP_MAGIC = backup_types.BACKUP_MAGIC;
 const BACKUP_VERSION = backup_types.BACKUP_VERSION;
-// QUIC transport for remote backup operations
-const quic = @import("transport/quic");
 // Import migration module for actual migration operations
 const migration = @import("migration");
 const protobuf = @import("protobuf");
 const schema = @import("schema");
 const stdio_util = @import("../utils/stdio.zig");
+const zig_quic_bridge = geode.zig_quic_bridge;
+const zig_client = zig_quic_bridge.zig_client;
 
 // CANARY: REQ=REQ-LIB-MIGRATION-SLOG-003; FEATURE="Structured Logging"; ASPECT=CLI; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-24
 const logging = @import("logging");
@@ -922,44 +922,38 @@ const MigrationExecContext = struct {
     password: ?[]const u8,
 };
 
-// GAP-0137: Updated to support TLS certificate verification
-// NOTE: Returns heap-allocated QuicClient to prevent dangling allocator pointers.
-// The QUIC Connection stores a pointer to the Endpoint's allocator field,
-// so the QuicClient must not be moved/copied after connection is established.
-fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8, tls_config: TlsConfig) !*quic.QuicClient {
-    const client = try allocator.create(quic.QuicClient);
+fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8, tls_config: TlsConfig) !*zig_client.GeodeClient {
+    const parsed = try zig_quic_bridge.parseHostPort(server_addr, 3141);
+    const client = try allocator.create(zig_client.GeodeClient);
     errdefer allocator.destroy(client);
 
-    client.* = quic.QuicClient.init(allocator);
-    const colon = std.mem.lastIndexOf(u8, server_addr, ":") orelse return error.InvalidArgument;
-    const host = server_addr[0..colon];
-    const port = try std.fmt.parseInt(u16, server_addr[colon + 1 ..], 10);
-
-    // GAP-0137: Choose connection method based on TLS configuration
-    // Priority: explicit certs > insecure flag > default secure
-    if (tls_config.hasCerts()) {
-        // Use explicit certificates for enterprise PKI/mutual TLS
-        try client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path);
-    } else if (tls_config.insecure) {
-        // Use insecure connect only when explicitly requested
+    if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
-        client.connectInsecure(host, port, true) catch |err| {
-            if (err == error.InsecureForbiddenInRelease) {
-                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
-                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
-            }
-            return err;
-        };
-    } else {
-        // Default: secure connection with system CA store
-        try client.connectInsecure(host, port, false);
     }
 
-    try client.waitForHandshake(10);
+    client.* = try zig_quic_bridge.initClientStrictTls(
+        allocator,
+        parsed.host,
+        parsed.port,
+        .{
+            .insecure = tls_config.insecure,
+            .ca_cert_path = tls_config.ca_cert_path,
+            .client_cert_path = tls_config.client_cert_path,
+            .client_key_path = tls_config.client_key_path,
+        },
+        null,
+        null,
+    );
+    errdefer {
+        client.deinit();
+        allocator.destroy(client);
+    }
+
+    try client.connect();
     return client;
 }
 
-fn writeProtoMessage(allocator: std.mem.Allocator, stream: *quic.QuicClientStream, msg: schema.QuicClientMessage) !void {
+fn writeProtoMessage(allocator: std.mem.Allocator, client: *zig_client.GeodeClient, msg: schema.QuicClientMessage) !void {
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
     defer aw.deinit();
 
@@ -967,60 +961,24 @@ fn writeProtoMessage(allocator: std.mem.Allocator, stream: *quic.QuicClientStrea
     try protobuf.encode(&aw.writer, allocator, packet);
 
     const body = aw.writer.buffer[0..aw.writer.end];
-    var len_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &len_buf, @intCast(body.len), .big);
-    try stream.writeAll(&len_buf);
-    try stream.writeAll(body);
+    const framed = try allocator.alloc(u8, body.len + 4);
+    defer allocator.free(framed);
+
+    std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
+    @memcpy(framed[4..], body);
+    try client.sendRawFramed(framed);
 }
 
 fn readProtoMessage(
     allocator: std.mem.Allocator,
-    quic_client: *quic.QuicClient,
-    stream: *quic.QuicClientStream,
+    client: *zig_client.GeodeClient,
     timeout_ms: u64,
 ) !schema.QuicServerMessage {
-    const max_attempts: usize = if (timeout_ms == 0) 0 else @max(@as(usize, 1), @as(usize, @intCast(timeout_ms / 10)));
-    var attempts: usize = 0;
-
-    var len_buf: [4]u8 = undefined;
-    var total_read: usize = 0;
-    while (total_read < 4) {
-        const n = stream.read(len_buf[total_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                attempts += 1;
-                if (attempts > max_attempts) return error.Timeout;
-                quic_client.poll(10) catch {};
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n == 0) return error.EndOfStream;
-        total_read += n;
-    }
-
-    const msg_len = std.mem.readInt(u32, &len_buf, .big);
-    if (msg_len > 16 * 1024 * 1024) return error.MessageTooLarge;
-
-    const msg_bytes = try allocator.alloc(u8, msg_len);
+    const msg_bytes = client.receiveRawFrame(allocator, timeout_ms) catch |err| switch (err) {
+        error.ReceiveTimeout => return error.Timeout,
+        else => return err,
+    };
     defer allocator.free(msg_bytes);
-
-    total_read = 0;
-    attempts = 0;
-    while (total_read < msg_len) {
-        const n = stream.read(msg_bytes[total_read..]) catch |err| {
-            if (err == error.WouldBlock) {
-                attempts += 1;
-                if (attempts > max_attempts) return error.Timeout;
-                quic_client.poll(10) catch {};
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
-            }
-            return err;
-        };
-        if (n == 0) return error.EndOfStream;
-        total_read += n;
-    }
 
     var reader: std.Io.Reader = .fixed(msg_bytes);
     const packet = try protobuf.decode(schema.ServerPacket, &reader, allocator);
@@ -1040,9 +998,6 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         ctx.allocator.destroy(quic_client);
     }
 
-    var stream = quic_client.getStream() catch |err| return err;
-    defer stream.deinit();
-
     const hello_req = schema.HelloRequest{
         .username = ctx.username orelse "",
         .password = ctx.password orelse "",
@@ -1050,11 +1005,11 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         .client_version = build_options.version,
         .wanted_conformance = "min",
     };
-    try writeProtoMessage(ctx.allocator, stream, .{ .hello = hello_req });
+    try writeProtoMessage(ctx.allocator, quic_client, .{ .hello = hello_req });
 
     var arena = std.heap.ArenaAllocator.init(ctx.allocator);
     defer arena.deinit();
-    const hello_resp = readProtoMessage(arena.allocator(), quic_client, stream, 5000) catch |err| return err;
+    const hello_resp = readProtoMessage(arena.allocator(), quic_client, 5000) catch |err| return err;
     var session_id_buf: ?[]u8 = null;
     switch (hello_resp) {
         .hello => |h| {
@@ -1067,8 +1022,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     defer ctx.allocator.free(session_id);
 
     const MigrationProtocolAdapter = struct {
-        stream: *quic.QuicClientStream,
-        quic_client: *quic.QuicClient,
+        client: *zig_client.GeodeClient,
         timeout_ms: u64,
 
         fn sendClientMessage(
@@ -1077,7 +1031,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
             msg: schema.QuicClientMessage,
         ) !void {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
-            try writeProtoMessage(allocator, self.stream, msg);
+            try writeProtoMessage(allocator, self.client, msg);
         }
 
         fn readServerMessage(
@@ -1087,7 +1041,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         ) !schema.QuicServerMessage {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
             const requested_ms = @max(@as(u64, timeout_secs), 1) * 1000;
-            return try readProtoMessage(allocator, self.quic_client, self.stream, @min(self.timeout_ms, requested_ms));
+            return try readProtoMessage(allocator, self.client, @min(self.timeout_ms, requested_ms));
         }
     };
 
@@ -1121,8 +1075,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
     };
 
     var adapter = MigrationProtocolAdapter{
-        .stream = stream,
-        .quic_client = quic_client,
+        .client = quic_client,
         .timeout_ms = 5000,
     };
     var protocol_client = query_runner.ProtocolClient{
@@ -1714,52 +1667,34 @@ fn executeRemoteBackup(
     username: ?[]const u8,
     password: ?[]const u8,
 ) !void {
-    // Parse server address
-    const colon_idx = std.mem.lastIndexOf(u8, server, ":") orelse return error.InvalidAddress;
-    const host = server[0..colon_idx];
-    const port = try std.fmt.parseInt(u16, server[colon_idx + 1 ..], 10);
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch return error.InvalidAddress;
 
-    // Create QUIC client
-    var client = quic.QuicClient.init(allocator);
+    var client = zig_quic_bridge.initClientStrictTls(
+        allocator,
+        parsed.host,
+        parsed.port,
+        .{
+            .insecure = tls_config.insecure,
+            .ca_cert_path = tls_config.ca_cert_path,
+            .client_cert_path = tls_config.client_cert_path,
+            .client_key_path = tls_config.client_key_path,
+        },
+        null,
+        null,
+    ) catch |err| {
+        std.debug.print("Error: Failed to initialize client: {}\n", .{err});
+        return err;
+    };
     defer client.deinit();
 
-    // GAP-0137: Choose connection method based on TLS configuration
-    if (tls_config.hasCerts()) {
-        _ = client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
-            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-            return err;
-        };
-    } else if (tls_config.insecure) {
+    if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
-        _ = client.connectInsecure(host, port, true) catch |err| {
-            if (err == error.InsecureForbiddenInRelease) {
-                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
-                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
-            } else {
-                std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-            }
-            return err;
-        };
-    } else {
-        // Default: secure connection with system CA store
-        _ = client.connectInsecure(host, port, false) catch |err| {
-            std.debug.print("Error: Failed to connect to {s}:{}: {}\n", .{ host, port, err });
-            return err;
-        };
     }
 
-    // Wait for handshake
-    _ = client.waitForHandshake(10) catch |err| {
+    client.connect() catch |err| {
         std.debug.print("Error: QUIC handshake failed: {}\n", .{err});
         return err;
     };
-
-    // Get stream
-    var stream = client.getStream() catch |err| {
-        std.debug.print("Error: Failed to create stream: {}\n", .{err});
-        return err;
-    };
-    defer stream.deinit();
 
     // Send HELLO (Protobuf)
     const hello_req = schema.HelloRequest{
@@ -1769,7 +1704,7 @@ fn executeRemoteBackup(
         .client_version = build_options.version,
         .wanted_conformance = "GQL/1.0",
     };
-    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
+    writeProtoMessage(allocator, &client, .{ .hello = hello_req }) catch |err| {
         std.debug.print("Error: Failed to send HELLO: {}\n", .{err});
         return err;
     };
@@ -1777,7 +1712,7 @@ fn executeRemoteBackup(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const hello_resp = readProtoMessage(arena.allocator(), &client, stream, 5000) catch |err| {
+    const hello_resp = readProtoMessage(arena.allocator(), &client, 5000) catch |err| {
         std.debug.print("Error: Failed to receive HELLO response: {}\n", .{err});
         return err;
     };
@@ -1799,12 +1734,12 @@ fn executeRemoteBackup(
         .backup_type = mode,
         .compress = compress,
     };
-    writeProtoMessage(allocator, stream, .{ .backup = backup_req }) catch |err| {
+    writeProtoMessage(allocator, &client, .{ .backup = backup_req }) catch |err| {
         std.debug.print("Error: Failed to send BACKUP request: {}\n", .{err});
         return err;
     };
 
-    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, stream, 30000) catch |err| {
+    const backup_resp_msg = readProtoMessage(arena.allocator(), &client, 30000) catch |err| {
         std.debug.print("Error: Failed to receive backup response: {}\n", .{err});
         return err;
     };
@@ -1835,23 +1770,10 @@ fn executeRemoteBackup(
         const remaining = backup_size - bytes_received;
         const chunk_size = @min(remaining, chunk_buf.len);
 
-        // Read chunk
-        const bytes_read = stream.read(chunk_buf[0..chunk_size]) catch |err| {
-            if (err == error.WouldBlock) {
-                // GAP-0200: Reduced poll/sleep from 50ms to 10ms for higher throughput
-                client.poll(10) catch {};
-                std.Thread.sleep(10 * std.time.ns_per_ms);
-                continue;
-            }
+        const bytes_read = client.receiveRawBytes(chunk_buf[0..chunk_size], 30000) catch |err| {
             std.debug.print("Error: Failed to receive backup data: {}\n", .{err});
             return err;
         };
-
-        if (bytes_read == 0) {
-            // GAP-0200: Reduced poll from 50ms to 10ms for higher throughput
-            client.poll(10) catch {};
-            continue;
-        }
 
         // Write to file
         try output_file.writeAll(chunk_buf[0..bytes_read]);
@@ -1990,55 +1912,37 @@ fn executeRemoteRestore(
 ) !void {
     std.debug.print("RESTORE: Connecting to server {s} for remote restore...\n", .{server});
 
-    // Parse server address
-    const colon_pos = std.mem.indexOf(u8, server, ":") orelse {
+    const parsed = zig_quic_bridge.parseHostPort(server, 3141) catch {
         std.debug.print("Error: Invalid server address format. Expected host:port\n", .{});
-        return error.InvalidServerAddress;
-    };
-    const host = server[0..colon_pos];
-    const port_str = server[colon_pos + 1 ..];
-    const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        std.debug.print("Error: Invalid server port\n", .{});
         return error.InvalidServerPort;
     };
 
-    // Create QUIC client and connect
-    var client = quic.QuicClient.init(allocator);
+    var client = zig_quic_bridge.initClientStrictTls(
+        allocator,
+        parsed.host,
+        parsed.port,
+        .{
+            .insecure = tls_config.insecure,
+            .ca_cert_path = tls_config.ca_cert_path,
+            .client_cert_path = tls_config.client_cert_path,
+            .client_key_path = tls_config.client_key_path,
+        },
+        null,
+        null,
+    ) catch |err| {
+        std.debug.print("RESTORE: Failed to initialize client: {}\n", .{err});
+        return error.ConnectionFailed;
+    };
     defer client.deinit();
 
-    // GAP-0137: Choose connection method based on TLS configuration
-    if (tls_config.hasCerts()) {
-        client.connectEx(host, port, tls_config.ca_cert_path, tls_config.client_cert_path, tls_config.client_key_path) catch |err| {
-            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
-            return error.ConnectionFailed;
-        };
-    } else if (tls_config.insecure) {
+    if (tls_config.insecure) {
         std.debug.print("Warning: TLS verification disabled (--insecure-tls-skip-verify flag)\n", .{});
-        client.connectInsecure(host, port, true) catch |err| {
-            if (err == error.InsecureForbiddenInRelease) {
-                std.debug.print("Error: --insecure-tls-skip-verify is only available in debug builds.\n", .{});
-                std.debug.print("For production use, configure a trusted CA certificate with --ca-cert instead.\n", .{});
-            } else {
-                std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
-            }
-            return error.ConnectionFailed;
-        };
-    } else {
-        // Default: secure connection with system CA store
-        client.connectInsecure(host, port, false) catch |err| {
-            std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
-            return error.ConnectionFailed;
-        };
     }
 
-    client.waitForHandshake(10) catch |err| {
-        std.debug.print("RESTORE: TLS handshake failed: {}\n", .{err});
-        return error.HandshakeFailed;
+    client.connect() catch |err| {
+        std.debug.print("RESTORE: Failed to connect to server: {}\n", .{err});
+        return error.ConnectionFailed;
     };
-
-    // Open stream for restore communication
-    const stream = try client.openStream(true);
-    defer stream.close();
 
     // Send HELLO (Protobuf)
     const hello_req = schema.HelloRequest{
@@ -2048,7 +1952,7 @@ fn executeRemoteRestore(
         .client_version = build_options.version,
         .wanted_conformance = "GQL/1.0",
     };
-    writeProtoMessage(allocator, stream, .{ .hello = hello_req }) catch |err| {
+    writeProtoMessage(allocator, &client, .{ .hello = hello_req }) catch |err| {
         std.debug.print("RESTORE: Failed to send HELLO: {}\n", .{err});
         return error.ConnectionFailed;
     };
@@ -2056,7 +1960,7 @@ fn executeRemoteRestore(
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
-    const hello_resp = readProtoMessage(arena.allocator(), &client, stream, 5000) catch |err| {
+    const hello_resp = readProtoMessage(arena.allocator(), &client, 5000) catch |err| {
         std.debug.print("RESTORE: Failed to receive HELLO response: {}\n", .{err});
         return error.ReadFailed;
     };
@@ -2081,12 +1985,12 @@ fn executeRemoteRestore(
         .target_time = target_time orelse "",
         .confirm = true,
     };
-    writeProtoMessage(allocator, stream, .{ .restore = restore_req }) catch |err| {
+    writeProtoMessage(allocator, &client, .{ .restore = restore_req }) catch |err| {
         std.debug.print("RESTORE: Failed to send restore request: {}\n", .{err});
         return error.WriteFailed;
     };
 
-    const resp_msg = readProtoMessage(arena.allocator(), &client, stream, 30000) catch |err| {
+    const resp_msg = readProtoMessage(arena.allocator(), &client, 30000) catch |err| {
         std.debug.print("RESTORE: Failed to read server response: {}\n", .{err});
         return error.ReadFailed;
     };

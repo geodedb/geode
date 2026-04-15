@@ -179,6 +179,13 @@ pub fn build(b: *std.Build) void {
     });
     const quic_ext_mod = quic_ext_dep.module("quic");
 
+    // Official Zig client library shipped as a sibling repository.
+    const zig_client_dep = b.dependency("geode_client_zig", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zig_client_real_mod = zig_client_dep.module("geode_client");
+
     // ==========================================================================
     // Phase 3 External Library Dependencies (Integration Libraries)
     // ==========================================================================
@@ -434,6 +441,7 @@ pub fn build(b: *std.Build) void {
     root_mod.addImport("gql_lib", gql_ext_mod);
     root_mod.addImport("timeseries_lib", timeseries_ext_mod);
     root_mod.addImport("auth_lib", auth_ext_mod);
+    root_mod.addImport("geode_client_zig", zig_client_real_mod);
 
     // Main unified CLI binary with server and client capabilities
     // CANARY: REQ=REQ-CLI-SUBPROCESS-ELIMINATION-001; FEATURE="CLI Subprocess Elimination"; ASPECT=UnifiedEntry; STATUS=IMPL; OWNER=build; UPDATED=2026-02-03
@@ -2670,16 +2678,29 @@ pub fn build(b: *std.Build) void {
     // Client builds
     const client_step = b.step("clients", "Build client libraries");
 
-    // Zig client library
+    // Zig client library - forward to the real sibling geode-client-zig module.
+    const zig_client_root = b.createModule(.{
+        .root_source_file = b.path("clients/zig/client_minimal.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_client_root.addImport("geode_client_real", zig_client_real_mod);
     const zig_client_lib = b.addLibrary(.{
         .name = "geode-client",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("clients/zig/client_minimal.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = zig_client_root,
         .linkage = .static,
     });
+    zig_client_lib.linkLibC();
+    if (target.result.os.tag != .windows) {
+        zig_client_lib.linkSystemLibrary("ssl");
+        zig_client_lib.linkSystemLibrary("crypto");
+    }
+    if (target.result.os.tag == .linux) {
+        zig_client_lib.linkSystemLibrary("dl");
+    }
+    if (target.result.os.tag == .windows) {
+        zig_client_lib.linkSystemLibrary("ws2_32");
+    }
     b.installArtifact(zig_client_lib);
     client_step.dependOn(&zig_client_lib.step);
 
@@ -2693,6 +2714,17 @@ pub fn build(b: *std.Build) void {
         }),
     });
     zig_client_example.root_module.addImport("geode-client", zig_client_lib.root_module);
+    zig_client_example.linkLibC();
+    if (target.result.os.tag != .windows) {
+        zig_client_example.linkSystemLibrary("ssl");
+        zig_client_example.linkSystemLibrary("crypto");
+    }
+    if (target.result.os.tag == .linux) {
+        zig_client_example.linkSystemLibrary("dl");
+    }
+    if (target.result.os.tag == .windows) {
+        zig_client_example.linkSystemLibrary("ws2_32");
+    }
     b.installArtifact(zig_client_example);
     client_step.dependOn(&zig_client_example.step);
 
@@ -2714,25 +2746,35 @@ pub fn build(b: *std.Build) void {
     // Build Zig clients for each platform
     for (client_targets) |client_target| {
         const target_triple = b.resolveTargetQuery(client_target.triple);
+        const cross_zig_client_dep = b.dependency("geode_client_zig", .{
+            .target = target_triple,
+            .optimize = .ReleaseSafe,
+        });
+        const cross_zig_client_real_mod = cross_zig_client_dep.module("geode_client");
+
+        const client_lib_root = b.createModule(.{
+            .root_source_file = b.path("clients/zig/client_minimal.zig"),
+            .target = target_triple,
+            .optimize = .ReleaseSafe,
+        });
+        client_lib_root.addImport("geode_client_real", cross_zig_client_real_mod);
 
         const client_lib = b.addLibrary(.{
             .name = b.fmt("geode-client-{s}", .{client_target.name}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("clients/zig/client_minimal.zig"),
-                .target = target_triple,
-                .optimize = .ReleaseSafe,
-            }),
+            .root_module = client_lib_root,
             .linkage = .static,
         });
 
+        const client_exe_root = b.createModule(.{
+            .root_source_file = b.path("clients/zig/example_minimal.zig"),
+            .target = target_triple,
+            .optimize = .ReleaseSafe,
+        });
         const client_exe = b.addExecutable(.{
             .name = b.fmt("geode-zig-example-{s}", .{client_target.name}),
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("clients/zig/example_minimal.zig"),
-                .target = target_triple,
-                .optimize = .ReleaseSafe,
-            }),
+            .root_module = client_exe_root,
         });
+        client_exe.root_module.addImport("geode-client", client_lib.root_module);
 
         // Install to platform-specific directories
         const install_lib = b.addInstallArtifact(client_lib, .{
@@ -2750,12 +2792,14 @@ pub fn build(b: *std.Build) void {
     const test_clients_step = b.step("test-clients", "Test client libraries");
 
     // Zig client tests
+    const zig_client_tests_root = b.createModule(.{
+        .root_source_file = b.path("clients/zig/client_minimal.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zig_client_tests_root.addImport("geode_client_real", zig_client_real_mod);
     const zig_client_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("clients/zig/client_minimal.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = zig_client_tests_root,
     });
     const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
     test_clients_step.dependOn(&run_zig_client_tests.step);

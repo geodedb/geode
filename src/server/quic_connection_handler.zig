@@ -2229,10 +2229,11 @@ fn handleClientMessage(
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
-                graph_lock_handle = if (is_mutation)
-                    graph_store.acquireGraphWriteLock(query_graph_name)
-                else
-                    graph_store.acquireGraphReadLock(query_graph_name);
+                // Serialize GraphStore access for live QUIC queries. Shared
+                // read locks still permit starvation/corruption under mixed
+                // workloads, and correctness matters more than concurrency in
+                // the integration path.
+                graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
             }
             // Safety net: release on any unexpected error path not explicitly handled.
             var lock_released = false;
@@ -2996,7 +2997,7 @@ fn handleClientMessage(
                             break;
                         };
                         if (n == 0) break;
-                        _ = stream.write(buf[0..n]) catch |err| {
+                        stream.writeAll(buf[0..n]) catch |err| {
                             log.err("Failed to stream backup bytes", &.{
                                 Attr.string("path", backup_path),
                                 Attr.string("error", @errorName(err)),

@@ -3,7 +3,12 @@ const geode = @import("geode-client");
 
 pub fn main() !void {
     const allocator = std.heap.page_allocator;
-    const client = geode.Client.init(allocator);
-    _ = client;
-    std.debug.print("Geode Zig Client Example Minimal\n", .{});
+    var cfg = geode.config.Config.init();
+    cfg.username = "geode";
+    cfg.password = "GeodeTestPassword123!";
+
+    var client = try geode.GeodeClient.initFromConfig(allocator, cfg);
+    defer client.deinit();
+
+    std.debug.print("Geode Zig Client Example using geode-client-zig\n", .{});
 }

@@ -136,6 +136,10 @@ pub const diagnostics = @import("diagnostics.zig");
 pub const type_promotion = @import("eval/type_promotion.zig");
 pub const index_manager = @import("index/index_manager.zig");
 pub const advanced_types_optimizer = @import("optimizer/advanced_types_optimizer.zig");
+// Re-export the official Zig client package for internal consumers migrating
+// off the legacy in-repo client implementations.
+pub const zig_client = @import("geode_client_zig");
+pub const zig_quic_bridge = @import("client/zig_quic_bridge.zig");
 // Re-export unicode utilities (normalization, case folding, UTF-16/WTF-8 helpers)
 pub const unicode = @import("unicode/geode_unicode.zig");
 pub const unicode_tables = @import("unicode/unicode_tables.zig");
