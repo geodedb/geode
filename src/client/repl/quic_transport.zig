@@ -105,14 +105,19 @@ fn quicReadLine(self: *repl_dispatch.TransportConnection, allocator: std.mem.All
     var last_progress = std.time.milliTimestamp();
     const idle_timeout_ms: i64 = 30000; // 30 second idle timeout for REPL.
 
+    // GAP-0276: Hold the lock for the entire receive loop to avoid
+    // lock/unlock syscall overhead on every 50ms timeout iteration.
+    // The keepalive thread uses tryLock(), so it safely skips cycles
+    // while we hold the lock here during an active read.
+    impl.client_mu.lock();
+    defer impl.client_mu.unlock();
+
     while (true) {
         if (repl_dispatch.checkForInterrupt()) {
             return error.Interrupted;
         }
 
-        impl.client_mu.lock();
         const result = impl.client.receiveRawFrame(allocator, 50);
-        impl.client_mu.unlock();
 
         const body = result catch |err| {
             if (err == error.ReceiveTimeout) {

@@ -135,6 +135,30 @@ chmod 644 certs/server.crt
 docker-compose restart geode nginx
 ```
 
+#### CLI Client TLS Configuration (Q-4)
+
+The CLI QUIC transport (`zig_quic_bridge.zig:initClient()`) disables TLS
+verification when no client certificates are provided. This is intentional for
+local development but **must not be relied on in production**.
+
+- **Default (no certs):** TLS verification is skipped for dev convenience.
+- **With mTLS certs:** verification follows the `--insecure-tls-skip-verify` flag (default: enabled).
+
+For production, always supply certificate paths:
+
+```bash
+geode shell --ca-cert /etc/ssl/ca.crt \
+            --client-cert /etc/ssl/client.crt \
+            --client-key /etc/ssl/client.key
+```
+
+The `--insecure-tls-skip-verify` flag (deprecated alias: `--insecure`) exists
+for dev/test environments only. Do not use it in production.
+
+**Note:** `backup`, `restore`, and `migrate` commands enforce strict TLS
+verification by default and require explicit `--insecure-tls-skip-verify` to
+override.
+
 ## Vault Setup
 
 ### Initialize Vault (First Time Only)

@@ -954,18 +954,20 @@ fn connectMigrationClient(allocator: std.mem.Allocator, server_addr: []const u8,
 }
 
 fn writeProtoMessage(allocator: std.mem.Allocator, client: *zig_client.GeodeClient, msg: schema.QuicClientMessage) !void {
+    // GAP-0276: Encode with length prefix in a single buffer to avoid a
+    // second allocation + memcpy for the framing header.
     var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 1024);
     defer aw.deinit();
+
+    // Reserve 4 bytes for the big-endian length prefix.
+    try aw.writer.writeAll(&[4]u8{ 0, 0, 0, 0 });
 
     const packet = schema.ClientPacket{ .quic = msg };
     try protobuf.encode(&aw.writer, allocator, packet);
 
-    const body = aw.writer.buffer[0..aw.writer.end];
-    const framed = try allocator.alloc(u8, body.len + 4);
-    defer allocator.free(framed);
-
-    std.mem.writeInt(u32, framed[0..4], @intCast(body.len), .big);
-    @memcpy(framed[4..], body);
+    const framed = aw.writer.buffer[0..aw.writer.end];
+    const body_len: u32 = @intCast(framed.len - 4);
+    std.mem.writeInt(u32, framed[0..4], body_len, .big);
     try client.sendRawFramed(framed);
 }
 

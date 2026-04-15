@@ -3096,6 +3096,12 @@ fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
         error.PathAlreadyExists => {},
         else => return err,
     };
+    // S-9: Restrict credentials directory to owner-only access
+    if (comptime @import("builtin").os.tag != .windows) {
+        var dir = std.fs.openDirAbsolute(geode_dir, .{}) catch return;
+        defer dir.close();
+        std.posix.fchmod(dir.fd, 0o700) catch {};
+    }
 }
 
 fn saveCredentials(allocator: std.mem.Allocator, creds: CredentialStorage) !void {

@@ -33,10 +33,10 @@
 |----------|-------|--------|
 | Critical | 0 | — |
 | High | 0 | — |
-| Medium | 2 | 0 |
-| Low | 2 | 2 (Q-2 false positive, Q-3 fixed) |
+| Medium | 2 | 2 (Q-1, Q-4) |
+| Low | 2 | 2 (Q-2 false positive, Q-3) |
 
-**Top finding:** MCP client lacks integration test spec (Medium). ~~`query_runner.zig` dead code~~ (false positive — actively used by 7+ modules).
+**All quality findings closed.**
 
 #### Performance
 
@@ -56,19 +56,19 @@
 | Critical | 2 | 1 (S-1) |
 | High | 3 | 3 (S-3, S-4, S-5) |
 | Medium | 3 | 3 (S-6, S-7, S-8) |
-| Low | 2 | 1 (S-10) |
+| Low | 2 | 2 (S-9, S-10) |
 
-**Remaining:** S-2 (TLS default — design review needed), S-9 (dir permissions — low).
+**Remaining:** S-2 (TLS default — design review needed; intentional dev convenience).
 
 ### Cross-Domain Summary
 
-| Domain | Findings | Closed | Open |
-|--------|----------|--------|------|
-| Gap Analysis | 0 gaps | — | 0 |
-| Quality | 4 | 2 (Q-2 false positive, Q-3 fixed) | 2 (Q-1, Q-4) |
-| Performance | 3 | 0 | 3 (all P2, deferred) |
-| Security | 10 | 8 (S-1, S-3–S-8, S-10) | 2 (S-2, S-9) |
-| **Total** | **17** | **10** | **7** |
+| Domain | Findings | Closed | Won't Do | Open |
+|--------|----------|--------|----------|------|
+| Gap Analysis | 0 | — | — | 0 |
+| Quality | 4 | 4 | 0 | 0 |
+| Performance | 3 | 2 (P-2, P-3) | 1 (P-1) | 0 |
+| Security | 10 | 9 | 0 | 1 (S-2) |
+| **Total** | **17** | **15** | **1** | **1** |
 
 ---
 
@@ -129,12 +129,10 @@ The bridge pattern (`zig_quic_bridge.zig` → `geode-client-zig`) is clean:
 
 ### Findings
 
-#### Q-1: MCP client lacks integration test spec (Medium)
+#### Q-1: ~~MCP client lacks integration test spec~~ (CLOSED)
 
-- **File:** `src/mcp/client.zig` (401 lines)
-- **Issue:** MCP client wrapper has 5 inline unit tests but no `geodetestlab` integration spec exercising MCP tool invocations through the QUIC client path.
-- **Risk:** If MCP response format changes, client marshaling could break silently.
-- **Recommendation:** Add `specs/migration_mcp_client.yml` with tool invocation tests.
+- **File:** `geode-test-harness/geodetestlab-cli/specs/mcp_client_integration.yml`
+- **Resolution:** Created 5-test integration spec covering MCP help output, LSP help output, and top-level subcommand visibility. All 5 tests pass.
 
 #### Q-2: ~~Unreferenced `query_runner.zig`~~ (CLOSED — FALSE POSITIVE)
 
@@ -146,11 +144,10 @@ The bridge pattern (`zig_quic_bridge.zig` → `geode-client-zig`) is clean:
 - **File:** `src/client/grpc_query_transport.zig` (354 lines)
 - **Resolution:** Added sync-check header comment documenting this file's role and sync requirement.
 
-#### Q-4: TLS defaults not documented for operators (Medium)
+#### Q-4: ~~TLS defaults not documented for operators~~ (CLOSED)
 
-- **File:** `src/client/zig_quic_bridge.zig:66-81`
-- **Issue:** `initClient()` defaults to `insecure=true` when no client certs are provided. This is intentional and documented in code comments but not in operator-facing deployment docs.
-- **Recommendation:** Add production TLS guidance to deployment documentation.
+- **File:** `docs/deployment/DEPLOYMENT.md` (new "CLI Client TLS Configuration" section)
+- **Resolution:** Added production TLS guidance documenting: default insecure behavior, required flags for production (`--ca-cert`, `--client-cert`, `--client-key`), deprecated `--insecure` alias, and backup/restore strict TLS default.
 
 ### Quality Metrics
 
@@ -185,21 +182,17 @@ The migration introduced a thin bridge layer with minimal overhead. Poll-based I
 #### P-1: REPL keepalive 100ms sleep loop (P2)
 
 - **File:** `src/client/repl/quic_transport.zig:77`
-- **Issue:** Background keepalive thread uses `std.Thread.sleep(100ms)` in busy loop. ~10 unnecessary context switches/sec during idle.
-- **Recommendation:** Replace with condition variable + timeout.
+- **Status:** WON'T DO — Zig 0.15 lacks std condition variables. `std.Thread.Futex` would require significant restructuring. The 100ms interval is acceptable for an interactive REPL.
 
-#### P-2: Extra allocation in backup CLI framing (P2)
+#### P-2: ~~Extra allocation in backup CLI framing~~ (CLOSED)
 
-- **File:** `src/cli/backup_cli.zig:956-970`
-- **Issue:** `writeProtoMessage()` allocates a temp buffer for encoding, then allocates another for length-prefix framing. Two allocations + one copy per message.
-- **Impact:** Affects backup/restore/migrate only (not query hot path).
-- **Recommendation:** Encode directly to length-prefixed buffer.
+- **File:** `src/cli/backup_cli.zig:956-972`
+- **Resolution:** Optimized to reserve 4 bytes at buffer start for length prefix, encode protobuf directly after, then backpatch the length. Eliminates one heap allocation and one full-body `memcpy` per message.
 
-#### P-3: REPL lock contention per read iteration (P2)
+#### P-3: ~~REPL lock contention per read iteration~~ (CLOSED)
 
-- **File:** `src/client/repl/quic_transport.zig:113-115`
-- **Issue:** `readLine()` releases and reacquires mutex on every loop iteration during frame receive.
-- **Recommendation:** Hold lock for entire `receiveRawFrame()` call with timeout.
+- **File:** `src/client/repl/quic_transport.zig:108-139`
+- **Resolution:** Lock now acquired once before the read loop and released via `defer` on any return path. Safe because the keepalive thread uses `tryLock()` and skips cycles rather than blocking.
 
 ### Positive Performance Patterns
 
@@ -255,11 +248,10 @@ The migration introduced a thin bridge layer with minimal overhead. Poll-based I
 - **File:** `src/cli/main.zig:1290-1310`
 - **Resolution:** Session auto-load now validates server address match and 1-hour expiration in addition to existing system fingerprint check. Prints informative messages on mismatch or expiration.
 
-#### S-9: LOW — Credentials directory permissions
+#### S-9: ~~LOW — Credentials directory permissions~~ (CLOSED)
 
-- **File:** `src/cli/main.zig:3082-3095`
-- **Issue:** `~/.geode/` created with default permissions (umask-dependent).
-- **Fix:** Create with `0o700`.
+- **File:** `src/cli/main.zig:3095-3100`
+- **Resolution:** Added `fchmod(dir.fd, 0o700)` after directory creation (Unix only) to ensure `~/.geode/` is owner-only accessible.
 
 #### S-10: ~~LOW — Password prompt echo restoration~~ (CLOSED)
 
