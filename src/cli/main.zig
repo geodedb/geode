@@ -952,7 +952,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             insecure = true;
         } else if (std.mem.eql(u8, arg, "--insecure")) {
             insecure = true;
-            // --insecure silently accepted as alias for --insecure-tls-skip-verify
+            std.debug.print("Warning: --insecure is deprecated, use --insecure-tls-skip-verify\n", .{});
         } else if (std.mem.eql(u8, arg, "--batch")) {
             // PERF-P1-002: Read semicolon-delimited queries from stdin over single connection
             batch_mode = true;
@@ -1287,25 +1287,29 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 const current_fp = try session_storage.getSystemFingerprint(allocator);
                 defer allocator.free(current_fp);
 
-                if (std.mem.eql(u8, creds.system_fingerprint, current_fp)) {
+                const server_addr = server orelse "127.0.0.1:3141";
+                const fp_match = std.mem.eql(u8, creds.system_fingerprint, current_fp);
+                const server_match = std.mem.eql(u8, creds.server, server_addr);
+                const now = std.time.timestamp();
+                const age_secs = now - creds.created_at;
+                const max_age_secs: i64 = 3600; // 1 hour
+                const not_expired = age_secs < max_age_secs;
+
+                if (fp_match and server_match and not_expired) {
                     loaded_token = try allocator.dupe(u8, creds.token);
                     loaded_username = try allocator.dupe(u8, creds.username);
                     token = loaded_token;
                     user = loaded_username;
-
-                    // Free loaded credentials
-                    allocator.free(creds.token);
-                    allocator.free(creds.username);
-                    allocator.free(creds.server);
-                    allocator.free(creds.system_fingerprint);
-                } else {
-                    // System fingerprint mismatch - credentials are for different system/user
-                    // Silently ignore and require explicit authentication
-                    allocator.free(creds.token);
-                    allocator.free(creds.username);
-                    allocator.free(creds.server);
-                    allocator.free(creds.system_fingerprint);
+                } else if (fp_match and !server_match) {
+                    std.debug.print("Note: saved session is for {s}, not {s}. Use --save-session to update.\n", .{ creds.server, server_addr });
+                } else if (fp_match and !not_expired) {
+                    std.debug.print("Note: saved session expired. Use 'geode auth login' to refresh.\n", .{});
                 }
+                // Free loaded credentials regardless of match
+                allocator.free(creds.token);
+                allocator.free(creds.username);
+                allocator.free(creds.server);
+                allocator.free(creds.system_fingerprint);
             }
         }
     }

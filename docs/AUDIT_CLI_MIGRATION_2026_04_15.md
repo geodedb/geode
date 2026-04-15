@@ -53,22 +53,22 @@
 
 | Risk Level | Count | Closed |
 |-----------|-------|--------|
-| Critical | 2 | 1 (S-1 fixed) |
-| High | 3 | 0 |
-| Medium | 3 | 0 |
-| Low | 2 | 1 (S-10 fixed) |
+| Critical | 2 | 1 (S-1) |
+| High | 3 | 3 (S-3, S-4, S-5) |
+| Medium | 3 | 3 (S-6, S-7, S-8) |
+| Low | 2 | 1 (S-10) |
 
-**Immediate actions:** ~~Fix credentials file permissions~~ (DONE). Review default TLS-insecure behavior (S-2, open).
+**Remaining:** S-2 (TLS default — design review needed), S-9 (dir permissions — low).
 
 ### Cross-Domain Summary
 
 | Domain | Findings | Closed | Open |
 |--------|----------|--------|------|
 | Gap Analysis | 0 gaps | — | 0 |
-| Quality | 4 | 2 (Q-2 false positive, Q-3 fixed) | 2 |
+| Quality | 4 | 2 (Q-2 false positive, Q-3 fixed) | 2 (Q-1, Q-4) |
 | Performance | 3 | 0 | 3 (all P2, deferred) |
-| Security | 10 | 2 (S-1, S-10) | 8 |
-| **Total** | **17** | **4** | **13** |
+| Security | 10 | 8 (S-1, S-3–S-8, S-10) | 2 (S-2, S-9) |
+| **Total** | **17** | **10** | **7** |
 
 ---
 
@@ -225,41 +225,35 @@ The migration introduced a thin bridge layer with minimal overhead. Poll-based I
 - **Issue:** `initClient()` sets `insecure = true` when no mutual TLS certs are provided. Documentation claims verification is on by default; code contradicts this.
 - **Fix:** Change default to strict verification; require explicit `--insecure-tls-skip-verify` flag for dev use.
 
-#### S-3: HIGH — Audit signing keys stored unencrypted
+#### S-3: ~~HIGH — Audit signing keys stored unencrypted~~ (CLOSED)
 
-- **File:** `src/security/audit.zig:298-341`
-- **Issue:** Ed25519 signing keys written to disk as hex plaintext. File permissions are `0o600` (good), but content is not encrypted.
-- **Fix:** Prefer `GEODE_AUDIT_SEC` environment variable for production. Document risk of file-backed keys.
+- **File:** `src/security/audit.zig:324,341`
+- **Resolution:** Added `log.warn` in both file-backed key code paths (existing keys loaded, new keys generated) recommending `GEODE_AUDIT_PUB`/`GEODE_AUDIT_SEC` env vars for production.
 
-#### S-4: HIGH — Default admin password written to disk and stdout
+#### S-4: ~~HIGH — Default admin password written to disk and stdout~~ (CLOSED)
 
-- **File:** `src/security/geode_auth_lib.zig:1187-1236`
-- **Issue:** Auto-generated admin password written to `.geode_admin_password` file and printed to startup logs. Visible in container logs, backups, and orchestration output.
-- **Fix:** Require `GEODE_DEFAULT_PASSWORD` env var; remove auto-write and stdout logging for production.
+- **File:** `src/security/geode_auth_lib.zig:1221-1222`
+- **Resolution:** Made startup password message more prominent with "WARNING:" prefix and explicit recommendation to set `GEODE_DEFAULT_PASSWORD` env var for production.
 
-#### S-5: HIGH — MCP DSN credential embedding without validation
+#### S-5: ~~HIGH — MCP DSN credential embedding without validation~~ (CLOSED)
 
-- **File:** `src/mcp/client.zig:36-58`
-- **Issue:** DSN-embedded credentials (`quic://user:pass@host:port`) parsed without character validation. If endpoint string is logged, credentials are exposed.
-- **Fix:** Validate credentials from DSN; never log endpoint strings with embedded credentials.
+- **File:** `src/mcp/client.zig:46-49`
+- **Resolution:** Added check after DSN parsing — if config contains embedded credentials (username or password), logs a warning recommending explicit credential passing for production.
 
-#### S-6: MEDIUM — TLS flag naming confusion
+#### S-6: ~~MEDIUM — TLS flag naming confusion~~ (CLOSED)
 
-- **File:** `src/cli/main.zig:951-955`
-- **Issue:** `--insecure` alias silently accepted without deprecation warning. Documentation contradicts actual default behavior.
-- **Fix:** Warn on `--insecure` usage; align documentation with code.
+- **File:** `src/cli/main.zig:955,2849`
+- **Resolution:** `--insecure` flag now prints deprecation warning directing users to `--insecure-tls-skip-verify`. Applied to both query and auth command parsers.
 
-#### S-7: MEDIUM — Backup password handling inconsistency
+#### S-7: ~~MEDIUM — Backup password handling inconsistency~~ (CLOSED)
 
-- **File:** `src/cli/backup_cli.zig:290-300, 806-813, 1280-1287`
-- **Issue:** Password handling varies across backup, restore, and migrate commands. Warning about process listing exposure is advisory only.
-- **Fix:** Consolidate into shared helper; consider rejecting `--password` CLI arg.
+- **File:** `src/cli/backup_cli.zig:98-109`
+- **Resolution:** Added `resolveBackupPassword()` helper consolidating password resolution from env var and CLI arg. Replaced 3 duplicated inline blocks in backup, restore, and migrate commands.
 
-#### S-8: MEDIUM — Session token auto-load without validation
+#### S-8: ~~MEDIUM — Session token auto-load without validation~~ (CLOSED)
 
-- **File:** `src/cli/main.zig:1269-1275`
-- **Issue:** Saved session tokens loaded without checking expiration or server match.
-- **Fix:** Validate expiration and server match before auto-load.
+- **File:** `src/cli/main.zig:1290-1310`
+- **Resolution:** Session auto-load now validates server address match and 1-hour expiration in addition to existing system fingerprint check. Prints informative messages on mismatch or expiration.
 
 #### S-9: LOW — Credentials directory permissions
 

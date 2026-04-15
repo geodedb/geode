@@ -338,6 +338,8 @@ pub const AuditLogger = struct {
 
         self.signing_key = kp;
         log.info("Generated audit signing keys", &.{Attr.string("path", self.config.file_path)});
+
+        std.log.warn("Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.", .{});
     }
 
     fn initFromTail(self: *AuditLogger) !void {

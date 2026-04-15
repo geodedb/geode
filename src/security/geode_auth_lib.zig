@@ -1218,8 +1218,8 @@ pub const SecurityManager = struct {
                         Attr.string("error", @errorName(err)),
                     });
                 };
-                std.debug.print("\n[GEODE SECURITY] Generated random admin password written to: {s}\n" ++
-                    "[GEODE SECURITY] Set GEODE_DEFAULT_PASSWORD env var before starting in production.\n\n", .{pw_path});
+                std.debug.print("\n[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: {s}\n" ++
+                    "[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.\n\n", .{pw_path});
             } else |err| {
                 log.warn("Failed to create admin password file", &.{
                     Attr.string("path", pw_path),
