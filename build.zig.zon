@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#2ab8c49b474cdfa543033b7e091271ebaf729d1c",
-            .hash = "graph_storage-0.1.0-9UyJS8dECwB9_ZMHm6OaULLWRpVhQZQK_FmFmICSFRRT",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#65edc62d1ee23c1bb27bd1fcb151749df91767b8",
+            .hash = "graph_storage-0.1.0-9UyJSzNFCwA9DJnaAH2YMQS_EJHZUClguT6GRKgdETzX",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -174,8 +174,8 @@
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#0a7c4a2397ab0dadc29de10ae1577fe47bc4ecf6",
-            .hash = "hnsw-0.1.0-wYzBy6QQAQBOHl_sUs2L3XsQCANa4yhJ_HDLFS_KZ5k0",
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#0e317aae53e88ebd38b7a0ce03545df8e21352f0",
+            .hash = "hnsw-0.1.0-wYzBy5wQAQCPeApLgqmBv2g3HJ00H-FusFp6H5FUlKXm",
         },
 
         // R-tree - Spatial index with bounding-box search
@@ -192,8 +192,8 @@
 
         // FLE - Field-level encryption with AEAD, HKDF, blind indices
         .fle = .{
-            .url = "git+https://gitlab.com/devnw/zig/fle.git#2069ffc521bd52724824661f5ce8d611073a6a09",
-            .hash = "fle-0.1.0-1CfwlRtJAQCWR5DkJpmPvXZTZGfL0pufl40-yxv24uGK",
+            .url = "git+https://gitlab.com/devnw/zig/fle.git#40293399e36c917d61420ac1a507403a7dde8f33",
+            .hash = "fle-0.1.0-1Cfwlb1KAQCCTGi8pKEt2CPu4G0vz8kq-zrZQG_IbclA",
         },
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
@@ -210,8 +210,8 @@
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
         .auth = .{
-            .url = "git+https://gitlab.com/devnw/zig/auth.git#07828687938dfcfb2b60a68eb7a5085bad3a0600",
-            .hash = "auth-0.1.0-W76ZZ2D9AAAe7QW8998qeZ4dfo-bIYI4f_sVkaf_0igh",
+            .url = "git+https://gitlab.com/devnw/zig/auth.git#56f838714cc985087ddb9055791101fcbbcef7f5",
+            .hash = "auth-0.1.0-W76ZZ1z9AABE00GhNYYiZBzPvQfFTJCyPAhJnHRjyNux",
         },
     },
 
