@@ -43,6 +43,11 @@ pub const GeodeClient = struct {
         var cfg = try zig_client.config.parseDSN(allocator, endpoint_storage);
         errdefer cfg.deinit(allocator);
 
+        // S-5: Warn if DSN contains embedded credentials to discourage credential leakage via logs.
+        if (cfg.username != null or cfg.password != null) {
+            std.log.warn("MCP endpoint contains embedded credentials. Prefer explicit credential passing for production.", .{});
+        }
+
         const client = try zig_client.GeodeClient.initFromConfig(allocator, cfg);
 
         self.* = .{

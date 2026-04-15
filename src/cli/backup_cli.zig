@@ -92,6 +92,21 @@ fn isPathSafe(path: []const u8) bool {
     return true;
 }
 
+// S-7: Consolidated backup password resolution for backup, restore, and migrate commands.
+// Prefers GEODE_BACKUP_PASSWORD env var over --password CLI arg to avoid password exposure
+// in process listings (/proc/PID/cmdline).
+fn resolveBackupPassword(password_arg: ?[]const u8) ?[]const u8 {
+    if (password_arg) |pw| {
+        std.debug.print("Warning: --password on command line is visible in process listings. " ++
+            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
+        return pw;
+    }
+    if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
+        return env_pw;
+    }
+    return null;
+}
+
 // SEC-MIG-01: Load HMAC key for migration file signature verification.
 // Checks GEODE_MIGRATION_HMAC_KEY env var first, then {migrations_dir}/.hmac_key file.
 fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std.mem.Allocator) ?*const [32]u8 {
@@ -288,16 +303,8 @@ fn cmdBackupCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
-    // to avoid password exposure in process listing (/proc/PID/cmdline).
-    if (password == null) {
-        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
-            password = env_pw;
-        }
-    } else {
-        std.debug.print("Warning: --password on command line is visible in process listings. " ++
-            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
-    }
+    // S-7: Use consolidated password resolution
+    password = resolveBackupPassword(password);
 
     // GAP-0137: Validate TLS configuration
     if (!tls_config.validate()) {
@@ -802,15 +809,8 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
         std.process.exit(@intFromEnum(ExitCode.general_error));
     }
 
-    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
-    if (password == null) {
-        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
-            password = env_pw;
-        }
-    } else {
-        std.debug.print("Warning: --password on command line is visible in process listings. " ++
-            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
-    }
+    // S-7: Use consolidated password resolution
+    password = resolveBackupPassword(password);
 
     // GAP-0137: Validate TLS configuration
     if (!tls_config.validate()) {
@@ -1276,15 +1276,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
-    // SEC-MIG-11: Prefer GEODE_BACKUP_PASSWORD env var over --password CLI arg
-    if (password == null) {
-        if (std.posix.getenv("GEODE_BACKUP_PASSWORD")) |env_pw| {
-            password = env_pw;
-        }
-    } else {
-        std.debug.print("Warning: --password on command line is visible in process listings. " ++
-            "Prefer GEODE_BACKUP_PASSWORD environment variable.\n", .{});
-    }
+    // S-7: Use consolidated password resolution
+    password = resolveBackupPassword(password);
 
     // SEC-MIG-10: Validate --dir path to prevent directory traversal
     if (!isPathSafe(migrations_dir)) {
