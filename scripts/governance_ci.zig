@@ -601,7 +601,7 @@ const Summary = struct {
         _ = self.errors.append(self.alloc, .{ .context = dup(self.alloc, ctx), .message = dup(self.alloc, msg) }) catch {};
     }
     pub fn emit(self: *Summary, status: Overall) !void {
-        var stdout_file: std.fs.File = .{ .handle = std.posix.STDOUT_FILENO };
+        var stdout_file: std.Io.File = .{ .handle = std.posix.STDOUT_FILENO };
         const json = try self.toJSON(status);
         defer self.alloc.free(json);
         // Write JSON plus newline

@@ -3049,8 +3049,12 @@ pub fn main() !void {
 
     execution.initEvaluator();
 
-    const argv = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, argv);
+    const raw_argv = std.posix.argv;
+    const argv = try allocator.alloc([:0]u8, raw_argv.len);
+    defer allocator.free(argv);
+    for (raw_argv, 0..) |arg, i| {
+        argv[i] = std.mem.span(arg);
+    }
 
     // Delegate all command routing and dispatch to cli_dispatcher
     try cli_dispatcher.dispatch(

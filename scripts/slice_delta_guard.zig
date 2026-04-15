@@ -157,18 +157,18 @@ fn fail(code: u8, msg: []const u8) noreturn {
     std.process.exit(code);
 }
 
-fn getStdErr() std.fs.File {
+fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO };
 }
 
-fn getStdOut() std.fs.File {
+fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
 }
 
 test "countSlices counts markdown slice headings" {

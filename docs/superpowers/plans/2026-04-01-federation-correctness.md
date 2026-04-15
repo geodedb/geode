@@ -287,13 +287,13 @@ git commit -m "fix(distributed): implement real aggregate value accumulation in 
 In `federation.zig`, above the `union_distinct` handler:
 
 ```zig
-// CANARY: REQ=REQ-FED-UNION-DISTINCT-001; FEATURE="FederationUnionDistinct"; ASPECT=Deduplication; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01; TEST=test_union_distinct_removes_duplicates
+// CANARY: REQ=REQ-FED-UNION-DISTINCT-001; FEATURE="FederationUnionDistinct"; ASPECT=Deduplication; STATUS=TESTED; TEST=test_union_distinct_removes_duplicates; OWNER=distributed; UPDATED=2026-04-15
 ```
 
 In `enhanced_query_coordinator.zig`, above `hashAggregateResults`:
 
 ```zig
-// CANARY: REQ=REQ-DIST-HASH-AGG-001; FEATURE="DistributedHashAggregate"; ASPECT=ValueAccumulation; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-01; TEST=test_hashAggregateResults_computes_real_count
+// CANARY: REQ=REQ-DIST-HASH-AGG-001; FEATURE="DistributedHashAggregate"; ASPECT=ValueAccumulation; STATUS=TESTED; TEST=test_hashAggregateResults_computes_real_count; OWNER=distributed; UPDATED=2026-04-15
 ```
 
 - [ ] **Step 2: Commit**

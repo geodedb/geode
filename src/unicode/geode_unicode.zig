@@ -23,7 +23,7 @@ pub fn simpleDecompose(cp: u32, out: *std.ArrayList(u32)) !void {
 
 pub fn nfcNormalize(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
     // Extremely small-scale NFC for test purposes.
-    var scalars: std.ArrayListUnmanaged(u32) = .{};
+    var scalars: std.ArrayListUnmanaged(u32) = .empty;
     defer scalars.deinit(alloc);
     var i_byte: usize = 0;
     while (i_byte < s.len) {

@@ -18,7 +18,7 @@ const url = @import("../types/url.zig");
 const cryptographic = @import("../types/cryptographic.zig");
 
 var global_index_manager: ?*IndexManager = null;
-var global_index_manager_mutex = std.Thread.Mutex{};
+var global_index_manager_mutex = std.Io.Mutex{};
 
 // Comprehensive index management for graph database
 // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="IndexRebuild"; ASPECT=DeferredRebuild; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10
@@ -42,7 +42,7 @@ pub const IndexManager = struct {
     statistics: IndexStatistics,
     /// GAP-0511: Mutex protecting rebuild operations so they can safely run
     /// outside the graph write lock without racing with concurrent rebuilds.
-    rebuild_mutex: std.Thread.Mutex = .{},
+    rebuild_mutex: std.Io.Mutex = .{},
 
     pub const IndexType = enum {
         btree,

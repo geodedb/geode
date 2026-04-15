@@ -6,8 +6,12 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    const raw_argv = std.posix.argv;
+    const args = try allocator.alloc([:0]u8, raw_argv.len);
+    defer allocator.free(args);
+    for (raw_argv, 0..) |arg, i| {
+        args[i] = std.mem.span(arg);
+    }
 
     if (args.len < 2) {
         try printUsage();

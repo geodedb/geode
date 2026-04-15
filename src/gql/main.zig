@@ -14,8 +14,12 @@ pub fn main() !void {
     var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();
     const gpa = gpa_instance.allocator();
-    const args = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, args);
+    const raw_argv = std.posix.argv;
+    const args = try gpa.alloc([:0]u8, raw_argv.len);
+    defer gpa.free(args);
+    for (raw_argv, 0..) |arg, i| {
+        args[i] = std.mem.span(arg);
+    }
     if (args.len < 2) {
         std.debug.print("usage: gql [--strict-order-keys] [--ident-order-only] [--forbid-orderby-calls] [--forbid-orderby-paths] [--normalize-temporals] [--clamp-frac <n>] [--session-offset <Z|+HH[:MM]|-HH[:MM]>] [--ast|--ast-json|--ast-json-verbose|--conformance-json] [--demo-sort|--demo-setops|--bench-setops|--demo-eval|--demo-diagnostics|--demo-agg] <file>\n", .{});
         return;

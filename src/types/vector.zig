@@ -39,7 +39,7 @@ pub const VectorF32 = struct {
 
         // Split by comma and parse each element
         var parts = std.mem.splitSequence(u8, cleaned_str, ",");
-        var elements = std.ArrayList(f32){};
+        var elements: std.ArrayList(f32) = .empty;
         defer elements.deinit(allocator);
 
         while (parts.next()) |part| {

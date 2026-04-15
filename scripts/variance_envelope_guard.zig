@@ -91,18 +91,18 @@ pub fn main() !void {
     if (!overall_ok) std.process.exit(2);
 }
 
-fn getStdErr() std.fs.File {
+fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO };
 }
 
-fn getStdOut() std.fs.File {
+fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
 }
 
 fn failUsage(msg: []const u8) noreturn {

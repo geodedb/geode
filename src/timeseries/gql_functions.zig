@@ -256,7 +256,7 @@ pub fn executeFunction(
             );
             defer allocator.free(samples);
 
-            var array: std.ArrayList(Value) = .{};
+            var array: std.ArrayList(Value) = .empty;
             errdefer {
                 for (array.items) |*item| {
                     deinitValue(item, allocator);
@@ -287,7 +287,7 @@ pub fn executeFunction(
             );
             defer allocator.free(buckets);
 
-            var array: std.ArrayList(Value) = .{};
+            var array: std.ArrayList(Value) = .empty;
             errdefer {
                 for (array.items) |*item| {
                     deinitValue(item, allocator);
@@ -487,7 +487,7 @@ pub fn executeFunction(
             const cps = pelt_mod.pelt(allocator, values, params.penalty, params.min_size) catch return .Null;
             defer allocator.free(cps);
 
-            var array: std.ArrayList(Value) = .{};
+            var array: std.ArrayList(Value) = .empty;
             errdefer {
                 for (array.items) |*item| deinitValue(item, allocator);
                 array.deinit(allocator);
@@ -506,7 +506,7 @@ pub fn executeFunction(
 
             const feats = features_mod.extractFeatures(allocator, values) catch return .Null;
 
-            var array: std.ArrayList(Value) = .{};
+            var array: std.ArrayList(Value) = .empty;
             errdefer {
                 for (array.items) |*item| deinitValue(item, allocator);
                 array.deinit(allocator);
@@ -557,7 +557,7 @@ pub fn executeFunction(
             const normed = preprocess_mod.zNormalizeAlloc(allocator, values) catch return .Null;
             defer allocator.free(normed);
 
-            var array: std.ArrayList(Value) = .{};
+            var array: std.ArrayList(Value) = .empty;
             errdefer {
                 for (array.items) |*item| deinitValue(item, allocator);
                 array.deinit(allocator);

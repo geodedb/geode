@@ -14,18 +14,18 @@ fn appendFmt(list: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, co
 // Usage: zig run scripts/generate_badges.zig -- --status status.csv --out badges/evidence.svg
 // Produces a Shields.io style flat badge with TOTAL / TESTED / BENCHED counts.
 // Future: color thresholds (green when 100% coverage) and stale detection colorization.
-fn getStdOut() std.fs.File {
+fn getStdOut() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        std.Io.File{ .handle = std.posix.STDOUT_FILENO };
 }
 
-fn getStdErr() std.fs.File {
+fn getStdErr() std.Io.File {
     return if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
+        std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable }
     else
-        std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        std.Io.File{ .handle = std.posix.STDERR_FILENO };
 }
 
 pub fn main() !void {

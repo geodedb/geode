@@ -8,11 +8,11 @@ const builtin = @import("builtin");
 // Exit codes: 0 success (appended or already present), 2 failure (missing status.json or parse error), 1 usage.
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=TrendAppend; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_TrendAppend; OWNER=tooling; UPDATED=2025-09-22
 
-fn getStdErr() std.fs.File {
-    return if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDERR_FILENO };
+fn getStdErr() std.Io.File {
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDERR_FILENO };
 }
-fn getStdOut() std.fs.File {
-    return if (builtin.os.tag == .windows) std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+fn getStdOut() std.Io.File {
+    return if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable } else std.Io.File{ .handle = std.posix.STDOUT_FILENO };
 }
 
 pub fn main() !void {

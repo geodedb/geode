@@ -331,7 +331,7 @@ fn constructLanguageTag(allocator: std.mem.Allocator, args: []const ExtValue) !E
 }
 
 fn canonicalizeLanguageTag(allocator: std.mem.Allocator, tag: []const u8) ![]const u8 {
-    var result = std.ArrayListUnmanaged(u8){};
+    var result: std.ArrayListUnmanaged(u8) = .empty;
     defer result.deinit(allocator);
 
     var parts = std.mem.tokenizeAny(u8, tag, "-");
@@ -1005,7 +1005,7 @@ fn constructVectorI32(allocator: std.mem.Allocator, args: []const ExtValue) !Ext
 
     // Split by comma and parse each element
     var parts = std.mem.splitSequence(u8, cleaned_str, ",");
-    var elements = std.ArrayListUnmanaged(i32){};
+    var elements: std.ArrayListUnmanaged(i32) = .empty;
     defer elements.deinit(allocator);
 
     while (parts.next()) |part| {
@@ -1629,7 +1629,7 @@ fn wkbToWkt(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
         if (wkb.len < expected_len) return error.InvalidWkb;
 
         // Build coordinate string
-        var coords = std.ArrayListUnmanaged(u8){};
+        var coords: std.ArrayListUnmanaged(u8) = .empty;
         defer coords.deinit(allocator);
 
         try coords.appendSlice(allocator, "POLYGON((");
@@ -1678,10 +1678,10 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
 
     const geom_type = std.mem.readInt(u32, wkb[1..5][0..4], byte_order);
 
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-    defer buf.deinit(allocator); // Always clean up - we dupe the result before returning
+    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, 128);
+    defer aw.deinit();
 
-    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    var encoder = json_lib.streamingEncoder(allocator, &aw.writer, .{});
     defer encoder.deinit();
 
     if (geom_type == 1) { // Point
@@ -1703,7 +1703,7 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
         try encoder.endArray();
         try encoder.endObject();
 
-        return try allocator.dupe(u8, buf.items);
+        return try allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
     }
 
     if (geom_type == 3) { // Polygon
@@ -1745,7 +1745,7 @@ fn wkbToGeoJson(allocator: std.mem.Allocator, wkb: []const u8) ![]const u8 {
         try encoder.endArray(); // end coordinates
         try encoder.endObject();
 
-        return try allocator.dupe(u8, buf.items);
+        return try allocator.dupe(u8, aw.writer.buffer[0..aw.writer.end]);
     }
 
     return error.UnsupportedGeometry;

@@ -20,17 +20,17 @@ const language_metadata = geode.language_metadata;
 const KeywordCategory = language_metadata.KeywordCategory;
 const FunctionCategory = language_metadata.FunctionCategory;
 
-fn getStdoutHandle() std.fs.File {
+fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
     }
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -38,7 +38,7 @@ pub fn main() !void {
     try generateSyntaxToFile(allocator, stdout);
 }
 
-fn generateSyntaxToFile(allocator: std.mem.Allocator, file: std.fs.File) !void {
+fn generateSyntaxToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
     // Build the entire output in memory, then write all at once
     var output = try std.ArrayList(u8).initCapacity(allocator, 32768);
     defer output.deinit(allocator);

@@ -65,7 +65,7 @@ fn isZeroUuid(uuid: [16]u8) bool {
 /// Thread-safe via RwLock for concurrent access
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
-    rwlock: std.Thread.RwLock,
+    rwlock: std.Io.RwLock,
     schemas: std.StringHashMap(void),
     graphs: std.StringHashMap([16]u8),
     indexes: std.StringHashMap(IndexInfo),

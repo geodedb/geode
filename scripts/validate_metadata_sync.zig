@@ -17,26 +17,26 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const language_metadata = geode.language_metadata;
 
-fn getStdoutHandle() std.fs.File {
+fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
     }
 }
 
-fn getStderrHandle() std.fs.File {
+fn getStderrHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_ERROR_HANDLE) catch unreachable;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle };
     } else {
-        return std.fs.File{ .handle = std.posix.STDERR_FILENO };
+        return std.Io.File{ .handle = std.posix.STDERR_FILENO };
     }
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

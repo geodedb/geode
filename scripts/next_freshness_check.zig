@@ -103,7 +103,7 @@ pub fn main() !void {
         std.process.exit(2);
     }
 
-    var stdout_file: std.fs.File = .{ .handle = std.posix.STDOUT_FILENO };
+    var stdout_file: std.Io.File = .{ .handle = std.posix.STDOUT_FILENO };
     // Write message manually (File.Writer in this Zig version lacks print, emulate)
     const msg_prefix = "NEXT freshness OK (generated ";
     _ = try stdout_file.write(msg_prefix);

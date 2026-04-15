@@ -42,7 +42,7 @@ fn generateTimeBasedId() u64 {
 var g_override_data_dir_buf: [512]u8 = undefined;
 var g_override_data_dir_len: usize = 0;
 var g_override_data_dir_set: bool = false;
-var g_data_dir_mutex: std.Thread.Mutex = .{};
+var g_data_dir_mutex: std.Io.Mutex = .{};
 
 /// Set the data directory override (takes precedence over GEODE_DATA_DIR env var)
 /// Pass null to clear the override and revert to env var behavior
@@ -4963,12 +4963,12 @@ pub fn getNodesByLabelsCallCount() u64 {
 /// Mutex protecting the re-initialization path in getGlobalStore.
 /// Without this, concurrent callers can race: one thread tears down the store
 /// while another reads a half-initialized global_store, yielding empty results.
-var g_init_mutex: std.Thread.Mutex = .{};
+var g_init_mutex: std.Io.Mutex = .{};
 
 /// GAP-0259/0260: RwLock replaces Mutex so query threads (shared readers) don't
 /// block each other — only the persistence thread takes an exclusive write lock.
 /// CANARY: REQ=REQ-GAP-0259-RWLOCK-001; FEATURE="AsyncPersistence"; ASPECT=RwLockMigration; STATUS=IMPL; OWNER=storage; UPDATED=2026-02-13
-var g_store_rwlock: std.Thread.RwLock = .{};
+var g_store_rwlock: std.Io.RwLock = .{};
 
 /// Mutation epoch counter for ReadView invalidation.
 /// Incremented on every data mutation (node/edge create, delete, property set/remove).
@@ -5391,8 +5391,7 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
         }
 
         // Non-override path: check if data directory has changed (rare).
-        const current_data_dir: ?[]u8 = std.process.getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null;
-        defer if (current_data_dir) |dir| allocator.free(dir);
+        const current_data_dir: ?[]const u8 = if (std.posix.getenv("GEODE_DATA_DIR")) |ptr| std.mem.span(ptr) else null;
 
         // Compare under the init mutex to avoid racing with a concurrent reinit.
         var needs_reinit = false;

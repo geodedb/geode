@@ -465,7 +465,7 @@ pub const ManagedGraph = struct {
     fts_dir: ?[]const u8 = null,
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
-    rwlock: std.Thread.RwLock = .{},
+    rwlock: std.Io.RwLock = .{},
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -597,7 +597,7 @@ pub const StorageAdapter = struct {
     config: gs.GraphConfig,
     registry: gs.registry.GraphRegistry,
     registry_path: []const u8, // owned
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     /// Create a new `StorageAdapter`.
     ///

@@ -15,12 +15,12 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const language_metadata = geode.language_metadata;
 
-fn getStdoutHandle() std.fs.File {
+fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
     }
 }
 
@@ -33,7 +33,7 @@ pub fn main() !void {
     try generateFuzzDictToFile(allocator, stdout);
 }
 
-fn generateFuzzDictToFile(allocator: std.mem.Allocator, file: std.fs.File) !void {
+fn generateFuzzDictToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
     var output = try std.ArrayList(u8).initCapacity(allocator, 16384);
     defer output.deinit(allocator);
 

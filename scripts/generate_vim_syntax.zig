@@ -17,17 +17,17 @@ const language_metadata = geode.language_metadata;
 const KeywordCategory = language_metadata.KeywordCategory;
 const FunctionCategory = language_metadata.FunctionCategory;
 
-fn getStdoutHandle() std.fs.File {
+fn getStdoutHandle() std.Io.File {
     if (builtin.os.tag == .windows) {
         const handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable;
-        return std.fs.File{ .handle = handle };
+        return std.Io.File{ .handle = handle };
     } else {
-        return std.fs.File{ .handle = std.posix.STDOUT_FILENO };
+        return std.Io.File{ .handle = std.posix.STDOUT_FILENO };
     }
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -35,7 +35,7 @@ pub fn main() !void {
     try generateVimSyntaxToFile(allocator, stdout);
 }
 
-fn generateVimSyntaxToFile(allocator: std.mem.Allocator, file: std.fs.File) !void {
+fn generateVimSyntaxToFile(allocator: std.mem.Allocator, file: std.Io.File) !void {
     var output = try std.ArrayList(u8).initCapacity(allocator, 16384);
     defer output.deinit(allocator);
 

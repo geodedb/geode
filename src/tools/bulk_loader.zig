@@ -395,41 +395,60 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
+    const argv = std.posix.argv;
 
     var config = Config{};
     _ = &config;
 
     // Skip program name
-    _ = args.skip();
+    var arg_idx: usize = 1;
 
     // Parse arguments
-    while (args.next()) |arg| {
+    while (arg_idx < argv.len) {
+        const arg = std.mem.span(argv[arg_idx]);
+        arg_idx += 1;
         if (std.mem.eql(u8, arg, "--input") or std.mem.eql(u8, arg, "-i")) {
-            config.input_path = args.next();
+            config.input_path = if (arg_idx < argv.len) blk: {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
+                break :blk val;
+            } else null;
         } else if (std.mem.eql(u8, arg, "--format") or std.mem.eql(u8, arg, "-f")) {
-            if (args.next()) |val| {
+            if (arg_idx < argv.len) {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
                 config.input_format = std.meta.stringToEnum(Config.Format, val) orelse .gql;
             }
         } else if (std.mem.eql(u8, arg, "--batch-size") or std.mem.eql(u8, arg, "-b")) {
-            if (args.next()) |val| {
+            if (arg_idx < argv.len) {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
                 config.batch_size = try std.fmt.parseInt(u32, val, 10);
             }
         } else if (std.mem.eql(u8, arg, "--workers") or std.mem.eql(u8, arg, "-w")) {
-            if (args.next()) |val| {
+            if (arg_idx < argv.len) {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
                 config.num_workers = try std.fmt.parseInt(u8, val, 10);
             }
         } else if (std.mem.eql(u8, arg, "--defer-indexes")) {
             config.defer_indexes = true;
         } else if (std.mem.eql(u8, arg, "--checkpoint") or std.mem.eql(u8, arg, "-c")) {
-            config.checkpoint_path = args.next();
+            config.checkpoint_path = if (arg_idx < argv.len) blk: {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
+                break :blk val;
+            } else null;
         } else if (std.mem.eql(u8, arg, "--server") or std.mem.eql(u8, arg, "-s")) {
-            if (args.next()) |val| {
+            if (arg_idx < argv.len) {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
                 config.server_host = val;
             }
         } else if (std.mem.eql(u8, arg, "--port") or std.mem.eql(u8, arg, "-p")) {
-            if (args.next()) |val| {
+            if (arg_idx < argv.len) {
+                const val = std.mem.span(argv[arg_idx]);
+                arg_idx += 1;
                 config.server_port = try std.fmt.parseInt(u16, val, 10);
             }
         } else if (std.mem.eql(u8, arg, "--quiet") or std.mem.eql(u8, arg, "-q")) {
