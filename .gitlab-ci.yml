@@ -900,16 +900,24 @@ security-trivy:
 snapshot:
   stage: release
   interruptible: false  # Never cancel in-flight release builds
-  # Skip stage-based ordering: require key quality gates only
+  # Skip stage-based ordering: require key quality gates only.
+  # All needs set artifacts: false — release jobs build from scratch and
+  # downloaded artifacts pollute the workspace (causing GoReleaser dirty-git
+  # failures, e.g. harness-reports/ from test-harness-integration).
   needs:
     - job: test-zig-unit
+      artifacts: false
     - job: test-zig-release-safe
+      artifacts: false
     - job: test-harness-integration
       artifacts: false
     - job: test-performance-benchmarks
+      artifacts: false
       optional: true  # Flaky SIMD benchmarks should not block snapshot builds
     - job: security-secrets
+      artifacts: false
     - job: security-trivy
+      artifacts: false
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64
@@ -923,6 +931,9 @@ snapshot:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
+    # Defensive cleanup: remove any stale artifacts or generated files
+    # that could make GoReleaser detect a dirty git state.
+    - git clean -fdx -e .zig-cache/ -e zig-cache/
     # Install Zig while Docker daemon starts up
     - |
       export ZVM_NO_MODIFY=1
@@ -1022,16 +1033,24 @@ snapshot:
 build-release:
   stage: release
   interruptible: false  # Never cancel in-flight release builds
-  # Only require unit tests, release-safe build, and harness to pass before building release
+  # Only require unit tests, release-safe build, and harness to pass before building release.
+  # All needs set artifacts: false — release jobs build from scratch and
+  # downloaded artifacts pollute the workspace (causing GoReleaser dirty-git
+  # failures, e.g. harness-reports/ from test-harness-integration).
   needs:
     - job: test-zig-unit
+      artifacts: false
     - job: test-zig-release-safe
+      artifacts: false
     - job: test-harness-integration
       artifacts: false
     - job: test-performance-benchmarks
+      artifacts: false
       optional: false  # GAP-0252: Benchmarks required for release builds to detect regressions
     - job: security-secrets
+      artifacts: false
     - job: security-trivy
+      artifacts: false
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
     - saas-linux-medium-amd64
@@ -1045,6 +1064,9 @@ build-release:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
     - apk add --no-cache curl git bash tar xz coreutils jq python3
+    # Defensive cleanup: remove any stale artifacts or generated files
+    # that could make GoReleaser detect a dirty git state.
+    - git clean -fdx -e .zig-cache/ -e zig-cache/
     # Install Zig while Docker daemon starts up
     - |
       export ZVM_NO_MODIFY=1
