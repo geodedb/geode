@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#c487bdb54a1eae1aca65e784e9be51c9773be8ba",
-            .hash = "geode_client_zig-0.2.1-8ysbVw6NCADzXXjGAnkIYNjCA7qKrnksYXatfmsSAK_I",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#38d5f240546285dd5be1cc4f6ae45e84af52a421",
+            .hash = "geode_client_zig-0.2.1-8ysbVw6NCADlXx2jNwMY3CFAhRXj_ZO3atjxD1cdVXF1",
         },
 
         // =======================================================================
