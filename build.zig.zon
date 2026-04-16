@@ -88,7 +88,7 @@
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
             .url = "git+https://gitlab.com/devnw/zig/cli.git#357cea90d789c5be3e072a845f2802abb210b80a",
-            .hash = "cli-0.1.1-0aso9ImlBgAy2i3OubsJdY2y53Damaithrt1BjPus_Qn",
+            .hash = "geode_client_zig-0.2.1-8ysbV3WSCAAIIUBiEyLeaeZLIK9KBnjXzD87PMvgEioL",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
@@ -128,7 +128,7 @@
         },
         .geode_client_zig = .{
             .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#9edfcad3caec866d8e0da823049c075462385fca",
-            .hash = "cli-0.1.1-0aso9ImlBgAy2i3OubsJdY2y53Damaithrt1BjPus_Qn",
+            .hash = "geode_client_zig-0.2.1-8ysbV3WSCAAIIUBiEyLeaeZLIK9KBnjXzD87PMvgEioL",
         },
 
         // =======================================================================
