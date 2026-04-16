@@ -129,7 +129,8 @@ repos:
     files: \.goreleaser\.ya?ml$
     pass_filenames: false
 
-      # Zig formatting check
+      # Zig formatting check — runs at BOTH pre-commit and pre-push so a
+      # --no-verify on commit is still caught on push (issue #724).
   - id: zig-fmt
     name: zig fmt (check)
     entry: zig fmt --check
@@ -138,6 +139,7 @@ repos:
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
     pass_filenames: false
     args: [src/, build.zig]
+    stages: [pre-commit, pre-push]
 
       # Reject .path dependencies in build.zig.zon — they work locally but fail
       # in CI where sibling repos aren't checked out (caused pipeline #847, #848).
