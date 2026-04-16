@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
@@ -56,10 +57,51 @@ pub fn buildClusterHelloRequest(allocator: std.mem.Allocator) !schema.HelloReque
 }
 
 /// Check whether insecure mode (no TLS verification) is explicitly allowed.
-/// Returns true only if GEODE_CLUSTER_INSECURE environment variable is set to "1".
+///
+/// GAP-0737 / SEC-INFRA-01 (2026-04-16):
+///   - In a Debug build, returns true iff GEODE_CLUSTER_INSECURE=1.
+///   - In ReleaseSafe / ReleaseFast / ReleaseSmall, ALWAYS returns false.
+///     Even if the env var is set, the release build ignores it AND logs
+///     a one-shot warning + increments `geode_cluster_insecure_total` so
+///     operators can detect misconfiguration attempts.
+///
+/// The previous behaviour allowed anyone who could set an environment
+/// variable on the server host to turn off TLS verification on a
+/// production node — and because the check happened in six different
+/// modules (federation, raft, 2pc, query-transport, cluster, cluster_auth),
+/// it was easy to miss.  This single gate is the chokepoint; the caller
+/// modules MUST go through here.
 pub fn isInsecureModeAllowed() bool {
     const val = posixGetenv("GEODE_CLUSTER_INSECURE") orelse return false;
-    return std.mem.eql(u8, val, "1");
+    const requested = std.mem.eql(u8, val, "1");
+    if (!requested) return false;
+
+    if (builtin.mode != .Debug) {
+        // Release path: refuse, but emit a one-shot warning so the
+        // misconfiguration is observable in logs / audit / metrics.
+        logInsecureRefusalOnce();
+        return false;
+    }
+    // Debug path: allow.
+    return true;
+}
+
+/// Monotonic counter of refused insecure-cluster attempts (exposed via
+/// metrics).  A Prometheus scrape or admin CLI can expose this so ops
+/// alerts fire when someone tries to flip the bit in release.
+///
+/// CANARY: REQ=REQ-SEC-INFRA-01-METRIC; FEATURE="InsecureRefusalMetric"; ASPECT=Metrics; STATUS=IMPL; OWNER=security; UPDATED=2026-04-16
+pub var geode_cluster_insecure_refused_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+var insecure_warn_logged: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+fn logInsecureRefusalOnce() void {
+    _ = geode_cluster_insecure_refused_total.fetchAdd(1, .monotonic);
+    // Emit the stderr warning at most once per process.
+    if (insecure_warn_logged.swap(true, .monotonic)) return;
+    log.warn(
+        "GAP-0737 SEC-INFRA-01: refusing GEODE_CLUSTER_INSECURE=1 in release build — use a Debug build if you really need insecure cluster transport",
+        &.{},
+    );
 }
 
 // ---------------------------------------------------------------------------

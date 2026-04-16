@@ -2610,6 +2610,20 @@ pub fn build(b: *std.Build) void {
     const run_audit_verify_seq_tests = b.addRunArtifact(audit_verify_seq_tests);
     test_step.dependOn(&run_audit_verify_seq_tests.step);
 
+    // GAP-0737 / SEC-INFRA-01 regression: GEODE_CLUSTER_INSECURE is
+    // refused in release builds and a metrics counter is exposed.
+    // cluster_auth uses std.c.getenv so the test module needs libc.
+    const cluster_auth_test_mod = b.createModule(.{ .root_source_file = b.path("src/distributed/cluster_auth.zig"), .target = target, .optimize = optimize });
+    cluster_auth_test_mod.addImport("schema", schema_mod);
+    cluster_auth_test_mod.addImport("logging", logging_mod);
+    cluster_auth_test_mod.link_libc = true;
+    const insecure_gate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_cluster_insecure_gate.zig"), .target = target, .optimize = optimize });
+    insecure_gate_test_mod.addImport("cluster_auth", cluster_auth_test_mod);
+    insecure_gate_test_mod.link_libc = true;
+    const insecure_gate_tests = b.addTest(.{ .root_module = insecure_gate_test_mod });
+    const run_insecure_gate_tests = b.addRunArtifact(insecure_gate_tests);
+    test_step.dependOn(&run_insecure_gate_tests.step);
+
     // GAP-0512 regression: graph isolation in edge iteration
     const graph_isolation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_isolation_edge_iteration.zig"), .target = target, .optimize = optimize });
     graph_isolation_test_mod.addImport("geode", root_mod);

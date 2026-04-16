@@ -1232,10 +1232,13 @@ pub const ClusterCoordinator = struct {
         var client = quic.QuicClient.init(self.allocator);
         defer client.deinit();
 
-        // SEC-D006: Consolidated to single env var GEODE_CLUSTER_INSECURE
-        const allow_insecure = envFlagEnabled(self.allocator, "GEODE_CLUSTER_INSECURE");
+        // GAP-0737 / SEC-INFRA-01 (2026-04-16): route through the single
+        // cluster_auth.isInsecureModeAllowed() chokepoint so release builds
+        // refuse the flag automatically.  The old envFlagEnabled path would
+        // honour the env var in any build mode.
+        const allow_insecure = cluster_auth.isInsecureModeAllowed();
         if (allow_insecure) {
-            log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+            log.warn("SECURITY WARNING: Cluster TLS verification disabled via GEODE_CLUSTER_INSECURE (Debug build only)", &.{});
             _ = client.connectInsecure(host, port, true) catch |err| return err;
         } else {
             const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
