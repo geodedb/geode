@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#dda0ae9f9746a0d7ed1b7c0b98454cdfd72a9c29",
-            .hash = "quic-0.1.11-gBIqUR8jNgAr8R5magjKXzx2SRcXuxo4NwbIHp600IKG",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#6cbc82d5a5d15a14042551cb0d110dd20a2928e3",
+            .hash = "quic-0.1.11-gBIqUR8jNgCrb7FSlhwQjSF1EfIi5K7FGiPKNF7fGBmA",
         },
 
         // =======================================================================
@@ -99,8 +99,8 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#c1753e04046e2e002097e42aede9df86876b2d4f",
-            .hash = "thread_pool-0.2.0-11B1BlAHQwA_cO0fDA7DZMyz2vVNgTKQpRJ7NipZLoJL",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#48af8fd281b7972cf54cb896acf9e57856a32c87",
+            .hash = "thread_pool-0.2.0-11B1BlgHQwCj8Lk5rXWJJyFNGKbQGnHwRvHE1e2_tN5p",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#74b2411fb307f8338a2a7ead25c89e06f6ae2e98",
-            .hash = "geode_client_zig-0.2.1-8ysbV3WSCAC1Rw-Hto_B8I0I6seiGiumzyuFOu-QTWGj",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#1784447409a5a749f3a483001d37fa56a79a03f3",
+            .hash = "geode_client_zig-0.2.1-8ysbV3WSCADmwJT-0ZeVxuQMhJqci9lDRuUmU6Sg5_gi",
         },
 
         // =======================================================================
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#9495e3b32ddede7d49c43a3ef78da5e0f90dcfe7",
-            .hash = "graph_storage-0.1.0-9UyJSxFLCwAyznRGYAaRsXfebjA3QXzZ1IgPM2xFPZGb",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#277e26e59d86d34c6d21918825916eb88aac2d96",
+            .hash = "graph_storage-0.1.0-9UyJSxFLCwAMwYDsEmKMDObD5J9qLOHNtT3AC5K6IQRO",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
