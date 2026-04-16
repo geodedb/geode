@@ -45,7 +45,7 @@ pub const HistoryStore = struct {
             error.FileNotFound => return,
             else => return err,
         };
-        defer file.close();
+        defer file.close(std.Io.Threaded.global_single_threaded.io());
 
         // Read entire file
         const file_size = try file.length(std.Io.Threaded.global_single_threaded.io());
@@ -109,7 +109,7 @@ pub const HistoryStore = struct {
                 if (err == error.FileNotFound) return;
                 return err;
             };
-            defer file.close();
+            defer file.close(std.Io.Threaded.global_single_threaded.io());
 
             try file.seekFromEnd(0);
             try file.writeAll(line);
@@ -138,7 +138,7 @@ pub const HistoryStore = struct {
                 // If we can't clear the file, just continue
                 return;
             };
-            file.close();
+            file.close(std.Io.Threaded.global_single_threaded.io());
         }
     }
 
@@ -175,7 +175,7 @@ test "history leading-space suppression" {
 
     // Verify file content
     const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
 
     var buf: [100]u8 = undefined;
     const n = try file.read(&buf);

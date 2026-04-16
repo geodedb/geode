@@ -715,7 +715,7 @@ fn processInput(state: *ReplState) !void {
             }
         }
 
-        const n = stdin.read(&buf) catch |err| {
+        const n = stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{&buf}) catch |err| {
             // EINTR from signal - check for SIGINT and retry
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {

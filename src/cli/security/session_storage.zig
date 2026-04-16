@@ -131,7 +131,7 @@ pub fn getSystemFingerprint(allocator: std.mem.Allocator) ![]u8 {
         getEnvVarOwned(allocator, "USERNAME") catch "unknown";
 
     // Get user ID (0 on Windows since it doesn't have Unix-style UIDs)
-    const uid: u32 = if (builtin.os.tag == .windows) 0 else std.posix.getuid();
+    const uid: u32 = if (builtin.os.tag == .windows) 0 else std.os.linux.getuid();
 
     // Combine: hostname:username:uid
     return std.fmt.allocPrint(allocator, "{s}:{s}:{d}", .{ hostname, username, uid });
