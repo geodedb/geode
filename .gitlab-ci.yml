@@ -710,6 +710,17 @@ test-code-coverage:
       else
         echo "kcov not available — reporting test pass rate only"
         echo "coverage: test-pass-rate" > metrics.txt
+        # Emit a minimal cobertura-shaped stub so GitLab's artifact upload
+        # (reports: coverage_report: cobertura) doesn't fail the job. Real
+        # coverage numbers fill in once kcov lands in the CI image.
+        mkdir -p coverage_report
+        cat > coverage_report/cobertura.xml <<'XML'
+      <?xml version="1.0" ?>
+      <coverage line-rate="0" branch-rate="0" version="0.0.0" timestamp="0">
+        <sources><source>src</source></sources>
+        <packages/>
+      </coverage>
+      XML
       fi
 
       echo "✓ GAP-0251: Coverage collection configured"
