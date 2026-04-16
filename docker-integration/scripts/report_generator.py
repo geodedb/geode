@@ -43,7 +43,7 @@ def calculate_totals(results: dict[str, Any]) -> dict[str, int]:
         "clients_failed": 0,
     }
 
-    for client, data in results.items():
+    for _client, data in results.items():
         if isinstance(data, dict) and "total_tests" in data:
             totals["total_tests"] += data.get("total_tests", 0)
             totals["passed"] += data.get("passed", 0)

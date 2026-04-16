@@ -11,7 +11,6 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Set
 
 
 @dataclass
@@ -20,9 +19,9 @@ class FailureComparison:
 
     previous_run: str
     current_run: str
-    fixed_tests: List[str]  # Tests that were failing but now pass
-    new_failures: List[str]  # Tests that were passing but now fail
-    persistent_failures: List[str]  # Tests that continue to fail
+    fixed_tests: list[str]  # Tests that were failing but now pass
+    new_failures: list[str]  # Tests that were passing but now fail
+    persistent_failures: list[str]  # Tests that continue to fail
     total_previous_failures: int
     total_current_failures: int
     improvement_rate: float
@@ -32,7 +31,7 @@ class FailureTracker:
     def __init__(self, log_dir: Path = Path("/home/benji/src/gl/devnw/codepros/geode/test_logs")):
         self.log_dir = log_dir
 
-    def get_run_directories(self) -> List[Path]:
+    def get_run_directories(self) -> list[Path]:
         """Get all test run directories sorted by timestamp."""
         if not self.log_dir.exists():
             return []
@@ -40,7 +39,7 @@ class FailureTracker:
         run_dirs = [d for d in self.log_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
         return sorted(run_dirs, key=lambda x: x.name)
 
-    def load_run_summary(self, run_dir: Path) -> Dict:
+    def load_run_summary(self, run_dir: Path) -> dict:
         """Load summary data from a test run."""
         summary_file = run_dir / "summary.json"
         if not summary_file.exists():
@@ -49,7 +48,7 @@ class FailureTracker:
         with open(summary_file) as f:
             return json.load(f)
 
-    def load_run_failures(self, run_dir: Path) -> Dict:
+    def load_run_failures(self, run_dir: Path) -> dict:
         """Load failure data from a test run."""
         failures_file = run_dir / "failures.json"
         if not failures_file.exists():
@@ -58,7 +57,7 @@ class FailureTracker:
         with open(failures_file) as f:
             return json.load(f)
 
-    def get_failed_test_ids(self, failures_data: Dict) -> Set[str]:
+    def get_failed_test_ids(self, failures_data: dict) -> set[str]:
         """Extract set of failed test identifiers from failures data."""
         failed_tests = set()
         for failure in failures_data.get("failures", []):
@@ -96,7 +95,7 @@ class FailureTracker:
             improvement_rate=improvement_rate,
         )
 
-    def analyze_failure_trends(self, num_runs: int = 5) -> Dict:
+    def analyze_failure_trends(self, num_runs: int = 5) -> dict:
         """Analyze failure trends across the last N runs."""
         run_dirs = self.get_run_directories()[-num_runs:]
 
@@ -161,8 +160,8 @@ class FailureTracker:
                 trends["newly_failing"] = list(last_run_failures - first_run_failures)
 
         # Convert sets to lists for JSON serialization
-        trends["persistent_failures"] = sorted(list(trends["persistent_failures"]))
-        trends["intermittent_failures"] = sorted(list(trends["intermittent_failures"]))
+        trends["persistent_failures"] = sorted(trends["persistent_failures"])
+        trends["intermittent_failures"] = sorted(trends["intermittent_failures"])
 
         return trends
 

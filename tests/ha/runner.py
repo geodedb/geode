@@ -90,7 +90,7 @@ def run_test_scenario(scenario, client):
 
     # Setup
     nodes = ["ha-node-1", "ha-node-2", "ha-node-3"]
-    containers = [client.containers.get(n) for n in nodes]
+    [client.containers.get(n) for n in nodes]
 
     try:
         if scenario.get("type") == "leader_failure":

@@ -33,9 +33,8 @@ def json_rows_contain_value(stdout, expected):
             if isinstance(row, dict):
                 if expected in row.values():
                     return True
-            elif isinstance(row, list):
-                if expected in row:
-                    return True
+            elif isinstance(row, list) and expected in row:
+                return True
     return False
 
 

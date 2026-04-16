@@ -5,7 +5,6 @@ import csv
 import pathlib
 import re
 import sys
-from typing import Set
 
 CANARY_PATTERN = re.compile(
     r'CANARY:\s*REQ=([^;]+);\s*FEATURE="([^"]+)";\s*ASPECT=([^;]+);\s*'
@@ -69,9 +68,12 @@ def check_canary_syntax(line: str, file_path: str, line_num: int) -> list:
         errors.append(f"{file_path}:{line_num}: Invalid date format: {updated}")
 
     # Check test name convention
-    if status_norm in {"TESTED", "BENCHED"} and test:
-        if not (test.startswith("TestCANARY_") or test.startswith("BenchmarkCANARY_") or test.startswith("tests/")):
-            errors.append(f"{file_path}:{line_num}: Test name should start with TestCANARY_ or BenchmarkCANARY_")
+    if (
+        status_norm in {"TESTED", "BENCHED"}
+        and test
+        and not (test.startswith("TestCANARY_") or test.startswith("BenchmarkCANARY_") or test.startswith("tests/"))
+    ):
+        errors.append(f"{file_path}:{line_num}: Test name should start with TestCANARY_ or BenchmarkCANARY_")
 
     return errors
 
@@ -101,7 +103,7 @@ def scan_repo(repo_path: pathlib.Path) -> tuple:
     return all_errors, req_ids
 
 
-def cross_check_csv(csv_path: str, req_ids: Set[str]) -> list:
+def cross_check_csv(csv_path: str, req_ids: set[str]) -> list:
     """Cross-check REQ IDs with CSV."""
     errors = []
     csv_req_ids = set()

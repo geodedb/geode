@@ -111,7 +111,7 @@ def run_spec(spec_path):
 
         if "gql" in step:
             query = step["gql"].strip()
-            expect = step.get("expect", {})
+            step.get("expect", {})
 
             print(f"  • {step_name}")
             print(f"    Query: {query[:60]}...")

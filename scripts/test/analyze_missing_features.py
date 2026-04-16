@@ -37,7 +37,7 @@ def analyze_specs():
                 commands[cmd].add("(base command)")
 
                 # Check for subcommands
-                for i, arg in enumerate(args[1:], 1):
+                for _i, arg in enumerate(args[1:], 1):
                     if not arg.startswith("-"):
                         commands[cmd].add(arg)
                         break
