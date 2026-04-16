@@ -5,6 +5,13 @@ const value_types = geode.value_types;
 const ts = geode.timeseries;
 const ast = geode.ast;
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() i128 {
+    var tsval: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &tsval);
+    return @as(i128, tsval.sec) * 1_000_000_000 + @as(i128, tsval.nsec);
+}
+
 const TestConfig = struct {
     num_points: usize,
     num_queries: usize,
@@ -35,9 +42,9 @@ fn runBenchmark(config: TestConfig, allocator: std.mem.Allocator) !void {
     }
 
     std.debug.print("  Ingesting data...\n", .{});
-    const ingest_start = std.time.nanoTimestamp();
+    const ingest_start = nowNs();
     try store.insertMany(key, points);
-    const ingest_end = std.time.nanoTimestamp();
+    const ingest_end = nowNs();
     const ingest_ms = @as(f64, @floatFromInt(ingest_end - ingest_start)) / 1_000_000.0;
     const ingest_rate = @as(f64, @floatFromInt(config.num_points)) / (ingest_ms / 1000.0);
 
@@ -46,7 +53,7 @@ fn runBenchmark(config: TestConfig, allocator: std.mem.Allocator) !void {
     // 2. Benchmark Query -- direct Store API (not eval, to avoid heavy AST construction)
     std.debug.print("  Benchmarking Store.valueBefore queries...\n", .{});
 
-    const query_start = std.time.nanoTimestamp();
+    const query_start = nowNs();
 
     var q: usize = 0;
     var hits: usize = 0;
@@ -57,7 +64,7 @@ fn runBenchmark(config: TestConfig, allocator: std.mem.Allocator) !void {
         }
     }
 
-    const query_end = std.time.nanoTimestamp();
+    const query_end = nowNs();
     const query_ms = @as(f64, @floatFromInt(query_end - query_start)) / 1_000_000.0;
     const query_rate = @as(f64, @floatFromInt(config.num_queries)) / (query_ms / 1000.0);
 
