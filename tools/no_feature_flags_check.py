@@ -28,7 +28,8 @@ SKIP_PATTERNS = {
     "/node_modules/",
     "/kb/reviews/",  # Skip review documentation
     "/docs/",  # Skip documentation
-    "/docker/zig-packages/",  # Skip vendored Zig dependency cache
+    "/docker/zig-packages/",  # Skip vendored Zig dependency cache (legacy path)
+    "/zig-pkg/",  # Skip vendored Zig dependency cache (current path)
     "/.worktrees/",  # Skip git worktrees (gitignored)
     "/.claude/worktrees/",  # Skip Claude agent worktrees (gitignored)
 }
