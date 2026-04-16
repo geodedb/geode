@@ -28,7 +28,7 @@ const executeReturnClauseWithParams = execution.executeReturnClauseWithParams;
 const validateGroupBy = execution.validateGroupBy;
 const sortRows = execution.sortRows;
 const isAggregationExpr = execution.isAggregationExpr;
-const evaluateAggregation = execution.evaluateAggregation;
+// GAP-0739 (2026-04-16): evaluateAggregation removed as unsafe dead code.
 const allocateColumnStrings = execution.allocateColumnStrings;
 
 // Import for unique column name generation

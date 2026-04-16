@@ -177,8 +177,10 @@ pub const getExpressionNameFromAst = aggregation_evaluation.getExpressionNameFro
 pub const evaluateGroupAggregation = aggregation_evaluation.evaluateGroupAggregation;
 pub const computeBindingGroupAggregation = aggregation_evaluation.computeBindingGroupAggregation;
 pub const evaluateNodeExpression = aggregation_evaluation.evaluateNodeExpression;
-pub const evaluateAggregationWithLabels = aggregation_evaluation.evaluateAggregationWithLabels;
-pub const evaluateAggregation = aggregation_evaluation.evaluateAggregation;
+// GAP-0739 / SEC-MTI-01 (2026-04-16): removed evaluateAggregation /
+// evaluateAggregationWithLabels re-exports.  The underlying functions
+// were deleted — they iterated store.nodes with no tenant filter.  Live
+// aggregations go through evaluateGroupAggregation on pre-filtered rows.
 
 // Re-export return and sorting functions for backward compatibility (M1 Phase 9 extraction)
 pub const sortRows = return_and_sorting.sortRows;
