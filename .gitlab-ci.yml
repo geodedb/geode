@@ -88,14 +88,23 @@ variables:
 # Pre-populate Zig package cache from vendored packages to avoid network
 # fetches that can fail with transient GitHub 502 errors.
 # Use vendored package cache if present, otherwise fetch dependencies from network.
+# Checks both legacy (docker/zig-packages) and current (zig-pkg) vendor paths.
 .zig-vendor-cache: &zig-vendor-cache
   - |
     mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+    populated=0
+    if [ -d "zig-pkg" ] && ls zig-pkg/* >/dev/null 2>&1; then
+      cp -rn zig-pkg/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      populated=1
+    fi
     if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
       cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      populated=1
+    fi
+    if [ "$populated" = "1" ]; then
       echo "✓ populated cache from vendored packages"
     else
-      echo "⚠ docker/zig-packages absent — zig build will fetch from network"
+      echo "⚠ no vendored packages present — zig build will fetch from network"
     fi
 
 # =============================================================================
@@ -454,6 +463,15 @@ test-macos-unit:
   timeout: 2h
   tags:
     - saas-macos-medium-m1
+  retry:
+    # macOS runners frequently see HttpConnectionClosing when fetching lazy
+    # protoc binaries from GitHub; two retries on script_failure cover the
+    # transient. See test-macos-unit failure in pipelines #883/#885.
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - script_failure
   # Pull-only cache: macOS Debug builds produce ~27K files across .zig-cache/
   # and zig-cache/ which exceed GitLab SaaS S3 upload limits (EntityTooLarge).
   # Dependency packages are vendored in docker/zig-packages/ anyway.
@@ -497,9 +515,13 @@ test-macos-unit:
       zvm install "${ZIG_VERSION}"
       zvm use "${ZIG_VERSION}"
       zig version
-    # Use vendored cache if present, otherwise zig build fetches from network
+    # Use vendored cache if present, otherwise zig build fetches from network.
+    # Check current (zig-pkg) and legacy (docker/zig-packages) vendor paths.
     - |
       mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
+      if [ -d "zig-pkg" ] && ls zig-pkg/* >/dev/null 2>&1; then
+        cp -rn zig-pkg/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
+      fi
       if [ -d "docker/zig-packages" ] && ls docker/zig-packages/* >/dev/null 2>&1; then
         cp -rn docker/zig-packages/* "${ZIG_GLOBAL_CACHE_DIR}/p/" 2>/dev/null || true
       fi
