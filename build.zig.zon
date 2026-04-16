@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#22f46c83a74492aa6220abec85290f245653348c",
-            .hash = "quic-0.1.11-gBIqUVY0NgDB9OBmTs44O8EGHSh9vQYZiCRRXL1jWmT2",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#15406cfe7849382e7a7337b6c98c0f467ff665cb",
+            .hash = "quic-0.1.11-gBIqUVY0NgC8PiPAfkvC7dn8lC32LXTzy_LqBWLvOPT_",
         },
 
         // =======================================================================
@@ -77,8 +77,8 @@
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#5baf104408f8d4640f10b0d7669d848a68ba728c",
-            .hash = "config-0.1.0-TiLumiZFCgCwDFWZtGPrajJmvyvM029frGL9_-LWkQxR",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#53d84eba81b793939bc4ce904cff7c2af631054b",
+            .hash = "config-0.1.0-TiLumoRJCgAPJ9HcPWfJAGZ1nE5uXIH9rdTO1Xf7OYC6",
         },
 
         // =======================================================================
@@ -87,8 +87,8 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git#489ac85c66ea473ac74456d67e63bfb083a46e12",
-            .hash = "cli-0.1.1-0aso9M-oBgCnqEOsKtmilbXTjU6PGGdNSDwqI4WB12s9",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#e280c62321f7dccf6f72582d5310ce2059bcd58b",
+            .hash = "cli-0.1.1-0aso9M-oBgCuuYCSErpmEOa8M0kkZnUy56-mIn66XJAF",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
@@ -115,8 +115,8 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#c02f3aa0abc445eb033ac9bbe0cc914e44e2c70b",
-            .hash = "protobuf-3.0.0-0e82ar5fKQCTVWPjChWGJ2esh1wKBDTVX_UfmQy7XRPO",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#78fc12ad60bfafb2353e43e93ab992a024fc7fb5",
+            .hash = "protobuf-3.0.0-0e82anVfKQBFCxoLAkwAknbinR3I4tpWBWOqXh-yaIiv",
         },
 
         // gRPC for Zig
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#44f5dea9b5f48b2f4f35dd8202792dc8e18d03aa",
-            .hash = "geode_client_zig-0.2.1-8ysbV3WSCABeoWipo0mFYesPEFrXpy-A2yBD6ZQJn-gA",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#e7b064330bf8e7b886a408935bf620a72a8e04f0",
+            .hash = "geode_client_zig-0.2.1-8ysbV3WSCAABTPL63dn9Dn20ddh-lWJ7fJ5K6W_2XEQl",
         },
 
         // =======================================================================
@@ -143,8 +143,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#1c639add1278cc09aaf9807afffe3c4962e139f4",
-            .hash = "wal-0.1.0-EqPqpryXAwBkoJ61005aKHBDZ2ijy6BT2Y0kkXowGbg6",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#a7cd757fb5fc9177202fd2a59dedce48cc689101",
+            .hash = "wal-0.1.0-EqPqpsuXAwDavgG5holADI1eFTdvaHdi9ASWfURcp0Dy",
         },
 
         // Page-based graph storage engine
