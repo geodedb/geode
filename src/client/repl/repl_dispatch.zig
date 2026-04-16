@@ -4,6 +4,15 @@ const std = @import("std");
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
 }
+
+// Zig 0.16 compat: std.Thread.sleep was removed; use raw nanosleep syscall.
+fn sleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.os.linux.nanosleep(&req, null);
+}
 const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
@@ -158,7 +167,7 @@ pub fn checkForInterrupt() bool {
         // Data available, check if it's Ctrl+C (ASCII 3)
         var buf: [1]u8 = undefined;
         const stdin = platform.getStdinHandle();
-        const bytes_read = stdin.read(&buf) catch return false;
+        const bytes_read = stdin.readStreaming(std.Io.Threaded.global_single_threaded.io(), &.{&buf}) catch return false;
         if (bytes_read > 0 and buf[0] == 3) { // Ctrl+C
             return true;
         }
@@ -833,7 +842,7 @@ pub const ClientSession = struct {
         while (retry_count < max_retries) : (retry_count += 1) {
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 // Any other error - just return, no inline page
@@ -940,7 +949,7 @@ pub const ClientSession = struct {
 
             // Wait before attempting (except first attempt)
             if (attempt > 0) {
-                std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+                sleepNs(delay_ms * std.time.ns_per_ms);
                 // Exponential backoff
                 const new_delay = @as(u64, @intFromFloat(@as(f64, @floatFromInt(delay_ms)) * self.reconnect_config.backoff_multiplier));
                 delay_ms = @min(new_delay, self.reconnect_config.max_delay_ms);
@@ -1061,7 +1070,7 @@ pub const ClientSession = struct {
 
             const hello_ack = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -1132,7 +1141,7 @@ pub const ClientSession = struct {
 
             break self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -1401,7 +1410,7 @@ pub const ClientSession = struct {
             }
 
             // Wait a bit before checking again
-            std.Thread.sleep(check_interval_ms * std.time.ns_per_ms);
+            sleepNs(check_interval_ms * std.time.ns_per_ms);
             waited_ms += check_interval_ms;
         }
 
@@ -1432,7 +1441,7 @@ pub const ClientSession = struct {
 
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -1579,7 +1588,7 @@ pub const ClientSession = struct {
 
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 // Connection error during rollback
@@ -1636,7 +1645,7 @@ pub const ClientSession = struct {
             const response = self.connection.?.readLine(self.allocator, 0) catch |err| {
                 if (err == error.WouldBlock) {
                     // Poll and wait before retrying (use shorter sleep to be more responsive)
-                    std.Thread.sleep(25 * std.time.ns_per_ms);
+                    sleepNs(25 * std.time.ns_per_ms);
                     continue;
                 }
                 return err;
@@ -1694,7 +1703,7 @@ pub const ClientSession = struct {
                 }
                 break self.connection.?.readLine(self.allocator, 0) catch |err| {
                     if (err == error.WouldBlock) {
-                        std.Thread.sleep(50 * std.time.ns_per_ms);
+                        sleepNs(50 * std.time.ns_per_ms);
                         continue;
                     }
                     return err;
@@ -1808,7 +1817,7 @@ pub const ClientSession = struct {
             const response = while (poll_count < max_polls) : (poll_count += 1) {
                 break self.connection.?.readLine(self.allocator, 0) catch |err| {
                     if (err == error.WouldBlock) {
-                        std.Thread.sleep(5 * std.time.ns_per_ms);
+                        sleepNs(5 * std.time.ns_per_ms);
                         continue;
                     }
                     return messages_drained; // Connection error, stop draining
@@ -1872,7 +1881,7 @@ pub const ClientSession = struct {
             }
 
             // Brief yield to allow server to send more data
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            sleepNs(5 * std.time.ns_per_ms);
         }
 
         // Clear the progress line if we showed any
@@ -1919,7 +1928,7 @@ pub const ClientSession = struct {
                     empty_count += 1;
                     // Stop after 3 consecutive empty reads (150ms of no data)
                     if (empty_count >= 3) break;
-                    std.Thread.sleep(50 * std.time.ns_per_ms);
+                    sleepNs(50 * std.time.ns_per_ms);
                     continue;
                 }
                 break; // Connection error, stop draining
@@ -2527,7 +2536,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 
                 break self.session.connection.?.readLine(allocator, 0) catch |err| {
                     if (err == error.WouldBlock) {
-                        std.Thread.sleep(50 * std.time.ns_per_ms);
+                        sleepNs(50 * std.time.ns_per_ms);
                         continue;
                     }
                     return err;
@@ -2697,16 +2706,33 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         try stderr.writeAll(msg);
         return;
     };
-    defer file.close();
+    const repl_io = std.Io.Threaded.global_single_threaded.io();
+    defer file.close(repl_io);
 
     // Read file contents
-    const contents = file.readToEndAlloc(state.allocator, 1 << 24) catch |err| { // 16MB max
+    const file_len = file.length(repl_io) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
+        try stderr.writeAll(msg);
+        return;
+    };
+    if (file_len > 1 << 24) { // 16MB max
+        try stderr.writeAll("Error [GEODE-E2005]: File too large (>16MB)\r\n");
+        return;
+    }
+    const contents = state.allocator.alloc(u8, @intCast(file_len)) catch |err| {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
         try stderr.writeAll(msg);
         return;
     };
     defer state.allocator.free(contents);
+    _ = file.readPositionalAll(repl_io, contents, 0) catch |err| {
+        var buf2: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf2, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
+        try stderr.writeAll(msg);
+        return;
+    };
 
     // Issue #392: Check if this file content was already sourced
     const content_hash = hashFileContent(contents);

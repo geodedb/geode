@@ -36,7 +36,7 @@ pub const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 
 const STATE_DIR_ENV = "GEODE_STATE_DIR";
 
-fn secureChmod(path: []const u8, mode: std.Io.File.Mode) void {
+fn secureChmod(path: []const u8, mode: std.Io.File.Permissions) void {
     if (builtin.os.tag == .windows) return;
     if (std.fs.openFileAbsolute(path, .{})) |file| {
         defer file.close();

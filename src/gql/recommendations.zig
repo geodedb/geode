@@ -34,7 +34,7 @@ pub const RecommendationEngine = struct {
     pub fn init(allocator: Allocator) RecommendationEngine {
         return .{
             .allocator = allocator,
-            .results = .{},
+            .results = .empty,
         };
     }
 

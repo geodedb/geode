@@ -2055,7 +2055,7 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
         },
         .List => |l| {
             try buf.append(allocator, 'L');
-            try buf.writer(allocator).print("{d}:", .{l.len});
+            try buf.print(allocator, "{d}:", .{l.len});
             for (l) |item| {
                 try encodeValueKey(allocator, buf, item);
             }
@@ -2063,11 +2063,11 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
         // GAP-0045: Complex types encode by pointer identity
         .Node => |n| {
             try buf.append(allocator, 'n');
-            try buf.writer(allocator).print("{x};", .{@intFromPtr(n)});
+            try buf.print(allocator,"{x};", .{@intFromPtr(n)});
         },
         .Edge => |e| {
             try buf.append(allocator, 'e');
-            try buf.writer(allocator).print("{x};", .{@intFromPtr(e)});
+            try buf.print(allocator,"{x};", .{@intFromPtr(e)});
         },
         .Path => try buf.append(allocator, 'p'), // Paths get fixed encoding
         .Map => try buf.append(allocator, 'm'), // Maps get fixed encoding
@@ -2090,15 +2090,15 @@ fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
     var buf = std.ArrayList(u8).empty;
     switch (v) {
         .Null => try buf.appendSlice(allocator, "n"),
-        .Int => |n| try buf.writer(allocator).print("i{d}", .{n}),
+        .Int => |n| try buf.print(allocator,"i{d}", .{n}),
         .Bool => |b| try buf.appendSlice(allocator, if (b) "bt" else "bf"),
         .Str => |s| {
             try buf.appendSlice(allocator, "s");
             try buf.appendSlice(allocator, s);
         },
-        .Decimal => |d| try buf.writer(allocator).print("d{d}:{d}", .{ d.coeff, d.scale }),
+        .Decimal => |d| try buf.print(allocator,"d{d}:{d}", .{ d.coeff, d.scale }),
         .List => |l| {
-            try buf.writer(allocator).print("l{d}:", .{l.len});
+            try buf.print(allocator,"l{d}:", .{l.len});
             for (l) |item| {
                 const item_key = try valueKeyAlloc(allocator, item);
                 defer allocator.free(item_key);
@@ -2106,8 +2106,8 @@ fn valueKeyAlloc(allocator: std.mem.Allocator, v: BindingValue) ![]u8 {
             }
         },
         // GAP-0045: Complex types use pointer-based keys for distinction
-        .Node => |node| try buf.writer(allocator).print("node@{x}", .{@intFromPtr(node)}),
-        .Edge => |edge| try buf.writer(allocator).print("edge@{x}", .{@intFromPtr(edge)}),
+        .Node => |node| try buf.print(allocator,"node@{x}", .{@intFromPtr(node)}),
+        .Edge => |edge| try buf.print(allocator,"edge@{x}", .{@intFromPtr(edge)}),
         .Path => try buf.appendSlice(allocator, "path"),
         .Map => try buf.appendSlice(allocator, "map"),
         .ExtValue => try buf.appendSlice(allocator, "ext"),

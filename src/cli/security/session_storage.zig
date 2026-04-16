@@ -155,7 +155,7 @@ pub const CredentialStore = struct {
         defer allocator.free(geode_dir);
 
         // Create ~/.geode directory if it doesn't exist
-        std.fs.makeDirAbsolute(geode_dir) catch |err| {
+        std.Io.Dir.createDirAbsolute(std.Io.Threaded.global_single_threaded.io(), geode_dir, .default_dir) catch |err| {
             if (err != error.PathAlreadyExists) return err;
         };
 
@@ -196,14 +196,18 @@ pub const CredentialStore = struct {
     pub fn loadCredentials(self: *CredentialStore) !?Credentials {
         // CANARY: REQ=REQ-AUTH-SESSION-003; FEATURE="LoadSessionToken"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/session_storage_integration_test.zig; OWNER=security; UPDATED=2026-01-15
 
-        const file = std.fs.openFileAbsolute(self.file_path, .{}) catch |err| {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.openFileAbsolute(io, self.file_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        defer file.close();
+        defer file.close(io);
 
-        const content = try file.readToEndAlloc(self.allocator, 4096);
+        const file_len = try file.length(io);
+        if (file_len > 4096) return error.FileTooBig;
+        const content = try self.allocator.alloc(u8, @intCast(file_len));
         defer self.allocator.free(content);
+        _ = try file.readPositionalAll(io, content, 0);
 
         // Simple JSON parsing (for basic structure)
         var token: ?[]const u8 = null;

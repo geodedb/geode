@@ -48,10 +48,10 @@ pub const HistoryStore = struct {
         defer file.close();
 
         // Read entire file
-        const file_size = try file.getEndPos();
+        const file_size = try file.length(std.Io.Threaded.global_single_threaded.io());
         const content = try self.allocator.alloc(u8, @intCast(file_size));
         defer self.allocator.free(content);
-        _ = try file.read(content);
+        _ = try file.readPositionalAll(std.Io.Threaded.global_single_threaded.io(), content, 0);
 
         // Split into lines
         var it = std.mem.tokenizeScalar(u8, content, '\n');
