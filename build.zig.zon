@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#948f001b955da7c277742bd28a0312ac8d5656ca",
-            .hash = "quic-0.1.11-gBIqUVY0NgCb-Uc5VXaQY5fnUDcs4ZWS7GiQod99bdio",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#22f46c83a74492aa6220abec85290f245653348c",
+            .hash = "quic-0.1.11-gBIqUVY0NgDB9OBmTs44O8EGHSh9vQYZiCRRXL1jWmT2",
         },
 
         // =======================================================================
@@ -77,8 +77,8 @@
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#d0b06f083b1f73339b66b16aed217a20eda3899a",
-            .hash = "config-0.1.0-TiLumqFCCgCKZGRx9GXuk2rGCWSzp3htHjvb_lCaelFt",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#5baf104408f8d4640f10b0d7669d848a68ba728c",
+            .hash = "config-0.1.0-TiLumiZFCgCwDFWZtGPrajJmvyvM029frGL9_-LWkQxR",
         },
 
         // =======================================================================
@@ -87,8 +87,8 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git#a767d34f5dd384e33cdc081cbb551b49321d745d",
-            .hash = "cli-0.1.1-0aso9N2mBgA6uPbsTXOISduMJXxT3GJ9yOOHY1Z801_5",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#489ac85c66ea473ac74456d67e63bfb083a46e12",
+            .hash = "cli-0.1.1-0aso9M-oBgCnqEOsKtmilbXTjU6PGGdNSDwqI4WB12s9",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
@@ -99,8 +99,8 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#48af8fd281b7972cf54cb896acf9e57856a32c87",
-            .hash = "thread_pool-0.2.0-11B1BlgHQwCj8Lk5rXWJJyFNGKbQGnHwRvHE1e2_tN5p",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#a572f2c255f6d1d7163bacdad266b3f199854822",
+            .hash = "thread_pool-0.2.0-11B1BnYIQwCpbLn6Mm8gNc8_0eN-z0BaN6B3yNU0Y1-q",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpFi7AQAR6YQ_iC-CGmKsyD4SRMKMnUWCzW4ROtmb",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#2537706f1d0434d1155014f2c555ee6c61e57b80",
-            .hash = "geode_client_zig-0.2.1-8ysbV3WSCAChy6oszkqyG-LWW-4xKh_IUciX8k9H4Eu3",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#44f5dea9b5f48b2f4f35dd8202792dc8e18d03aa",
+            .hash = "geode_client_zig-0.2.1-8ysbV3WSCABeoWipo0mFYesPEFrXpy-A2yBD6ZQJn-gA",
         },
 
         // =======================================================================
@@ -143,8 +143,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#d9fd10bd43fcb5386afcb2a366142591aba2e1f9",
-            .hash = "wal-0.1.0-EqPqpuyTAwBhZKtAjHbP9pIBldteWe-q1cVbG1SrJTEG",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#1c639add1278cc09aaf9807afffe3c4962e139f4",
+            .hash = "wal-0.1.0-EqPqpryXAwBkoJ61005aKHBDZ2ijy6BT2Y0kkXowGbg6",
         },
 
         // Page-based graph storage engine
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#277e26e59d86d34c6d21918825916eb88aac2d96",
-            .hash = "graph_storage-0.1.0-9UyJSxFLCwAMwYDsEmKMDObD5J9qLOHNtT3AC5K6IQRO",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#16f812f7538c280d1d82fa8deb16adb7d0ac2275",
+            .hash = "graph_storage-0.1.0-9UyJS_RLCwBfqlcrDvzqZ-h4IvX1IhnuipvqLqLkg-cK",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -174,8 +174,8 @@
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#26a2476f76fe1177f8fe6f35304a3601efed07bc",
-            .hash = "hnsw-0.1.0-wYzBy08SAQDM0F8u-eNk8yowDFl7mLGG9QEsTc0AQKpc",
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#a4d242d491d2476d1453c3236c8ecae10d81198f",
+            .hash = "hnsw-0.1.0-wYzBy2sSAQDIAaiEQXcYh0l8RDgPi4tL4a-fwi_C7sQM",
         },
 
         // R-tree - Spatial index with bounding-box search
