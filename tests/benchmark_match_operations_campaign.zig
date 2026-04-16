@@ -11,6 +11,21 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 
@@ -97,7 +112,7 @@ test "match refactor benchmark campaign smoke" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
-    const maybe_enabled = std.process.getEnvVarOwned(allocator, "GEODE_MATCH_BENCH_ENABLE") catch null;
+    const maybe_enabled = getEnvVarOwned(allocator, "GEODE_MATCH_BENCH_ENABLE") catch null;
     defer if (maybe_enabled) |v| allocator.free(v);
     if (maybe_enabled == null or !std.mem.eql(u8, maybe_enabled.?, "1")) return;
 
@@ -108,18 +123,17 @@ test "match refactor benchmark campaign smoke" {
 
     try seedBenchmarkGraph(allocator);
 
-    var timer = try std.time.Timer.start();
     var max_case_ns: u64 = 0;
 
     for (cases) |bench_case| {
-        timer.reset();
+        const case_start = nowNs();
 
         var i: usize = 0;
         while (i < iterations) : (i += 1) {
             try h.exec(bench_case.query);
         }
 
-        const elapsed = timer.read();
+        const elapsed = nowNs() - case_start;
         if (elapsed > max_case_ns) max_case_ns = elapsed;
 
         const avg_ns = elapsed / iterations;
