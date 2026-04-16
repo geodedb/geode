@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#4446d0b39b6d32cb3f5dd45c0fe36a3057f91104",
-            .hash = "graph_storage-0.1.0-9UyJS32jCwCaBCQFVEX4DMgSIPmm6tKoy1ekWXctOHkY",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#51afaf3f0f2c6d1e444c92e63476794c9f997da6",
+            .hash = "graph_storage-0.1.0-9UyJS32jCwBoL9xOI0xCqigRPvXVmT-bFJ07--yUalMa",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
