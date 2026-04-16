@@ -151,7 +151,7 @@ repos:
     files: \.zig$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
     pass_filenames: false
-    args: [src/, tests/, tools/, benchmarks/, build.zig, build.zig.zon]
+    args: [src/, tests/, tools/, benchmarks/, scripts/, build.zig, build.zig.zon]
     stages: [pre-commit, pre-push]
 
       # Reject .path dependencies in build.zig.zon — they work locally but fail

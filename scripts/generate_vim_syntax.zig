@@ -17,12 +17,10 @@ const language_metadata = geode.language_metadata;
 const KeywordCategory = language_metadata.KeywordCategory;
 const FunctionCategory = language_metadata.FunctionCategory;
 
-
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-
 
     try generateVimSyntaxToStdout(allocator);
 }

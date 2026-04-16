@@ -14,18 +14,19 @@ const std = @import("std");
 // - Gaps in numeric sequence are intentional - IDs assigned by feature ranges, not sequentially
 // The scanner reports duplicates and gaps for informational purposes only.
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(proc_init: std.process.Init.Minimal) !void {
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = try std.process.argsWithAllocator(allocator);
-    defer args.deinit();
-    _ = args.next();
+    // Zig 0.16: arguments arrive via proc_init.args.vector; process.argsWithAllocator was removed.
+    const raw_argv = proc_init.args.vector;
     var json = false;
     var markdown = false;
     var fail_on_issues = false;
-    while (args.next()) |a| {
+    var idx: usize = 1; // skip program name
+    while (idx < raw_argv.len) : (idx += 1) {
+        const a = std.mem.span(raw_argv[idx]);
         if (std.mem.eql(u8, a, "--json")) json = true else if (std.mem.eql(u8, a, "--markdown")) markdown = true else if (std.mem.eql(u8, a, "--fail-on-issues")) fail_on_issues = true;
     }
     if (json and markdown) return error.ConflictingModes;
@@ -57,7 +58,7 @@ pub fn main() !void {
     var min_seen: i32 = -1;
 
     // Collect ids into a list for deterministic ordering
-    var id_list = std.ArrayListUnmanaged([]const u8){};
+    var id_list: std.ArrayListUnmanaged([]const u8) = .empty;
     defer id_list.deinit(allocator);
     var it2 = ids.iterator();
     while (it2.next()) |e| {
@@ -136,7 +137,7 @@ pub fn main() !void {
 
     if (markdown) {
         // Build sorted frequency list
-        var freq_list = std.ArrayListUnmanaged([]const u8){};
+        var freq_list: std.ArrayListUnmanaged([]const u8) = .empty;
         defer freq_list.deinit(allocator);
         var itf2 = dup_freq.iterator();
         while (itf2.next()) |e| freq_list.append(allocator, e.key_ptr.*) catch {};
@@ -217,11 +218,13 @@ fn walkDir(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *us
 }
 
 fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count: *usize, dup_freq: *std.StringHashMap(u32), allocator: std.mem.Allocator, path: []const u8) !void {
-    var dir = std.Io.Dir.cwd().openDir(path, .{ .iterate = true }) catch return;
-    defer dir.close();
+    // Zig 0.16: Io.Dir.openDir/readFileAlloc now take an io parameter; use the global single-threaded Io.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, path, .{ .iterate = true }) catch return;
+    defer dir.close(io);
     var it = dir.iterate();
     while (true) {
-        const next = it.next() catch break;
+        const next = it.next(io) catch break;
         if (next == null) break;
         const ent = next.?;
         if (ent.kind == .directory) {
@@ -233,7 +236,7 @@ fn walkDirInner(ids: *std.StringHashMap(void), dups: *[512][]const u8, dup_count
         if (ent.kind == .file) {
             if (!std.mem.endsWith(u8, ent.name, ".md") and !std.mem.endsWith(u8, ent.name, ".zig")) continue;
             const full = try std.fs.path.join(allocator, &.{ path, ent.name });
-            const data = std.Io.Dir.cwd().readFileAlloc(allocator, full, 1 << 20) catch {
+            const data = std.Io.Dir.cwd().readFileAlloc(io, full, allocator, .limited(1 << 20)) catch {
                 allocator.free(full);
                 continue;
             };
