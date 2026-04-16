@@ -37,6 +37,7 @@ fn compat_microTimestamp() i64 {
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
 const logging = @import("logging");
+const build_options = @import("build_options"); // GAP-0732: allow_rls_raw_interp gate
 const log = logging.scoped("security");
 const Attr = logging.Attr;
 
@@ -657,6 +658,21 @@ pub const RLSEngine = struct {
         return compiled;
     }
 
+    // CANARY: REQ=REQ-GAP-0732-RLS-FAIL-CLOSED; FEATURE="RLSRawStringFailClosed"; ASPECT=Security; STATUS=TESTED; TEST=tests/test_rls_vm_bounds.zig; OWNER=security; UPDATED=2026-04-16
+    // GAP-0732 / SEC-RLS-02 (Risk 16, 2026-04-16): if a policy's Expression
+    // has a raw string but no compiled bytecode, we MUST treat it as deny,
+    // not fall through to the raw-string interpreter.  The raw-string
+    // interpreter is convenient for development but has its own parsing
+    // quirks and does NOT walk the bounds-checked VM path, so a malformed
+    // or attacker-supplied raw expression could bypass restrictions that
+    // the compiled form would catch.  The compiled-expression path is the
+    // single authoritative enforcement gate; `createPolicy` is responsible
+    // for running the compiler before persistence.
+    //
+    // The legacy interpreter remains available for callers that set the
+    // `allow_rls_raw_interp` build option (default OFF).  This keeps the
+    // existing test_rls_enhanced* coverage intact but gates real servers
+    // from accidentally shipping raw-only policies.
     fn evaluateExpression(
         self: *Self,
         expr: Expression,
@@ -667,8 +683,13 @@ pub const RLSEngine = struct {
             return try self.evaluateCompiledExpression(compiled, row, context);
         }
 
-        // Fall back to interpreted evaluation
-        return try self.context_evaluator.evaluate(expr.raw, row, context);
+        // GAP-0732 fail-closed: policies without compiled bytecode must be
+        // rejected — OR explicitly opt-in via -Dallow-rls-raw-interp=true
+        // (debug/test builds only).
+        if (build_options.allow_rls_raw_interp) {
+            return try self.context_evaluator.evaluate(expr.raw, row, context);
+        }
+        return error.UnsafePolicy;
     }
 
     // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=TESTED; TEST=test_rls_vm_bounds.zig; OWNER=security; UPDATED=2026-04-16
@@ -1125,11 +1146,14 @@ pub const RLSEngine = struct {
             return try self.evaluateCompiledExpressionWithUsername(compiled, row, username);
         }
 
-        // Interpreted evaluation requires a SecurityContext; without one we cannot
-        // evaluate the raw expression.  Return true (permissive) so that the
-        // compiled-expression path is the enforcing gate.  Policies should always
-        // be compiled at creation time via createPolicy().
-        return true;
+        // GAP-0732 / SEC-RLS-02 (2026-04-16): the username-only path has no
+        // SecurityContext, so we cannot walk the raw-string interpreter at
+        // all.  Previously this returned `true` (allow) — a restrictive
+        // policy without compiled bytecode silently let every row through.
+        // Now we return error.UnsafePolicy so the caller denies the row.
+        // Policies must be compiled at creation time via createPolicy(); the
+        // compiled-expression path is the single enforcement gate.
+        return error.UnsafePolicy;
     }
 
     /// Bytecode VM evaluation using a username string instead of SecurityContext.

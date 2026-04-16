@@ -358,6 +358,17 @@ pub fn build(b: *std.Build) void {
         "Use GeneralPurposeAllocator(.{}){} for the server main allocator (leak detection; default: smp_allocator)",
     ) orelse false;
     build_opts.addOption(bool, "enable_gpa_debug", enable_gpa_debug);
+
+    // GAP-0732 / SEC-RLS-02 (2026-04-16): raw-string RLS interpreter is
+    // fail-closed by default in production.  Set -Dallow-rls-raw-interp=true
+    // only when you need to run the legacy interpreter for compatibility
+    // tests; never enable in a release server build.
+    const allow_rls_raw_interp = b.option(
+        bool,
+        "allow-rls-raw-interp",
+        "Allow the legacy raw-string RLS interpreter path (SECURITY: default OFF; set ONLY for compatibility tests)",
+    ) orelse false;
+    build_opts.addOption(bool, "allow_rls_raw_interp", allow_rls_raw_interp);
     const build_options_mod = build_opts.createModule();
 
     const lib = b.addLibrary(.{
@@ -1930,6 +1941,7 @@ pub fn build(b: *std.Build) void {
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("geode_auth", auth_mod);
     rls_mod.addImport("logging", logging_mod);
+    rls_mod.addImport("build_options", build_options_mod); // GAP-0732: for allow_rls_raw_interp
     root_mod.addImport("rls", rls_mod);
     root_mod.addImport("rls_types", rls_types_mod);
     // GAP-0510: Make rls_types available to the server binary so quic_connection_handler

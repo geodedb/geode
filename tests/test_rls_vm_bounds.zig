@@ -228,3 +228,71 @@ test "GAP-0723: Opcode.fromByte returns null on unknown byte" {
     try testing.expect(CompiledExpression.Opcode.fromByte(0x41) == .jump_if_false);
     try testing.expect(CompiledExpression.Opcode.fromByte(0xFF) == .ret);
 }
+
+test "GAP-0732: raw-only expression fails closed (UnsafePolicy)" {
+    // SEC-RLS-02: a policy whose Expression has `raw != null` but
+    // `compiled == null` used to fall through to the legacy raw-string
+    // interpreter (or, on the username-only path, silently return true).
+    // Both paths are now fail-closed: the VM rejects the policy with
+    // error.UnsafePolicy so the caller denies the row.
+    //
+    // This is the exact attack the plan called out: `raw = "1"` (always
+    // true under the legacy interpreter) should now deny, not allow.
+    //
+    // Note: RLSEngine.createPolicy auto-compiles raw expressions on
+    // insertion, so we construct and register the policy first, then
+    // overwrite its compiled slot back to null (simulating a policy
+    // that somehow reaches the VM with only a raw string — e.g. a
+    // direct insertion by a future GQL→bytecode wire that hasn't
+    // finished compiling yet).
+    const allocator = testing.allocator;
+    var engine = try RLSEngine.init(allocator);
+    defer engine.deinit();
+
+    const policy = Policy{
+        .id = 42,
+        .name = "raw_only_policy",
+        .description = "GAP-0732 regression — raw-only policies must deny",
+        .graph = "g_raw",
+        .table = "t_raw",
+        .operation = .all,
+        .permissive = false,
+        .roles = &.{},
+        .using_expr = Expression{
+            .raw = "1", // always-true under legacy interpreter
+            .parsed = null,
+            .compiled = null,
+            .parameters = &.{},
+        },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .none,
+    };
+
+    try engine.createPolicy(policy);
+
+    // Simulate the defect: strip the auto-compiled bytecode back to null
+    // so the VM is forced through the raw-only path.  We must free the
+    // bytecode we're orphaning to keep the test allocator happy.
+    const key = rls.RLSEngine.PolicyKey{ .graph = "g_raw", .table = "t_raw" };
+    const policies = engine.policies.getPtr(key) orelse return error.SetupFailed;
+    try testing.expect(policies.items.len == 1);
+    if (policies.items[0].using_expr.?.compiled) |c| {
+        allocator.free(c.bytecode);
+        allocator.free(c.constants);
+        allocator.free(c.jump_table);
+        allocator.destroy(c);
+    }
+    policies.items[0].using_expr.?.compiled = null;
+
+    var row = std.StringHashMap(Value).init(allocator);
+    defer row.deinit();
+
+    const res = engine.checkRowAccessByUsername(&row, .select, "raw_only_probe", "g_raw", "t_raw");
+    try testing.expectError(error.UnsafePolicy, res);
+}
