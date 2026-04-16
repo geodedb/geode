@@ -1,8 +1,131 @@
-# Security Gap Analysis -- Migration Engine Audit
+# Security Gap Analysis
 
-Last updated: 2026-04-10
-Scope: `src/migration/mod.zig`, `src/cli/backup_cli.zig`
-Audited by: Claude Opus 4.6 (adversarial security review)
+Last updated: 2026-04-16
+Scope (Phase 3, 2026-04-16): `src/security/rls_core.zig`, `src/security/audit.zig`, `src/cli/geode_audit_verify.zig`, `src/security/vault_kms_provider.zig`, `src/security/geode_auth_lib.zig`, `src/distributed/*`, `src/execution/aggregation_evaluation.zig`, `src/monitoring/metrics_server.zig`, `config/nginx/conf.d/geode.conf`, `src/cli/main.zig`, `src/cli/cli_dispatcher.zig`
+Scope (Original, 2026-04-10): `src/migration/mod.zig`, `src/cli/backup_cli.zig`
+Audited by: Claude Opus 4.6 / Opus 4.7 (adversarial security review)
+
+---
+
+## Phase 3 Audit (2026-04-16) — Core Security Engines
+
+### Summary
+
+- **Total new findings:** 10 (3 confidential — active-exploit potential)
+- **Critical (Risk >= 24):** 3 — SEC-RLS-01 (30), SEC-AUD-01 (24), SEC-INFRA-01 (24) — **all 3 CLOSED 2026-04-16**
+- **High (Risk 12-20):** 3 — SEC-RLS-02 (16), SEC-AUD-02 (12), SEC-KMS-01 (12), SEC-INFRA-03 (15) — **SEC-RLS-02, SEC-AUD-02, SEC-KMS-01 CLOSED 2026-04-16**
+- **Medium (Risk 7-10):** 2 — SEC-MTI-01 (10), SEC-AUTH-01 (9) — **SEC-MTI-01 CLOSED 2026-04-16**
+- **Low (Risk <=6):** 2 — SEC-MON-01 via #674 (6), SEC-CLI-01 (6), SEC-INFRA-02 (2)
+- **Open:** 3 (SEC-INFRA-03 #743, SEC-AUTH-01 #742, SEC-CLI-01 #744, SEC-MON-01 #674, SEC-INFRA-02 #740 deferred to Wave 5/6; see per-row status below)
+- **Closed (2026-04-16):** 7 (SEC-RLS-01 #723, SEC-RLS-02 #732, SEC-AUD-01 #727, SEC-AUD-02 #738, SEC-INFRA-01 #737, SEC-MTI-01 #739, SEC-KMS-01 #741)
+- **Confidential:** 3 (#723, #727, #732) — all 3 CLOSED with confidentiality-preserving wording
+
+### Top 5 Risks (Phase 3, Open)
+
+| Rank | Risk | ID | Finding | Issue |
+|------|------|-----|---------|-------|
+| 1 | 30 | SEC-RLS-01 | RLS VM stack OOB — arbitrary write in auth fast-path | [#723](https://gitlab.com/devnw/codepros/geode/geode/-/issues/723) (confidential) |
+| 2 | 24 | SEC-AUD-01 | Audit verifier skips seq_no — chain splice undetectable | [#727](https://gitlab.com/devnw/codepros/geode/geode/-/issues/727) (confidential) |
+| 3 | 24 | SEC-INFRA-01 | GEODE_CLUSTER_INSECURE works in release — cluster MITM | [#737](https://gitlab.com/devnw/codepros/geode/geode/-/issues/737) |
+| 4 | 16 | SEC-RLS-02 | RLS raw-string fallthrough — `raw=\"1\"` bypasses every deny | [#732](https://gitlab.com/devnw/codepros/geode/geode/-/issues/732) (confidential) |
+| 5 | 15 | SEC-INFRA-03 | Cluster bearer token — single shared secret, no rotation | [#743](https://gitlab.com/devnw/codepros/geode/geode/-/issues/743) |
+
+### Critical Attack Chain (Phase 3)
+
+`GEODE_CLUSTER_INSECURE=1` set via `/proc/1/environ` leak or supervisor misconfig (SEC-INFRA-01) → QUIC TLS peer verification off across federation/Raft → on-path attacker exfiltrates `GEODE_CLUSTER_TOKEN` from first federation HELLO (SEC-INFRA-03) → attacker forges peer cert → Raft leader election flipped → insider reads `audit.jsonl.key` (SEC-AUD-02, colocated) → forges signed sub-chain with seq_no gap → verifier returns clean \"OK\" (SEC-AUD-01) → forensic timeline silently lossy. **Effect: full cluster compromise with deniable tampering.**
+
+Separately, once the GQL->bytecode parser lands (GAP-0510 follow-up), SEC-RLS-01 (stack OOB) becomes a pre-auth arbitrary-write primitive triggered by any admin `CREATE POLICY` — today constrained to manually-pinned `CompiledExpression` paths (test shims, migrations).
+
+### Stack-Ranked New Findings Table
+
+| Rank | ID | Severity | Risk | Finding | Component | CWE/OWASP | Evidence (file:line) | Issue | Status |
+|------|-----|----------|------|---------|-----------|-----------|----------------------|-------|--------|
+| 1 | SEC-RLS-01 | Critical | 30 | RLS VM stack OOB write | security/rls_core | CWE-787 / A04:2021 | rls_core.zig:642-848 | [#723](https://gitlab.com/devnw/codepros/geode/geode/-/issues/723) confidential | **Closed 2026-04-16** (`4b5fc453` — stack bounds + opcode validator; 6 regression tests in `tests/test_rls_vm_bounds.zig`) |
+| 2 | SEC-AUD-01 | Critical | 24 | Audit verifier skips seq_no | cli/geode_audit_verify | CWE-345 / A09:2021 | geode_audit_verify.zig:60-128 | [#727](https://gitlab.com/devnw/codepros/geode/geode/-/issues/727) confidential | **Closed 2026-04-16** (`a2d168bc` — seq_no monotonicity assertion + error; 2 regression tests in `tests/test_audit_verify_seq_no.zig`) |
+| 3 | SEC-INFRA-01 | Critical | 24 | GEODE_CLUSTER_INSECURE in release | distributed (x6) | CWE-295 / A02:2021 | cluster_auth, federation, raft_consensus, twophase, query_transport, cluster | [#737](https://gitlab.com/devnw/codepros/geode/geode/-/issues/737) | **Closed 2026-04-16** (`40ac14bc` — Debug-only gate + release refusal + counter metric `geode_cluster_insecure_refused_total`; 2 regression tests in `tests/test_cluster_insecure_gate.zig`) |
+| 4 | SEC-RLS-02 | High | 16 | RLS raw-string interpreter fallthrough | security/rls_core | CWE-94 / A03:2021 | rls_core.zig:631, 1441-1532 | [#732](https://gitlab.com/devnw/codepros/geode/geode/-/issues/732) confidential | **Closed 2026-04-16** (`b5487d04` — fail-closed by default; `-Dallow-rls-raw-interp=false` default; 1 regression test) |
+| 5 | SEC-INFRA-03 | Medium | 15 | Cluster token single shared bearer | distributed/cluster_auth | CWE-798 / A07:2021 | cluster_auth.zig:17-56 | [#743](https://gitlab.com/devnw/codepros/geode/geode/-/issues/743) | Open (Wave 5 — deferred; per-node mTLS + SPIFFE/SVID rotation scaffold) |
+| 6 | SEC-AUD-02 | High | 12 | audit.jsonl + signing key colocated | security/audit | CWE-312, CWE-798 / A09:2021 | audit.zig:343-345; commit c8b7c44f | [#738](https://gitlab.com/devnw/codepros/geode/geode/-/issues/738) | **Closed 2026-04-16** (`e751ed0c` — `git rm --cached audit.jsonl`; `.gitignore` covers future checkins) |
+| 7 | SEC-KMS-01 | Medium | 12 | Vault KMS empty env_map | security/vault_kms_provider | CWE-88, CWE-306 / A02:2021 | vault_kms_provider.zig:163,167,251,270 | [#741](https://gitlab.com/devnw/codepros/geode/geode/-/issues/741) | **Closed 2026-04-16** (`f9daea3a` — `getEnvMap` inherit + `validateVaultPath` allowlist; 4 inline regression tests) |
+| 8 | SEC-MTI-01 | Medium | 10 | Aggregation dead-code no tenant filter | execution/aggregation_evaluation | CWE-863 / A01:2021 | aggregation_evaluation.zig:629-692 | [#739](https://gitlab.com/devnw/codepros/geode/geode/-/issues/739) | **Closed 2026-04-16** (`fa34d617` — deleted 419 LOC of dead unsafe evaluators + dropped re-exports) |
+| 9 | SEC-AUTH-01 | Medium | 9 | Blake2b legacy: no password_reset_required | security/geode_auth_lib | CWE-521, CWE-916 / A07:2021 | geode_auth_lib.zig:1068-1092 | [#742](https://gitlab.com/devnw/codepros/geode/geode/-/issues/742) | Open (Wave 6 — partial-do; full migration is Won't-Do per vendor ownership; see Won't-Do section) |
+| 10 | SEC-CLI-01 | Low | 6 | --insecure-tls-skip-verify in release | cli/main, cli_dispatcher | CWE-295 / A02:2021 | main.zig:1054, cli_dispatcher.zig:490 | [#744](https://gitlab.com/devnw/codepros/geode/geode/-/issues/744) | Open (Wave 3 — deferred; low priority) |
+| 11 | SEC-MON-01 | Low | 6 | Metrics endpoint no auth (timing oracle at re-impl) | monitoring/metrics_server | CWE-306, CWE-200 / A07 | metrics_server.zig:47-97, 102 | [#674](https://gitlab.com/devnw/codepros/geode/geode/-/issues/674) (existing) | Open (Phase 3 comment; deferred) |
+| 12 | SEC-INFRA-02 | Medium | 2 | nginx h2c residual on Grafana vhost | config/nginx | CWE-444 / A10:2021 | geode.conf:20-29 | [#740](https://gitlab.com/devnw/codepros/geode/geode/-/issues/740) | Open (Wave 6 — deferred; low priority) |
+
+### Findings by Area (Phase 3)
+
+**Row-Level Security:**
+
+- SEC-RLS-01 (#723, confidential, Risk 30) — VM stack OOB write
+- SEC-RLS-02 (#732, confidential, Risk 16) — raw-string fallthrough
+- #707 (existing) — RLS value bridge not wired into match loop
+
+**Audit Log Integrity:**
+
+- SEC-AUD-01 (#727, confidential, Risk 24) — verifier skips seq_no
+- SEC-AUD-02 (#738, Risk 12) — signing key colocated with log
+
+**Cluster / Distributed:**
+
+- SEC-INFRA-01 (#737, Risk 24) — insecure mode cluster-wide
+- SEC-INFRA-03 (#743, Risk 15) — shared bearer token, no rotation
+
+**KMS / Cryptography:**
+
+- SEC-KMS-01 (#741, Risk 12) — Vault KMS empty env + path injection
+- SEC-AUTH-01 (#742, Risk 9) — Blake2b legacy reset flag
+
+**Multi-Tenant Isolation:**
+
+- SEC-MTI-01 (#739, Risk 10) — aggregation dead-code revival risk
+
+**Operations / Hardening:**
+
+- SEC-CLI-01 (#744, Risk 6) — insecure TLS flag in release
+- SEC-MON-01 (#674, Risk 6) — metrics auth (updated with Phase 3 context)
+- SEC-INFRA-02 (#740, Risk 2) — nginx h2c residual
+
+### Roadmap (Phase 3)
+
+**Quick Wins (< 1 day each):**
+
+- SEC-AUD-01: add `seq_no` assertion in verifier loop (~10 LoC).
+- SEC-AUD-02: `git rm --cached audit.jsonl`; update `.gitignore`; add pre-commit + CI guard.
+- SEC-MTI-01: replace aggregation dead-code bodies with `@compileError` or delete.
+- SEC-CLI-01: add `builtin.mode == .Debug` gate on `--insecure-tls-skip-verify`.
+- SEC-AUTH-01: set `password_reset_required = true` in Blake2b success path.
+
+**Medium (1-5 days each):**
+
+- SEC-RLS-01: add bounds checks on every push/pop opcode; fuzz harness.
+- SEC-RLS-02: reject `raw != null and compiled == null` at load; force compile.
+- SEC-INFRA-01: Debug-mode gate across 6 modules; startup banner; Prometheus gauge; audit event.
+- SEC-KMS-01: inherit env with `std.process.getEnvMap`; validate `self.key_path`; startup self-test.
+- SEC-INFRA-02: remove h2c headers from Grafana `location /`; scope to `/api/live/ws`.
+
+**Strategic (> 5 days):**
+
+- SEC-INFRA-03: per-node mTLS cert pinning, token → SPIFFE/SVID; rotation command.
+- SEC-MON-01: re-implement metrics endpoint with bearer/mTLS auth.
+
+### Immediate Actions
+
+No findings require immediate credential rotation. Priority actions:
+
+1. **7-day SLA:** SEC-RLS-01 (#723), SEC-AUD-01 (#727), SEC-INFRA-01 (#737) — all three are on the Critical path and block the GAP-0510 RLS-engine landing and any production multi-node deployment.
+2. **30-day SLA:** SEC-RLS-02 (#732), SEC-AUD-02 (#738) — chain-breakers for SEC-AUD-01 and SEC-RLS-01.
+3. **Git hygiene:** run `git rm --cached audit.jsonl` and sweep `.gitignore` before next CI tarball rev.
+
+### Blockers and Unknowns
+
+- **Supply-chain CVE re-scan:** 3 outstanding Trivy CVEs (2 HIGH, 1 MEDIUM) flagged in audit brief but not re-run this phase. Re-run `trivy image` against published container; track in a SEC-SCN-01 placeholder if confirmed.
+- **QUIC vendor audit:** TLS/QUIC cryptographic defaults not reviewed in Phase 3 — scope is vendored `zig-quic@2ca4f8db`. Pending vendor audit, assume TLS 1.3 AEAD is correct.
+- **24 git-pinned Zig modules in `build.zig.zon`** — no lockfile signing; a malicious commit to any of auth/fle/audit/wal/raft/quic/graph_storage lands on next `zig build`. Supply-chain hardening is strategic.
+
+---
+
+## Migration Engine Audit (2026-04-10 — original scope)
 
 ## Summary
 

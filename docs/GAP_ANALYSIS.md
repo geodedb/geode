@@ -1,17 +1,19 @@
 # Gap Analysis
 
-Last updated: 2026-04-14
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)**
+Last updated: 2026-04-16
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)**
 
 ## Summary
 
-- **Total open gaps:** 7
+- **Total open gaps:** 8
 - **Critical:** 1 (GAP-0256 blocked)
 - **High:** 2 (GAP-0526, GAP-0527)
-- **Medium:** 1 (GAP-0528)
-- **Low:** 1 (GAP-0529)
+- **Medium:** 2 (GAP-0528, GAP-0514 residual, **GAP-0542 won't do** — extraction follow-up)
+- **Low:** 2 (GAP-0529, GAP-0509 residual)
 - **Blocked (external dependency):** 4 (GAP-0246, GAP-0247, GAP-0256, GAP-0526)
-- **Won't Do:** 1 (GAP-0258)
+- **Won't Do:** 2 (GAP-0258, **GAP-0542** — extraction deferred per plan)
+- **Closed (2026-04-16):** GAP-0538 (#710), GAP-0539 (#711), GAP-0540 (#712), GAP-0541 (#713) — 14 gap commits from waves 1-3 (`81dc475d..f9daea3a`); Won't-Do on GAP-0542 (extraction over CI-diff check)
+- **Opened (2026-04-16):** GAP-0538 (#710) → Closed, GAP-0539 (#711) → Closed, GAP-0540 (#712) → Closed, GAP-0541 (#713) → Closed, GAP-0542 (#714) → Won't-Do
 - **Opened (2026-04-14):** GAP-0526, GAP-0527, GAP-0528, GAP-0529
 - **Closed (2026-04-10):** GAP-0519 (posting-list intersection verified), GAP-0520 (dead materializing wrappers removed), GAP-0521 (GROUP BY at practical optimum), GAP-0522 (full-scan diagnostics added), GAP-0523 (ReadView adapter gate removed), GAP-0524 (storage APIs documented, partial), GAP-0525 (micro-benchmarks added)
 - **Closed (2026-04-05):** GAP-0500, GAP-0501, GAP-0502, GAP-0503, GAP-0504, GAP-0508, SEC-04..SEC-27 (17 critical security), R4, performance items #675/#681/#683/#688/#692/#695, migration security SEC-MIG-06/07/09/10/11, quality Q13/Q15/Q17/Q18, #696 dead imports
@@ -2236,3 +2238,100 @@ The following CANARY-related work is out of scope for GAP-0514 phases as current
 | 4 (MCP activation) | — | — | Open (blocked on pre-existing LSP/client dead-test fixes) | — |
 
 Each open phase should get its own plan document under `docs/superpowers/plans/` before execution begins. Phase 1A's plan is the template.
+
+### Evidence update (2026-04-16, Phase 4 audit)
+
+- Fresh Phase 2 scan of `docs/status.csv`: IMPL coverage **improved from documented 15% → observed 10.4%** (397 of 3,820 non-exempt rows).
+- Hotspot has **shifted away from `execution.zig` / `graph_store.zig`** (Phase 1A closed 8 markers there) **to the REPL / CLI / QUIC layer**.
+- New Phase 1B–1E candidates by file (top 5):
+  - `src/client/repl/repl_dispatch.zig` — 36 IMPL markers
+  - `src/cli/main.zig` — 27 IMPL markers
+  - `src/server/quic_connection_handler.zig` — 22 IMPL markers
+  - `src/client/repl/repl_loop.zig` — 19 IMPL markers
+  - `src/transport/grpc_server.zig` — 17 IMPL markers
+- **Platform-issue sync note:** GitLab issue `#666` currently titled "GAP-0514: Deterministic nonce in ReleaseSmall builds" reuses this Gap-ID for a *different* semantic concern. The flatfile ledger's GAP-0514 (CANARY IMPL Coverage Sprint) is the authoritative meaning here; create a dedicated tracking issue for Phase 1B–1E before the IDs diverge further.
+
+---
+
+## GAP-0509 residual: aggregation tenant filter (open tracking item)
+
+- **Category:** Security / Multi-tenancy isolation
+- **Severity:** Low (dead code, but unsafe if wired)
+- **Parent gap:** GAP-0509 (Closed 2026-04-11 — match-loop tenant isolation verified)
+- **Evidence (reconfirmed 2026-04-16):**
+  - `src/execution/aggregation_evaluation.zig:629-690` — `evaluateAggregation` and `evaluateAggregationWithLabels` iterate `store.nodes` with **no tenant filter**. Source file carries an explicit `GAP-0509 WARNING` comment.
+  - These functions are currently **unreachable** (dead code after the tenant-filter migration).
+  - CANARY marker `REQ-GAP-0509-AGG-TENANT-WARNING` shows `STATUS=IMPL` — tracked but not verified by a CI gate.
+- **Why this is still a gap:** No CI enforcement prevents a future caller from wiring these functions back in; the warning comment alone is not load-bearing.
+- **Recommended fix:** Either (a) delete the two dead functions, or (b) add a `tenant` parameter and route all callers through the filtered path. Add a CANARY `TEST=` marker that fails the build if either function is called without a tenant argument.
+- **Acceptance criteria:** Functions either removed from the tree or refactored to require a tenant; marker flipped to `STATUS=TESTED`.
+
+---
+
+## GAP-0538: Zig 0.16.0 build regression — `Io.File.writeAll` removed — **CLOSED (2026-04-16)**
+
+- **Issue:** [#710](https://gitlab.com/devnw/codepros/geode/geode/-/issues/710) — Closed
+- **Category:** Bug (build-blocker)
+- **Severity:** **Critical**
+- **Date opened:** 2026-04-16
+- **Date closed:** 2026-04-16
+- **Closure commit:** [`81dc475d`](https://gitlab.com/devnw/codepros/geode/geode/-/commit/81dc475d) — `fix: close GAP-0538 — migrate cli Io.File.writeAll to Zig 0.16 API`
+- **Resolution:** Migrated all 3 call sites (`src/cli/transport_response.zig:171`, `src/client/query_result_accumulator.zig:145`, `src/cli/main.zig:1897`) to a new `Stream` helper; bumped `build.zig.zon:6` to `0.16.0`; synced banners in `CLAUDE.md`, `AGENTS.md`, `README.md`, `.gitlab-ci.yml`. `zig build` exits 0; `zig build test` passes 1059/1059.
+- **Evidence:** Verified in `docs/audit/gap-close-verification.md` — AC fully met.
+- **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md)
+
+---
+
+## GAP-0539: `tools/status_generate.py` emits schema-invalid CSV rows — **CLOSED (2026-04-16)**
+
+- **Issue:** [#711](https://gitlab.com/devnw/codepros/geode/geode/-/issues/711) — Closed
+- **Category:** CI-CD / Tooling
+- **Severity:** **Medium**
+- **Date opened:** 2026-04-16
+- **Date closed:** 2026-04-16
+- **Closure commit:** [`4be895a9`](https://gitlab.com/devnw/codepros/geode/geode/-/commit/4be895a9) — `fix: close GAP-0539/0540 — status_generate schema bug + canaryscan resync`
+- **Resolution:** `tools/status_generate.py` regex updated to guard against newline-straddle; strict `VALID_STATUS` filter drops `COMPLETE` and blank-status rows with `STATUS_GEN_WARN`. Fresh `docs/status.csv` is 4299 valid rows / 0 COMPLETE / 0 blank. Added 5 Python regression tests in `tools/test_status_generate.py`.
+- **Evidence:** Verified in `docs/audit/gap-close-verification.md` — AC fully met.
+- **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md)
+
+---
+
+## GAP-0540: Committed `tools/canaryscan/status.csv` lags working-tree regeneration by 210 REQ IDs — **CLOSED (2026-04-16)**
+
+- **Issue:** [#712](https://gitlab.com/devnw/codepros/geode/geode/-/issues/712) — Closed
+- **Category:** CI-CD / Docs
+- **Severity:** **Low**
+- **Date opened:** 2026-04-16
+- **Date closed:** 2026-04-16
+- **Closure commit:** [`4be895a9`](https://gitlab.com/devnw/codepros/geode/geode/-/commit/4be895a9) — same PR as GAP-0539
+- **Resolution:** Regenerated `tools/canaryscan/status.csv` in sync with `docs/status.csv`; pre-commit `status.csv sync check` hook added to prevent future drift.
+- **Evidence:** Verified in `docs/audit/gap-close-verification.md` — pre-commit `status.csv sync check` PASS.
+- **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md)
+
+---
+
+## GAP-0541: `docs/REQUIREMENTS.md` still links GAP-0249 as open (mirror stale) — **CLOSED (2026-04-16)**
+
+- **Issue:** [#713](https://gitlab.com/devnw/codepros/geode/geode/-/issues/713) — Closed
+- **Category:** Docs
+- **Severity:** **Low**
+- **Date opened:** 2026-04-16
+- **Date closed:** 2026-04-16
+- **Closure commit:** [`d610547d`](https://gitlab.com/devnw/codepros/geode/geode/-/commit/d610547d) — `chore: close GAP-0541 — drop stale GAP-0249 link from REQUIREMENTS mirror`
+- **Resolution:** Removed stale GAP-0249 bullet from `docs/REQUIREMENTS.md`; replaced with dated HTML comment. Mirror now accurately reflects tracker state.
+- **Evidence:** `docs/REQUIREMENTS.md:82` — GAP-0249 bullet absent; HTML comment documents closure date.
+- **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md)
+
+---
+
+## GAP-0542: NodeRegistry inline-clone drift risk untracked by CI — **WON'T DO (2026-04-16)**
+
+- **Issue:** [#714](https://gitlab.com/devnw/codepros/geode/geode/-/issues/714) — Commented (will remain open until extraction lands)
+- **Category:** Code Quality (duplication / drift)
+- **Severity:** **Medium**
+- **Date opened:** 2026-04-16
+- **Date marked Won't Do:** 2026-04-16
+- **Rationale (per `docs/audit/gap-close-plan.md` §Won't-Do):** The proposed "CI byte-identical diff check" variant treats the symptom (drift detection) rather than the cause (duplication). Zig's module system supports the extraction path cheaply. Extraction is the chosen remediation and is tracked as a Wave-5 follow-up in `docs/audit/gap-close-plan.md:194` (#35). Adding a CI diff check would add tooling debt without addressing the underlying duplication.
+- **Follow-up:** Wave-5 item #35 — extract `NodeRegistry` to `src/distributed/node_registry.zig`; both prod and test import it. Tracked in `docs/audit/gap-close-plan.md`.
+- **Current state (unchanged):** `src/distributed/test_query_transport_node_registry.zig:53-112` remains an inline clone of `src/distributed/query_transport.zig:607-664`.
+- **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) (Won't-Do section)

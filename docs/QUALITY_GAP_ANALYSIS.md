@@ -1,13 +1,13 @@
 # Quality Gap Analysis
 
-Last updated: 2026-04-10 (gap closure session — all 8 remaining items closed) (gap closure session -- Q13, Q15, Q17, Q18 closed; prior: migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
+Last updated: 2026-04-16 (Phase 4 closeout — 3 of 15 Phase 4 findings closed this pass: #710, #717, #724; 2 more follow-ups committed as sub-fixes for #716 / audit.jsonl; 10 remain open; prior: 2026-04-10 gap closure — all 8 remaining items closed; Q13, Q15, Q17, Q18 closed; migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
 
 ## Summary
 
-- Total findings: 103
-- Closed / Implemented: 81 (73 prior + 8 closed 2026-04-10: #553, #551, #549, #555, #624, #621, Q19, Q9)
+- Total findings: 118 (103 prior + 15 from Phase 4 audit 2026-04-16)
+- Closed / Implemented: 84 (81 prior + 3 closed this pass: #710 build-blocker, #717 dead clone, #724 zig-fmt pre-push)
 - Blocked: 14
-- Open: 0
+- Open: 10 (from 2026-04-16 Phase 4 audit — reduced from 15 after closing #710/#717/#724 and noting #716 ZIG_VERSION align landed in commit `94c75922`)
 - Closed (Won't Do by policy): 8
 
 15 quality gaps from the initial audit have been resolved. 9 additional findings verified as already resolved. 8 findings closed as Won't Do per policy. 14 large architectural items blocked pending dedicated sprint planning. 8 new findings identified in March 2026 audit; 4 closed in that session (#550, #552, #554, #556). 18 new findings from April 2026 migration engine audit of `src/migration/mod.zig` -- 16 closed via gap closure (2026-04-01), 2 remain open (#621 file length, #624 doc-comments). 19 new findings from April 2026 migration engine re-audit (quality review) -- 13 closed via GAP-0306..0321 gap closure, 6 remain open (Q9 monolith, Q13 unused allocator, Q15 error type erasure, Q17 module docs, Q18 optional type, Q19 MigrationPlan UB).
@@ -163,6 +163,66 @@ Scores: Readability 7/10, Maintainability 5/10, API Contract 6/10, Reliability 4
 | 101 | Q13 | Low | 15 | api-contract | `confidence::confirmed` acquireLock ignores allocator parameter -- parameter accepted but unused | migration | `src/migration/mod.zig:334` -- allocator param in signature but never referenced in body | Removed unused allocator parameter from acquireLock signature | migration | -- | Closed / Implemented (2026-04-05) |
 | 102 | Q16 | Low | 15 | docs | `confidence::confirmed` Resume token lifecycle undocumented; total_batches hardcoded to 5 | migration | `src/migration/mod.zig:700-711` | Closed via GAP-0318. Commit `f0e26e31`. total_batches now configurable. | migration | -- | Closed / Implemented |
 | 103 | Q17 | Low | 15 | docs | `confidence::confirmed` No module-level architecture documentation | migration | `src/migration/mod.zig:1-7` -- file starts with imports, no overview of module purpose or design | Added module-level doc-comment explaining migration engine architecture, data flow, and key abstractions | migration | -- | Closed / Implemented (2026-04-05) |
+
+## April 2026 Phase 4 Audit — New Findings (15)
+
+Consolidated from Phase 3 review (`docs/audit/quality-phase3-review.md`). PriorityScore = Impact(1-5) × Likelihood(1-5) × 4. Top 5 risks are the three merge-blockers (#710, #716, #724) plus the two largest open refactors (#474 cli/main, new executeMatchQueryImpl).
+
+### Top 5 Risks (2026-04-16) — updated after 2026-04-16 closeout
+
+1. ~~Build broken at HEAD — `writeAll` call-sites use removed Zig 0.16 API~~ → **Closed** via `81dc475d` (#710)
+2. ~~Zig toolchain pin drift~~ → **Closed** via `94c75922` + `81dc475d` (#716)
+3. `executeMatchQueryImpl` 2,567 LOC — decomposable via existing 4-way dispatcher (PriorityScore: 80) → [#719](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/719) (Wave 5 — deferred)
+4. `cli/main.zig` #1 churn (177 commits/3mo), 57 `catch {}`, 650-LOC `cmdQuery` (PriorityScore: 80) → [#474](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/474) (Blocked)
+5. 653 `catch {}` swallowed errors — 29 in CLI/transport hot paths (PriorityScore: 80) → [#721](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/721) (Wave 6 — deferred)
+
+| Rank | Severity | PriorityScore | Category | Finding | Component | Evidence | GitLab Issue | Fix Summary | Owner | ETA/SLA | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|---|
+| 104 | Critical | 100 | ci-cd | `confidence::confirmed` Build broken at HEAD — 16 `writeAll` call-sites use removed Zig 0.16 `Io.File.writeAll` API | CLI/transport | `src/cli/transport_response.zig:171-213` + 16 call-sites across `cli/` | [#710](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/710) | Use `File.deprecatedWriter()` or thread an explicit writer through the call-sites (GAP-0538). Commit `81dc475d`. | core, cli | <1w | Closed / Implemented (2026-04-16) |
+| 105 | Critical | 100 | ci-cd | `confidence::confirmed` Zig toolchain pin drift: `build.zig.zon` 0.15.1 / CI 0.15.2 / HEAD 0.16.0 | build system | `build.zig.zon:6`; `.gitlab-ci.yml` `ZIG_VERSION`; HEAD 0.16.0 APIs | [#716](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/716) | Align all refs to single `ZIG_VERSION`; add drift guard in CI. AGENTS.md banner cleanup via `94c75922`; core alignment via `81dc475d`. | core, ci | 1-2d | Closed / Implemented (2026-04-16) |
+| 106 | High | 80 | maintainability | `confidence::confirmed` `executeMatchQueryImpl` 2,567 LOC — decompose via existing 4-way dispatcher seam at line 4585 | execution | `src/execution/match_operations.zig:4543` (function), `:4585` (seam), `:4604-4638` (GROUP-BY-with-rel branch) | [#719](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/719) | Extract four branches (aggregation / GROUP-BY-with-rel / single-node-scan / rel-scan) into dedicated functions | execution | 2-4w | Open (Wave 5 — Deferred) |
+| 107 | High | 80 | maintainability | `confidence::confirmed` 653 `catch {}` swallowed errors; 29 in CLI/transport hot paths | CLI/transport | `src/cli/main.zig` (57), `src/client/repl/repl_dispatch.zig` (35), `src/transport/quic.zig` (14), `src/transport/grpc_server.zig` (8), `src/cli/transport_response.zig` (29) | [#721](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/721) | Categorize display-only vs best-effort cleanup vs bugs; add policy comments + pre-commit guard | cli, transport | 2-3w | Open (Wave 6 — Deferred) |
+| 108 | High | 80 | architecture | `confidence::confirmed` `cli/main.zig` #1 churn (177 commits/3mo), 57 `catch {}`, 650-LOC `cmdQuery` | CLI | `src/cli/main.zig` (3,666 LOC) | [#474](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/474) | Per-command struct + dispatch table (`cli_dispatcher.zig` pattern) | cli | TBD | Open (Blocked — module boundary design required) |
+| 109 | Medium | 64 | cleanup | `confidence::confirmed` Dead 1,235-LOC clone `src/execution/statement_dispatcher.zig` (orphaned duplicate of `execution.zig:919`) | execution | `src/execution/statement_dispatcher.zig:121` vs `src/execution.zig:919` | [#717](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/717) | Move 3 helpers (lines 42-89) to `execution/index_runtime.zig`; delete file. Commit `468ed60b` — file shrinks 1,235 → 60 LOC. | execution | 1-2d | Closed / Implemented (2026-04-16) |
+| 110 | High | 64 | architecture | `confidence::confirmed` 24 modules rely on mutable singletons; `graph_store.zig` has 16 globals | core/storage | `src/graph_store.zig` (`global_store`, `g_persist_pool`, 14 more), `src/execution.zig` (`global_catalog_instance`), `src/wal.zig` (`g_wal`, `g_wal_storage`), `src/distributed/twophase.zig`, `src/fle_integration.zig` | [#520](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/520) | Thread state through `ExecutionContext`; start with `graph_store.global_store` | core | TBD | Open (Blocked — context-threading design required) |
+| 111 | High | 64 | maintainability | `confidence::confirmed` `eval.zig:677` 1,163-LOC `evalExpr` switch (ADR refactor stalled — 70 commits/3mo with no decomposition) | query eval | `src/eval.zig:677` (4,517 LOC total) | [#409](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/409) | Split by expression family, mirroring existing `eval_extended.zig` split | query | TBD | Open (Blocked — dispatch table design) |
+| 112 | Medium | 60 | readability | `confidence::confirmed` 30 files fail `zig fmt --check` (merge-blocker under CI `zig-format@v1.2.1`) | core | `/tmp/quality-audit/zig-fmt.log`; notable: `cli/main.zig`, `server/quic_connection_handler.zig`, `transport/grpc_server.zig`, `gql/main.zig` | [#724](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/724) | One-shot `zig fmt src/ build.zig` (commit `0b79bb92`) + extend pre-commit hook to pre-push (commit `72342204`) | core | <1d | Closed / Implemented (2026-04-16) |
+| 113 | Medium | 48 | ci-cd | `confidence::confirmed` 19 ruff errors + 7 shellcheck errors + 532 markdownlint violations | tools/docs/scripts | `/tmp/quality-audit/ruff.log` (`tools/canary_lint.py`, `status_generate.py`, `canary_check.py`); `/tmp/quality-audit/shellcheck.log`; `/tmp/quality-audit/markdownlint.log` (247 in one file) | [#725](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/725) | `ruff check --fix`; shellcheck-compliant packaging scripts; regenerate noisy docs | tooling, docs | 1w | Open |
+| 114 | High | 48 | maintainability | `confidence::confirmed` 84 `catch unreachable` — several in parsed-input paths (server panic on bad input) | types/core | `src/types/jsonb.zig:30`, `src/types/datetime.zig:14`, `src/graph_store.zig:21`, `src/cli/main.zig:4` | [#556](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/556) | Replace with `catch err return err` on IO/parse (source uses Zig pipe-err-pipe syntax); keep only for provably-unreachable branches | core, types | 2-3w | Open |
+| 115 | Medium | 48 | architecture | `confidence::confirmed` Lock-tier discipline lives only in CLAUDE.md (no runtime enforcement — GAP-0278) | core concurrency | `CLAUDE.md` (prose); 13 mutexes, 24 acquisition sites; `src/graph_store.zig:store_mutex`, `g_store_rwlock` | [#736](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/736) | Add debug-only `OrderedMutex(tier)` wrapper in `src/util/lock_tier.zig`; adopt incrementally from tier-0 `graph_handles_mutex` | core, concurrency | 1-2w | Open |
+| 116 | Low | 36 | ci-cd | `confidence::confirmed` 42 unallowlisted gitleaks hits in test fixtures (not real secrets, `.gitleaks.toml` needs coverage) | security tooling | `clients/test-harness/certs/server.key.{bak,ec,rsa.bak}`; `geodetestlab/specs/tde_plaintext_verification_page.yml:44` | [#728](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/728) | Extend `.gitleaks.toml` allowlist for `.bak`/`.ec`/`.rsa.bak` suffixes and `geodetestlab/specs/tde_*.yml` | security, tooling | <1d | Open |
+| 117 | Medium | 36 | tests | `confidence::confirmed` `tools/status_generate.py` + `canary_lint.py` CANARY_PATTERN regex has no unit tests (powers 71% TESTED figure) | governance tools | `tools/status_generate.py:15-25`; `tools/canary_lint.py` | [#730](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/730) | Add `pytest` golden-CSV and malformed-input tests; wire into `governance-canary-lint` CI | tooling, governance | 1-2d | Open |
+| 118 | Medium | 36 | tests | `confidence::confirmed` Parser, match, execution hot paths have 0-1 inline tests each (vs 32 in graph_store.zig) | core | `src/gql/parser.zig` (0 inline, 6,640 LOC, 84 fn), `src/execution/match_operations.zig` (0 inline), `src/execution.zig` (1 inline) | [#733](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/733) | Backfill targeted inline tests at dispatcher branches and 10 most-branched parser productions | parser, execution | 2-3w | Open |
+
+### April 2026 Phase 4 — Quick Wins (< 1 day)
+
+| Issue | Fix | Effort | Impact | Status |
+|-------|-----|--------|--------|--------|
+| [#710](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/710) | Replace 16 `writeAll` call-sites with `deprecatedWriter()` or threaded writer | S | Unblock build | **Closed (2026-04-16, `81dc475d`)** |
+| [#724](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/724) | `zig fmt src/ build.zig` + pre-push hook | S | Unblock CI | **Closed (2026-04-16, `0b79bb92` + `72342204`)** |
+| [#716](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/716) | Align `ZIG_VERSION` across `build.zig.zon`, CI, Dockerfiles | S | Eliminate toolchain drift | **Closed (2026-04-16, `81dc475d` + `94c75922`)** |
+| [#717](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/717) | Move 3 helpers, delete 1,235-LOC clone | S | Remove dead code | **Closed (2026-04-16, `468ed60b`)** |
+| [#728](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/728) | Add 2 allowlist entries to `.gitleaks.toml` | S | Clear CI noise | Open (Wave 6 — deferred) |
+| [#730](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/730) | Add golden-CSV + malformed-input pytest for CANARY regex | S | Protect 71% TESTED figure | Partial — 5 tests landed in `tools/test_status_generate.py` via `4be895a9` (GAP-0539/GAP-0540) |
+
+### April 2026 Phase 4 — Medium-Term (1-5 days)
+
+| Issue | Fix | Effort | Impact |
+|-------|-----|--------|--------|
+| [#725](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/725) | Fix ruff + shellcheck + markdownlint | M | CI cleanup |
+| [#721](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/721) | Categorize 29 CLI/transport `catch {}` + pre-commit guard | M | Error visibility |
+| [#736](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/736) | `OrderedMutex(tier)` wrapper; adopt from tier-0 | M | Deadlock prevention |
+
+### April 2026 Phase 4 — Strategic (> 5 days)
+
+| Issue | Fix | Effort | Impact |
+|-------|-----|--------|--------|
+| [#719](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/719) | Decompose `executeMatchQueryImpl` via 4-way dispatcher | L | Core maintainability |
+| [#556](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/556) | Replace 84 `catch unreachable` in allocation/parse paths | L | Crash prevention |
+| [#733](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/733) | Inline tests in parser/match/execution hot paths | L | Refactor safety net |
+| [#474](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/474) | Decompose `cli/main.zig` 3,666 LOC (blocked) | L | Core maintainability |
+| [#520](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/520) | Thread 102 globals through context (blocked) | L | Testability |
+| [#409](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/409) | Decompose `evalExpr` 1,163-LOC switch (blocked) | L | Core maintainability |
 
 ## Findings by Category
 

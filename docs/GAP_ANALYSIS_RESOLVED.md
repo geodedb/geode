@@ -4488,3 +4488,159 @@ See docs/GAP_ANALYSIS.md for current open gaps.
 - **Resolution:** Added write-permission check in `geode_auth_lib.zig` that verifies the user's role permits mutation operations before query execution. ReadOnly and basic User roles are blocked from executing CREATE, DELETE, MERGE, SET, REMOVE, and DROP statements with `42000: Insufficient privileges` error. Write and Admin roles proceed normally. Check occurs before lock acquisition. 4 new regression tests added.
 - **Evidence:** `src/security/geode_auth_lib.zig` -- `checkWritePermission()` function; `src/server/quic_connection_handler.zig` -- permission check called before mutation execution; 4 unit tests. Commit `bbef876d`.
 - **Resolved date:** 2026-04-09
+
+---
+
+## April 16, 2026 Gap Closure — Audit Close-out (Waves 1-3 of `gap-close-plan.md`)
+
+**Summary**: 14 gap commits across Waves 1-3 (`81dc475d..f9daea3a`) plus 1 fmt sweep (`0b79bb92`) plus 1 progress doc (`34d33143`). Verifier verdict: **PASS** per `docs/audit/gap-close-verification.md`. 1059/1059 tests. Build green on Zig 0.16.0.
+
+### GAP-0538: Zig 0.16.0 build regression ✅ RESOLVED
+
+- **GitLab issue:** [#710](https://gitlab.com/devnw/codepros/geode/geode/-/issues/710)
+- **Severity:** Critical (build-blocker)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `81dc475d` — migrated all 3 `Io.File.writeAll` call sites to a new `Stream` helper; bumped `build.zig.zon` → 0.16.0; aligned banners in `CLAUDE.md`, `AGENTS.md`, `README.md`, `.gitlab-ci.yml`.
+- **Evidence:** `zig build` exits 0; `zig build test` 1059/1059 PASS; CLAUDE.md:267 matches build.zig.zon:6.
+
+### GAP-0539: `status_generate.py` schema-invalid CSV rows ✅ RESOLVED
+
+- **GitLab issue:** [#711](https://gitlab.com/devnw/codepros/geode/geode/-/issues/711)
+- **Severity:** Medium
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `4be895a9` — regex guard against newline straddle; strict `VALID_STATUS` filter drops COMPLETE and blank-status rows; 5 Python regression tests in `tools/test_status_generate.py`.
+- **Evidence:** Fresh `docs/status.csv` is 4299 valid rows / 0 COMPLETE / 0 blank.
+
+### GAP-0540: `tools/canaryscan/status.csv` stale by 210 REQs ✅ RESOLVED
+
+- **GitLab issue:** [#712](https://gitlab.com/devnw/codepros/geode/geode/-/issues/712)
+- **Severity:** Low
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `4be895a9` (paired with GAP-0539) — regenerated `tools/canaryscan/status.csv`; added pre-commit `status.csv sync check`.
+- **Evidence:** Pre-commit hook PASS; `tools/canaryscan/status.csv` byte-equal to `docs/status.csv` regen.
+
+### GAP-0541: `docs/REQUIREMENTS.md:82` stale GAP-0249 link ✅ RESOLVED
+
+- **GitLab issue:** [#713](https://gitlab.com/devnw/codepros/geode/geode/-/issues/713)
+- **Severity:** Low
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `d610547d` — removed stale GAP-0249 bullet; replaced with dated HTML comment.
+- **Evidence:** `docs/REQUIREMENTS.md` — GAP-0249 absent; mirror sync verified.
+
+### GAP-0542: NodeRegistry inline-clone drift risk — WON'T DO
+
+- **GitLab issue:** [#714](https://gitlab.com/devnw/codepros/geode/geode/-/issues/714) — remains open (commented); extraction is a Wave-5 follow-up.
+- **Severity:** Medium
+- **Marked date:** 2026-04-16
+- **Rationale:** The proposed "CI byte-identical diff check" variant treats the symptom (drift detection) rather than the cause (duplication). Zig module system supports extraction cheaply — the preferred Wave-5 remediation is to extract `NodeRegistry` into `src/distributed/node_registry.zig`; both production and test import it. The CI-only variant is explicitly Won't-Do per `docs/audit/gap-close-plan.md:212` Won't-Do section.
+- **Alternative control:** Wave-5 item #35 in `docs/audit/gap-close-plan.md`.
+
+### Quality closures (from `docs/QUALITY_GAP_ANALYSIS.md` Phase 4)
+
+#### #710 (Build broken at HEAD) ✅ RESOLVED — see GAP-0538 above
+
+#### #716 (Zig toolchain pin drift) ✅ RESOLVED
+
+- **GitLab issue:** [#716](https://gitlab.com/devnw/codepros/geode/geode/-/issues/716)
+- **Severity:** Critical (merge-blocker)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `81dc475d` (core `ZIG_VERSION` alignment across `build.zig.zon`, `.gitlab-ci.yml`, `CLAUDE.md`, `AGENTS.md`, `README.md`) + commit `94c75922` (residual AGENTS.md banner cleanup).
+- **Evidence:** `grep -n 0.15` across `.gitlab-ci.yml`, `build.zig.zon`, `CLAUDE.md` returns only historical comments.
+
+#### #717 (Dead 1,235-LOC `statement_dispatcher.zig` clone) ✅ RESOLVED
+
+- **GitLab issue:** [#717](https://gitlab.com/devnw/codepros/geode/geode/-/issues/717)
+- **Severity:** Medium
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `468ed60b` — deleted 1,114-LOC `executeStatementWithContext` clone; moved 3 live helpers to `execution/index_runtime.zig`; `statement_dispatcher.zig` shrinks 1,235 → 60 LOC.
+- **Evidence:** `grep statement_dispatcher.executeStatementWithContext` returns 0 hits; build + tests green.
+
+#### #724 (zig fmt at pre-push) ✅ RESOLVED
+
+- **GitLab issue:** [#724](https://gitlab.com/devnw/codepros/geode/geode/-/issues/724)
+- **Severity:** Medium (merge-blocker)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `0b79bb92` (fmt sweep of 30 files) + commit `72342204` (extend zig-fmt hook to pre-push stage).
+- **Evidence:** `zig fmt --check src/ build.zig` exits 0; `.pre-commit-config.yaml` runs on `pre-commit` and `pre-push`.
+
+### Security closures (from `docs/SECURITY_GAP_ANALYSIS.md` Phase 3)
+
+#### SEC-RLS-01 / #723 (confidential) — RLS VM stack OOB ✅ RESOLVED
+
+- **GitLab issue:** [#723](https://gitlab.com/devnw/codepros/geode/geode/-/issues/723) (confidential)
+- **Severity:** Critical (Risk 30)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `4b5fc453` — stack bounds on every push/pop, safe opcode decoder (`Opcode.fromByte`), fail-closed error set, propagation via `try` in match loop.
+- **Evidence:** 6 regression tests in `tests/test_rls_vm_bounds.zig` cover 65-push overflow, empty-stack pop, 0xAA invalid opcode, truncated push_const, 64-depth boundary, and opcode lookup.
+- **Confidentiality:** preserved — closure comment avoids exploit details.
+
+#### SEC-RLS-02 / #732 (confidential) — RLS raw-string fallthrough ✅ RESOLVED
+
+- **GitLab issue:** [#732](https://gitlab.com/devnw/codepros/geode/geode/-/issues/732) (confidential)
+- **Severity:** High (Risk 16)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `b5487d04` — `evaluateExpression` returns `error.UnsafePolicy` for raw-only policies by default; `-Dallow-rls-raw-interp` build flag (default OFF).
+- **Evidence:** 1 regression test asserts raw-only register triggers `error.UnsafePolicy`.
+- **Confidentiality:** preserved.
+
+#### SEC-AUD-01 / #727 (confidential) — Audit verifier seq_no ✅ RESOLVED
+
+- **GitLab issue:** [#727](https://gitlab.com/devnw/codepros/geode/geode/-/issues/727) (confidential)
+- **Severity:** Critical (Risk 24)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `a2d168bc` — verifier parses and validates `seq_no` strict +1 monotonicity; new `error.SequenceMonotonicityViolation`.
+- **Evidence:** 2 regression tests in `tests/test_audit_verify_seq_no.zig` — valid chain passes, tampered chain with middle record removed rejects.
+- **Confidentiality:** preserved.
+
+#### SEC-AUD-02 / #738 — audit.jsonl + signing-key colocation ✅ RESOLVED
+
+- **GitLab issue:** [#738](https://gitlab.com/devnw/codepros/geode/geode/-/issues/738)
+- **Severity:** High (Risk 12)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `e751ed0c` — `git rm --cached audit.jsonl`; `.gitignore` covers `audit.jsonl`, `audit.jsonl.key`, `*/audit.jsonl*`.
+- **Evidence:** `git ls-files` returns no audit.jsonl.
+
+#### SEC-INFRA-01 / #737 — GEODE_CLUSTER_INSECURE in release ✅ RESOLVED
+
+- **GitLab issue:** [#737](https://gitlab.com/devnw/codepros/geode/geode/-/issues/737)
+- **Severity:** Critical (Risk 24)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `40ac14bc` — `cluster_auth.isInsecureModeAllowed()` chokepoint; release builds refuse; counter `geode_cluster_insecure_refused_total`; all 6 distributed modules routed through this single gate.
+- **Evidence:** 2 regression tests in `tests/test_cluster_insecure_gate.zig` — env-unset returns false, counter symbol exists.
+
+#### SEC-MTI-01 / #739 — Aggregation dead-code no tenant filter ✅ RESOLVED
+
+- **GitLab issue:** [#739](https://gitlab.com/devnw/codepros/geode/geode/-/issues/739)
+- **Severity:** Medium (Risk 10)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `fa34d617` — deleted 419 LOC of dead `evaluateAggregation` + `evaluateAggregationWithLabels`; dropped re-exports from `execution.zig` and `query_execution.zig`.
+- **Evidence:** Grep confirms only tombstone comments remain; cross-tenant attack surface eliminated by deletion.
+
+#### SEC-KMS-01 / #741 — Vault KMS env inheritance + path validation ✅ RESOLVED
+
+- **GitLab issue:** [#741](https://gitlab.com/devnw/codepros/geode/geode/-/issues/741)
+- **Severity:** Medium (Risk 12)
+- **Resolved date:** 2026-04-16
+- **Fix applied:** Commit `f9daea3a` — `buildVaultEnv` inherits parent env via `getEnvMap`; `validateVaultPath` allowlist rejects leading `-` (argv injection) and shell metachars; `init` is fallible (`!Self`).
+- **Evidence:** 4 inline regression tests in `vault_kms_provider.zig` — reject empty, reject leading dash, reject shell metachars, accept well-formed.
+
+### Won't-Do items marked 2026-04-16
+
+Per `docs/audit/gap-close-plan.md` §Won't-Do — these six are explicitly not closing in this sprint, with documented alternative controls:
+
+| Item | Reason | Alternative |
+|------|--------|-------------|
+| GAP-0542 CI diff-check variant | Extraction (Wave 5 #35) preferred over symptom-treatment | Wave-5 extraction to `src/distributed/node_registry.zig` |
+| Full Blake2b→Argon2id hash migration (partial landed via #742 follow-up) | Vendor ownership — requires `zig/auth` coordination | OPS-owned RFC; partial flag `password_reset_required=true` lands Wave 6 |
+| Platform-wide CI pin-enforce bot | Out of scope for repo PR | Platform-infra team follow-up ticket |
+| Trivy MEDIUM on `quic-go` in Go tooling | Not shipping runtime (tools/ only) | Next tooling refresh |
+| Markdownlint mass fix of `SHELL_TEST_ISSUES.md` | File is auto-generated | Fix the generator or allow-list auto-gen files |
+| Password hash in-place migration | Requires user re-auth or migration plan | OPS-owned RFC, out of engineering scope |
+
+### Metrics delta
+
+- Test count: 1049 → 1059 (+10 new regression tests)
+- Build: FAIL → PASS (GAP-0538)
+- `zig fmt --check src/ build.zig`: 30 dirty → 0 dirty
+- CANARY status.csv: 4 COMPLETE + 16 blank-status schema violations → 0 / 0 (GAP-0539)
+- TESTED/IMPL/EXEMPT/BENCHED: 71.0/14.2/11.6/3.1 → 78.7/9.1/7.0/5.1 (Phase 4)

@@ -1,6 +1,6 @@
 # Performance Gap Analysis
 
-Last updated: 2026-04-10
+Last updated: 2026-04-16
 
 ## Summary
 
@@ -209,3 +209,112 @@ Context: Full perf-scan + perf-review of execution engine, graph store, transpor
 - `rg -n "ptr ==" src/execution/pattern_helpers.zig` — confirmed #561 pointer equality fast-path
 - `rg -n "record_buf\|enc_buf" src/wal.zig` — confirmed #559 single-write buffering
 - `rg -n "up_to_lsn == 0\|getEndPos" src/wal.zig` — confirmed #562 truncation optimizations
+
+## April 2026 Phase 1-3 Perf Audit — New Findings (2026-04-16)
+
+Anchored to `benchmarks/loadtest/baseline.jsonl`: ping_c1 273.8 qps / p50 2.4ms; ping_c2 727 qps / p50 2.7ms; **ping_c4 646.2 qps / p50 3.1ms with 4 errors** (c=4 regression cliff). Phase 3 review: [docs/audit/perf-phase3-review.md](audit/perf-phase3-review.md). Composite estimate for #1+#4+#7: **p50 2.7 → 1.5-1.8ms, QPS +25-40% at c=2..8**, zero I/O changes.
+
+### 2026-04-16 Closeout note
+
+**Wave 4 and Wave 5 perf items are deferred.** Per `docs/audit/gap-close-plan.md` dependency notes:
+
+- Wave 4 requires a loadtest harness (`../geode-test-harness` Go loadtest + hyperfine) and composite A/B baselining — neither installed on the current verification host. `make loadtest-save-all-baselines` is a prerequisite before attempting #715 / #718 / #720 composite measurement.
+- Wave 5 item #719 (match decomposition) must not pair with Wave 4 perf work in the same commit; it needs its own A/B. Schedule after Wave 4 p0 composite is frozen.
+
+No perf items were closed in the 2026-04-16 gap-close pass. All 9 new findings remain Triage. Tracking handoff preserved; Wave-4/5 counts of 8+12 items deferred to the next perf sprint.
+
+### Summary
+
+- **P0:** 3 (#715 RLS row alloc, #718 QUIC wake storm, #720 TDE key reload)
+- **P1:** 4 (#722 thread_pool alloc, #726 planner leak, #729 lane routing, #731 federation gating)
+- **P2:** 2 (#734 storage RwLock, #735 WAL fsync)
+
+### Top 5 Risks (by expected throughput delta)
+
+1. **#715 per-row RLS alloc** (PerfScore 80; Impact 5 × Likelihood 4 × 4) — **MATCH row-rate +30-80% single-tenant**
+2. **#718 QUIC handler wake storm** (PerfScore 72; Impact 4 × Likelihood ~4.5 × 4) — **ping_c4 646 → ≥900 qps (+40%), p50 2.7 → 1.6ms**
+3. **#720 TDE key reload per op** (PerfScore 72; Impact 5 × Likelihood ~3.6 × 4) — **TDE 30 → 120+ MB/s (4x)**
+4. **#731 per-stream FederationManager** (PerfScore 48; Impact 3 × Likelihood 4 × 4) — **stream accept 200-500μs → <50μs**
+5. **#722 thread_pool per-task alloc** (PerfScore 64; Impact 4 × Likelihood 4 × 4) — **submit 500ns → ≤50ns; QPS +3-5% ping**
+
+### Stack-Ranked Findings
+
+| Rank | Sev | Score | Finding | Component | Evidence | GitLab | Fix Summary | Owner | SLA | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|
+| 44 | P0 | 80 | Per-row RLS row alloc in MATCH even when policy inactive — `nodePropertiesToRLSRow` allocates StringHashMap per node at ≥19 MATCH sites | Query exec | `src/execution/match_operations.zig:104-145`; `src/security/rls_value_bridge.zig:55-69` | [#715](https://gitlab.com/devnw/codepros/geode/geode/-/issues/715) | Thread-local scratch RLSRow + clearRetainingCapacity + hasPolicyForTable short-circuit; long-term: compile predicate against native property layout | @benjiv | Immediate | Triage |
+| 45 | P0 | 72 | QUIC handler wake storm — `poll_cv.broadcast` every 500μs wakes 30+ threads for 1 progress (PERF-P1-001) | Transport | `src/transport/quic.zig:389-404`; `src/server/quic_connection_handler.zig:329-337` | [#718](https://gitlab.com/devnw/codepros/geode/geode/-/issues/718) | Per-connection CV (not broadcast); skip broadcast on empty poll; adaptive wakeup | @benjiv | Immediate | Triage |
+| 46 | P0 | 72 | TDE `loadKey()` per encrypt/decrypt — getenv+hex-parse on every call, 8 callers | Storage | `src/storage/tde_file_encryption.zig:59-143, 190-203` | [#720](https://gitlab.com/devnw/codepros/geode/geode/-/issues/720) | Module-level atomic `KeyCache` + `std.once` lazy init; explicit `invalidateKeyCache()` for rotation | @benjiv | Immediate | Triage |
+| 47 | P1 | 64 | Thread-pool `submit` allocates `SubmittedTask` per task — 1454/s at ping_c2 | Transport | `src/transport/thread_pool.zig:262-274` | [#722](https://gitlab.com/devnw/codepros/geode/geode/-/issues/722) | Bounded MPSC freelist (4×thread_count slots) with allocator fallback | @benjiv | Sprint | Triage |
+| 48 | P1 | 56 | Planner DP `dpEnumerateJoinOrders` leaks PlanNodes — O(3^n) create without free, n=8 retains ~6561 | Planner | `src/planner/cbo.zig:166-240` | [#726](https://gitlab.com/devnw/codepros/geode/geode/-/issues/726) | Scoped `ArenaAllocator` around DP enumeration; deep-copy winning plan to ctx.allocator | @benjiv | Sprint | Triage |
+| 49 | P1 | 56 | Thread pool submits all work to `.blocking` lane — CPU MATCH contends with I/O | Transport | `src/transport/thread_pool.zig:203-214` + callers | [#729](https://gitlab.com/devnw/codepros/geode/geode/-/issues/729) | Extend `submit()` with `.lane` param; classify MATCH/planner → `.cpu`, WAL flush → `.io` | @benjiv | Sprint | Triage |
+| 50 | P1 | 48 | Per-stream FederationManager + DistributedQueryPlanner + 3 HashMap catalogs even in single-tenant mode | Server | `src/server/quic_connection_handler.zig:704-745` | [#731](https://gitlab.com/devnw/codepros/geode/geode/-/issues/731) | Gate alloc behind `GEODE_CLUSTER_TOKEN != null`; single-tenant path allocates nothing | @benjiv | Sprint | Triage |
+| 51 | P2 | 32 | StorageAdapter `graph_handles_mutex` is `Mutex` — serializes read-only lookups at tier-0 | Storage | `src/graph_storage_adapter.zig:668-750` | [#734](https://gitlab.com/devnw/codepros/geode/geode/-/issues/734) | Convert to `std.Thread.RwLock`; readers `.lockShared()`, mutators unique lock; GAP-0278 tier-0 ordering preserved | @benjiv | Quarter | Triage |
+| 52 | P2 | 20 | WAL fsync per 1s tick regardless of dirty flag — idle SSD wear | Storage | `src/graph_store.zig:5184-5205`; `src/wal.zig:241-248` | [#735](https://gitlab.com/devnw/codepros/geode/geode/-/issues/735) | `wal.dirty: atomic.Value(bool)` set on append, CAS-clear on sync; skip fsync when clean | @benjiv | Quarter | Triage |
+
+### Consolidated Top-15 (live view — new findings + highest-severity from prior audits)
+
+| Rank | Sev | Score | Issue | Status |
+|---:|---|---:|---|---|
+| 1 | P0 | 80 | #715 Per-row RLS row alloc | **NEW — Triage** |
+| 2 | P0 | 72 | #718 QUIC handler wake storm (PERF-P1-001) | **NEW — Triage** |
+| 3 | P0 | 72 | #720 TDE key reload per op | **NEW — Triage** |
+| 4 | P1 | 64 | #722 thread_pool per-task alloc | **NEW — Triage** |
+| 5 | P1 | 56 | #726 Planner DP leak | **NEW — Triage** |
+| 6 | P1 | 56 | #729 Thread-pool lane routing | **NEW — Triage** |
+| 7 | P1 | 48 | #731 Per-stream FederationManager | **NEW — Triage** |
+| 8 | P2 | 32 | #734 StorageAdapter Mutex → RwLock | **NEW — Triage** |
+| 9 | P2 | 20 | #735 WAL fsync per tick | **NEW — Triage** |
+| 10 | P0 | 90 | #557 N² binding clone in multi-chain MATCH joins | Closed / Implemented |
+| 11 | P1 | 64 | #558 Full node scan fallback (no-labels MATCH) | Closed / Implemented |
+| 12 | P1 | 60 | #559 WAL per-record unbuffered writes | Closed / Implemented |
+| 13 | P1 | 56 | #560 Per-row environment allocation | Closed / Implemented |
+| 14 | P1 | 60 | #449 O(V²) BFS dequeue | Closed / Implemented |
+| 15 | P1 | 60 | #450 O(m*n) edge dedup | Closed / Implemented |
+
+### Findings by Area
+
+- **app (execution/transport):** #715, #718, #722, #729, #731 (5 open)
+- **db (storage):** #720, #734, #735 (3 open)
+- **planner:** #726 (1 open)
+- **infra/ci:** none new (existing #545, #701 tracked)
+
+### Roadmap
+
+**Quick Wins (< 1 day)**
+
+- #720 TDE key cache — atomic ptr + once.init
+- #735 WAL dirty flag — single atomic bool + CAS in sync loop
+- #734 Mutex → RwLock swap in graph_storage_adapter
+
+**Medium (1-5 days)**
+
+- #715 RLS scratch row + short-circuit — composes with #560 (already closed) for full MATCH alloc kill
+- #722 thread_pool freelist — bounded ring + fallback
+- #726 Planner arena
+- #731 FederationManager gating — add env check + null-guards at callers
+
+**Strategic (> 5 days)**
+
+- #718 QUIC per-connection wake — requires endpoint API changes, regression coverage across ping/fan_out/two_hop at c=1..16
+- #729 Thread-pool lane routing — API extension + caller-by-caller classification + per-lane sizing policy
+
+### Validation Commands
+
+```sh
+# Full regression suite:
+cd ../geode-test-harness && make test-everything GEODE_BINARY=/home/benji/src/devnw/codepros/geode/geode/zig-out/bin/geode
+
+# Before merging any of #715/#718/#720/#722: save baseline
+make loadtest-save-baseline
+
+# After merge:
+make loadtest-compare  # must not regress any benchmark
+```
+
+### April 2026 Phase 4 Tracking
+
+- Created 9 GitLab issues: #715, #718, #720, #722, #726, #729, #731, #734, #735
+- All tagged `type::performance` + severity + area + confidence labels
+- No duplicates: #560 (per-row env alloc, closed) is distinct from #715 (RLS row); #540 (idle CPU broad bug) overlaps with #718 but has different scope (handshake spin vs. wake storm)
+- Phase 3 review: `docs/audit/perf-phase3-review.md`
+- Baseline regression cited: ping_c4 727 → 646 qps + 4 errors
