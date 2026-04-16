@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#e320688c01250d92de5e28edc894eb7ffdca8f6a",
-            .hash = "quic-0.1.11-gBIqUY32NQCtI8R_1ZY9fAHmJM0XHGNMiLohyCxdeQ9s",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#dda0ae9f9746a0d7ed1b7c0b98454cdfd72a9c29",
+            .hash = "quic-0.1.11-gBIqUR8jNgAr8R5magjKXzx2SRcXuxo4NwbIHp600IKG",
         },
 
         // =======================================================================
@@ -77,8 +77,8 @@
 
         // Configuration management - XDG compliant, multi-format support
         .config = .{
-            .url = "git+https://gitlab.com/devnw/zig/config.git#3613c2d39ec3733dd94a92b571d05a095a8a25a8",
-            .hash = "config-0.1.0-TiLumm1CCgCa-EETXBwFv-ypFC3M_x9xXypGGxsroHnp",
+            .url = "git+https://gitlab.com/devnw/zig/config.git#d0b06f083b1f73339b66b16aed217a20eda3899a",
+            .hash = "config-0.1.0-TiLumqFCCgCKZGRx9GXuk2rGCWSzp3htHjvb_lCaelFt",
         },
 
         // =======================================================================
@@ -87,8 +87,8 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git#3ef74d085fdd526953c746a11e2d9dc94314388d",
-            .hash = "cli-0.1.1-0aso9N-mBgBMatdN3KOo3yjeAk9Wr6MfexwxrFUwA5DG",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#a767d34f5dd384e33cdc081cbb551b49321d745d",
+            .hash = "cli-0.1.1-0aso9N2mBgA6uPbsTXOISduMJXxT3GJ9yOOHY1Z801_5",
         },
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
@@ -99,8 +99,8 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#e9b6b2a7a98c2724e8bf11a5c22f3c47bb7879c5",
-            .hash = "thread_pool-0.2.0-11B1BuVVOwDZ8LWKIdFwgn9drtSSFh6yI21KYA64PqIJ",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#c1753e04046e2e002097e42aede9df86876b2d4f",
+            .hash = "thread_pool-0.2.0-11B1BlAHQwA_cO0fDA7DZMyz2vVNgTKQpRJ7NipZLoJL",
         },
 
         // =======================================================================
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#8f2339fc564d486b58799bd97b1bc9ad1921bb44",
-            .hash = "graph_storage-0.1.0-9UyJSwFLCwCXfy8Lrd4xTIUPAJo0u-gEV8Jon3F9LtQX",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#9495e3b32ddede7d49c43a3ef78da5e0f90dcfe7",
+            .hash = "graph_storage-0.1.0-9UyJSxFLCwAyznRGYAaRsXfebjA3QXzZ1IgPM2xFPZGb",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -174,8 +174,8 @@
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
         .hnsw = .{
-            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#c997f863ac7bc3da4f42cb6492faa3caaa3c82ca",
-            .hash = "hnsw-0.1.0-wYzBy0MSAQDXxGgbz0zB1Si_LmuH7tVO2UlghQGLkbHk",
+            .url = "git+https://gitlab.com/devnw/zig/hnsw.git#26a2476f76fe1177f8fe6f35304a3601efed07bc",
+            .hash = "hnsw-0.1.0-wYzBy08SAQDM0F8u-eNk8yowDFl7mLGG9QEsTc0AQKpc",
         },
 
         // R-tree - Spatial index with bounding-box search
@@ -204,8 +204,8 @@
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#773c5464e4f3bfaa6f797425cf2791622f861cdf",
-            .hash = "timeseries-0.1.0-iAEwOgnqAwDZkxaE5F-f8VRtVBYpbV_yOaOH6FlW8ab4",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#b8cec2ce5ea78f5b11f8a38d3fd225f7a2267ab0",
+            .hash = "timeseries-0.1.0-iAEwOgzqAwAjd1uTt4yXgv5PHJucA8GJEHJFsX3pXclJ",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
