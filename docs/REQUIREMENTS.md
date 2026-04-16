@@ -73,15 +73,16 @@ This page mirrors GitLab requirement issues. GitLab is the source of truth for s
 - [REQ-DOC-RUST_CLIENT_S2N_QUIC_FINDINGS: Rust Client Migration to s2n-quic - Findings Report Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/270)
 - [REQ-DOC-ZIG_CLIENT_V2_COMPLETION_REPORT: Zig Client v2: Zig 0.15.1 Migration - Completion Report Requirements](https://gitlab.com/devnw/codepros/geode/-/issues/271)
 
-## Open Gaps (from Gap Analysis — March 2026)
+## Open Gaps (from Gap Analysis — April 2026)
 
-See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for full details. GitLab is the source of truth.
+See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for full details. This file is a mirror of the platform issue tracker. The tracker is authoritative.
 
 ### Critical
 
-- [GAP-0249: Concurrent MERGE data race (SIGSEGV)](https://gitlab.com/devnw/codepros/geode/geode/-/issues/542)
+<!-- GAP-0541 (2026-04-16): GAP-0249 (Concurrent MERGE data race / issue #542) was closed 2026-03-13 — removed from this mirror. -->
 - [GAP-0250: FLE plaintext fallback on encryption failure](https://gitlab.com/devnw/codepros/geode/geode/-/issues/543)
 - [GAP-0256: Unsigned release artifacts / no SBOM](https://gitlab.com/devnw/codepros/geode/geode/-/issues/483) — Blocked
+- [GAP-0538: Zig 0.16.0 build regression (`Io.File.writeAll` removed at 3 sites)](https://gitlab.com/devnw/codepros/geode/geode/-/issues/710) — Opened 2026-04-16
 
 ### High
 
@@ -98,10 +99,14 @@ See [GAP_ANALYSIS.md](GAP_ANALYSIS.md) for full details. GitLab is the source of
 - [GAP-0247: OAuth2/OIDC authentication not implemented](https://gitlab.com/devnw/codepros/geode/geode/-/issues/398) — Blocked (Q3 2026)
 - [GAP-0253: Incomplete cryptographic signature algorithms](https://gitlab.com/devnw/codepros/geode/geode/-/issues/546)
 - GAP-0528: Dijkstra missing expected output format
+- [GAP-0539: `status_generate.py` emits schema-invalid CSV rows](https://gitlab.com/devnw/codepros/geode/geode/-/issues/711) — Opened 2026-04-16
+- [GAP-0542: NodeRegistry inline-clone drift risk untracked by CI](https://gitlab.com/devnw/codepros/geode/geode/-/issues/714) — Opened 2026-04-16
 
 ### Low
 
 - GAP-0529: Missing multi-graph lock acquisition during backup/restore
+- [GAP-0540: Committed `tools/canaryscan/status.csv` lags fresh scan by 210 REQ IDs](https://gitlab.com/devnw/codepros/geode/geode/-/issues/712) — Opened 2026-04-16
+- [GAP-0541: `docs/REQUIREMENTS.md:82` lists GAP-0249 as open; closed 2026-03-13](https://gitlab.com/devnw/codepros/geode/geode/-/issues/713) — Opened 2026-04-16
 
 ### Recently Resolved
 
