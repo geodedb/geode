@@ -24,13 +24,33 @@ pub const VaultKMSProvider = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) Self {
+    /// GAP-0741 / SEC-KMS-01 (2026-04-16): validate `key_path` at
+    /// construction time with the same allowlist used for key names
+    /// (issue #435).  Without this, a malicious operator could set
+    /// `key_path` to something like `-` or `--format=...` and inject a
+    /// flag into the spawned `vault kv` argv.  We now reject anything
+    /// that isn't `[A-Za-z0-9._/-]+` and also reject leading `-`.
+    pub fn init(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !Self {
+        try validateVaultPath(key_path);
         return Self{
             .allocator = allocator,
             .vault_addr = vault_addr,
             .vault_token = vault_token,
             .key_path = key_path,
         };
+    }
+
+    /// GAP-0741 / SEC-KMS-01 (2026-04-16): same allowlist as key names.
+    /// Kept as a separate function so the error name points at the
+    /// key_path case at call sites.
+    fn validateVaultPath(path: []const u8) !void {
+        if (path.len == 0) return error.InvalidVaultKeyPath;
+        if (path[0] == '-') return error.InvalidVaultKeyPath;
+        for (path) |c| {
+            if (!std.ascii.isAlphanumeric(c) and c != '-' and c != '_' and c != '.' and c != '/') {
+                return error.InvalidVaultKeyPath;
+            }
+        }
     }
 
     /// Issue #435: Validate key names to prevent CLI argument injection via vault subprocess.
@@ -44,6 +64,21 @@ pub const VaultKMSProvider = struct {
                 return error.InvalidKeyName;
             }
         }
+    }
+
+    /// GAP-0741 / SEC-KMS-01 (2026-04-16): inherit the parent's env so
+    /// VAULT_ADDR / VAULT_TOKEN / VAULT_NAMESPACE / VAULT_CACERT make it
+    /// to the `vault` subprocess.  Previously each exec call passed an
+    /// empty env map, which silently broke vault authentication.
+    fn buildVaultEnv(self: *Self) !std.process.Environ.Map {
+        var env = try std.process.getEnvMap(self.allocator);
+        errdefer env.deinit();
+        // Ensure the fields on self win over parent env if they disagree —
+        // the constructor takes them explicitly and they are the source of
+        // truth for this provider instance.
+        if (self.vault_addr.len > 0) try env.put("VAULT_ADDR", self.vault_addr);
+        if (self.vault_token.len > 0) try env.put("VAULT_TOKEN", self.vault_token);
+        return env;
     }
 
     /// Generate a new encryption key and store it in Vault
@@ -159,11 +194,19 @@ pub const VaultKMSProvider = struct {
     // CANARY: REQ=REQ-VAULT-KMS-LIST-001; FEATURE="Vault Key Listing"; ASPECT=Core; STATUS=EXEMPT; OWNER=security; UPDATED=2026-01-10
     /// GAP-0052: Implements actual Vault key listing using `vault kv list` command
     pub fn listKeys(self: *Self) ![][]u8 {
-        // Execute vault kv list command to get actual keys
-        const result = std.ChildProcess.exec(.{
-            .allocator = self.allocator,
+        // GAP-0741 (2026-04-16): Zig 0.16 API + inherit env so VAULT_ADDR /
+        // VAULT_TOKEN reach the subprocess.
+        var env = self.buildVaultEnv() catch |err| {
+            log.warn("Vault list keys: failed to read parent env", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return try self.allocator.alloc([]u8, 0);
+        };
+        defer env.deinit();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const result = std.process.run(self.allocator, io, .{
             .argv = &[_][]const u8{ "vault", "kv", "list", "-format=json", self.key_path },
-            .env_map = &std.process.EnvMap.init(self.allocator),
+            .environ_map = &env,
         }) catch |err| {
             // If vault command fails (e.g., vault not available), return empty list
             log.warn("Vault list keys failed, returning empty list", &.{
@@ -248,10 +291,13 @@ pub const VaultKMSProvider = struct {
         const value = try std.fmt.allocPrint(self.allocator, "value={s}", .{hex_key});
         defer self.allocator.free(value);
 
-        const result = try std.ChildProcess.exec(.{
-            .allocator = self.allocator,
+        // GAP-0741: Zig 0.16 API + inherit env.
+        var env = try self.buildVaultEnv();
+        defer env.deinit();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const result = try std.process.run(self.allocator, io, .{
             .argv = &[_][]const u8{ "vault", "kv", "put", path, value },
-            .env_map = &std.process.EnvMap.init(self.allocator),
+            .environ_map = &env,
         });
         defer self.allocator.free(result.stdout);
         defer self.allocator.free(result.stderr);
@@ -267,10 +313,13 @@ pub const VaultKMSProvider = struct {
         const path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ self.key_path, key_name });
         defer self.allocator.free(path);
 
-        const result = try std.ChildProcess.exec(.{
-            .allocator = self.allocator,
+        // GAP-0741: Zig 0.16 API + inherit env.
+        var env = try self.buildVaultEnv();
+        defer env.deinit();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const result = try std.process.run(self.allocator, io, .{
             .argv = &[_][]const u8{ "vault", "kv", "get", "-field=value", path },
-            .env_map = &std.process.EnvMap.init(self.allocator),
+            .environ_map = &env,
         });
         defer self.allocator.free(result.stderr);
 
@@ -368,8 +417,10 @@ pub const WrappedKey = struct {
     }
 };
 
-// Factory function for easy Vault KMS creation
-pub fn createVaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) VaultKMSProvider {
+// Factory function for easy Vault KMS creation.
+// GAP-0741 (2026-04-16): init now validates key_path and returns an error,
+// so the factory is fallible too.
+pub fn createVaultKMSProvider(allocator: std.mem.Allocator, vault_addr: []const u8, vault_token: []const u8, key_path: []const u8) !VaultKMSProvider {
     return VaultKMSProvider.init(allocator, vault_addr, vault_token, key_path);
 }
 
@@ -384,5 +435,29 @@ pub fn createVaultKMSFromEnv(allocator: std.mem.Allocator) !VaultKMSProvider {
     const key_path = getEnvVarOwned(allocator, "VAULT_KEY_PATH") catch "geode";
     defer if (!std.mem.eql(u8, key_path, "geode")) allocator.free(key_path);
 
-    return VaultKMSProvider.init(allocator, try allocator.dupe(u8, vault_addr), try allocator.dupe(u8, vault_token), try allocator.dupe(u8, key_path));
+    return try VaultKMSProvider.init(allocator, try allocator.dupe(u8, vault_addr), try allocator.dupe(u8, vault_token), try allocator.dupe(u8, key_path));
+}
+
+// CANARY: REQ=REQ-GAP-0741-VAULT-PATH-VALIDATE; FEATURE="VaultKeyPathValidation"; ASPECT=InputSafety; STATUS=TESTED; OWNER=security; UPDATED=2026-04-16
+test "GAP-0741: validateVaultPath rejects empty path" {
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath(""));
+}
+
+test "GAP-0741: validateVaultPath rejects leading dash (flag injection)" {
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("-format=yaml"));
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("--format=yaml"));
+}
+
+test "GAP-0741: validateVaultPath rejects shell metacharacters" {
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("foo;rm -rf /"));
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("foo bar"));
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("foo$(whoami)"));
+    try std.testing.expectError(error.InvalidVaultKeyPath, VaultKMSProvider.validateVaultPath("foo`whoami`"));
+}
+
+test "GAP-0741: validateVaultPath accepts well-formed paths" {
+    try VaultKMSProvider.validateVaultPath("geode");
+    try VaultKMSProvider.validateVaultPath("geode/prod");
+    try VaultKMSProvider.validateVaultPath("tenant-42/keys");
+    try VaultKMSProvider.validateVaultPath("v2.keys_001");
 }

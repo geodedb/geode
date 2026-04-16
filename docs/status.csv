@@ -1018,6 +1018,7 @@ REQ-GAP-0723-RLS-VM-BOUNDS,RLSBytecodeVMBounds,MemorySafety,TESTED,,,security,20
 REQ-GAP-0727-AUDIT-SEQ-NO,AuditVerifySeqNo,TamperDetection,TESTED,,,security,2026-04-16,tests/test_audit_verify_seq_no.zig
 REQ-GAP-0732-RLS-FAIL-CLOSED,RLSRawStringFailClosed,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-GAP-0737-INSECURE-GATE,ClusterInsecureRefusal,DefenseInDepth,TESTED,,,security,2026-04-16,tests/test_cluster_insecure_gate.zig
+REQ-GAP-0741-VAULT-PATH-VALIDATE,VaultKeyPathValidation,InputSafety,TESTED,,,security,2026-04-16,src/security/vault_kms_provider.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig
