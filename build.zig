@@ -220,13 +220,13 @@ pub fn build(b: *std.Build) void {
     cli_mod.addImport("config", config_mod);
 
     // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
+    // NOTE: options must match audit's dns import (which uses defaults) to avoid
+    // diamond-dep module duplication. Don't pass .cli here.
     const dns_dep = b.dependency("dns", .{
         .target = target,
         .optimize = optimize,
-        .cli = false,
     });
     const dns_mod = dns_dep.module("dns");
-    dns_mod.addImport("cli", cli_mod);
 
     // ==========================================================================
     // Phase 5 External Library Dependencies (Optional Enhancements)
