@@ -56,7 +56,7 @@ fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
         defer allocator.free(raw);
         if (std.fs.path.isAbsolute(raw)) return allocator.dupe(u8, raw);
 
-        const cwd = try std.process.getCwdAlloc(allocator);
+        const cwd = try std.process.currentPathAlloc(std.Io.Threaded.global_single_threaded.io(), allocator);
         defer allocator.free(cwd);
         return std.fs.path.join(allocator, &.{ cwd, raw });
     } else |_| {}

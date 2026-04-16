@@ -171,8 +171,29 @@ pub fn printHelp() void {
 /// Parse command line arguments into ServerConfig
 /// Returns null if help was requested (caller should exit)
 pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    // Zig 0.16 compat: read /proc/self/cmdline to get process args
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cmdline_file = std.Io.Dir.openFileAbsolute(io, "/proc/self/cmdline", .{}) catch return error.StdioUnavailable;
+    defer cmdline_file.close(io);
+    const cmdline_len = cmdline_file.length(io) catch return error.StdioUnavailable;
+    const cmdline_data = try allocator.alloc(u8, @intCast(cmdline_len));
+    defer allocator.free(cmdline_data);
+    _ = cmdline_file.readPositionalAll(io, cmdline_data, 0) catch return error.StdioUnavailable;
+    // Split by null bytes to get individual args
+    var args_list = std.ArrayList([:0]u8).empty;
+    defer args_list.deinit(allocator);
+    var start: usize = 0;
+    for (cmdline_data, 0..) |c, i| {
+        if (c == 0) {
+            if (i > start) {
+                cmdline_data[i] = 0; // ensure sentinel
+                const arg: [:0]u8 = cmdline_data[start..i :0];
+                args_list.append(allocator, arg) catch return error.OutOfMemory;
+            }
+            start = i + 1;
+        }
+    }
+    const args = args_list.items;
 
     var config = ServerConfig{};
     var custom_config_path: ?[]const u8 = null;

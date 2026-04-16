@@ -1160,8 +1160,13 @@ pub fn initializeAuditLogger(allocator: std.mem.Allocator, cli_config: CliAuditC
         };
 
         // Seek to end for append mode
-        if (global_audit_file) |*file| {
-            _ = file.seekFromEnd(0) catch {};
+        if (global_audit_file) |file| {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            const len = file.length(io) catch 0;
+            // Use writePositionalAll at end to effectively seek; or write a no-op
+            // The streaming writer will begin at the current OS position, so we
+            // set the position by writing nothing at the end offset.
+            _ = file.writePositionalAll(io, "", len) catch {};
         }
     }
 
@@ -1214,7 +1219,7 @@ pub fn logAuditEvent(category: []const u8, action: []const u8, outcome: []const 
         var buf: [1024]u8 = undefined;
         const json_line = std.fmt.bufPrint(&buf, "{{\"timestamp\":{d},\"category\":\"{s}\",\"action\":\"{s}\",\"outcome\":\"{s}\",\"actor\":\"geode-cli\"}}\n", .{ timestamp, category, action, outcome }) catch return;
 
-        _ = file.writeAll(json_line) catch |err| {
+        file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), json_line) catch |err| {
             log.warn("Failed to write audit event", &.{
                 Attr.string("error", @errorName(err)),
             });
@@ -1341,7 +1346,7 @@ fn logToWindowsEventLog(event_handle: std.os.windows.HANDLE, category: []const u
 
 pub fn deinitializeAuditLogger() void {
     if (global_audit_file) |file| {
-        file.close();
+        file.close(std.Io.Threaded.global_single_threaded.io());
         global_audit_file = null;
     }
 

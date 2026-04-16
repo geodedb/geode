@@ -65,12 +65,17 @@ pub fn main() !void {
 
 fn validateVSCodeSyntax(allocator: std.mem.Allocator) !bool {
     // Read existing file
-    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "editors/vscode/syntaxes/gql.tmLanguage.json", .{}) catch {
+    const vsc_io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(vsc_io, "editors/vscode/syntaxes/gql.tmLanguage.json", .{}) catch {
         return false; // File doesn't exist
     };
-    defer file.close();
+    defer file.close(vsc_io);
 
-    const existing = file.readToEndAlloc(allocator, 1024 * 1024) catch {
+    const vsc_len = file.length(vsc_io) catch return false;
+    if (vsc_len > 1024 * 1024) return false;
+    const existing = allocator.alloc(u8, @intCast(vsc_len)) catch return false;
+    _ = file.readPositionalAll(vsc_io, existing, 0) catch {
+        allocator.free(existing);
         return false;
     };
     defer allocator.free(existing);
@@ -101,12 +106,17 @@ fn validateVSCodeSyntax(allocator: std.mem.Allocator) !bool {
 
 fn validateVimSyntax(allocator: std.mem.Allocator) !bool {
     // Read existing file
-    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "editors/vim/syntax/gql.vim", .{}) catch {
+    const vim_io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(vim_io, "editors/vim/syntax/gql.vim", .{}) catch {
         return false; // File doesn't exist
     };
-    defer file.close();
+    defer file.close(vim_io);
 
-    const existing = file.readToEndAlloc(allocator, 1024 * 1024) catch {
+    const vim_len = file.length(vim_io) catch return false;
+    if (vim_len > 1024 * 1024) return false;
+    const existing = allocator.alloc(u8, @intCast(vim_len)) catch return false;
+    _ = file.readPositionalAll(vim_io, existing, 0) catch {
+        allocator.free(existing);
         return false;
     };
     defer allocator.free(existing);

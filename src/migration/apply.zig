@@ -100,13 +100,14 @@ pub fn applyDownMigration(alloc: std.mem.Allocator, cfg: MigrationConfig, execut
 pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError![]StatusRow {
     var ledger = try ledger_mod.loadLedger(alloc, cfg);
     defer ledger.deinit();
-    var dir = std.Io.Dir.cwd().openDir(cfg.migrations_dir, .{ .iterate = true }) catch |err| {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, cfg.migrations_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             return alloc.alloc(StatusRow, 0) catch return error.OutOfMemory;
         }
         return error.FileSystemError;
     };
-    defer dir.close();
+    defer dir.close(io);
     var result = std.ArrayList(StatusRow).initCapacity(alloc, 16) catch return error.OutOfMemory;
     errdefer {
         for (result.items) |row| {
@@ -116,7 +117,7 @@ pub fn statusReport(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationErr
     }
     var it = dir.iterate();
     while (true) {
-        const entry = it.next() catch return error.FileSystemError;
+        const entry = it.next(io) catch return error.FileSystemError;
         if (entry == null) break;
         if (entry.?.kind == .file and std.mem.endsWith(u8, entry.?.name, ".gql") and !std.mem.endsWith(u8, entry.?.name, ".down.gql")) {
             const ver = root.parseVersion(entry.?.name) orelse continue;

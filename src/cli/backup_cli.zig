@@ -124,7 +124,8 @@ fn printStdout(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
     const slice = std.fmt.bufPrint(&buf, fmt, args) catch return;
     const stdout = getStdoutFile() catch return;
-    stdout.writeAll(slice) catch {};
+    const io = std.Io.Threaded.global_single_threaded.io();
+    stdout.writeStreamingAll(io, slice) catch {};
 }
 
 /// SEC-MIG-10: Validate that a user-supplied directory path does not contain
@@ -171,11 +172,12 @@ fn loadMigrationHmacKey(out: *[32]u8, migrations_dir: []const u8, allocator: std
     const key_path = std.fs.path.join(allocator, &.{ migrations_dir, ".hmac_key" }) catch return null;
     defer allocator.free(key_path);
 
-    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), key_path, .{}) catch return null;
-    defer file.close();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, key_path, .{}) catch return null;
+    defer file.close(io);
 
     var hex_buf: [64]u8 = undefined;
-    const bytes_read = file.readAll(&hex_buf) catch return null;
+    const bytes_read = file.readPositionalAll(io, &hex_buf, 0) catch return null;
     if (bytes_read == 64) {
         _ = std.fmt.hexToBytes(out, &hex_buf) catch return null;
         return out;
@@ -447,11 +449,12 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     // Scan each directory for backup files
     for (dirs_to_scan) |backup_dir| {
-        var dir = std.Io.Dir.cwd().openDir(backup_dir, .{ .iterate = true }) catch continue;
-        defer dir.close();
+        const io_h = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.cwd().openDir(io_h, backup_dir, .{ .iterate = true }) catch continue;
+        defer dir.close(io_h);
 
         var dir_iter = dir.iterate();
-        while (dir_iter.next() catch null) |entry| {
+        while (dir_iter.next(io_h) catch null) |entry| {
             if (entry.kind == .file) {
                 // Match geode backup file patterns
                 const is_backup = std.mem.startsWith(u8, entry.name, "geode_backup") or
@@ -480,17 +483,17 @@ fn cmdBackupList(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
                     }
 
                     // Get file stat for size
-                    if (dir.statFile(entry.name)) |stat| {
+                    if (dir.statFile(io_h, entry.name, .{})) |stat| {
                         info.size_bytes = stat.size;
                     } else |_| {}
 
                     // Try to read backup header for metadata (if uncompressed)
                     if (info.compression == .none) {
-                        if (dir.openFile(std.Io.Threaded.global_single_threaded.io(), entry.name, .{})) |file| {
-                            defer file.close();
+                        if (dir.openFile(io_h, entry.name, .{})) |file| {
+                            defer file.close(io_h);
                             var header_buf: [@sizeOf(BackupHeader)]u8 align(@alignOf(BackupHeader)) = undefined;
                             // GAP-0221 FIX: Log read errors instead of silent catch 0
-                            const bytes_read = file.readAll(&header_buf) catch |err| blk: {
+                            const bytes_read = file.readPositionalAll(io_h, &header_buf, 0) catch |err| blk: {
                                 log.debug("Failed to read backup header", &.{
                                     Attr.string("error", @errorName(err)),
                                 });
@@ -578,14 +581,15 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     const filepath = backup_file.?;
 
     // Open the backup file
-    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), filepath, .{}) catch |err| {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io, filepath, .{}) catch |err| {
         std.debug.print("Error: Cannot open backup file '{s}': {}\n", .{ filepath, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close();
+    defer file.close(io);
 
     // Get file stat for size
-    const stat = file.stat() catch |err| {
+    const stat = file.stat(io) catch |err| {
         std.debug.print("Error: Cannot stat backup file: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -600,7 +604,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
     // Read first few bytes to detect format
     var magic_buf: [4]u8 = undefined;
     // GAP-0221 FIX: Log read errors instead of silent catch 0
-    const magic_read = file.readAll(&magic_buf) catch |err| blk: {
+    const magic_read = file.readPositionalAll(io, &magic_buf, 0) catch |err| blk: {
         log.debug("Failed to read magic bytes", &.{
             Attr.string("error", @errorName(err)),
         });
@@ -635,12 +639,10 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
     } else {
         // Try to read as uncompressed Geode backup
-        // Reset file position
-        file.seekTo(0) catch {};
-
+        // Read header from beginning of file using positional read
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
         // GAP-0221 FIX: Log read errors instead of silent catch 0
-        const bytes_read = file.readAll(&header_buf) catch |err| blk: {
+        const bytes_read = file.readPositionalAll(io, &header_buf, 0) catch |err| blk: {
             log.debug("Failed to read backup header", &.{
                 Attr.string("error", @errorName(err)),
             });
@@ -880,13 +882,14 @@ pub fn cmdRestore(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
             std.debug.print("\nError: Unable to read from stdin.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
+        const io_stdin = std.Io.Threaded.global_single_threaded.io();
         var line_buf: [256]u8 = undefined;
         var line_len: usize = 0;
 
         // Read line character by character until newline
         while (line_len < line_buf.len) {
             var b: [1]u8 = undefined;
-            const bytes_read = stdin_file.readAll(&b) catch break;
+            const bytes_read = stdin_file.readStreaming(io_stdin, &.{&b}) catch break;
             if (bytes_read == 0) break;
             if (b[0] == '\n') break;
             line_buf[line_len] = b[0];
@@ -1340,7 +1343,8 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
     // Scan migrations directory for .gql files (excluding .down.gql rollback files)
     // GAP-0200: Treat non-existent directory as empty (no migrations to run)
-    var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+    const io_mig = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io_mig, migrations_dir, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) {
             // Directory doesn't exist - treat as empty (no migrations)
             printStdout("No migration files found in '{s}'\n", .{migrations_dir});
@@ -1349,17 +1353,17 @@ fn cmdMigrateRun(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer dir.close();
+    defer dir.close(io_mig);
 
     // Collect migration file names
-    var migration_names = std.ArrayList([]const u8){};
+    var migration_names = std.ArrayList([]const u8).empty;
     defer {
         for (migration_names.items) |name| allocator.free(name);
         migration_names.deinit(allocator);
     }
 
     var dir_iter = dir.iterate();
-    while (dir_iter.next() catch null) |entry| {
+    while (dir_iter.next(io_mig) catch null) |entry| {
         if (entry.kind == .file) {
             // Match .gql files but exclude .down.gql rollback files
             if (std.mem.endsWith(u8, entry.name, ".gql") and !std.mem.endsWith(u8, entry.name, ".down.gql")) {
@@ -1509,15 +1513,16 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     };
 
     // Find next version number by scanning existing migrations
-    var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+    const io_gen = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io_gen, migrations_dir, .{ .iterate = true }) catch |err| {
         std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer dir.close();
+    defer dir.close(io_gen);
 
     var max_version: u32 = 0;
     var dir_iter = dir.iterate();
-    while (dir_iter.next() catch null) |entry| {
+    while (dir_iter.next(io_gen) catch null) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql")) {
             // Parse version number from filename (e.g., "001_create_users.gql")
             var version: u32 = 0;
@@ -1569,13 +1574,14 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     defer allocator.free(template);
 
     // Write the file
-    const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), filename, .{}) catch |err| {
+    const io_wf = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().createFile(io_wf, filename, .{}) catch |err| {
         std.debug.print("Error: Cannot create migration file '{s}': {}\n", .{ filename, err });
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close();
+    defer file.close(io_wf);
 
-    file.writeAll(template) catch |err| {
+    file.writeStreamingAll(io_wf, template) catch |err| {
         std.debug.print("Error: Cannot write to migration file: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -1602,7 +1608,7 @@ fn cmdMigrateCreate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
 fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
     var migrations_dir: []const u8 = "migrations";
     var sign_all = false;
-    var specific_files = std.ArrayList([]const u8){};
+    var specific_files = std.ArrayList([]const u8).empty;
     defer specific_files.deinit(allocator);
 
     var i: usize = start_idx;
@@ -1656,15 +1662,16 @@ fn cmdMigrateSign(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
 
     if (sign_all) {
         // Sign all .gql files (excluding .down.gql and .sig files)
-        var dir = std.Io.Dir.cwd().openDir(migrations_dir, .{ .iterate = true }) catch |err| {
+        const io_sa = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.cwd().openDir(io_sa, migrations_dir, .{ .iterate = true }) catch |err| {
             std.debug.print("Error: Cannot open migrations directory '{s}': {}\n", .{ migrations_dir, err });
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer dir.close();
+        defer dir.close(io_sa);
 
         var dir_iter = dir.iterate();
         var signed_count: usize = 0;
-        while (dir_iter.next() catch null) |entry| {
+        while (dir_iter.next(io_sa) catch null) |entry| {
             if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".gql") and
                 !std.mem.endsWith(u8, entry.name, ".down.gql") and
                 !std.mem.endsWith(u8, entry.name, ".sig"))
@@ -1803,8 +1810,9 @@ fn executeRemoteBackup(
     std.debug.print("Receiving backup ({} bytes) from {s}...\n", .{ backup_size, server });
 
     // Create destination file
-    const output_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), dest, .{});
-    defer output_file.close();
+    const io_bf = std.Io.Threaded.global_single_threaded.io();
+    const output_file = try std.Io.Dir.cwd().createFile(io_bf, dest, .{});
+    defer output_file.close(io_bf);
 
     // Receive backup data chunks
     var bytes_received: u64 = 0;
@@ -1820,7 +1828,7 @@ fn executeRemoteBackup(
         };
 
         // Write to file
-        try output_file.writeAll(chunk_buf[0..bytes_read]);
+        try output_file.writeStreamingAll(io_bf, chunk_buf[0..bytes_read]);
         bytes_received += bytes_read;
 
         // Progress indicator (every 10%)
@@ -2169,24 +2177,24 @@ const SimplifiedRestoreManager = struct {
     /// Restore from a backup file to the restore directory
     fn restoreFromBackup(self: SimplifiedRestoreManager, backup_path: []const u8) !RestoreMetadata {
         // Open backup file
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{}) catch |err| {
+        const io_rb = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io_rb, backup_path, .{}) catch |err| {
             std.debug.print("RESTORE: Failed to open backup file '{s}': {}\n", .{ backup_path, err });
             return error.BackupFileNotFound;
         };
-        defer file.close();
+        defer file.close(io_rb);
 
         // Read entire file into memory for processing
-        const stat = file.stat() catch return error.ReadError;
+        const stat = file.stat(io_rb) catch return error.ReadError;
         // Cast to usize (safely truncates on 32-bit platforms; backup files should not exceed addressable memory)
         const file_size: usize = @intCast(stat.size);
         const file_data = self.allocator.alloc(u8, file_size) catch return error.OutOfMemory;
         defer self.allocator.free(file_data);
-        const bytes_read = file.readAll(file_data) catch return error.ReadError;
+        const bytes_read = file.readPositionalAll(io_rb, file_data, 0) catch return error.ReadError;
         if (bytes_read != file_size) return error.ReadError;
 
-        // Use a fixed buffer stream for reading
-        var fbs = std.io.fixedBufferStream(file_data);
-        const reader = fbs.reader();
+        // Use a fixed buffer reader
+        var reader = std.Io.Reader.fixed(file_data);
 
         // Read and verify header
         const header = reader.readStruct(BackupHeader) catch |err| {
@@ -2277,13 +2285,18 @@ const SimplifiedRestoreManager = struct {
         const metadata_path = try std.fmt.allocPrint(self.allocator, "{s}/metadata.json", .{self.backup_dir});
         defer self.allocator.free(metadata_path);
 
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const io_pt = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io_pt, metadata_path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return error.BackupMetadataNotFound,
             else => return err,
         };
-        defer file.close();
+        defer file.close(io_pt);
 
-        const data = try file.readToEndAlloc(self.allocator, 2 * 1024 * 1024);
+        const file_len = try file.length(io_pt);
+        if (file_len > 2 * 1024 * 1024) return error.OutOfMemory;
+        const data = try self.allocator.alloc(u8, @intCast(file_len));
+        errdefer self.allocator.free(data);
+        _ = try file.readPositionalAll(io_pt, data, 0);
         defer self.allocator.free(data);
 
         const parsed = try std.json.parseFromSlice([]backup_types.BackupMetadata, self.allocator, data, .{});

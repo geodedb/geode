@@ -123,15 +123,17 @@ pub const Checkpoint = struct {
             self.edges_loaded,
             compat_milliTimestamp(),
         });
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-        defer file.close();
-        try file.writeAll(json);
+        const ck_io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(ck_io, path, .{});
+        defer file.close(ck_io);
+        try file.writeStreamingAll(ck_io, json);
         _ = allocator;
     }
 
     pub fn restore(allocator: std.mem.Allocator, path: []const u8) !Checkpoint {
-        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-        defer file.close();
+        const ck_io2 = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(ck_io2, path, .{});
+        defer file.close(ck_io2);
         var buf: [4096]u8 = undefined;
         const bytes_read = try file.readAll(&buf);
         _ = bytes_read;
@@ -201,13 +203,14 @@ pub const Batch = struct {
 /// Line reader for streaming input
 pub const LineReader = struct {
     file: std.Io.File,
+    io: std.Io,
     buf: [65536]u8 = undefined,
     start: usize = 0,
     end: usize = 0,
     bytes_read: u64 = 0,
 
     pub fn init(file: std.Io.File) LineReader {
-        return .{ .file = file };
+        return .{ .file = file, .io = std.Io.Threaded.global_single_threaded.io() };
     }
 
     pub fn nextLine(self: *LineReader) !?[]const u8 {
@@ -232,7 +235,7 @@ pub const LineReader = struct {
                 self.start = 0;
             }
 
-            const n = try self.file.read(self.buf[self.end..]);
+            const n = try self.file.readStreaming(self.io, &.{self.buf[self.end..]});
             if (n == 0) {
                 if (self.end > self.start) {
                     const line = self.buf[self.start..self.end];
@@ -281,7 +284,7 @@ pub const ProgressReporter = struct {
             self.stats.batches_sent,
         }) catch return;
 
-        self.stderr_file.writeAll(msg) catch {};
+        self.stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     }
 
     pub fn finish(self: *ProgressReporter) void {
@@ -295,7 +298,7 @@ pub const ProgressReporter = struct {
             self.stats.getNodesPerSecond(),
             self.stats.getEdgesPerSecond(),
         }) catch return;
-        self.stderr_file.writeAll(msg) catch {};
+        self.stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     }
 };
 
@@ -325,11 +328,12 @@ pub const BulkLoader = struct {
         var progress = ProgressReporter.init(&self.stats, self.config.progress_interval_ms);
 
         // Open input file or use stdin
+        const bl_io = std.Io.Threaded.global_single_threaded.io();
         const input_file = if (self.config.input_path) |path|
-            try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{})
+            try std.Io.Dir.cwd().openFile(bl_io, path, .{})
         else
             getStdIn();
-        defer if (self.config.input_path != null) input_file.close();
+        defer if (self.config.input_path != null) input_file.close(bl_io);
 
         var reader = LineReader.init(input_file);
 
@@ -517,7 +521,7 @@ fn printHelp() !void {
         \\
     ;
     const stdout_file = getStdOut();
-    try stdout_file.writeAll(help);
+    try stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), help);
 }
 
 test "Batch accumulates statements" {

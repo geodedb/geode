@@ -53,12 +53,16 @@ pub fn initLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError
 pub fn loadLedger(alloc: std.mem.Allocator, cfg: MigrationConfig) MigrationError!Ledger {
     const path = ledgerPath(alloc, cfg) catch return error.OutOfMemory;
     defer alloc.free(path);
-    var file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{}) catch |err| {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var file = std.Io.Dir.cwd().openFile(io, path, .{}) catch |err| {
         if (err == error.FileNotFound) return initLedger(alloc, cfg);
         return error.FileSystemError;
     };
-    defer file.close();
-    const data = file.readToEndAlloc(alloc, max_ledger_bytes) catch return error.OutOfMemory;
+    defer file.close(io);
+    const file_len = file.length(io) catch return error.OutOfMemory;
+    if (file_len > max_ledger_bytes) return error.OutOfMemory;
+    const data = alloc.alloc(u8, @intCast(file_len)) catch return error.OutOfMemory;
+    _ = file.readPositionalAll(io, data, 0) catch return error.OutOfMemory;
     defer alloc.free(data);
     var parsed = std.json.parseFromSlice(LedgerFile, alloc, data, .{ .duplicate_field_behavior = .@"error" }) catch return error.LedgerCorrupt;
     defer parsed.deinit();
@@ -93,17 +97,18 @@ pub fn saveLedger(alloc: std.mem.Allocator, cfg: MigrationConfig, ledger: *const
     const suffix = std.fmt.bufPrint(&suffix_buf, ".migration_ledger.{d}.{s}.tmp", .{ root.nowMs(), rand_hex }) catch return error.OutOfMemory;
     const tmp_path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, suffix }) catch return error.OutOfMemory;
     defer alloc.free(tmp_path);
-    var tmp = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
-    errdefer tmp.close();
-    if (builtin.os.tag != .windows) tmp.chmod(0o600) catch {};
+    const io_sv = std.Io.Threaded.global_single_threaded.io();
+    var tmp = std.Io.Dir.cwd().createFile(io_sv, tmp_path, .{ .truncate = true, .read = false }) catch return error.FileSystemError;
+    errdefer tmp.close(io_sv);
+    if (builtin.os.tag != .windows) tmp.setPermissions(io_sv, std.Io.File.Permissions.fromMode(0o600)) catch {};
     var buffer = std.ArrayList(u8).initCapacity(alloc, 4096) catch return error.OutOfMemory;
     defer buffer.deinit(alloc);
     writeLedgerJson(&buffer, alloc, ledger) catch return error.OutOfMemory;
-    tmp.writeAll(buffer.items) catch return error.FileSystemError;
-    tmp.sync() catch return error.FileSystemError;
-    tmp.close();
-    std.Io.Dir.cwd().rename(tmp_path, path) catch {
-        std.Io.Dir.cwd().deleteFile(tmp_path) catch {};
+    tmp.writeStreamingAll(io_sv, buffer.items) catch return error.FileSystemError;
+    tmp.sync(io_sv) catch return error.FileSystemError;
+    tmp.close(io_sv);
+    std.Io.Dir.rename(std.Io.Dir.cwd(), tmp_path, std.Io.Dir.cwd(), path, io_sv) catch {
+        std.Io.Dir.cwd().deleteFile(io_sv, tmp_path) catch {};
         return error.FileSystemError;
     };
 }

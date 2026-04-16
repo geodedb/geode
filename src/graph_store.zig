@@ -4365,7 +4365,7 @@ pub const GraphStore = struct {
         const node_ptr = self.nodes.getPtr(node_id) orelse return;
 
         // Collect connected edges first
-        var edge_ids = std.ArrayList(u64){};
+        var edge_ids = std.ArrayList(u64).empty;
         defer edge_ids.deinit(self.allocator);
 
         if (self.outgoing_edges.get(node_id)) |outgoing| {

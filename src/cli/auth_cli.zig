@@ -9,7 +9,8 @@ fn printOut(comptime fmt: []const u8, args: anytype) void {
     var buf: [512]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
     const stdout = stdio_util.getStdout() catch return;
-    stdout.writeAll(msg) catch {};
+    const io = std.Io.Threaded.global_single_threaded.io();
+    stdout.writeStreamingAll(io, msg) catch {};
 }
 
 fn hasHelpFlag(argv: [][:0]u8, start_idx: usize) bool {

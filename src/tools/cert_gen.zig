@@ -58,11 +58,11 @@ pub fn ensureCertificatesAtPath(allocator: std.mem.Allocator, cert_path: []const
         //   server.key  → 0600 (owner-only read/write)
         //   server.crt  → 0644 (world-readable public cert)
         if (builtin.os.tag != .windows) {
-            if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), io, key_path, .{})) |f| {
+            if (std.Io.Dir.cwd().openFile(io, key_path, .{})) |f| {
                 defer f.close(io);
                 f.setPermissions(io, std.Io.File.Permissions.fromMode(0o600)) catch {};
             } else |_| {}
-            if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), io, cert_path, .{})) |f| {
+            if (std.Io.Dir.cwd().openFile(io, cert_path, .{})) |f| {
                 defer f.close(io);
                 f.setPermissions(io, std.Io.File.Permissions.fromMode(0o644)) catch {};
             } else |_| {}

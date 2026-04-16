@@ -211,22 +211,24 @@ pub fn writeEncryptedFile(allocator: std.mem.Allocator, path: []const u8, data: 
     const encrypted = try encrypt(allocator, data);
     defer allocator.free(encrypted);
 
-    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-    defer file.close();
-    try file.writeAll(encrypted);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().createFile(io, path, .{});
+    defer file.close(io);
+    try file.writeStreamingAll(io, encrypted);
 }
 
 /// Read and decrypt file
 /// If file is not encrypted, returns plaintext
 pub fn readDecryptedFile(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-    defer file.close();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io, path, .{});
+    defer file.close(io);
 
-    const file_size = try file.getEndPos();
+    const file_size = try file.length(io);
     const raw_data = try allocator.alloc(u8, @intCast(file_size));
     defer allocator.free(raw_data);
 
-    const read_bytes = try file.readAll(raw_data);
+    const read_bytes = try file.readPositionalAll(io, raw_data, 0);
     return try decrypt(allocator, raw_data[0..read_bytes]);
 }
 

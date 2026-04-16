@@ -93,10 +93,11 @@ fn generateKey(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     _ = std.os.linux.getrandom(&key_data, key_data.len, 0);
 
     if (output_path) |path| {
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = 0o600 });
-        defer file.close();
+        const io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io, path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) });
+        defer file.close(io);
 
-        try file.writeAll(&key_data);
+        try file.writeStreamingAll(io, &key_data);
         std.debug.print("Key generated and saved to {s}\n", .{path});
     } else {
         // Print hex-encoded key
@@ -146,24 +147,25 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 
     // Read old key
-    const old_key_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), old_key_path.?, .{});
-    defer old_key_file.close();
+    const io_kr = std.Io.Threaded.global_single_threaded.io();
+    const old_key_file = try std.Io.Dir.cwd().openFile(io_kr, old_key_path.?, .{});
+    defer old_key_file.close(io_kr);
     var old_key_data: [tde.KEY_BYTES]u8 = undefined;
-    _ = try old_key_file.read(&old_key_data);
+    _ = try old_key_file.readPositionalAll(io_kr, &old_key_data, 0);
 
     // Read new key
-    const new_key_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), new_key_path.?, .{});
-    defer new_key_file.close();
+    const new_key_file = try std.Io.Dir.cwd().openFile(io_kr, new_key_path.?, .{});
+    defer new_key_file.close(io_kr);
     var new_key_data: [tde.KEY_BYTES]u8 = undefined;
-    _ = try new_key_file.read(&new_key_data);
+    _ = try new_key_file.readPositionalAll(io_kr, &new_key_data, 0);
 
     // Read input file
-    const in_file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), input_path.?, .{});
-    defer in_file.close();
-    const in_size = try in_file.getEndPos();
+    const in_file = try std.Io.Dir.cwd().openFile(io_kr, input_path.?, .{});
+    defer in_file.close(io_kr);
+    const in_size = try in_file.length(io_kr);
     const raw = try allocator.alloc(u8, @intCast(in_size));
     defer allocator.free(raw);
-    const read_bytes = try in_file.readAll(raw);
+    const read_bytes = try in_file.readPositionalAll(io_kr, raw, 0);
 
     // Decrypt with old key (passes through if not encrypted)
     const plaintext = try tde.decryptWithKey(allocator, raw[0..read_bytes], old_key_data);
@@ -174,9 +176,9 @@ fn rotateKeys(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     defer allocator.free(encrypted);
 
     // Write output
-    const out_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), output_path.?, .{});
-    defer out_file.close();
-    try out_file.writeAll(encrypted);
+    const out_file = try std.Io.Dir.cwd().createFile(io_kr, output_path.?, .{});
+    defer out_file.close(io_kr);
+    try out_file.writeStreamingAll(io_kr, encrypted);
 
     std.debug.print("\nKey rotation completed successfully\n", .{});
 }
@@ -208,11 +210,12 @@ fn verifyEncryption(allocator: std.mem.Allocator, args: [][:0]u8) !void {
         return;
     }
 
-    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path.?, .{});
-    defer file.close();
+    const io_v = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io_v, file_path.?, .{});
+    defer file.close(io_v);
 
     var header: [tde.MAGIC.len]u8 = undefined;
-    const read_len = try file.read(&header);
+    const read_len = try file.readPositionalAll(io_v, &header, 0);
     const encrypted = read_len >= tde.MAGIC.len and tde.isEncrypted(header[0..tde.MAGIC.len]);
 
     if (encrypted) {

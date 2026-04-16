@@ -1259,9 +1259,10 @@ pub const SecurityManager = struct {
             };
             defer self.allocator.free(pw_path);
 
-            if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), pw_path, .{ .mode = 0o600 })) |file| {
-                defer file.close();
-                file.writeAll(generated_password_hex[0..64]) catch |err| {
+            const io_pw = std.Io.Threaded.global_single_threaded.io();
+            if (std.Io.Dir.cwd().createFile(io_pw, pw_path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
+                defer file.close(io_pw);
+                file.writeStreamingAll(io_pw, generated_password_hex[0..64]) catch |err| {
                     log.warn("Failed to write admin password file", &.{
                         Attr.string("error", @errorName(err)),
                     });

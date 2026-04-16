@@ -157,10 +157,13 @@ const NodePropertyExactIndex = struct {
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), idx_path, .{ .truncate = true });
-        defer file.close();
+        const idx_io = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(idx_io, idx_path, .{ .truncate = true });
+        defer file.close(idx_io);
 
-        const writer = file.deprecatedWriter();
+        var idx_wbuf: [8192]u8 = undefined;
+        var idx_fw = file.writerStreaming(idx_io, &idx_wbuf);
+        const writer = &idx_fw.interface;
 
         // 8-byte magic header
         try writer.writeAll("GENPIDX1");
@@ -185,6 +188,7 @@ const NodePropertyExactIndex = struct {
                 try writer.writeInt(u64, nid, .little);
             }
         }
+        try idx_fw.flush();
     }
 
     /// Load the index from `prop_exact.idx` inside `graph_dir_path`.
@@ -625,7 +629,7 @@ pub const StorageAdapter = struct {
             .config = config,
             .registry = gs.registry.GraphRegistry.init(allocator),
             .registry_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{owned_dir}),
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
         errdefer self.registry.deinit();
         errdefer allocator.free(self.registry_path);
@@ -784,7 +788,7 @@ pub const StorageAdapter = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        var names = std.ArrayList([]const u8){};
+        var names = std.ArrayList([]const u8).empty;
         errdefer {
             for (names.items) |name| allocator.free(name);
             names.deinit(allocator);
@@ -1632,7 +1636,7 @@ pub const StorageAdapter = struct {
         const store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, file_name });
         defer self.allocator.free(store_path);
 
-        const stat = std.Io.Dir.cwd().statFile(store_path) catch |err| switch (err) {
+        const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), store_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return 64,
             else => return err,
         };
@@ -1646,13 +1650,14 @@ pub const StorageAdapter = struct {
         const free_store_path = try std.fmt.allocPrint(self.allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
         defer self.allocator.free(free_store_path);
 
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{}) catch |err| switch (err) {
+        const io_fv = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io_fv, free_store_path, .{}) catch |err| switch (err) {
             error.FileNotFound => return true,
             else => return err,
         };
-        defer file.close();
+        defer file.close(io_fv);
 
-        const stat = try file.stat();
+        const stat = try file.stat(io_fv);
         if (stat.size == 0) return true;
 
         const word_size = @sizeOf(usize);
@@ -2026,7 +2031,7 @@ pub const StorageAdapter = struct {
     }
 
     fn loadRegistry(self: *StorageAdapter) !void {
-        std.Io.Dir.cwd().access(self.registry_path, .{}) catch |err| {
+        std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), self.registry_path, .{}) catch |err| {
             if (err == error.FileNotFound) return err;
             return err;
         };
@@ -2867,9 +2872,10 @@ test "StorageAdapter: reopen repairs corrupted free.store" {
     defer allocator.free(free_store_path);
 
     {
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{ .truncate = true });
-        defer file.close();
-        try file.writeAll(&([_]u8{0xFF} ** 64));
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_fs, free_store_path, .{ .truncate = true });
+        defer file.close(io_fs);
+        try file.writeStreamingAll(io_fs, &([_]u8{0xFF} ** 64));
     }
 
     {

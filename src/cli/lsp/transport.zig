@@ -56,6 +56,7 @@ pub const Transport = struct {
     stdin: std.Io.File,
     stdout: std.Io.File,
     stderr: std.Io.File,
+    io: std.Io,
 
     pub fn init(allocator: Allocator) TransportError!Transport {
         return .{
@@ -63,6 +64,7 @@ pub const Transport = struct {
             .stdin = std.Io.File{ .handle = try getStdinHandle(), .flags = .{ .nonblocking = false } },
             .stdout = std.Io.File{ .handle = try getStdoutHandle(), .flags = .{ .nonblocking = false } },
             .stderr = std.Io.File{ .handle = try getStderrHandle(), .flags = .{ .nonblocking = false } },
+            .io = std.Io.Threaded.global_single_threaded.io(),
         };
     }
 
@@ -103,7 +105,7 @@ pub const Transport = struct {
 
         var total_read: usize = 0;
         while (total_read < content_length.?) {
-            const n = try self.stdin.read(content[total_read..]);
+            const n = try self.stdin.readStreaming(self.io, &.{content[total_read..]});
             if (n == 0) {
                 self.allocator.free(content);
                 return TransportError.EndOfStream;
@@ -123,20 +125,20 @@ pub const Transport = struct {
         );
         defer self.allocator.free(header);
 
-        try self.stdout.writeAll(header);
-        try self.stdout.writeAll(message);
+        try self.stdout.writeStreamingAll(self.io, header);
+        try self.stdout.writeStreamingAll(self.io, message);
     }
 
     pub fn logMessage(self: *Transport, level: []const u8, message: []const u8) void {
         const msg = std.fmt.allocPrint(self.allocator, "[{s}] {s}\n", .{ level, message }) catch return;
         defer self.allocator.free(msg);
-        _ = self.stderr.writeAll(msg) catch {};
+        self.stderr.writeStreamingAll(self.io, msg) catch {};
     }
 
     fn readLine(self: *Transport, buf: []u8) !?[]const u8 {
         var i: usize = 0;
         while (i < buf.len) : (i += 1) {
-            const n = try self.stdin.read(buf[i .. i + 1]);
+            const n = try self.stdin.readStreaming(self.io, &.{buf[i .. i + 1]});
             if (n == 0) {
                 // EOF - return null if no data read, otherwise return what we have
                 if (i == 0) return null;
