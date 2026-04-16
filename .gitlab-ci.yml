@@ -708,11 +708,27 @@ test-code-coverage:
     - 'apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"'
   script:
     - |
+      # Pre-create artifact paths up front so a mid-script failure still
+      # leaves behind well-formed artifacts (previous run exited before
+      # the else-branch ran, leaving the pipeline to fail on artifact upload).
+      set +e  # informational job; don't bail on grep/tee edge cases.
+      mkdir -p coverage_report
+      cat > coverage_report/cobertura.xml <<'XML'
+      <?xml version="1.0" ?>
+      <coverage line-rate="0" branch-rate="0" version="0.0.0" timestamp="0">
+        <sources><source>src</source></sources>
+        <packages/>
+      </coverage>
+      XML
+      echo "coverage: test-pass-rate" > metrics.txt
+
       echo "=== Building Test Binary ==="
       zig build test -Doptimize=Debug --summary all 2>&1 | tee test_output.log
+      build_rc=${PIPESTATUS[0]}
+      echo "zig build test exit=${build_rc}"
 
-      # Count test pass rate as baseline metric
-      TOTAL_TESTS=$(grep -oP '\d+ passed' test_output.log | awk '{s+=$1} END {print s}')
+      # Count test pass rate as baseline metric (Zig prints "N/N tests passed").
+      TOTAL_TESTS=$(grep -oE '[0-9]+/[0-9]+ tests passed' test_output.log | head -1 | awk -F'/' '{print $1}')
       echo "Total tests passed: ${TOTAL_TESTS:-0}"
 
       # If kcov is available, run instrumented coverage
@@ -730,19 +746,7 @@ test-code-coverage:
           echo "coverage: ${COVERAGE}%" > metrics.txt
         fi
       else
-        echo "kcov not available — reporting test pass rate only"
-        echo "coverage: test-pass-rate" > metrics.txt
-        # Emit a minimal cobertura-shaped stub so GitLab's artifact upload
-        # (reports: coverage_report: cobertura) doesn't fail the job. Real
-        # coverage numbers fill in once kcov lands in the CI image.
-        mkdir -p coverage_report
-        cat > coverage_report/cobertura.xml <<'XML'
-      <?xml version="1.0" ?>
-      <coverage line-rate="0" branch-rate="0" version="0.0.0" timestamp="0">
-        <sources><source>src</source></sources>
-        <packages/>
-      </coverage>
-      XML
+        echo "kcov not available — cobertura.xml stub already in place"
       fi
 
       echo "✓ GAP-0251: Coverage collection configured"
