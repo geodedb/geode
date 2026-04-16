@@ -245,29 +245,8 @@ REQ-AUTH-CONFIG-001,Configurable Password Policy,Security,TESTED,,,security,2025
 REQ-AUTH-CONFIG-001,UserAuthPolicy,ConfigurablePolicy,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-DEFAULT-001,AuthDefault,UserCreation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-DEFAULT-001,Default User Creation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
-REQ-AUTH-ENFORCE-002,AuthEnforcement,QueryReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
 REQ-AUTH-ENFORCE-003,AuthEnforcement,UnitTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-004,AuthEnforcement,BuildIntegration,TESTED,,,security,2026-01-28,build.zig
-REQ-AUTH-ENFORCE-005,AuthEnforcement,UnionReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-006,AuthEnforcement,IntersectReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-007,AuthEnforcement,ExceptReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-008,AuthEnforcement,ShowReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-009,AuthEnforcement,ExplainReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-010,AuthEnforcement,ProfileReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-011,AuthEnforcement,CreateIndexSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-012,AuthEnforcement,CreateConstraintSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-013,AuthEnforcement,DropIndexSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-014,AuthEnforcement,DropConstraintSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-015,AuthEnforcement,CreateGraphSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-016,AuthEnforcement,CreateGraphTypeSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-017,AuthEnforcement,DropGraphSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-018,AuthEnforcement,DropGraphTypeSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-019,AuthEnforcement,CreateSchemaSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-020,AuthEnforcement,DropSchemaSchemaPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-021,AuthEnforcement,CallReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-022,AuthEnforcement,ForReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-023,AuthEnforcement,ValuesReadPermission,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
-REQ-AUTH-ENFORCE-024,AuthEnforcement,TransactionBodyPermissions,TESTED,,,security,2026-01-28,src/execution/statement_dispatcher.zig
 REQ-AUTH-ENFORCE-025,AuthEnforcement,AuthorizationTests,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-026,AuthEnforcement,OperationMapping,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-027,AuthEnforcement,SecurityBoundaries,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
@@ -621,8 +600,6 @@ REQ-CONSTRAINT-002,ConstraintManagement,CatalogMethods,TESTED,,,schema,2026-01-0
 REQ-CONSTRAINT-ENFORCE-001,ConstraintEnforcement,CatalogImport,TESTED,,,engine,2026-01-09,src/execution/crud_operations.zig
 REQ-CONSTRAINT-ENFORCE-002,ConstraintEnforcement,Validation,TESTED,,,engine,2026-01-09,src/execution/crud_operations.zig
 REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,EXEMPT,,,engine,2026-01-09,src/execution.zig
-REQ-CONSTRAINT-EXEC-001,ConstraintExecution,CREATE,EXEMPT,,,engine,2026-01-10,src/execution/statement_dispatcher.zig
-REQ-CONSTRAINT-EXEC-002,ConstraintExecution,DROP,EXEMPT,,,engine,2026-01-10,src/execution/statement_dispatcher.zig
 REQ-COUNT-DISTINCT-BINDING-001,CountDistinct,Binding,TESTED,,,engine,2026-01-15,tests/test_shell_requirements_verification.zig
 REQ-COUNT-DISTINCT-BINDING-001,CountDistinctBindings,BindingAggregation,TESTED,,,aggregation,2025-12-28,src/execution/aggregation_evaluation.zig
 REQ-COUNT-DISTINCT-FIX-001,CountDistinctStrings,StringSupport,TESTED,,,engine,2025-12-26,src/execution/aggregation_evaluation.zig
@@ -773,16 +750,11 @@ REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001,Documentation System Integration Tests,
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,ContextFlag,IMPL,,,engine,2026-03-25,src/execution.zig
 REQ-DSN-GRAPH-BIND-001,DSNGraphBinding,SessionGraphBound,IMPL,,,engine,2026-03-25,src/server/server_state.zig
 REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-31,src/execution.zig
-REQ-DSN-GRAPH-BIND-002,DSNGraphBinding,UseGraphRejection,IMPL,,,engine,2026-03-25,src/execution/statement_dispatcher.zig
 REQ-DSN-GRAPH-BIND-003,DSNGraphBinding,QuicGraphResolution,IMPL,,,transport,2026-03-25,src/server/quic_connection_handler.zig
-REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,CreateGraphRejection,IMPL,,,engine,2026-04-05,src/execution/statement_dispatcher.zig
 REQ-DSN-GRAPH-BIND-004,DSNGraphBinding,GrpcSessionGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig
-REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,CreateGraphTypeRejection,IMPL,,,engine,2026-04-05,src/execution/statement_dispatcher.zig
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GraphBoundError,IMPL,,,transport,2026-03-25,src/server/proto_util.zig
 REQ-DSN-GRAPH-BIND-005,DSNGraphBinding,GrpcGraphResolution,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig
-REQ-DSN-GRAPH-BIND-006,DSNGraphBinding,DropGraphRejection,IMPL,,,engine,2026-04-05,src/execution/statement_dispatcher.zig
 REQ-DSN-GRAPH-BIND-006,DSNGraphBinding,GrpcNoAuthGraph,IMPL,,,transport,2026-03-25,src/transport/grpc_server.zig
-REQ-DSN-GRAPH-BIND-007,DSNGraphBinding,DropGraphTypeRejection,IMPL,,,engine,2026-04-05,src/execution/statement_dispatcher.zig
 REQ-ENGINE-001,Engine,QueryExecution,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-002,Engine,PlanGeneration,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-ENGINE-003,Engine,ResultStreaming,TESTED,,,engine,2026-01-15,tests/test_gap_0193_final_batch.zig
@@ -851,7 +823,6 @@ REQ-EXEC-REFACTOR-008,ExecutionRefactoring,WithExecution,TESTED,,,execution,2026
 REQ-EXEC-REFACTOR-009,ExecutionRefactoring,ReturnExecution,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-EXEC-REFACTOR-009,FileModularization,ReturnAndSorting,EXEMPT,,,refactoring,2025-10-17,src/execution/return_and_sorting.zig
 REQ-EXEC-REFACTOR-010,ExecutionRefactoring,CallExecution,TESTED,,,execution,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
-REQ-EXEC-REFACTOR-010,FileModularization,StatementDispatcher,EXEMPT,,,refactoring,2025-10-17,src/execution/statement_dispatcher.zig
 REQ-EXEC-REFACTOR-011,FileModularization,QueryExecution,EXEMPT,,,refactoring,2025-10-17,src/execution/query_execution.zig
 REQ-EXEC-REMOVE-001,Execution,RemoveExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-EXEC-SET-001,Execution,SetExecution,TESTED,,,exec,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
@@ -1747,11 +1718,8 @@ REQ-GQL-081,MonitoringVariance,UnifiedVarianceEnvelope,BENCHED,,,ops-team,2025-0
 REQ-GQL-081,MonitoringVariance,UnifiedVarianceEnvelope,TESTED,,,ops-team,2025-09-27,tests/canary_monitoring_variance_unified.zig
 REQ-GQL-081,Numeric Types,IntWidths,TESTED,,,types,2025-09-27,src/canary.zig
 REQ-GQL-081,SessionManagement,SessionClose,TESTED,,,engine,2025-10-09,src/execution.zig
-REQ-GQL-081,SessionManagement,SessionClose,TESTED,,,engine,2025-10-09,src/execution/statement_dispatcher.zig
 REQ-GQL-081,SessionManagement,SessionReset,TESTED,,,engine,2025-10-09,src/execution.zig
-REQ-GQL-081,SessionManagement,SessionReset,TESTED,,,engine,2025-10-09,src/execution/statement_dispatcher.zig
 REQ-GQL-081,SessionManagement,SessionSet,TESTED,,,engine,2025-10-09,src/execution.zig
-REQ-GQL-081,SessionManagement,SessionSet,TESTED,,,engine,2025-10-09,src/execution/statement_dispatcher.zig
 REQ-GQL-081,SessionManagement,State,TESTED,,,engine,2025-10-09,src/execution.zig
 REQ-GQL-082,ExtendedBuiltins,ADAPTER_BRIDGE,TESTED,,,engine,2025-09-27,tests/canary_extended_builtins.zig
 REQ-GQL-082,ExtendedBuiltins,ADAPTER_BRIDGE,TESTED,,,engine,2025-09-26,tests/test_extended_canary.zig
@@ -1767,11 +1735,8 @@ REQ-GQL-082,ExtendedBuiltins,FUNCTION_VECTOR_COSINE,TESTED,,,engine,2025-09-26,s
 REQ-GQL-082,ExtendedBuiltins,PERFORMANCE,BENCHED,,,engine,2025-09-26,benchmarks/benchmark_extended_builtins_overhead.zig
 REQ-GQL-082,Float Types,NaNForbidden,TESTED,,,types,2025-09-27,src/canary.zig
 REQ-GQL-082,TransactionManagement,Commit,TESTED,,,engine,2025-10-12,src/execution.zig
-REQ-GQL-082,TransactionManagement,Commit,TESTED,,,engine,2025-10-12,src/execution/statement_dispatcher.zig
 REQ-GQL-082,TransactionManagement,Rollback,TESTED,,,engine,2025-10-12,src/execution.zig
-REQ-GQL-082,TransactionManagement,Rollback,TESTED,,,engine,2025-10-12,src/execution/statement_dispatcher.zig
 REQ-GQL-082,TransactionManagement,StartTransaction,TESTED,,,engine,2025-10-09,src/execution.zig
-REQ-GQL-082,TransactionManagement,StartTransaction,TESTED,,,engine,2025-10-09,src/execution/statement_dispatcher.zig
 REQ-GQL-082,TransactionManagement,State,TESTED,,,engine,2025-10-09,src/execution.zig
 REQ-GQL-082,TransactionManagement,StatePropagation,TESTED,,,engine,2025-10-09,src/execution.zig
 REQ-GQL-083,CreateWithClause,ParserSupport,TESTED,,,parser,2025-10-09,src/gql/parser.zig
@@ -2625,8 +2590,6 @@ REQ-IMPL-TYPE-001,IMPL,TypeImpl,TESTED,,,core,2026-01-16,tests/test_gap_0193_bat
 REQ-IMPLEMENTATION-VERIFY-001,Implementation,ImplementationVerification,TESTED,,,core,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-INDEX-001,Index,IndexManagement,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-INDEX-001,IndexManagement,Catalog,TESTED,,,storage,2025-10-14,src/schema/catalog.zig
-REQ-INDEX-002,IndexManagement,ScopedCreation,TESTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
-REQ-INDEX-003,IndexManagement,ScopedDeletion,TESTED,,,storage,2025-10-14,src/execution/statement_dispatcher.zig
 REQ-INDEX-LOOKUP-001,Index,IndexLookup,TESTED,,,storage,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-INIT-CONTEXT-REGRESSION-001,InitContextPointerSafety,SegfaultPrevention,TESTED,,,server,2026-02-11,tests/test_init_context_regression.zig
 REQ-INLINE-RESULTS-001,InlineResultsHandling,SchemaResponseFlag,IMPL,,,cli,2026-02-05,src/client/repl/repl_dispatch.zig
@@ -2725,7 +2688,6 @@ REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/execution.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/execution/crud_operations.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/execution/procedure_registry.zig
-REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Execution,EXEMPT,,,execution,2026-01-24,src/execution/statement_dispatcher.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,ML,EXEMPT,,,ml,2026-01-24,src/ml/graph_embeddings.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Memory,EXEMPT,,,memory,2026-01-24,src/sentinel.zig
 REQ-LIB-MIGRATION-SLOG-003,Structured Logging,Planner,EXEMPT,,,planner,2026-01-24,src/planner/adaptive.zig
@@ -3044,7 +3006,6 @@ REQ-ML-HASEDGE-001,GraphData.hasEdge,EdgeLookup,TESTED,,,ml,2026-01-10,src/ml/in
 REQ-ML-MODULARITY-001,Louvain Modularity Gain,Core,TESTED,,,ml,2026-01-25,src/ml/integration_enhanced.zig
 REQ-ML-MODULARITY-002,Graph Modularity Calculation,Graph,TESTED,,,ml,2026-01-25,src/ml/integration_enhanced.zig
 REQ-ML-NEIGHBORS-001,GraphData.getNeighbors,NeighborLookup,TESTED,,,ml,2026-01-11,src/ml/integration_enhanced.zig
-REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,TESTED,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-001,MultiGraphSupport,UseGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-002,MultiGraphSupport,PerGraphStore,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,EdgeGraphTag,TESTED,,,engine,2025-12-22,src/graph_store.zig
@@ -3054,7 +3015,6 @@ REQ-MULTI-GRAPH-003,MultiGraphIsolation,GraphStore,TESTED,,,engine,2026-01-15,te
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-003,MultiGraphIsolation,NodeGraphTag,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
-REQ-MULTI-GRAPH-003,MultiGraphSupport,CreateGraph,TESTED,,,engine,2025-12-20,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-003,MultiGraphSupport,CreateGraph,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,TESTED,,,engine,2025-12-22,src/graph_store.zig
 REQ-MULTI-GRAPH-004,MultiGraphIsolation,CreateNode,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
@@ -3168,7 +3128,6 @@ REQ-MULTI-GRAPH-036,MultiGraphIsolation,ShortestPathIsolation,TESTED,,,engine,20
 REQ-MULTI-GRAPH-037,MultiGraphIsolation,AllShortestPathsIsolation,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority_comprehensive.zig
 REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2025-12-24,src/execution/crud_operations.zig
 REQ-MULTI-GRAPH-DELETE-001,MultiGraphIsolation,DeleteGraphFilter,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
-REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2025-12-24,src/execution/statement_dispatcher.zig
 REQ-MULTI-GRAPH-DELETE-002,MultiGraphIsolation,DeleteGraphContext,TESTED,,,engine,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-MULTI-GRAPH-EDGE-ISOLATION,GraphIsolationEdgeScan,GetEdgesByType,TESTED,,,engine,2026-04-11,src/graph_store.zig
 REQ-MULTI-GRAPH-RBAC-WIRE-001,GraphRBACEnforcement,GlobalInstance,IMPL,,,security,2026-04-01,src/server/quic_connection_handler.zig
