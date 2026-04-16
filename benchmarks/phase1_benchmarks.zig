@@ -4,6 +4,13 @@
 const std = @import("std");
 const testing = std.testing;
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // Benchmark Phase 1 - Performance validation for Phase 1 optimizations
 // CANARY: REQ=REQ-PERF-PHASE1-001; FEATURE="PerformanceOptimization"; ASPECT=Testing; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
 
@@ -13,8 +20,7 @@ const testing = std.testing;
 
 /// Benchmark: Stack buffer string formatting
 fn benchmarkStackBuffer(allocator: std.mem.Allocator, iterations: usize) !u64 {
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -25,14 +31,13 @@ fn benchmarkStackBuffer(allocator: std.mem.Allocator, iterations: usize) !u64 {
         allocator.free(owned);
     }
 
-    const end = timer.read();
+    const end = nowNs();
     return end - start;
 }
 
 /// Benchmark: Direct allocPrint (baseline)
 fn benchmarkAllocPrint(allocator: std.mem.Allocator, iterations: usize) !u64 {
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -41,7 +46,7 @@ fn benchmarkAllocPrint(allocator: std.mem.Allocator, iterations: usize) !u64 {
         allocator.free(owned);
     }
 
-    const end = timer.read();
+    const end = nowNs();
     return end - start;
 }
 
@@ -78,8 +83,7 @@ test "Benchmark: Stack Buffer vs allocPrint" {
 
 /// Benchmark: Pre-sized ArrayList
 fn benchmarkPresizedArrayList(allocator: std.mem.Allocator, iterations: usize) !u64 {
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -94,14 +98,13 @@ fn benchmarkPresizedArrayList(allocator: std.mem.Allocator, iterations: usize) !
         }
     }
 
-    const end = timer.read();
+    const end = nowNs();
     return end - start;
 }
 
 /// Benchmark: Zero-capacity ArrayList (baseline)
 fn benchmarkZeroCapacityArrayList(allocator: std.mem.Allocator, iterations: usize) !u64 {
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
@@ -116,7 +119,7 @@ fn benchmarkZeroCapacityArrayList(allocator: std.mem.Allocator, iterations: usiz
         }
     }
 
-    const end = timer.read();
+    const end = nowNs();
     return end - start;
 }
 
@@ -163,8 +166,7 @@ fn benchmarkSimdCosine(iterations: usize) !u64 {
         b[i] = @as(f32, @floatFromInt(dim - i)) * 0.1;
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     var sum: f64 = 0;
@@ -194,7 +196,7 @@ fn benchmarkSimdCosine(iterations: usize) !u64 {
         sum += 1.0 - similarity;
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Use sum to prevent optimization
     if (sum > 1e10) return error.Overflow;
@@ -214,8 +216,7 @@ fn benchmarkScalarCosine(iterations: usize) !u64 {
         b[i] = @as(f32, @floatFromInt(dim - i)) * 0.1;
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     var sum: f64 = 0;
@@ -238,7 +239,7 @@ fn benchmarkScalarCosine(iterations: usize) !u64 {
         sum += 1.0 - similarity;
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Use sum to prevent optimization
     if (sum > 1e10) return error.Overflow;
@@ -283,8 +284,7 @@ fn benchmarkSimdDot(iterations: usize) !u64 {
         b[i] = @as(f32, @floatFromInt(dim - i)) * 0.1;
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     var sum: f64 = 0;
@@ -303,7 +303,7 @@ fn benchmarkSimdDot(iterations: usize) !u64 {
         sum += dot_product;
     }
 
-    const end = timer.read();
+    const end = nowNs();
     if (sum > 1e10) return error.Overflow;
     return end - start;
 }
@@ -319,8 +319,7 @@ fn benchmarkScalarDot(iterations: usize) !u64 {
         b[i] = @as(f32, @floatFromInt(dim - i)) * 0.1;
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     var sum: f64 = 0;
@@ -332,7 +331,7 @@ fn benchmarkScalarDot(iterations: usize) !u64 {
         sum += dot;
     }
 
-    const end = timer.read();
+    const end = nowNs();
     if (sum > 1e10) return error.Overflow;
     return end - start;
 }
@@ -404,8 +403,7 @@ fn benchmarkCachedIndexLookup(allocator: std.mem.Allocator, iterations: usize) !
         try cache.put(key_owned, info);
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     // Benchmark cached lookups
     var j: usize = 0;
@@ -420,7 +418,7 @@ fn benchmarkCachedIndexLookup(allocator: std.mem.Allocator, iterations: usize) !
         }
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Verify cache hits
     try testing.expectEqual(iterations, found);
@@ -430,8 +428,7 @@ fn benchmarkCachedIndexLookup(allocator: std.mem.Allocator, iterations: usize) !
 
 /// Benchmark: Uncached index evaluation (baseline)
 fn benchmarkUncachedIndexEvaluation(_: std.mem.Allocator, iterations: usize) !u64 {
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     var i: usize = 0;
     var found: usize = 0;
@@ -460,7 +457,7 @@ fn benchmarkUncachedIndexEvaluation(_: std.mem.Allocator, iterations: usize) !u6
         }
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Verify we found something
     try testing.expect(found > 0);
