@@ -64,7 +64,7 @@ cache:
 
 variables:
   DOCKER_BUILDKIT: 1
-  ZIG_VERSION: "0.15.2"
+  ZIG_VERSION: "0.16.0"
   ZIG_GLOBAL_CACHE_DIR: "${CI_PROJECT_DIR}/zig-cache"
   ZIG_LOCAL_CACHE_DIR: "${CI_PROJECT_DIR}/.zig-cache"
   ZIG_IMAGE: "registry.gitlab.com/devnw/ci-catalog/zig:${ZIG_VERSION}"

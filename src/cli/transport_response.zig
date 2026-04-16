@@ -3,6 +3,27 @@ const std = @import("std");
 // NOTE: This file uses `catch {}` for stdout/stderr I/O operations.
 // Output write failures are non-critical — the query result is correct
 // even if display fails.  See docs/FULL_AUDIT_2026_04_07.md.
+//
+// GAP-0538 (2026-04-16): Migrated from legacy `std.Io.File.writeAll` (0.15.x)
+// to the 0.16.0 `writeStreamingAll(io, bytes)` API.  To keep call sites
+// tidy we wrap the File + Io pair in a tiny `Stream` helper that exposes
+// a `writeAll(bytes)` method — any call site that previously passed a
+// reader/writer-like value must now pass a `Stream` instance.
+
+/// Thin helper that pairs a `std.Io.File` with a `std.Io` context and
+/// exposes a `writeAll` method so legacy-style render code keeps working.
+pub const Stream = struct {
+    file: std.Io.File,
+    io: std.Io,
+
+    pub fn init(file: std.Io.File, io: std.Io) Stream {
+        return .{ .file = file, .io = io };
+    }
+
+    pub fn writeAll(self: Stream, bytes: []const u8) std.Io.File.Writer.Error!void {
+        try self.file.writeStreamingAll(self.io, bytes);
+    }
+};
 
 pub const ColumnInfo = struct {
     name: []const u8,
@@ -46,8 +67,12 @@ pub fn renderTransportResponseWithStreams(
     rows_json: ?*std.ArrayList(std.ArrayList(std.json.Value)),
     view: TransportResponseView,
 ) !bool {
-    var out = stdout;
-    var err_out = stderr;
+    // GAP-0538: If callers pass a raw `std.Io.File`, wrap it in a Stream so
+    // the renderer below can keep using legacy `writeAll`-style calls without
+    // plumbing the Io context through every single print.
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var out = if (@TypeOf(stdout) == std.Io.File) Stream.init(stdout, io) else stdout;
+    var err_out = if (@TypeOf(stderr) == std.Io.File) Stream.init(stderr, io) else stderr;
 
     if (std.mem.eql(u8, format, "json")) {
         // Use an arena allocator for the JSON tree structure (ObjectMaps, Arrays,

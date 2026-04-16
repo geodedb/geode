@@ -4,7 +4,7 @@ Guidelines for AI agents working in the Geode graph database codebase.
 
 ## Project Overview
 
-**Geode** is an enterprise-ready graph database implementing ISO/IEC 39075:2024 (GQL standard) with 98.6% compliance. Written primarily in Zig 0.15.1+ with Python test tooling.
+**Geode** is an enterprise-ready graph database implementing ISO/IEC 39075:2024 (GQL standard) with 98.6% compliance. Written primarily in Zig 0.16.0+ with Python test tooling.
 
 **Key stats:**
 
@@ -295,7 +295,7 @@ list.deinit(allocator);                // Allocator required
 
 ### Build Dependencies
 
-- **Zig**: 0.15.1+ required
+- **Zig**: 0.16.0+ required
 - **OpenSSL**: Required for QUIC/TLS (linked for native builds)
 - **Git submodules**: Run `git submodule update --init --recursive` for vendor/quic
 

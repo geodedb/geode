@@ -3,7 +3,7 @@
     .name = .geode,
     .version = "0.1.4",
     .fingerprint = 0x9e0aec1832a82609,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
 
     // Dependencies from gitlab.com/devnw/zig/* libraries
     .dependencies = .{

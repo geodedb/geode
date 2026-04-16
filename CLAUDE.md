@@ -264,7 +264,7 @@ make loadtest-save-baseline  # Save current results as new baseline
 
 ### Language & Style
 
-- **Language**: Zig 0.15.1+
+- **Language**: Zig 0.16.0+
 - **Comments**: Minimal unless required for clarity
 - **CANARY Markers**: Required for all implementations
 - **Memory Safety**: Proper allocation/deallocation patterns

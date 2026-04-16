@@ -153,6 +153,7 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
     _ = w.writeAll("}\n") catch return;
     const out_slice = buf[0..fbs.pos];
     // CANARY: REQ=REQ-QUALITY-GAP-406-008; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
+    // GAP-0538 (2026-04-16): Zig 0.16 removed File.writeAll — use writeStreamingAll(io, bytes).
     switch (g_sink) {
         .stderr => {
             const stderr_file = if (builtin.os.tag == .windows) blk: {
@@ -160,7 +161,7 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
                 if (h == std.os.windows.INVALID_HANDLE_VALUE) return;
                 break :blk std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
             } else std.Io.File{ .handle = std.posix.STDERR_FILENO, .flags = .{ .nonblocking = false } };
-            stderr_file.writeAll(out_slice) catch return;
+            stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), out_slice) catch return;
         },
         .buffer => |list| {
             // P2-3: Use static GPA for logger buffer

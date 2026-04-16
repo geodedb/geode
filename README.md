@@ -64,7 +64,7 @@ nix develop github:codeprosorg/geode
 #### Build from Source
 
 ```bash
-# Prerequisites: Zig 0.15.1+
+# Prerequisites: Zig 0.16.0+
 git clone https://gitlab.com/devnw/codepros/geode/geode
 cd geode
 
@@ -377,7 +377,7 @@ make setup-dev  # Installs pre-commit hooks, builds, and tests
 
 **Manual Setup:**
 
-1. **Prerequisites**: Zig 0.15.1+, Python 3.9+, Git
+1. **Prerequisites**: Zig 0.16.0+, Python 3.9+, Git
 2. **Clone Repository**: `git clone https://gitlab.com/devnw/codepros/geode/geode.git`
 3. **Install Pre-commit**: `make pre-commit-install`
 4. **Build**: `make build`
