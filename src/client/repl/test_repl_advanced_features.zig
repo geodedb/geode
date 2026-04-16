@@ -19,7 +19,6 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-
 // ============================================================================
 // Syntax Highlighting Tests
 // ============================================================================

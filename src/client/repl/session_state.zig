@@ -11,7 +11,6 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-
 // CANARY: REQ=REQ-REPL-SESSION-001; FEATURE="REPL Session Persistence"; ASPECT=Implementation; STATUS=TESTED; TEST=test_session_state; OWNER=repl; UPDATED=2025-11-17
 
 /// Session state that can be persisted

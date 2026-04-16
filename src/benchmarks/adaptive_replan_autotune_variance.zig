@@ -8,7 +8,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // Adaptive Replan Autotune Variance Envelope (S-019 / REQ-GQL-021)
 // Simulates an adaptive replan trigger loop where successive query executions
 // produce observed vs estimated cost deltas. An autotune controller adjusts a

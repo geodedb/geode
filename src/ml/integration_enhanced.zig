@@ -639,7 +639,11 @@ const RandomWalker = struct {
         _ = current;
         _ = previous;
         // Simplified sampling
-        const idx = blk: { var _rng_buf: [@sizeOf(usize)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(usize, &_rng_buf, .little); } % neighbors.len;
+        const idx = blk: {
+            var _rng_buf: [@sizeOf(usize)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(usize, &_rng_buf, .little);
+        } % neighbors.len;
         return neighbors[idx];
     }
 };
@@ -678,7 +682,12 @@ const SkipGram = struct {
                 if (!self.embeddings.contains(node)) {
                     const embedding = try self.allocator.alloc(f32, self.dimensions);
                     for (embedding) |*v| {
-                        v.* = (blk: { var _rf: [4]u8 = undefined; compat_fillRandom(&_rf); const _ri = std.mem.readInt(u32, &_rf, .little); break :blk @as(f32, @floatFromInt(_ri >> 8)) / @as(f32, @floatFromInt(@as(u32, 1) << 24)); } - 0.5) * 0.1;
+                        v.* = (blk: {
+                            var _rf: [4]u8 = undefined;
+                            compat_fillRandom(&_rf);
+                            const _ri = std.mem.readInt(u32, &_rf, .little);
+                            break :blk @as(f32, @floatFromInt(_ri >> 8)) / @as(f32, @floatFromInt(@as(u32, 1) << 24));
+                        } - 0.5) * 0.1;
                     }
                     try self.embeddings.put(node, embedding);
                 }

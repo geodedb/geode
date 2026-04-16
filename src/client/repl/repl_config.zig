@@ -8,7 +8,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;

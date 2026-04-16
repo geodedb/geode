@@ -6,7 +6,6 @@
 
 const std = @import("std");
 
-
 fn compat_sleep(ns: u64) void {
     const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
     var rem: std.os.linux.timespec = undefined;

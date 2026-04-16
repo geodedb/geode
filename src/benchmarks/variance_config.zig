@@ -8,7 +8,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // Shared helper for variance benchmarks: parses environment overrides, provides
 // minimal JSON emission, and trimming utility.
 // CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigHelper; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_VarianceConfigHelper; OWNER=tooling; UPDATED=2025-09-22

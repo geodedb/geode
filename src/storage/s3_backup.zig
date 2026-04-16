@@ -231,7 +231,11 @@ pub const S3BackupManager = struct {
 
                     // Exponential backoff with jitter
                     const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                    const jitter = blk: { var _rng_buf: [8]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2); };
+                    const jitter = blk: {
+                        var _rng_buf: [8]u8 = undefined;
+                        compat_fillRandom(&_rng_buf);
+                        break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2);
+                    };
                     std.time.sleep((delay + jitter) * 1_000_000);
                     continue;
                 };
@@ -269,7 +273,11 @@ pub const S3BackupManager = struct {
 
                 // Exponential backoff with jitter
                 const delay = self.config.retry_base_delay_ms * std.math.pow(u64, 2, retry_count);
-                const jitter = blk: { var _rng_buf: [8]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2); };
+                const jitter = blk: {
+                    var _rng_buf: [8]u8 = undefined;
+                    compat_fillRandom(&_rng_buf);
+                    break :blk std.mem.readInt(u64, &_rng_buf, .little) % (delay / 2);
+                };
                 std.time.sleep((delay + jitter) * 1_000_000);
                 continue;
             };

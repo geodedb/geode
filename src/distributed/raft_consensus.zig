@@ -5,7 +5,6 @@
 
 const std = @import("std");
 
-
 fn compat_sleep(ns: u64) void {
     const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
     var rem: std.os.linux.timespec = undefined;
@@ -64,7 +63,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -109,7 +107,11 @@ fn realNow() i64 {
     return compat_milliTimestamp();
 }
 fn realRand(max: u64) u64 {
-    return if (max == 0) 0 else blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); } % max;
+    return if (max == 0) 0 else blk: {
+        var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+        compat_fillRandom(&_rng_buf);
+        break :blk std.mem.readInt(u64, &_rng_buf, .little);
+    } % max;
 }
 pub const RealClock = struct {
     pub const instance: Clock = .{ .nowMillisFn = realNow, .randFn = realRand };

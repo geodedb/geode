@@ -914,7 +914,10 @@ fn readSerializedProperty(allocator: std.mem.Allocator, file: *std.Io.Reader) !S
 }
 
 fn readUndoEntry(allocator: std.mem.Allocator, file: *std.Io.Reader) !?UndoEntry {
-    const type_byte = file.takeByte() catch |err| switch (err) { error.EndOfStream => return null, else => return err };
+    const type_byte = file.takeByte() catch |err| switch (err) {
+        error.EndOfStream => return null,
+        else => return err,
+    };
 
     const entry_type: UndoOpType = @enumFromInt(type_byte);
 

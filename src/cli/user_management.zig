@@ -43,7 +43,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-059; FEATURE="JSON Library Migration"; ASPECT=UserManagement; STATUS=EXEMPT; OWNER=cli; UPDATED=2026-01-25
 const json_lib = @import("json");
 

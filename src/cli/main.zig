@@ -73,7 +73,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // Zig 0.16 compat: std.posix.getenv was removed; wrap std.c.getenv to return a slice.
 fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
     return if (std.c.getenv(name)) |p| std.mem.span(p) else null;
@@ -1754,7 +1753,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     const host = addr_port.next() orelse "127.0.0.1";
     const port_str = addr_port.next() orelse "3142";
     const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: Invalid port number in server address\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
@@ -1795,8 +1794,8 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
     }
 
     if (last_error) |le| {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),le) catch {};
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), le) catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
     }
 
     std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -1835,7 +1834,7 @@ fn executeQueryOnGrpc(
         .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     ) catch |err| {
         const msg = std.fmt.allocPrint(allocator, "Error: gRPC handshake failed: {}\n", .{err}) catch "Error: gRPC handshake failed\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),msg) catch {};
+        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer {
@@ -1845,7 +1844,7 @@ fn executeQueryOnGrpc(
 
     if (!hello_resp.success) {
         const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{hello_resp.error_message}) catch "Error: Authentication failed\n\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
         std.process.exit(@intFromEnum(ExitCode.auth_error));
     }
 
@@ -1932,7 +1931,7 @@ fn executeBatchQueries(
     }
 
     if (queries.items.len == 0) {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: no queries found in stdin\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: no queries found in stdin\n") catch {};
         return error.EmptyInput;
     }
 
@@ -1941,7 +1940,7 @@ fn executeBatchQueries(
     const host = addr_port.next() orelse "127.0.0.1";
     const port_str = addr_port.next() orelse "3141";
     const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: Invalid port number in server address\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
         return error.InvalidAddress;
     };
 
@@ -1960,14 +1959,14 @@ fn executeBatchQueries(
         null,
     ) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
         return error.ConnectionFailed;
     };
     defer raw_client.deinit();
 
     raw_client.connect() catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {}\n", .{err}) catch "Error: Failed to connect\n";
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
         return error.ConnectionFailed;
     };
 
@@ -2268,13 +2267,13 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const host = addr_port.next() orelse "127.0.0.1";
     const port_str = addr_port.next() orelse "3141";
     const port = std.fmt.parseInt(u16, port_str, 10) catch {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: Invalid port number in server address\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Invalid port number in server address\n") catch {};
         return error.InvalidAddress;
     };
 
     // Validate mutual TLS: if any client cert/key provided, both must be provided
     if ((client_cert_path != null) != (client_key_path != null)) {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: Both --client-cert and --client-key must be provided for mutual TLS\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Both --client-cert and --client-key must be provided for mutual TLS\n") catch {};
         return error.InvalidAddress;
     }
 
@@ -2338,8 +2337,8 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     }
 
     if (last_error) |le| {
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),le) catch {};
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\n") catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), le) catch {};
+        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
     }
 
     return error.ConnectionFailed;
@@ -2447,7 +2446,7 @@ fn executeQueryOnConnection(
     log.debug("Client sending HELLO (Protobuf)", &.{});
     writeProtoMessageViaZigClient(allocator, raw_client, .{ .hello = hello_req }) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to send HELLO: {}\n", .{err}) catch "Error: Failed to send HELLO\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
         return error.ConnectionFailed;
     };
 
@@ -2457,7 +2456,7 @@ fn executeQueryOnConnection(
 
     const hello_resp_msg = readProtoMessageViaZigClient(hello_arena.allocator(), raw_client, timeout_secs) catch |err| {
         const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to receive HELLO response: {}\n", .{err}) catch "Error: Failed to receive HELLO response\n";
-        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+        stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
         return error.ConnectionFailed;
     };
 
@@ -2469,7 +2468,7 @@ fn executeQueryOnConnection(
             log.debug("Client received HELLO response", &.{Attr.boolean("success", h.success)});
             if (!h.success) {
                 const err_msg = std.fmt.allocPrint(allocator, "Error: {s}\n\n", .{h.error_message}) catch "Error: Authentication failed\n\n";
-                stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),err_msg) catch {};
+                stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
                 return error.AuthenticationFailed;
             }
             if (h.session_id.len > 0) {
@@ -2478,7 +2477,7 @@ fn executeQueryOnConnection(
             }
         },
         else => {
-            stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Error: Unexpected response type during handshake\n") catch {};
+            stderr_handle.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: Unexpected response type during handshake\n") catch {};
             return error.AuthenticationFailed;
         },
     }
@@ -2608,11 +2607,11 @@ fn getDotNodeLabel(allocator: std.mem.Allocator, obj: std.json.ObjectMap, labels
 /// CANARY: REQ=REQ-CLI-DOT-003; FEATURE="DotFormat"; ASPECT=RowBasedOutput; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-02
 fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.ArrayList([]const u8), stdout: std.Io.File) !void {
     // Start DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"digraph G {\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"  rankdir=LR;\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"  edge [fontsize=10];\n") catch {};
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  rankdir=LR;\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  node [shape=ellipse, style=filled, fillcolor=lightblue];\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  edge [fontsize=10];\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
 
     // Track nodes and edges to avoid duplicates
     var seen_nodes = std.StringHashMap(void).init(allocator);
@@ -2643,11 +2642,11 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.Array
                     const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
                     defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
 
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"  \"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),node_id) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\" [label=\"") catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),label) catch {};
-                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\"];\n") catch {};
+                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
+                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), node_id) catch {};
+                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
+                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), label) catch {};
+                    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
                 }
             }
             // Check if this is a relationship
@@ -2662,13 +2661,13 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.Array
                     getDotIdString(allocator, obj.get("end_node")) orelse continue;
                 defer allocator.free(end_id);
 
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"  \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),start_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\" -> \"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),end_id) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\" [label=\"") catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),rel_type) catch {};
-                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\"];\n") catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"") catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), start_id) catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" -> \"") catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), end_id) catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"") catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), rel_type) catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n") catch {};
             }
 
             _ = col_idx; // Suppress unused variable warning
@@ -2676,7 +2675,7 @@ fn outputDotFormatFromRows(allocator: std.mem.Allocator, rows: []const std.Array
     }
 
     // End DOT graph
-    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"}\n") catch {};
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n") catch {};
 }
 
 fn formatJsonValueCompact(allocator: std.mem.Allocator, val: std.json.Value) ![]u8 {
@@ -3050,7 +3049,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     if (non_interactive) {
         const stderr_file = std.Io.File{ .handle = getStderrHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
-        stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
+        stderr_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Non-interactive shell mode is not supported. Use 'geode query' for scripted execution.\n") catch {};
         std.process.exit(@intFromEnum(ExitCode.usage_error));
     }
 
@@ -3531,17 +3530,17 @@ fn cmdAuthLogin(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) 
         return;
     };
     const stdout_file = std.Io.File{ .handle = stdout_handle, .flags = .{ .nonblocking = false } };
-    stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),msg) catch {};
+    stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
     if (save_session) {
         saveCredentials(allocator, creds) catch |err| {
             std.debug.print("Warning: Could not save credentials: {s}\n", .{@errorName(err)});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"Session token saved to ~/.geode/credentials.json\n") catch {};
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Session token saved to ~/.geode/credentials.json\n") catch {};
     } else {
         const token_msg = try std.fmt.allocPrint(allocator, "Session token: {s}\nUse --save-session to persist credentials locally\n", .{auth_result.session_token});
         defer allocator.free(token_msg);
-        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),token_msg) catch {};
+        stdout_file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), token_msg) catch {};
     }
 }
 
@@ -3659,8 +3658,8 @@ fn cmdAuthToken(allocator: std.mem.Allocator) !void {
 
     // Output the content to stdout
     const stdout_fd = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
-    try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),content);
+    try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), content);
     if (content.len == 0 or content[content.len - 1] != '\n') {
-        try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(),"\n");
+        try stdout_fd.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
     }
 }

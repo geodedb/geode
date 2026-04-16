@@ -517,7 +517,6 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
         const type_name = try allocator.alloc(u8, type_name_len);
         try reader.readSliceAll(type_name);
 
-
         // Create type metadata
         var type_meta = annotations.TypeMetadata.init(allocator, type_name);
 
@@ -540,7 +539,6 @@ pub fn loadCatalog(catalog: *SchemaCatalog) !void {
 
             const field_name = try allocator.alloc(u8, field_name_len);
             try reader.readSliceAll(field_name);
-
 
             var field_meta = annotations.FieldMetadata{
                 .field_name = field_name,

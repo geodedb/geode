@@ -152,7 +152,12 @@ const AdaptiveSampler = struct {
 
         if (self.current_sample_size >= self.max_sample_size) {
             // Reservoir sampling
-            const rand = blk: { var _rf: [8]u8 = undefined; compat_fillRandom(&_rf); const _ri = std.mem.readInt(u64, &_rf, .little); break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53)); };
+            const rand = blk: {
+                var _rf: [8]u8 = undefined;
+                compat_fillRandom(&_rf);
+                const _ri = std.mem.readInt(u64, &_rf, .little);
+                break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
+            };
             if (rand < @as(f64, @floatFromInt(self.max_sample_size)) / @as(f64, @floatFromInt(self.total_seen))) {
                 return true;
             }
@@ -163,7 +168,12 @@ const AdaptiveSampler = struct {
         const target_rate = @as(f64, @floatFromInt(self.max_sample_size)) / @as(f64, @floatFromInt(self.total_seen));
         self.sample_rate = @min(1.0, target_rate * 1.1); // 10% buffer
 
-        const rand = blk: { var _rf: [8]u8 = undefined; compat_fillRandom(&_rf); const _ri = std.mem.readInt(u64, &_rf, .little); break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53)); };
+        const rand = blk: {
+            var _rf: [8]u8 = undefined;
+            compat_fillRandom(&_rf);
+            const _ri = std.mem.readInt(u64, &_rf, .little);
+            break :blk @as(f64, @floatFromInt(_ri >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));
+        };
         if (rand < self.sample_rate) {
             self.current_sample_size += 1;
             return true;

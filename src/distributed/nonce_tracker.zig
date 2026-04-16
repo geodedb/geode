@@ -76,7 +76,11 @@ pub const NonceTracker = struct {
 
     /// Generate a cryptographically random nonce suitable for embedding in a frame.
     pub fn generateNonce() u64 {
-        return blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
+        return blk: {
+            var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(u64, &_rng_buf, .little);
+        };
     }
 };
 

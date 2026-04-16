@@ -59,7 +59,6 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
-
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE Key Management"; ASPECT=KeyManagement; STATUS=TESTED; TEST=tde_tests; OWNER=security; UPDATED=2025-11-12
 
 /// AES-256 key size in bytes

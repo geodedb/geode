@@ -937,7 +937,11 @@ pub const SimpleShardManager = struct {
     }
 
     pub fn addShard(self: *ShardManager, node_id: u64, address: []const u8) !void {
-        const shard_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
+        const shard_id = blk: {
+            var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(u64, &_rng_buf, .little);
+        };
 
         try self.consistent_hash.addNode(.{
             .id = node_id,
@@ -1001,8 +1005,16 @@ pub const SimpleShardManager = struct {
         shard.state = .splitting;
 
         // Create two new shards
-        const new_shard1_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
-        const new_shard2_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
+        const new_shard1_id = blk: {
+            var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(u64, &_rng_buf, .little);
+        };
+        const new_shard2_id = blk: {
+            var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(u64, &_rng_buf, .little);
+        };
 
         // Split the key range
         // In a real implementation, this would be based on actual key distribution
@@ -1053,7 +1065,11 @@ pub const SimpleShardManager = struct {
         }
 
         // Create merged shard
-        const merged_id = blk: { var _rng_buf: [@sizeOf(u64)]u8 = undefined; compat_fillRandom(&_rng_buf); break :blk std.mem.readInt(u64, &_rng_buf, .little); };
+        const merged_id = blk: {
+            var _rng_buf: [@sizeOf(u64)]u8 = undefined;
+            compat_fillRandom(&_rng_buf);
+            break :blk std.mem.readInt(u64, &_rng_buf, .little);
+        };
 
         try self.shards.put(merged_id, .{
             .id = merged_id,

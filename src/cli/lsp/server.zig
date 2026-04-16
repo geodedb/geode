@@ -808,10 +808,10 @@ pub const Server = struct {
             if (diag.severity) |sev| {
                 try buffer.appendSlice(alloc, ",\"severity\":");
                 {
-                var _tmp_buf: [64]u8 = undefined;
-                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{@intFromEnum(sev)}) catch return error.OutOfMemory;
-                try buffer.appendSlice(alloc, _tmp_str);
-            }
+                    var _tmp_buf: [64]u8 = undefined;
+                    const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{@intFromEnum(sev)}) catch return error.OutOfMemory;
+                    try buffer.appendSlice(alloc, _tmp_str);
+                }
             }
 
             try buffer.appendSlice(alloc, ",\"message\":\"");
