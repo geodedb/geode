@@ -23,12 +23,19 @@ tests/data_*/
 typescript
 
 **/.venv/*
-# Audit test output files
+# Audit test output files — GAP-0738 / SEC-AUD-02 (2026-04-16)
+# These are generated logs and signing keys.  Never commit them.
 /audit_*.json
 /audit_*.jsonl
 audit.jsonl
 audit.jsonl.pub
 audit.jsonl.key
+**/audit.jsonl
+**/audit.jsonl.pub
+**/audit.jsonl.key
+# Generic catch-all for signing keys beside logs
+**/*.jsonl.key
+**/*.jsonl.pub
 
 # Stress test data
 stress_data_integration/
