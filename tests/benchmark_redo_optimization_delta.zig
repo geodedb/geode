@@ -12,7 +12,6 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-
 // CANARY: REQ=REQ-GQL-022; FEATURE="Storage Snapshot Load"; ASPECT=GraphStoreLoadOptimizationDeltaVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness; BENCH=BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 // Benchmark target (S-016): Guard snapshot load optimization delta stability
 // Acceptance: speedup CV<=0.18, p95/mean<=1.35 across N samples; mean speedup >=1.00 (non-regression)

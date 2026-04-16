@@ -1,6 +1,5 @@
 const std = @import("std");
 
-
 // Zig 0.16 compat helpers for test code
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };

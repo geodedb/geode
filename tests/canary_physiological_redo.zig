@@ -34,7 +34,6 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
     return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
 }
 
-
 // CANARY: REQ=REQ-GQL-022; FEATURE="GraphStore Snapshot Load"; ASPECT=LoadCorrectnessAndVariance; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness; BENCH=BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 
 const NODE_COUNT: usize = 4096;

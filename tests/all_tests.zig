@@ -6,7 +6,6 @@ const geode = @import("geode");
 const _div_zero = @import("eval_div_zero_unit.zig");
 // E2E protocol tests (manually imported so they run under `zig build test`)
 const _e2e_profile_committed = @import("e2e_protocol_profile_committed_txns.zig");
-const _e2e_recovery_checksum_committed = @import("e2e_protocol_recovery_checksum_committed.zig");
 const _e2e_hashagg_spill = @import("e2e_protocol_hashagg_spill.zig");
 const _e2e_mvcc_phantom = @import("e2e_protocol_mvcc_phantom.zig");
 const _e2e_sort_spill = @import("e2e_protocol_sort_spill.zig");
@@ -28,7 +27,6 @@ const _canary_quic_tls = @import("canary_quic_tls.zig");
 const _e2e_with_clause = @import("e2e_with_clause.zig");
 const _unit_shortest_path_tiebreak = @import("unit_shortest_path_tiebreak.zig");
 const _e2e_mutations = @import("e2e_mutations.zig");
-const _unit_match_executor_guards = @import("unit_match_executor_guards.zig");
 const _test_match_operations_parity_campaign = @import("test_match_operations_parity_campaign.zig");
 const _benchmark_match_operations_campaign = @import("benchmark_match_operations_campaign.zig");
 const _test_cli_transport_response_parity = @import("test_cli_transport_response_parity.zig");

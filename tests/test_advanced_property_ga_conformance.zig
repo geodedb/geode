@@ -2,7 +2,6 @@ const std = @import("std");
 const geode = @import("geode");
 const schema = @import("schema");
 
-
 // Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
 fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
     var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;

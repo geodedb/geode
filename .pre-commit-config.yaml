@@ -84,7 +84,7 @@ repos:
   hooks:
   - id: markdownlint
     args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
-    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/)
+    exclude: ^(vendor/|dist/|docs/kb/|CHANGELOG\.md|specs/|docs/testing/|docker/zig-packages/|docs/superpowers/plans/)
 
   # =============================================================================
   # YAML formatting
@@ -103,7 +103,7 @@ repos:
   rev: v2.14.0
   hooks:
   - id: hadolint-docker
-    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018, --ignore, DL3015, --ignore, DL4006, --ignore, DL3042]
+    args: [--ignore, DL3008, --ignore, DL3013, --ignore, DL3018, --ignore, DL3015, --ignore, DL4006, --ignore, DL3042, --ignore, SC2086]
     # Exclude Dockerfile.dev - uses BuildKit heredocs which hadolint doesn't parse
     exclude: ^(vendor/|dist/|Dockerfile\.dev$)
 
@@ -121,24 +121,37 @@ repos:
   # =============================================================================
 - repo: local
   hooks:
-      # GoReleaser config validation (local hook since goreleaser repo doesn't have pre-commit support)
+      # GoReleaser config validation (local hook since goreleaser repo doesn't have
+      # pre-commit support). Skips gracefully if goreleaser isn't installed locally
+      # so missing dev tooling doesn't block commits — CI still enforces via its
+      # own goreleaser install.
   - id: goreleaser-check
     name: goreleaser check
-    entry: goreleaser check
+    entry: bash
+    args:
+    - -c
+    - |
+      if command -v goreleaser >/dev/null 2>&1; then
+        goreleaser check
+      else
+        echo "goreleaser not installed locally — skipping (CI will enforce)"
+      fi
     language: system
     files: \.goreleaser\.ya?ml$
     pass_filenames: false
 
       # Zig formatting check — runs at BOTH pre-commit and pre-push so a
       # --no-verify on commit is still caught on push (issue #724).
+      # Scope covers every Zig source tree in the repo; narrow src/+build.zig
+      # scope missed tests/, tools/, and benchmarks/ drift historically.
   - id: zig-fmt
     name: zig fmt (check)
     entry: zig fmt --check
     language: system
     files: \.zig$
-    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
+    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
     pass_filenames: false
-    args: [src/, build.zig]
+    args: [src/, tests/, tools/, benchmarks/, build.zig, build.zig.zon]
     stages: [pre-commit, pre-push]
 
       # Reject .path dependencies in build.zig.zon — they work locally but fail

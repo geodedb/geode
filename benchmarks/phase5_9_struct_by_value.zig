@@ -11,7 +11,7 @@ const testing = std.testing;
 const CostEstimate = struct {
     rows: f64,
     width: u32,
-    _padding: u32 = 0,  // Explicit padding to match alignment
+    _padding: u32 = 0, // Explicit padding to match alignment
     startup_cost: f64,
     total_cost: f64,
     memory_usage: f64,
@@ -121,11 +121,7 @@ test "Benchmark: CostEstimate struct passing - 1000 iterations" {
     std.debug.print("By value:    {} ns\n", .{by_value_time});
     std.debug.print("By pointer:  {} ns\n", .{by_pointer_time});
     std.debug.print("Ratio: {d}x\n", .{ratio});
-    std.debug.print("Assessment: {s}\n", .{
-        if (ratio > 1.05) "✅ Pointer is >5% faster - optimization recommended"
-        else if (ratio < 0.95) "⚠️ Pointer is slower - keep by-value"
-        else "➖ No significant difference (<5%) - keep current implementation"
-    });
+    std.debug.print("Assessment: {s}\n", .{if (ratio > 1.05) "✅ Pointer is >5% faster - optimization recommended" else if (ratio < 0.95) "⚠️ Pointer is slower - keep by-value" else "➖ No significant difference (<5%) - keep current implementation"});
 
     // Pass if results are reasonable (no assertion, just measurement)
     try testing.expect(true);

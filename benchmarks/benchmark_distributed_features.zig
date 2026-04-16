@@ -162,8 +162,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         const num_docs: u64 = 1000;
         var i: u64 = 0;
         while (i < num_docs) : (i += 1) {
-            const content = try std.fmt.allocPrint(allocator,
-                "Document {} contains various words including lorem ipsum dolor sit amet consectetur adipiscing elit", .{i});
+            const content = try std.fmt.allocPrint(allocator, "Document {} contains various words including lorem ipsum dolor sit amet consectetur adipiscing elit", .{i});
             defer allocator.free(content);
             try index.indexDocument(i, content);
         }
@@ -181,8 +180,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         // Pre-index documents
         var i: u64 = 0;
         while (i < 5000) : (i += 1) {
-            const content = try std.fmt.allocPrint(allocator,
-                "The quick brown fox jumps over the lazy dog. Document {} has unique content with keywords alpha beta gamma delta epsilon zeta eta theta", .{i});
+            const content = try std.fmt.allocPrint(allocator, "The quick brown fox jumps over the lazy dog. Document {} has unique content with keywords alpha beta gamma delta epsilon zeta eta theta", .{i});
             defer allocator.free(content);
             try index.indexDocument(i, content);
         }
@@ -218,11 +216,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         // Build large corpus
         var i: u64 = 0;
         while (i < 10000) : (i += 1) {
-            const content = try std.fmt.allocPrint(allocator,
-                "Article {} discusses {s} and {s} in the context of {s}",
-                .{ i, if (i % 3 == 0) "technology" else "science",
-                   if (i % 5 == 0) "innovation" else "research",
-                   if (i % 7 == 0) "development" else "discovery" });
+            const content = try std.fmt.allocPrint(allocator, "Article {} discusses {s} and {s} in the context of {s}", .{ i, if (i % 3 == 0) "technology" else "science", if (i % 5 == 0) "innovation" else "research", if (i % 7 == 0) "development" else "discovery" });
             defer allocator.free(content);
             try index.indexDocument(i, content);
         }
@@ -288,8 +282,7 @@ fn benchmarkLeiden(allocator: std.mem.Allocator) !void {
 
         const elapsed = timer.read();
         const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
-        std.debug.print("  Small graph (100 nodes): {d:.1} ms, {} communities, modularity={d:.3}\n",
-            .{ ms, result.communities.len, result.modularity });
+        std.debug.print("  Small graph (100 nodes): {d:.1} ms, {} communities, modularity={d:.3}\n", .{ ms, result.communities.len, result.modularity });
     }
 
     // Benchmark: Medium graph (1000 nodes)
@@ -327,11 +320,7 @@ fn benchmarkLeiden(allocator: std.mem.Allocator) !void {
 
             // Add weak inter-community edge
             if (c < num_communities - 1) {
-                try edges.append(.{
-                    .source = start,
-                    .target = (c + 1) * nodes_per_comm,
-                    .weight = 0.1
-                });
+                try edges.append(.{ .source = start, .target = (c + 1) * nodes_per_comm, .weight = 0.1 });
             }
         }
 
@@ -353,8 +342,7 @@ fn benchmarkLeiden(allocator: std.mem.Allocator) !void {
 
         const elapsed = timer.read();
         const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
-        std.debug.print("  Medium graph (1000 nodes): {d:.1} ms, {} communities\n",
-            .{ ms, result.communities.len });
+        std.debug.print("  Medium graph (1000 nodes): {d:.1} ms, {} communities\n", .{ ms, result.communities.len });
     }
 
     std.debug.print("\n", .{});
@@ -447,8 +435,7 @@ fn benchmarkWCOJ(allocator: std.mem.Allocator) !void {
 
         const elapsed = timer.read();
         const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
-        std.debug.print("  Two-way join (1000x1000): {d:.1} ms, {} results, {} comparisons\n",
-            .{ ms, result.tuples.len, executor.stats.comparisons });
+        std.debug.print("  Two-way join (1000x1000): {d:.1} ms, {} results, {} comparisons\n", .{ ms, result.tuples.len, executor.stats.comparisons });
     }
 
     // Benchmark: Three-way triangle join
