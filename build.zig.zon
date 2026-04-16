@@ -87,7 +87,7 @@
 
         // CLI framework - Cobra/Viper-class command-line interface
         .cli = .{
-            .url = "git+https://gitlab.com/devnw/zig/cli.git#357cea90d789c5be3e072a845f2802abb210b80a",
+            .url = "git+https://gitlab.com/devnw/zig/cli.git#3ef74d085fdd526953c746a11e2d9dc94314388d",
             .hash = "geode_client_zig-0.2.1-8ysbV3WSCAAIIUBiEyLeaeZLIK9KBnjXzD87PMvgEioL",
         },
 
