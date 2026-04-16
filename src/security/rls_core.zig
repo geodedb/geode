@@ -45,6 +45,14 @@ const Attr = logging.Attr;
 const RLS_POLICY_CACHE_MAX_SIZE = 10_000; // Maximum cached policy evaluations
 const RLS_POLICY_CACHE_TTL_MS = 60_000; // Cache TTL: 60 seconds (1 minute)
 
+// CANARY: REQ=REQ-RLS-EXPR-VM-BOUNDS; FEATURE="RLSBytecodeVM"; ASPECT=MemorySafety; STATUS=TESTED; TEST=test_rls_vm_bounds.zig; OWNER=security; UPDATED=2026-04-16
+// GAP-0723 / SEC-RLS-01: fixed VM stack depth.  The compiler enforces that
+// no compiled policy exceeds this bound; the VM also guards every push at
+// runtime with `error.StackOverflow` and every pop with
+// `error.StackUnderflow`, so even a corrupted / adversarial bytecode payload
+// can't write beyond the stack.
+const RLS_STACK_DEPTH: usize = 64;
+
 // Type definitions that would normally come from other modules
 pub const ValueType = enum {
     null,
@@ -191,6 +199,38 @@ pub const RLSEngine = struct {
             jump_if_true = 0x42, // Pop and jump if true
             // Return
             ret = 0xFF, // Return top of stack as result
+
+            // GAP-0723 / SEC-RLS-01: safe byte → Opcode conversion.
+            // Zig 0.16 removed std.meta.intToEnum, and `@enumFromInt` on an
+            // unknown u8 is UB in release mode.  This explicit lookup keeps
+            // the VM fail-closed on corrupted or adversarial bytecode.
+            pub fn fromByte(byte: u8) ?Opcode {
+                return switch (byte) {
+                    0x00 => .nop,
+                    0x01 => .push_const,
+                    0x02 => .push_true,
+                    0x03 => .push_false,
+                    0x04 => .push_null,
+                    0x05 => .pop,
+                    0x10 => .load_row,
+                    0x11 => .load_user,
+                    0x12 => .load_session,
+                    0x20 => .eq,
+                    0x21 => .neq,
+                    0x22 => .lt,
+                    0x23 => .gt,
+                    0x24 => .lte,
+                    0x25 => .gte,
+                    0x30 => .op_and,
+                    0x31 => .op_or,
+                    0x32 => .op_not,
+                    0x40 => .jump,
+                    0x41 => .jump_if_false,
+                    0x42 => .jump_if_true,
+                    0xFF => .ret,
+                    else => null,
+                };
+            }
         };
     };
 
@@ -631,7 +671,13 @@ pub const RLSEngine = struct {
         return try self.context_evaluator.evaluate(expr.raw, row, context);
     }
 
-    // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=EXEMPT; OWNER=security; UPDATED=2025-12-30
+    // CANARY: REQ=REQ-RLS-EXPR-004; FEATURE="RLSExpressionCompilation"; ASPECT=BytecodeVM; STATUS=TESTED; TEST=test_rls_vm_bounds.zig; OWNER=security; UPDATED=2026-04-16
+    // GAP-0723 / SEC-RLS-01 (2026-04-16): bytecode VM now bounds-checks every
+    // push/pop, returns `error.StackOverflow`/`error.StackUnderflow` on OOB,
+    // and validates every opcode byte via `std.meta.intToEnum` before dispatch.
+    // Callers (evaluateExpression and checkRowAccess*) must treat VM errors as
+    // DENY — see `evaluateExpression` where any `!bool` error short-circuits
+    // to `return false`.  Regression test: tests/test_rls_vm_bounds.zig.
     fn evaluateCompiledExpression(
         self: *Self,
         expr: *CompiledExpression,
@@ -639,43 +685,57 @@ pub const RLSEngine = struct {
         context: *auth.SecurityContext,
     ) !bool {
         const Opcode = CompiledExpression.Opcode;
-        var stack: [64]Value = undefined;
+        var stack: [RLS_STACK_DEPTH]Value = undefined;
         var sp: usize = 0; // Stack pointer
 
         var pc: usize = 0; // Program counter
         while (pc < expr.bytecode.len) {
-            const opcode: Opcode = @enumFromInt(expr.bytecode[pc]);
+            // GAP-0723: validate opcode byte before dispatch.  `@enumFromInt`
+            // on an unknown u8 is UB in release mode.  We accept only the
+            // explicit tag values declared on Opcode; anything else returns
+            // error.InvalidOpcode so the VM fails closed.
+            const opcode: Opcode = Opcode.fromByte(expr.bytecode[pc]) orelse {
+                return error.InvalidOpcode;
+            };
             pc += 1;
 
             switch (opcode) {
                 .nop => {},
                 .push_const => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.constants.len) {
+                        if (sp >= stack.len) return error.StackOverflow;
                         stack[sp] = expr.constants[idx];
                         sp += 1;
                     }
                 },
                 .push_true => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .{ .boolean = true };
                     sp += 1;
                 },
                 .push_false => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .{ .boolean = false };
                     sp += 1;
                 },
                 .push_null => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
                     sp += 1;
                 },
                 .pop => {
-                    if (sp > 0) sp -= 1;
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
                 },
                 .load_row => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.constants.len) {
+                        if (sp >= stack.len) return error.StackOverflow;
                         const field_name = switch (expr.constants[idx]) {
                             .string => |s| s,
                             else => "",
@@ -689,15 +749,18 @@ pub const RLSEngine = struct {
                     }
                 },
                 .load_user => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     // Push current user ID as integer
                     stack[sp] = .{ .integer = @intCast(context.user.id) };
                     sp += 1;
                 },
                 .load_session => {
-                    // CANARY: REQ=REQ-RLS-SESSION-001; FEATURE="RLSSessionAccess"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-01-30
+                    // CANARY: REQ=REQ-RLS-SESSION-001; FEATURE="RLSSessionAccess"; ASPECT=Security; STATUS=TESTED; OWNER=security; UPDATED=2026-04-16
                     // Load session variable by index into constants table
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
+                    if (sp >= stack.len) return error.StackOverflow;
                     if (idx < expr.constants.len) {
                         const var_name = switch (expr.constants[idx]) {
                             .string => |s| s,
@@ -728,67 +791,62 @@ pub const RLSEngine = struct {
                     sp += 1;
                 },
                 .eq => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                    sp += 1;
                 },
                 .neq => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
+                    sp += 1;
                 },
                 .lt, .gt, .lte, .gte => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        const cmp = self.compareValues(a, b);
-                        const result = switch (opcode) {
-                            .lt => cmp < 0,
-                            .gt => cmp > 0,
-                            .lte => cmp <= 0,
-                            .gte => cmp >= 0,
-                            else => false,
-                        };
-                        stack[sp] = .{ .boolean = result };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    const cmp = self.compareValues(a, b);
+                    const result = switch (opcode) {
+                        .lt => cmp < 0,
+                        .gt => cmp > 0,
+                        .lte => cmp <= 0,
+                        .gte => cmp >= 0,
+                        else => false,
+                    };
+                    stack[sp] = .{ .boolean = result };
+                    sp += 1;
                 },
                 .op_and => {
-                    if (sp >= 2) {
-                        const b = self.valueToBool(stack[sp - 1]);
-                        const a = self.valueToBool(stack[sp - 2]);
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = a and b };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = self.valueToBool(stack[sp - 1]);
+                    const a = self.valueToBool(stack[sp - 2]);
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = a and b };
+                    sp += 1;
                 },
                 .op_or => {
-                    if (sp >= 2) {
-                        const b = self.valueToBool(stack[sp - 1]);
-                        const a = self.valueToBool(stack[sp - 2]);
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = a or b };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = self.valueToBool(stack[sp - 1]);
+                    const a = self.valueToBool(stack[sp - 2]);
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = a or b };
+                    sp += 1;
                 },
                 .op_not => {
-                    if (sp >= 1) {
-                        const a = self.valueToBool(stack[sp - 1]);
-                        sp -= 1;
-                        stack[sp] = .{ .boolean = !a };
-                        sp += 1;
-                    }
+                    if (sp < 1) return error.StackUnderflow;
+                    const a = self.valueToBool(stack[sp - 1]);
+                    sp -= 1;
+                    stack[sp] = .{ .boolean = !a };
+                    sp += 1;
                 },
                 .jump => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.jump_table.len) {
@@ -796,26 +854,26 @@ pub const RLSEngine = struct {
                     }
                 },
                 .jump_if_false => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (sp > 0) {
-                        sp -= 1;
-                        if (!self.valueToBool(stack[sp])) {
-                            if (idx < expr.jump_table.len) {
-                                pc = expr.jump_table[idx];
-                            }
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
+                    if (!self.valueToBool(stack[sp])) {
+                        if (idx < expr.jump_table.len) {
+                            pc = expr.jump_table[idx];
                         }
                     }
                 },
                 .jump_if_true => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (sp > 0) {
-                        sp -= 1;
-                        if (self.valueToBool(stack[sp])) {
-                            if (idx < expr.jump_table.len) {
-                                pc = expr.jump_table[idx];
-                            }
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
+                    if (self.valueToBool(stack[sp])) {
+                        if (idx < expr.jump_table.len) {
+                            pc = expr.jump_table[idx];
                         }
                     }
                 },
@@ -1026,7 +1084,15 @@ pub const RLSEngine = struct {
             };
 
             if (expr) |e| {
-                const result = self.evaluateExpressionWithUsername(e, row, username) catch continue;
+                // GAP-0723 / SEC-RLS-01 (2026-04-16): propagate VM errors as
+                // the caller's error.  The old code did `catch continue`,
+                // silently skipping this policy and potentially letting the
+                // user through if no other restrictive policy existed.  The
+                // expected behaviour when bytecode is corrupt, truncated, or
+                // exceeds the stack is DENY — so return the error and let
+                // the match loop's `catch false` at match_operations.zig
+                // turn it into a user-visible deny.
+                const result = try self.evaluateExpressionWithUsername(e, row, username);
 
                 if (policy.permissive) {
                     if (result) any_permissive_allows = true;
@@ -1067,6 +1133,9 @@ pub const RLSEngine = struct {
     }
 
     /// Bytecode VM evaluation using a username string instead of SecurityContext.
+    // GAP-0723 / SEC-RLS-01 (2026-04-16): same hardening as
+    // evaluateCompiledExpression — bounds-checked push/pop, fail-closed on
+    // stack OOB, safe opcode decoding via std.meta.intToEnum.
     fn evaluateCompiledExpressionWithUsername(
         self: *Self,
         expr: *CompiledExpression,
@@ -1074,43 +1143,54 @@ pub const RLSEngine = struct {
         username: []const u8,
     ) !bool {
         const Opcode = CompiledExpression.Opcode;
-        var stack: [64]Value = undefined;
+        var stack: [RLS_STACK_DEPTH]Value = undefined;
         var sp: usize = 0;
 
         var pc: usize = 0;
         while (pc < expr.bytecode.len) {
-            const opcode: Opcode = @enumFromInt(expr.bytecode[pc]);
+            // GAP-0723: validate opcode before dispatch (avoid UB from @enumFromInt).
+            const opcode: Opcode = Opcode.fromByte(expr.bytecode[pc]) orelse {
+                return error.InvalidOpcode;
+            };
             pc += 1;
 
             switch (opcode) {
                 .nop => {},
                 .push_const => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.constants.len) {
+                        if (sp >= stack.len) return error.StackOverflow;
                         stack[sp] = expr.constants[idx];
                         sp += 1;
                     }
                 },
                 .push_true => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .{ .boolean = true };
                     sp += 1;
                 },
                 .push_false => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .{ .boolean = false };
                     sp += 1;
                 },
                 .push_null => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
                     sp += 1;
                 },
                 .pop => {
-                    if (sp > 0) sp -= 1;
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
                 },
                 .load_row => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.constants.len) {
+                        if (sp >= stack.len) return error.StackOverflow;
                         const field_name = switch (expr.constants[idx]) {
                             .string => |s| s,
                             else => "",
@@ -1124,99 +1204,94 @@ pub const RLSEngine = struct {
                     }
                 },
                 .load_user => {
+                    if (sp >= stack.len) return error.StackOverflow;
                     // Push hashed username as integer (matches cache key derivation).
                     stack[sp] = .{ .integer = @intCast(std.hash.Wyhash.hash(0, username)) };
                     sp += 1;
                 },
                 .load_session => {
                     // No session available in the username-only path; push null.
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     _ = idx;
+                    if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
                     sp += 1;
                 },
                 .eq => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.valuesEqual(a, b) };
+                    sp += 1;
                 },
                 .neq => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = !self.valuesEqual(a, b) };
+                    sp += 1;
                 },
                 .lt => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.compareValues(a, b) < 0 };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.compareValues(a, b) < 0 };
+                    sp += 1;
                 },
                 .gt => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.compareValues(a, b) > 0 };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.compareValues(a, b) > 0 };
+                    sp += 1;
                 },
                 .lte => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.compareValues(a, b) <= 0 };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.compareValues(a, b) <= 0 };
+                    sp += 1;
                 },
                 .gte => {
-                    if (sp >= 2) {
-                        const b = stack[sp - 1];
-                        const a = stack[sp - 2];
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = self.compareValues(a, b) >= 0 };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = stack[sp - 1];
+                    const a = stack[sp - 2];
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = self.compareValues(a, b) >= 0 };
+                    sp += 1;
                 },
                 .op_and => {
-                    if (sp >= 2) {
-                        const b = self.valueToBool(stack[sp - 1]);
-                        const a = self.valueToBool(stack[sp - 2]);
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = a and b };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = self.valueToBool(stack[sp - 1]);
+                    const a = self.valueToBool(stack[sp - 2]);
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = a and b };
+                    sp += 1;
                 },
                 .op_or => {
-                    if (sp >= 2) {
-                        const b = self.valueToBool(stack[sp - 1]);
-                        const a = self.valueToBool(stack[sp - 2]);
-                        sp -= 2;
-                        stack[sp] = .{ .boolean = a or b };
-                        sp += 1;
-                    }
+                    if (sp < 2) return error.StackUnderflow;
+                    const b = self.valueToBool(stack[sp - 1]);
+                    const a = self.valueToBool(stack[sp - 2]);
+                    sp -= 2;
+                    stack[sp] = .{ .boolean = a or b };
+                    sp += 1;
                 },
                 .op_not => {
-                    if (sp >= 1) {
-                        const a = self.valueToBool(stack[sp - 1]);
-                        sp -= 1;
-                        stack[sp] = .{ .boolean = !a };
-                        sp += 1;
-                    }
+                    if (sp < 1) return error.StackUnderflow;
+                    const a = self.valueToBool(stack[sp - 1]);
+                    sp -= 1;
+                    stack[sp] = .{ .boolean = !a };
+                    sp += 1;
                 },
                 .jump => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
                     if (idx < expr.jump_table.len) {
@@ -1224,26 +1299,26 @@ pub const RLSEngine = struct {
                     }
                 },
                 .jump_if_false => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (sp > 0) {
-                        sp -= 1;
-                        if (!self.valueToBool(stack[sp])) {
-                            if (idx < expr.jump_table.len) {
-                                pc = expr.jump_table[idx];
-                            }
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
+                    if (!self.valueToBool(stack[sp])) {
+                        if (idx < expr.jump_table.len) {
+                            pc = expr.jump_table[idx];
                         }
                     }
                 },
                 .jump_if_true => {
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
                     const idx = expr.bytecode[pc];
                     pc += 1;
-                    if (sp > 0) {
-                        sp -= 1;
-                        if (self.valueToBool(stack[sp])) {
-                            if (idx < expr.jump_table.len) {
-                                pc = expr.jump_table[idx];
-                            }
+                    if (sp == 0) return error.StackUnderflow;
+                    sp -= 1;
+                    if (self.valueToBool(stack[sp])) {
+                        if (idx < expr.jump_table.len) {
+                            pc = expr.jump_table[idx];
                         }
                     }
                 },

@@ -1021,6 +1021,7 @@ REQ-GAP-0513-DIST-SHARD-002,ShardManager,AddShard,TESTED,,,distributed,2026-04-0
 REQ-GAP-0513-DIST-SHARD-003,ShardManager,MergeError,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
 REQ-GAP-0513-DIST-SHARD-004,ShardManager,TransportCallback,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
 REQ-GAP-0513-DIST-SHARD-005,ShardManager,GetShardForKey,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
+REQ-GAP-0723-RLS-VM-BOUNDS,RLSBytecodeVMBounds,MemorySafety,TESTED,,,security,2026-04-16,tests/test_rls_vm_bounds.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapTests,AnalysisFixes,TESTED,,,testing,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -3565,14 +3566,15 @@ REQ-RLS-EXPR-001,RLSExpressionCompilation,Bytecode,EXEMPT,,,security,2025-12-30,
 REQ-RLS-EXPR-001,RLSExpressionCompilation,Compilation,TESTED,,,security,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-RLS-EXPR-002,RLSExpressionCompilation,PolicyCompilation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
 REQ-RLS-EXPR-003,RLSExpressionCompilation,ExpressionCompiler,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
-REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-004,RLSExpressionCompilation,BytecodeVM,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-RLS-EXPR-005,RLSExpressionCompilation,AttributeEvaluation,EXEMPT,,,security,2025-12-30,src/security/rls_core.zig
+REQ-RLS-EXPR-VM-BOUNDS,RLSBytecodeVM,MemorySafety,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-RLS-FAILCLOSED-001,RLSFailClosed,ExpressionEvaluation,IMPL,,,security,2026-04-05,src/security/rls_enhanced.zig
 REQ-RLS-PERM-001,RLSPermissionCheck,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-RLS-SECURITY-001,RLS,PolicyEnforcement,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-002,RLS,RowFiltering,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-RLS-SECURITY-003,RLS,PolicyCompilation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
-REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
+REQ-RLS-SESSION-001,RLSSessionAccess,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-RLS-TEMPORAL-001,RLSTemporalConstraints,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-RLS-TEST-001,RLSUnitTests,Security,TESTED,,,security,2026-01-30,src/security/rls_core.zig
 REQ-S3-BACKUP-001,S3 Cloud Backup,Unit,TESTED,,,storage,2025-10-05,tests/test_s3_backup.zig
