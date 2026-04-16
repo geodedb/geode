@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#5e2410f81fc0b3115bc6f74c44783348d7679e9a",
-            .hash = "quic-0.1.11-gBIqUUfiNQDms6KTmnr_P5_xyTcJFe_LJvVesvx_ArxD",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#628ffa9c25ccac44b0c668d4f7cacf0c0c4ac285",
+            .hash = "quic-0.1.11-gBIqUev1NQBLe6fDnBrAO_vNufKsWgMpqWZ8l_I2VtNf",
         },
 
         // =======================================================================
@@ -137,14 +137,14 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git#6c8320c9b1586cbf50d355ea17d70b30f6c0043d",
-            .hash = "uuid-0.1.0-tL1irqsGDAAcOzxBzLlKrEEsemPKKNsLhgxurxXZgSdL",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git#68dd493c61c64e75fde9e22510699e75b58186f0",
+            .hash = "uuid-0.1.0-tL1irqkGDAAQffPvTus04nMI_mW67YKIvPSibstA0oIM",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#bbba4b9a66c8dcc576f6932687a3e7a2a84974dc",
-            .hash = "wal-0.1.0-EqPqpuyTAwCE7t1JjvjLT7k8t0NFsPDFIWEJ4AEMEX1U",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#d9fd10bd43fcb5386afcb2a366142591aba2e1f9",
+            .hash = "wal-0.1.0-EqPqpuyTAwBhZKtAjHbP9pIBldteWe-q1cVbG1SrJTEG",
         },
 
         // Page-based graph storage engine
@@ -152,8 +152,8 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#ce0bafde62dd073fa830b53bc19cc6590d444514",
-            .hash = "graph_storage-0.1.0-9UyJS-VECwDBEYFoca8r6yXsXESI-nHlFfWeNWDzddhQ",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#8f2339fc564d486b58799bd97b1bc9ad1921bb44",
+            .hash = "graph_storage-0.1.0-9UyJSwFLCwCXfy8Lrd4xTIUPAJo0u-gEV8Jon3F9LtQX",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
@@ -204,8 +204,8 @@
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
         .timeseries = .{
-            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#f511a0e69cbe10978a593e46e00e8f1ab2b2b82d",
-            .hash = "timeseries-0.1.0-iAEwOq7oAwDjfmZH7eMadUIalphxV5EI5hyjl4TWsT6c",
+            .url = "git+https://gitlab.com/devnw/zig/timeseries.git#fd59d656113eb4a52bf797ebee3c086716f859cd",
+            .hash = "timeseries-0.1.0-iAEwOq7oAwCSM6qohAU4Z3x2_UC6vUtympKVu_GQJHam",
         },
 
         // Auth - HMAC chain, API keys, TOTP/MFA primitives
