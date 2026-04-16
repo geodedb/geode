@@ -50,7 +50,7 @@ fn measureRatio(allocator: std.mem.Allocator) !f64 {
 }
 
 test "tde aead overhead ratio under 5 percent" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ratio = try measureRatio(gpa.allocator());
     // Allow slight slack in debug: if >1.05 but <1.10 print warning instead of failing

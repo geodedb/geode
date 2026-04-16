@@ -346,17 +346,19 @@ pub const AuditLogger = struct {
         defer self.allocator.free(sec_path);
 
         const io_rf = std.Io.Threaded.global_single_threaded.io();
-        const pub_hex = std.Io.Dir.cwd().readFileAlloc(io_rf, pub_path, self.allocator, .limited(64)) catch |err| switch (err) {
+        const pub_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, pub_path, self.allocator, .limited(256)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
-        defer if (pub_hex) |bytes| self.allocator.free(bytes);
+        defer if (pub_hex_raw) |bytes| self.allocator.free(bytes);
+        const pub_hex: ?[]const u8 = if (pub_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
-        const sec_hex = std.Io.Dir.cwd().readFileAlloc(io_rf, sec_path, self.allocator, .limited(128)) catch |err| switch (err) {
+        const sec_hex_raw = std.Io.Dir.cwd().readFileAlloc(io_rf, sec_path, self.allocator, .limited(512)) catch |err| switch (err) {
             error.FileNotFound => null,
             else => return err,
         };
-        defer if (sec_hex) |bytes| self.allocator.free(bytes);
+        defer if (sec_hex_raw) |bytes| self.allocator.free(bytes);
+        const sec_hex: ?[]const u8 = if (sec_hex_raw) |b| std.mem.trim(u8, b, " \t\r\n") else null;
 
         if (pub_hex != null and sec_hex != null) {
             if (pub_hex.?.len != 64 or sec_hex.?.len != 128) {
@@ -2035,9 +2037,9 @@ pub const AuditLogger = struct {
     } {
         _ = self;
 
-        var output_buf = try std.ArrayList(u8).initCapacity(allocator, 1024);
-        defer output_buf.deinit(allocator);
-        const writer = output_buf.writer(allocator);
+        var output_buf: std.Io.Writer.Allocating = try .initCapacity(allocator, 1024);
+        defer output_buf.deinit();
+        const writer = &output_buf.writer;
 
         const is_windows = @import("builtin").os.tag == .windows;
 
@@ -2057,7 +2059,7 @@ pub const AuditLogger = struct {
                 .cmdlets_tested = 0,
                 .failures = 0,
                 .platform_supported = false,
-                .output = try output_buf.toOwnedSlice(allocator),
+                .output = try output_buf.toOwnedSlice(),
             };
         }
 
@@ -2088,7 +2090,7 @@ pub const AuditLogger = struct {
             .cmdlets_tested = cmdlets_tested,
             .failures = 0,
             .platform_supported = true,
-            .output = try output_buf.toOwnedSlice(allocator),
+            .output = try output_buf.toOwnedSlice(),
         };
     }
 };

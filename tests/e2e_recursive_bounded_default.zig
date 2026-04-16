@@ -32,7 +32,7 @@ test "recursive CTEs and bounded expansions default enabled" {
     try std.testing.expect(path_tracking.deterministic_ordering == true);
 
     // Test recursive frontier iteration
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

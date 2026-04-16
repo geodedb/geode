@@ -5,7 +5,7 @@ const protocol = @import("../src/protocol.zig");
 // TestCANARY_REQ_GQL_032_UniqueEnforce - verifies uniqueness constraint enforcement.
 
 test "TestCANARY_REQ_GQL_032_UniqueEnforce" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

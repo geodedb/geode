@@ -15,7 +15,7 @@ fn spawnProducer(q: *queue_mod.SignaledQueue(u32), values: []const u32) !std.Thr
 
 // Covers: blocking dequeue wakeup, FIFO ordering, tryDequeue behavior on empty and closed.
 test "TestCANARY_REQ_GQL_068_SignaledQueue" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

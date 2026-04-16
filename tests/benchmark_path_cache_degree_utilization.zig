@@ -13,7 +13,7 @@ fn simulateAccess(cache: *path_cache.PathCache, keys: [][]const u8) void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeUtilization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

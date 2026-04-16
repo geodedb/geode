@@ -19,7 +19,7 @@ test "governance: parity summary diff guard (optional)" {
     // If diff file missing, skip (not a nightly run)
     if (std.fs.cwd().openFile(diff_file_name, .{ .mode = .read_only })) |file| {
         defer file.close();
-        var buf_reader = std.io.bufferedReader(file.reader());
+        var buf_reader = std.Io.bufferedReader(file.reader());
         var in_stream = buf_reader.reader();
         var removed_count: usize = 0;
         var changed_count: usize = 0;

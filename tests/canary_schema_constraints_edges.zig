@@ -5,7 +5,7 @@ const protocol = @import("../src/protocol.zig");
 // Additional edge tests for schema constraints covering uniqueness and range checks.
 // TestCANARY_REQ_GQL_032_ConstraintUniqueViolation
 test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var sc = constraints_mod.SchemaConstraints.init(allocator);
@@ -39,7 +39,7 @@ test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
 
 // TestCANARY_REQ_GQL_032_ConstraintRange - numeric min/max enforcement
 test "TestCANARY_REQ_GQL_032_ConstraintRange" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var sc = constraints_mod.SchemaConstraints.init(allocator);

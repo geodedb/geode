@@ -27,7 +27,7 @@ fn stats(values: []i128) struct { mean: f64, stddev: f64, cv: f64, p95: i128 } {
 
 // Force spill by setting very low memory limit relative to rows.
 test "BenchmarkCANARY_REQ_GQL_012_HashAggSpillVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const runs = 36;

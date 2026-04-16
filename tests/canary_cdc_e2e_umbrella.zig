@@ -6,7 +6,7 @@ const streaming = @import("../src/streaming/cdc_enhanced.zig");
 // Deterministic: fixed seeds, no wall clock assertions.
 
 test "TestCANARY_REQ_GQL_042_CDC_E2EUmbrella" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

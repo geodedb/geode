@@ -8,6 +8,17 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
     return allocator.dupe(u8, std.mem.span(ptr));
 }
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    // Strip trailing NUL if present
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
 const pooled = @import("transport/thread_pool");
@@ -391,7 +402,7 @@ pub fn decodeExtValue(allocator: std.mem.Allocator, bytes: []const u8) !@import(
     var dummy: GraphStore = undefined;
     dummy.allocator = allocator;
 
-    var stream = std.io.fixedBufferStream(bytes);
+    var stream = std.Io.fixedBufferStream(bytes);
     return try dummy.readExtValue(stream.reader());
 }
 
@@ -3066,7 +3077,7 @@ pub const GraphStore = struct {
 
     /// Deprecated: prefer getOutgoingEdgeIds for zero-copy access.
     pub fn getEdgesFrom(self: *GraphStore, allocator: std.mem.Allocator, node_id: u64) []Edge {
-        var result = std.ArrayList(Edge){};
+        var result: std.ArrayList(Edge) = .empty;
         if (self.outgoing_edges.get(node_id)) |outgoing| {
             for (outgoing.items) |edge_id| {
                 if (self.edges.get(edge_id)) |edge| {
@@ -4189,7 +4200,7 @@ pub const GraphStore = struct {
     ///   {"type":"edge","id":N,"from":F,"to":T,"graph":"G","label":"L","properties":{}}
     /// Returns owned bytes that the caller must free with `allocator.free`.
     pub fn serializeSnapshot(self: *GraphStore, allocator: std.mem.Allocator) ![]u8 {
-        var buf = std.ArrayList(u8){};
+        var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
 
         // Serialize nodes as JSON-lines
@@ -5815,7 +5826,7 @@ test "getGlobalStore initializes adapter from data dir override" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(dir_path);
 
     setDataDirOverride(testing.allocator, dir_path);
@@ -5834,7 +5845,7 @@ test "QueryReadSession clones nodes from global store" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(dir_path);
 
     const store = try initGlobalStore(testing.allocator, dir_path);
@@ -5871,7 +5882,7 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(dir_path);
 
     const store = try initGlobalStore(testing.allocator, dir_path);
@@ -5905,10 +5916,11 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     const graph_dir_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}", .{ dir_path, std.fmt.bytesToHex(graph_uuid, .lower) });
     defer testing.allocator.free(graph_dir_path);
 
-    var graph_dir = try std.Io.Dir.cwd().openDir(graph_dir_path, .{});
-    defer graph_dir.close();
-    try testing.expectError(error.FileNotFound, graph_dir.access("id_map.dat", .{}));
-    try testing.expectError(error.FileNotFound, graph_dir.access("adapter_labels.dat", .{}));
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var graph_dir = try std.Io.Dir.cwd().openDir(io, graph_dir_path, .{});
+    defer graph_dir.close(io);
+    try testing.expectError(error.FileNotFound, graph_dir.access(io, "id_map.dat", .{}));
+    try testing.expectError(error.FileNotFound, graph_dir.access(io, "adapter_labels.dat", .{}));
 
     try store.loadFromFile();
 
@@ -5932,7 +5944,7 @@ test "rollback removes adapter-backed state before reload" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(dir_path);
 
     const store = try initGlobalStore(testing.allocator, dir_path);
@@ -5963,7 +5975,7 @@ test "listGraphNames merges persisted adapter graphs with local cache" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const dir_path = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(dir_path);
 
     const store = try initGlobalStore(testing.allocator, dir_path);

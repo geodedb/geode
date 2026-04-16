@@ -170,7 +170,7 @@ pub fn main() !void {
     defer if (verbose_env) |v| allocator.free(v);
     const verbose = verbose_env != null;
     var verbose_storage: [4096]u8 = undefined;
-    var verbose_fbs = std.io.fixedBufferStream(&verbose_storage);
+    var verbose_fbs = std.Io.fixedBufferStream(&verbose_storage);
     var verbose_written = false;
     var aggregate_fail_mask: u32 = 0;
     var run_index: usize = 0;
@@ -273,7 +273,7 @@ pub fn main() !void {
     const cv_mad = mad(cvs_copy, median_cv, allocator);
 
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     const want_txt = blk_format: {
         if (getEnvVarOwned(allocator, "FED_LATENCY_FORMAT")) |fmt| {

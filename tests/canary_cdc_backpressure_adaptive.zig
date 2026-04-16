@@ -4,7 +4,7 @@ const cdc = @import("cdc_enhanced");
 // Simulates buffer growth & shrink cycles and validates adaptive watermark adjustments.
 
 test "TestCANARY_REQ_GQL_042_BackpressureAdaptive" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var cfg: cdc.CDCConfig = .{};

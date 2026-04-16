@@ -123,7 +123,7 @@ pub const Mac = struct {
     }
 
     pub fn decode(reader: anytype) !Mac {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         if (tag != 0x08) return error.InvalidMacTag;
 
         var octets: [6]u8 = undefined;
@@ -231,7 +231,7 @@ test "MAC address comparison" {
 test "MAC address encoding/decoding" {
     const testing = std.testing;
     var buffer: [8]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test round-trip encoding
     const original_mac = try Mac.fromString("12:34:56:78:9A:BC");

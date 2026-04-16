@@ -237,7 +237,7 @@ pub const IpAddr = union(enum) {
     }
 
     pub fn decode(reader: anytype) !IpAddr {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         return switch (tag) {
             0x04 => {
                 var octets: [4]u8 = undefined;
@@ -247,7 +247,7 @@ pub const IpAddr = union(enum) {
             0x05 => {
                 var segments: [8]u16 = undefined;
                 for (&segments) |*segment| {
-                    segment.* = try reader.readInt(u16, .big);
+                    segment.* = try reader.takeInt(u16, .big);
                 }
                 return IpAddr{ .v6 = IPv6Addr{ .segments = segments } };
             },
@@ -301,7 +301,7 @@ test "IPv6 address parsing and formatting" {
 test "IP address encoding/decoding" {
     const testing = std.testing;
     var buffer: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test IPv4 round-trip
     const ipv4 = try IpAddr.fromString("192.168.1.100");

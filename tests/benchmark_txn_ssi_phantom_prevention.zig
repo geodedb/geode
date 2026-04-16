@@ -8,7 +8,7 @@ fn Stats(comptime N: usize) type {
 }
 
 test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var rnd = std.rand.DefaultPrng.init(0xdeadbeef);
@@ -80,6 +80,6 @@ test "BenchmarkCANARY_REQ_GQL_013_SSIPhantomPrevention" {
     try std.testing.expect(cv < 0.35);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 5.0);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{s}\n", .{try std.fmt.allocPrint(allocator", "{\"benchmark\":\"txn_ssi_phantom_prevention\",\"mean_ns\":{d},\"cv\":{d:.3},\"p95_ns\":{d}}", .{ @as(u64, @intFromFloat(mean)), cv, p95 })});
 }

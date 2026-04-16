@@ -26,7 +26,7 @@ fn makeQuery(ret_items: usize, allocator: std.mem.Allocator) geode.planner.ast.Q
 }
 
 test "TestCANARY_REQ_GQL_024_PlanCostModelFactors" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const small = makeQuery(1, allocator);
@@ -40,7 +40,7 @@ test "TestCANARY_REQ_GQL_024_PlanCostModelFactors" {
 
 // Variance envelope for cost model evaluation runtime (stability guard)
 test "BenchmarkCANARY_REQ_GQL_024_PlanCostModelVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const runs: usize = 80;

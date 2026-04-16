@@ -3,7 +3,7 @@ const gpu = @import("gpu");
 const pagerank = gpu.pagerank_kernels;
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

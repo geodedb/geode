@@ -10,7 +10,7 @@ const txn_mod = @import("txn");
 // NOTE: Storage layer not fully implemented; we simulate key catalog inside test harness referencing txn ids.
 
 test "TestCANARY_REQ_GQL_013_SSIPhantomPrevention" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -11,7 +11,7 @@ fn nextRand() u64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheHitMissVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache.PathCache.init(gpa.allocator(), 512);
     defer cache.deinit();

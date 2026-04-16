@@ -33,7 +33,7 @@ fn simulateFlushBatch(batch: usize, page_size: usize) u64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_SnapshotFlushBatchVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const Runs = 30;
     var samples: [Runs]u64 = undefined;

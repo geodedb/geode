@@ -1,7 +1,7 @@
 const std = @import("std");
 
 test "backup and restore round-trip with CRC verification" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

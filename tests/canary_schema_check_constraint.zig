@@ -5,7 +5,7 @@ const protocol = @import("../src/protocol.zig");
 // TestCANARY_REQ_GQL_032_CheckConstraint - validates simple check constraint expressions key=value and key!=value.
 
 test "TestCANARY_REQ_GQL_032_CheckConstraint" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

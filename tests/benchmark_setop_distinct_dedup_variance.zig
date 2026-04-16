@@ -43,6 +43,6 @@ test "BenchmarkCANARY_REQ_GQL_015_SetOpDistinctDedupVarianceEnvelope" {
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
     try std.testing.expect(cv < 0.21);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.45);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"setop_distinct_dedup_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

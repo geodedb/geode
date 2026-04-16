@@ -3,7 +3,7 @@ const parser = @import("src/gql/parser.zig");
 const lexer = @import("src/gql/lexer.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
 

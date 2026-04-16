@@ -4,7 +4,7 @@ const registry_mod = @import("../src/multitenancy/registry.zig");
 // CANARY: REQ=REQ-GQL-050; FEATURE="Multi-Tenancy"; ASPECT=TenantRegistryBasic; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_050_TenantRegistryBasic; OWNER=dist; UPDATED=2025-09-21
 
 test "TestCANARY_REQ_GQL_050_TenantRegistryBasic" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

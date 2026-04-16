@@ -7,7 +7,7 @@ const graph_storage = geode.graph_common;
 // CANARY: REQ=REQ-MATERIALIZED-VIEWS-001; FEATURE="Materialized View Management"; ASPECT=Testing; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-10-05
 
 test "materialized view manager initialization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -31,7 +31,7 @@ test "materialized view manager initialization" {
 }
 
 test "create materialized view with manual refresh" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -62,7 +62,7 @@ test "create materialized view with manual refresh" {
 }
 
 test "create materialized view with auto scheduled refresh" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -92,7 +92,7 @@ test "create materialized view with auto scheduled refresh" {
 }
 
 test "duplicate view creation should fail" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -113,7 +113,7 @@ test "duplicate view creation should fail" {
 }
 
 test "max views limit enforcement" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -134,7 +134,7 @@ test "max views limit enforcement" {
 }
 
 test "drop materialized view" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -157,7 +157,7 @@ test "drop materialized view" {
 }
 
 test "drop non-existent view should fail" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -170,7 +170,7 @@ test "drop non-existent view should fail" {
 }
 
 test "materialized view data operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -203,7 +203,7 @@ test "materialized view data operations" {
 }
 
 test "dependency tracker operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -232,7 +232,7 @@ test "dependency tracker operations" {
 }
 
 test "refresh scheduler operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -264,7 +264,7 @@ test "refresh scheduler operations" {
 }
 
 test "view metadata statistics tracking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -306,7 +306,7 @@ test "view metadata statistics tracking" {
 }
 
 test "view index management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -329,7 +329,7 @@ test "view index management" {
 }
 
 test "query compatibility checking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -353,7 +353,7 @@ test "query compatibility checking" {
 }
 
 test "manager statistics aggregation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

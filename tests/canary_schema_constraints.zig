@@ -5,7 +5,7 @@ const protocol = @import("../src/protocol.zig");
 // TestCANARY_REQ_GQL_032_ConstraintEnforce - ensures required property and type violation are detected.
 
 test "TestCANARY_REQ_GQL_032_ConstraintEnforce" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

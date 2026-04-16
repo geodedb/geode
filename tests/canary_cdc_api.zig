@@ -5,7 +5,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // Validates API promotion: beginTxn/endTxn attribution and isRunning semantics.
 
 test "TestCANARY_REQ_GQL_042_CDC_API" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

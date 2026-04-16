@@ -5,7 +5,7 @@ const seed = @import("src/planner/cost_seed.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=PlannerAdaptiveBiasApplication; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_075_PlannerAdaptiveBiasApplication" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var reg = seed.AdaptiveBiasRegistry{};

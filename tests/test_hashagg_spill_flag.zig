@@ -4,7 +4,7 @@ const exec = @import("../src/exec.zig");
 // CANARY: REQ=REQ-GQL-012; FEATURE="GROUP BY/Aggregation"; ASPECT=HashAggSpillFlag; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_012_HashAggSpillFlag; OWNER=engine; UPDATED=2025-09-21
 
 test "TestCANARY_REQ_GQL_012_HashAggSpillFlag" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -1,10 +1,21 @@
 const std = @import("std");
 const geode = @import("geode");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const Value = geode.value_types.Value;
-var test_mutex: std.Thread.Mutex = .{};
+var test_mutex: std.Io.Mutex = .init;
 
 // CANARY: REQ=REQ-BUG-LIMITATIONS-001; FEATURE="LimitationsFixes"; ASPECT=UnitTest; STATUS=TESTED; TEST=tests/test_limitations_fixes.zig; OWNER=engine; UPDATED=2026-03-13
 // Unit tests for 6 bug fixes: parameterized MATCH+relationship traversal,
@@ -24,7 +35,7 @@ const Harness = struct {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
-        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -74,8 +85,8 @@ fn expectValueInt(v: Value, expected: i64) !void {
 // The underlying fix ensures parameter env uses .param_names/.param_values.
 // ---------------------------------------------------------------------------
 test "bug5: MATCH + relationship traversal with hardcoded literals" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -113,8 +124,8 @@ test "bug5: MATCH + relationship traversal with hardcoded literals" {
 // Tests that CREATE (a)-[:REL]->(b) RETURN preserves property values.
 // ---------------------------------------------------------------------------
 test "bug4: inline CREATE with relationships preserves property values" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -132,8 +143,8 @@ test "bug4: inline CREATE with relationships preserves property values" {
 }
 
 test "advanced property constructors round-trip through CREATE storage" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -195,8 +206,8 @@ test "advanced property constructors round-trip through CREATE storage" {
 }
 
 test "advanced property setters round-trip through MATCH storage" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -267,8 +278,8 @@ test "advanced property setters round-trip through MATCH storage" {
 }
 
 test "advanced values serialize in result json without placeholders" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -295,8 +306,8 @@ test "advanced values serialize in result json without placeholders" {
 }
 
 test "advanced all-properties replacement preserves extended values" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -370,8 +381,8 @@ test "advanced all-properties replacement preserves extended values" {
 // Tests that matching two nodes then creating a relationship works.
 // ---------------------------------------------------------------------------
 test "bug3: MATCH two nodes then CREATE relationship between them" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -408,8 +419,8 @@ test "bug3: MATCH two nodes then CREATE relationship between them" {
 // Tests that DISTINCT works correctly with labels() function.
 // ---------------------------------------------------------------------------
 test "bug6: RETURN DISTINCT with labels() function returns distinct labels" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -445,8 +456,8 @@ test "bug6: RETURN DISTINCT with labels() function returns distinct labels" {
 // LIMIT is tested separately; here we verify the execution path.
 // ---------------------------------------------------------------------------
 test "bug2: literal LIMIT returns correct number of rows" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -474,8 +485,8 @@ test "bug2: literal LIMIT returns correct number of rows" {
 // Tests that MATCH ... MERGE ... parses and executes without error.
 // ---------------------------------------------------------------------------
 test "bug1: MERGE after MATCH parses and executes" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

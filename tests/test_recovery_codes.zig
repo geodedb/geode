@@ -5,7 +5,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-AUTH-004; FEATURE="MFA recovery code"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_AUTH_004_Recovery; OWNER=security; UPDATED=2025-09-26
 
 test "recovery code single-use" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
 

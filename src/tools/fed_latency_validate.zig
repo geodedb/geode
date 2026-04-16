@@ -169,7 +169,7 @@ pub fn main() !void {
 
     if (want_txt) {
         var out_buf: [256]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&out_buf);
+        var fbs = std.Io.fixedBufferStream(&out_buf);
         try fbs.writer().print("FED_VALIDATE lines={d} failures={d} strict={s}\n", .{ total_lines, failures, if (strict) "yes" else "no" });
         const written = fbs.getWritten();
         const stdout = if (builtin.os.tag == .windows)
@@ -181,7 +181,7 @@ pub fn main() !void {
         try stdout.writeAll(written);
     } else {
         var out_buf: [256]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&out_buf);
+        var fbs = std.Io.fixedBufferStream(&out_buf);
         // Escape literal braces with doubling for Zig format string
         try fbs.writer().print("{{\"lines\":{d},\"failures\":{d},\"strict\":{s}}}\n", .{ total_lines, failures, if (strict) "true" else "false" });
         const written = fbs.getWritten();
@@ -199,7 +199,7 @@ pub fn main() !void {
 
 test "fed_latency_validate_basic" {
     const sample = "{\"aggregate\":\"A\",\"runs\":5,\"promotion_ready\":true,\"avg_cv\":0.1,\"cv_q1\":0.05,\"cv_q3\":0.2,\"cv_iqr\":0.15,\"cv_mad\":0.01}\n";
-    var fbs = std.io.fixedBufferStream(sample);
+    var fbs = std.Io.fixedBufferStream(sample);
     // Just ensure reader compiles; do a tiny read.
     var r = fbs.reader();
     var tiny: [1]u8 = undefined;

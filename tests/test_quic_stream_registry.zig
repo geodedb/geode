@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const testing = std.testing;
 const thread_pool = @import("transport/thread_pool");
 
@@ -205,7 +228,7 @@ fn runWorkerTask(ctx: *anyopaque, runtime: *thread_pool.TaskContext) void {
 
 fn workerMain(context: *WorkerContext) void {
     while (!context.ready.load(.acquire)) {
-        std.Thread.sleep(1);
+        compat_sleep(1);
     }
 
     for (0..context.iterations) |iteration| {

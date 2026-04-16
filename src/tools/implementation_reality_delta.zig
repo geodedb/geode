@@ -73,11 +73,11 @@ pub fn main() !void {
     }
 
     const now_ts = compat_timestamp();
-    var added_idx = std.ArrayListUnmanaged(usize){};
+    var added_idx = std.ArrayList(usize).empty;
     defer if (added_idx.items.len > 0) added_idx.deinit(allocator);
-    var promo_idx = std.ArrayListUnmanaged(usize){};
+    var promo_idx = std.ArrayList(usize).empty;
     defer if (promo_idx.items.len > 0) promo_idx.deinit(allocator);
-    var promo_prior = std.ArrayListUnmanaged([]const u8){};
+    var promo_prior = std.ArrayList([]const u8).empty;
     defer if (promo_prior.items.len > 0) promo_prior.deinit(allocator);
 
     for (curr_rows, 0..) |row, ci| {

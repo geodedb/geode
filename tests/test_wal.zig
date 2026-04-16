@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const testing = std.testing;
 const geode = @import("geode");
 const graph_store = geode.graph_store;
@@ -9,14 +32,14 @@ const txn_undo_log = geode.txn_undo_log;
 // Issue #445: WAL unit tests — append, replay, checkpoint, CRC, concurrent writes
 
 fn getTempPath(allocator: std.mem.Allocator) ![]const u8 {
-    return try std.fmt.allocPrint(allocator, "/tmp/geode_test_wal_{d}.log", .{std.time.milliTimestamp()});
+    return try std.fmt.allocPrint(allocator, "/tmp/geode_test_wal_{d}.log", .{compat_milliTimestamp()});
 }
 
 test "WAL: init creates file" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -31,7 +54,7 @@ test "WAL: append and read back" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -60,7 +83,7 @@ test "WAL: replay on fresh store" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     // Phase 1: Write some WAL records
     {
@@ -119,7 +142,7 @@ test "WAL: checkpoint and truncation" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
@@ -150,7 +173,7 @@ test "WAL: CRC32 integrity validation" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     // Write a record
     {
@@ -166,12 +189,12 @@ test "WAL: CRC32 integrity validation" {
 
     // Corrupt a byte in the middle of the file
     {
-        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-        defer file.close();
-        const size = try file.getEndPos();
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(io_fs, path, .{ .mode = .read_write });
+        defer file.close(io_fs);
+        const size = try file.length(io_fs);
         if (size > 10) {
-            try file.seekTo(10);
-            try file.writeAll(&[_]u8{0xFF});
+            try file.writePositionalAll(io_fs, &[_]u8{0xFF}, 10);
         }
     }
 
@@ -191,7 +214,7 @@ test "WAL: multiple record types roundtrip" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     // Write various record types
     {
@@ -257,7 +280,7 @@ test "WAL: needsCheckpoint respects byte threshold" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -282,7 +305,7 @@ test "WAL: needsCheckpoint respects time threshold" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -299,11 +322,11 @@ test "WAL: needsCheckpoint respects time threshold" {
 
     // Should need checkpoint with time threshold of 1ms (already elapsed)
     // Set last_checkpoint_ms to the past to simulate time passing
-    w.last_checkpoint_ms = std.time.milliTimestamp() - 5000; // 5 seconds ago
+    w.last_checkpoint_ms = compat_milliTimestamp() - 5000; // 5 seconds ago
     try testing.expect(w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 1000)); // 1s threshold
 
     // Reset to now — should NOT trigger with 60s threshold
-    w.last_checkpoint_ms = std.time.milliTimestamp();
+    w.last_checkpoint_ms = compat_milliTimestamp();
     try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 60_000));
 }
 
@@ -311,14 +334,14 @@ test "WAL: needsCheckpoint time threshold ignored when no data written" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
 
     // No data written, even with time threshold exceeded — should NOT checkpoint
     // (there's nothing to checkpoint)
-    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000; // 2 minutes ago
+    w.last_checkpoint_ms = compat_milliTimestamp() - 120_000; // 2 minutes ago
     try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 1000));
 }
 
@@ -326,7 +349,7 @@ test "WAL: checkpoint resets time and byte counters" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var store = try graph_store.GraphStore.init(allocator);
     defer store.deinit();
@@ -350,7 +373,7 @@ test "WAL: checkpoint resets time and byte counters" {
     try testing.expect(w.bytesSinceCheckpoint() > 0);
 
     // Simulate old timestamp
-    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000;
+    w.last_checkpoint_ms = compat_milliTimestamp() - 120_000;
     const old_time = w.last_checkpoint_ms;
 
     // Truncate (which is what checkpoint calls internally)
@@ -370,7 +393,7 @@ test "WAL: time-based checkpoint triggers with small data below byte threshold" 
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -389,7 +412,7 @@ test "WAL: time-based checkpoint triggers with small data below byte threshold" 
     try testing.expect(!w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, 0));
 
     // Simulate 61 seconds passing (beyond CHECKPOINT_INTERVAL_MS of 60s)
-    w.last_checkpoint_ms = std.time.milliTimestamp() - 61_000;
+    w.last_checkpoint_ms = compat_milliTimestamp() - 61_000;
 
     // NOW should need checkpoint due to time threshold
     try testing.expect(w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, wal_mod.CHECKPOINT_INTERVAL_MS));
@@ -399,7 +422,7 @@ test "WAL: walNeedsCheckpointHook uses time threshold" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     // Initialize global WAL
     wal_mod.g_wal_storage = try wal_mod.WriteAheadLog.init(allocator, path);
@@ -422,7 +445,7 @@ test "WAL: walNeedsCheckpointHook uses time threshold" {
     try testing.expect(!needs_now);
 
     // Simulate time passing
-    w.last_checkpoint_ms = std.time.milliTimestamp() - 120_000; // 2 minutes ago
+    w.last_checkpoint_ms = compat_milliTimestamp() - 120_000; // 2 minutes ago
 
     // Now hook should return true (time threshold exceeded with pending data)
     const needs_later = w.needsCheckpoint(wal_mod.CHECKPOINT_BYTE_THRESHOLD, wal_mod.CHECKPOINT_INTERVAL_MS);
@@ -433,14 +456,14 @@ test "WAL: last_checkpoint_ms initialized on creation" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
-    const before = std.time.milliTimestamp();
+    const before = compat_milliTimestamp();
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
 
-    const after = std.time.milliTimestamp();
+    const after = compat_milliTimestamp();
 
     // last_checkpoint_ms should be set to approximately now
     try testing.expect(w.last_checkpoint_ms >= before);
@@ -451,7 +474,7 @@ test "WAL: LSN monotonically increasing" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     var w = try wal_mod.WriteAheadLog.init(allocator, path);
     defer w.deinit();
@@ -479,7 +502,7 @@ test "WAL: mutation callback integration" {
     const allocator = testing.allocator;
     const path = try getTempPath(allocator);
     defer allocator.free(path);
-    defer std.fs.cwd().deleteFile(path) catch {};
+    defer std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {};
 
     // Initialize global WAL
     wal_mod.g_wal_storage = try wal_mod.WriteAheadLog.init(allocator, path);

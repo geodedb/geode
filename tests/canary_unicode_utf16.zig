@@ -10,7 +10,7 @@ const unicode = geode.unicode;
 pub fn main() !void {}
 
 test "TestCANARY_REQ_GQL_UNICODE_012_Utf8ToUtf16RoundTrip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const samples = [_][]const u8{ "", "hello", "Grüße", "𝄞mus𝄢ic", "Straße" };
@@ -24,7 +24,7 @@ test "TestCANARY_REQ_GQL_UNICODE_012_Utf8ToUtf16RoundTrip" {
 }
 
 test "TestCANARY_REQ_GQL_UNICODE_013_Utf16ToUtf8RoundTrip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Single explicit surrogate pair U+1F600 GRINNING FACE 😀 (0xD83D 0xDE00)
@@ -38,7 +38,7 @@ test "TestCANARY_REQ_GQL_UNICODE_013_Utf16ToUtf8RoundTrip" {
 }
 
 test "TestCANARY_REQ_GQL_UNICODE_014_Wtf8Lossy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Ill-formed WTF-8: Lone surrogate 0xD800 sequence encoded in WTF-8 as 0xED 0xA0 0x80

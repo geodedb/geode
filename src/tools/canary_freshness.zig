@@ -123,7 +123,7 @@ pub fn main() !void {
         }
     }
     const rep = evaluate(entries_buf.items, now_days);
-    const out = std.io.getStdOut().writer();
+    const out = std.Io.getStdOut().writer();
     try out.print("{\"freshness\":{\"warn\":{d},\"fail\":{d}}}\n", .{ rep.warn, rep.fail });
     if (rep.fail > 0) return error.StaleEntries;
 }

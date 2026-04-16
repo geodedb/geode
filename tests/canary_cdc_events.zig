@@ -5,7 +5,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // Verifies that events are captured when enabled, start is invoked, and flushed to memory sink.
 
 test "TestCANARY_REQ_GQL_042_CDC_EventCapture" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

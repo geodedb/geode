@@ -45,7 +45,7 @@ test "BenchmarkCANARY_REQ_GQL_069_CountMinSketch" {
     const est_ops = iterations / 4;
     const avg_est = @as(f64, @floatFromInt(total_ns_est)) / @as(f64, @floatFromInt(est_ops));
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_069_CountMinSketch\",\n  \"depth\": {d},\n  \"width\": {d},\n  \"iterations\": {d},\n  \"avg_ns_add\": {d:.2},\n  \"avg_ns_estimate\": {d:.2}\n}\n", .{ cms.depth, cms.width, iterations, avg_add, avg_est });
 
     // Performance guards (debug-friendly upper bounds)

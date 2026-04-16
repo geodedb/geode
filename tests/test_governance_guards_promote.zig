@@ -12,7 +12,7 @@ extern fn evidenceDeltaCheck(summary: *anyopaque) callconv(.Inline) anyerror!boo
 extern fn realityFreshnessCheck(summary: *anyopaque) callconv(.Inline) anyerror!bool; // symbol from governance_ci.zig
 
 test "TestCANARY_REQ_GQL_010_EvidenceDeltaGuard" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Create synthetic previous and current status files.
     // prev has IDs 001 & 002; curr has 001,002 (no removal) -> pass; then curr missing 002 -> fail.

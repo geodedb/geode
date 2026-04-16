@@ -8,7 +8,7 @@ const kms = @import("security/kms_remote");
 // CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap; OWNER=security; UPDATED=2025-09-26
 
 test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xBEEFCAFE);
     try server.start(8876);
@@ -29,7 +29,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_Generate" {
 }
 
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xABCD1234);
     try server.start(8877);
@@ -47,7 +47,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_AttestationStub" {
 }
 
 test "TestCANARY_REQ_GQL_SEC_UNWRAP_001_PrivilegedUnwrap" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x11223344);
     try server.start(8878);

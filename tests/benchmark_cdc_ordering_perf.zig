@@ -5,7 +5,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 // Measures sequence assignment throughput under single-threaded load.
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -22,6 +22,6 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf" {
     const end_ns = std.time.nanoTimestamp();
     const elapsed = end_ns - start_ns;
     const per_sec = @as(f64, @floatFromInt(iterations)) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0);
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_042_CDC_OrderingPerf\",\"events\":{d},\"ns\":{d},\"eps\":{d:.2}\n", .{ iterations, elapsed, per_sec });
 }

@@ -25,7 +25,7 @@ fn simulateConsistencyCheck(keys_a: []const []const u8, dirs_a: []const bool, ke
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     _ = gpa.allocator(); // allocator unused for now
 
@@ -65,7 +65,7 @@ pub fn main() !void {
 
     // Output JSON line for aggregation / governance.
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_024_FederationMismatchFalsePositiveGuard\",");
     try w.print("\"iterations\":{},", .{iterations});

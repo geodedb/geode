@@ -10,10 +10,9 @@ fn renderToSlice(
     view: cli_transport_response.TransportResponseView,
 ) ![]u8 {
     var out_buf: [8192]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
-    const writer = fbs.writer();
-    try cli_transport_response.renderTransportResponse(allocator, writer, format, rows_text, rows_json, view);
-    return try allocator.dupe(u8, fbs.getWritten());
+    var writer = std.Io.Writer.fixed(&out_buf);
+    try cli_transport_response.renderTransportResponse(allocator, &writer, format, rows_text, rows_json, view);
+    return try allocator.dupe(u8, writer.buffered());
 }
 
 fn deinitTextRows(allocator: std.mem.Allocator, rows: *std.ArrayList(std.ArrayList([]const u8))) void {

@@ -28,7 +28,7 @@ fn stats(values: []i128) struct { mean: f64, stddev: f64, cv: f64, p95: i128 } {
 
 // Benchmark envelope ensuring AVG aggregation build+emit timings remain stable.
 test "BenchmarkCANARY_REQ_GQL_012_AvgVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const runs = 48;

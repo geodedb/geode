@@ -4,7 +4,7 @@ const path_cache = @import("../src/planner/path_cache.zig");
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheLookup; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_PathCacheLookup; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheLookupVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 
 test "TestCANARY_REQ_GQL_021_PathCacheLookup" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache.PathCache.init(gpa.allocator(), 4);
     defer cache.deinit();

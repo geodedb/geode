@@ -679,62 +679,68 @@ pub fn saveUndoLog(allocator: std.mem.Allocator, log: *UndoLog) !void {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{});
-    defer file.close();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().createFile(io_fs, file_path, .{});
+    defer file.close(io_fs);
+
+    var file_writer_buf: [4096]u8 = undefined;
+    var file_writer = file.writer(io_fs, &file_writer_buf);
+    const w = &file_writer.interface;
 
     // Write number of entries
     var count_buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &count_buf, log.entries.items.len, .little);
-    _ = try file.write(&count_buf);
+    try w.writeAll(&count_buf);
 
     // Write each entry (simplified binary format)
     for (log.entries.items) |entry| {
-        try writeUndoEntry(file, entry);
+        try writeUndoEntry(w, entry);
     }
+    try w.flush();
 }
 
-fn writeU32(file: std.Io.File, value: u32) !void {
+fn writeU32(file: *std.Io.Writer, value: u32) !void {
     var buf: [4]u8 = undefined;
     std.mem.writeInt(u32, &buf, value, .little);
-    _ = try file.write(&buf);
+    try file.writeAll(&buf);
 }
 
-fn writeU64(file: std.Io.File, value: u64) !void {
+fn writeU64(file: *std.Io.Writer, value: u64) !void {
     var buf: [8]u8 = undefined;
     std.mem.writeInt(u64, &buf, value, .little);
-    _ = try file.write(&buf);
+    try file.writeAll(&buf);
 }
 
-fn writeI64(file: std.Io.File, value: i64) !void {
+fn writeI64(file: *std.Io.Writer, value: i64) !void {
     var buf: [8]u8 = undefined;
     std.mem.writeInt(i64, &buf, value, .little);
-    _ = try file.write(&buf);
+    try file.writeAll(&buf);
 }
 
-fn writeI128(file: std.Io.File, value: i128) !void {
+fn writeI128(file: *std.Io.Writer, value: i128) !void {
     var buf: [16]u8 = undefined;
     std.mem.writeInt(i128, &buf, value, .little);
-    _ = try file.write(&buf);
+    try file.writeAll(&buf);
 }
 
-fn writeF64(file: std.Io.File, value: f64) !void {
+fn writeF64(file: *std.Io.Writer, value: f64) !void {
     const bits: u64 = @bitCast(value);
     try writeU64(file, bits);
 }
 
-fn writeBool(file: std.Io.File, value: bool) !void {
+fn writeBool(file: *std.Io.Writer, value: bool) !void {
     const byte: u8 = if (value) 1 else 0;
-    _ = try file.write(&[_]u8{byte});
+    try file.writeAll(&[_]u8{byte});
 }
 
-fn writeString(file: std.Io.File, value: []const u8) !void {
+fn writeString(file: *std.Io.Writer, value: []const u8) !void {
     try writeU32(file, @intCast(value.len));
-    _ = try file.write(value);
+    try file.writeAll(value);
 }
 
-fn writeSerializedProperty(file: std.Io.File, prop: SerializedProperty) !void {
+fn writeSerializedProperty(file: *std.Io.Writer, prop: SerializedProperty) !void {
     try writeString(file, prop.key);
-    _ = try file.write(&[_]u8{prop.value_type});
+    try file.writeAll(&[_]u8{prop.value_type});
     switch (prop.value_type) {
         0 => {},
         1 => try writeString(file, prop.string_value orelse ""),
@@ -746,10 +752,10 @@ fn writeSerializedProperty(file: std.Io.File, prop: SerializedProperty) !void {
     }
 }
 
-fn writeUndoEntry(file: std.Io.File, entry: UndoEntry) !void {
+fn writeUndoEntry(file: *std.Io.Writer, entry: UndoEntry) !void {
     // Write entry type
     const entry_type: u8 = @intFromEnum(std.meta.activeTag(entry));
-    _ = try file.write(&[_]u8{entry_type});
+    try file.writeAll(&[_]u8{entry_type});
 
     switch (entry) {
         .CreateNode => |e| {
@@ -819,25 +825,28 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     const file_path = try getUndoLogFilePath(allocator);
     defer allocator.free(file_path);
 
-    const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{}) catch |err| {
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.cwd().openFile(io_fs, file_path, .{}) catch |err| {
         if (err == error.FileNotFound) return null;
         return err;
     };
-    defer file.close();
+    defer file.close(io_fs);
+
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader_obj = file.reader(io_fs, &file_reader_buf);
+    const r = &file_reader_obj.interface;
 
     var log = getGlobalUndoLog(allocator);
     log.active = true;
     log.clear();
 
     // Read number of entries
-    var count_buf: [8]u8 = undefined;
-    _ = try file.read(&count_buf);
-    const count = std.mem.readInt(u64, &count_buf, .little);
+    const count = try r.takeInt(u64, .little);
 
     // Read entries
     var i: u64 = 0;
     while (i < count) : (i += 1) {
-        const entry = try readUndoEntry(allocator, file);
+        const entry = try readUndoEntry(allocator, r);
         if (entry) |e| {
             try log.entries.append(allocator, e);
         }
@@ -846,53 +855,41 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     return log;
 }
 
-fn readU32(file: std.Io.File) !u32 {
-    var buf: [4]u8 = undefined;
-    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
-    return std.mem.readInt(u32, &buf, .little);
+fn readU32(file: *std.Io.Reader) !u32 {
+    return try file.takeInt(u32, .little);
 }
 
-fn readU64(file: std.Io.File) !u64 {
-    var buf: [8]u8 = undefined;
-    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
-    return std.mem.readInt(u64, &buf, .little);
+fn readU64(file: *std.Io.Reader) !u64 {
+    return try file.takeInt(u64, .little);
 }
 
-fn readI64(file: std.Io.File) !i64 {
-    var buf: [8]u8 = undefined;
-    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
-    return std.mem.readInt(i64, &buf, .little);
+fn readI64(file: *std.Io.Reader) !i64 {
+    return try file.takeInt(i64, .little);
 }
 
-fn readI128(file: std.Io.File) !i128 {
-    var buf: [16]u8 = undefined;
-    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
-    return std.mem.readInt(i128, &buf, .little);
+fn readI128(file: *std.Io.Reader) !i128 {
+    return try file.takeInt(i128, .little);
 }
 
-fn readF64(file: std.Io.File) !f64 {
+fn readF64(file: *std.Io.Reader) !f64 {
     const bits = try readU64(file);
     return @bitCast(bits);
 }
 
-fn readBool(file: std.Io.File) !bool {
-    var buf: [1]u8 = undefined;
-    if ((try file.readAll(&buf)) < buf.len) return error.UnexpectedEndOfFile;
-    return buf[0] != 0;
+fn readBool(file: *std.Io.Reader) !bool {
+    return (try file.takeByte()) != 0;
 }
 
-fn readString(allocator: std.mem.Allocator, file: std.Io.File) ![]u8 {
+fn readString(allocator: std.mem.Allocator, file: *std.Io.Reader) ![]u8 {
     const len = try readU32(file);
     const buf = try allocator.alloc(u8, len);
-    if ((try file.readAll(buf)) < len) return error.UnexpectedEndOfFile;
+    try file.readSliceAll(buf);
     return buf;
 }
 
-fn readSerializedProperty(allocator: std.mem.Allocator, file: std.Io.File) !SerializedProperty {
+fn readSerializedProperty(allocator: std.mem.Allocator, file: *std.Io.Reader) !SerializedProperty {
     const key = try readString(allocator, file);
-    var type_buf: [1]u8 = undefined;
-    if ((try file.readAll(&type_buf)) < type_buf.len) return error.UnexpectedEndOfFile;
-    const value_type = type_buf[0];
+    const value_type = try file.takeByte();
     var prop = SerializedProperty{ .key = key, .value_type = value_type };
     switch (value_type) {
         0 => {},
@@ -916,13 +913,10 @@ fn readSerializedProperty(allocator: std.mem.Allocator, file: std.Io.File) !Seri
     return prop;
 }
 
-fn readUndoEntry(allocator: std.mem.Allocator, file: std.Io.File) !?UndoEntry {
-    var type_buf: [1]u8 = undefined;
-    const bytes_read = try file.readAll(&type_buf);
-    if (bytes_read == 0) return null;
-    if (bytes_read < type_buf.len) return error.UnexpectedEndOfFile;
+fn readUndoEntry(allocator: std.mem.Allocator, file: *std.Io.Reader) !?UndoEntry {
+    const type_byte = file.takeByte() catch |err| switch (err) { error.EndOfStream => return null, else => return err };
 
-    const entry_type: UndoOpType = @enumFromInt(type_buf[0]);
+    const entry_type: UndoOpType = @enumFromInt(type_byte);
 
     switch (entry_type) {
         .CreateNode => {
@@ -1071,8 +1065,13 @@ test "undo log persistence roundtrip for complex entries" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try tmp.dir.createFile(std.Io.Threaded.global_single_threaded.io(), "undo.bin", .{ .read = true, .truncate = true });
-    defer file.close();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try tmp.dir.createFile(io_fs, "undo.bin", .{ .read = true, .truncate = true });
+    defer file.close(io_fs);
+
+    var file_writer_buf: [4096]u8 = undefined;
+    var file_writer_obj = file.writer(io_fs, &file_writer_buf);
+    const w = &file_writer_obj.interface;
 
     const labels = [_][]const u8{ "Person", "Active" };
     const props = [_]SerializedProperty{
@@ -1105,17 +1104,20 @@ test "undo log persistence roundtrip for complex entries" {
         .label = "VIP",
     } };
 
-    try writeUndoEntry(file, entry1);
-    try writeUndoEntry(file, entry2);
-    try writeUndoEntry(file, entry3);
-    try writeUndoEntry(file, entry4);
+    try writeUndoEntry(w, entry1);
+    try writeUndoEntry(w, entry2);
+    try writeUndoEntry(w, entry3);
+    try writeUndoEntry(w, entry4);
+    try w.flush();
 
-    try file.seekTo(0);
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader_obj = file.reader(io_fs, &file_reader_buf);
+    const r = &file_reader_obj.interface;
 
     var log = UndoLog.init(allocator);
     defer log.deinit();
 
-    const r1 = (try readUndoEntry(allocator, file)).?;
+    const r1 = (try readUndoEntry(allocator, r)).?;
     try log.entries.append(allocator, r1);
     switch (r1) {
         .SetNodeProperty => |e| {
@@ -1128,7 +1130,7 @@ test "undo log persistence roundtrip for complex entries" {
         else => try std.testing.expect(false),
     }
 
-    const r2 = (try readUndoEntry(allocator, file)).?;
+    const r2 = (try readUndoEntry(allocator, r)).?;
     try log.entries.append(allocator, r2);
     switch (r2) {
         .DeleteNode => |e| {
@@ -1143,7 +1145,7 @@ test "undo log persistence roundtrip for complex entries" {
         else => try std.testing.expect(false),
     }
 
-    const r3 = (try readUndoEntry(allocator, file)).?;
+    const r3 = (try readUndoEntry(allocator, r)).?;
     try log.entries.append(allocator, r3);
     switch (r3) {
         .DeleteEdge => |e| {
@@ -1154,7 +1156,7 @@ test "undo log persistence roundtrip for complex entries" {
         else => try std.testing.expect(false),
     }
 
-    const r4 = (try readUndoEntry(allocator, file)).?;
+    const r4 = (try readUndoEntry(allocator, r)).?;
     try log.entries.append(allocator, r4);
     switch (r4) {
         .AddNodeLabel => |e| {

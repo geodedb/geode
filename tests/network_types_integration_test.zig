@@ -108,7 +108,7 @@ test "Network types error handling and edge cases" {
 test "Network types binary encoding round-trip" {
     const allocator = testing.allocator;
     var buffer: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test IP address encoding
     const ip = try IpAddr.fromString("192.168.1.100");

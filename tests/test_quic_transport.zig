@@ -250,7 +250,7 @@ test "session cleanup - deinitSourcedFileCache called on deinit" {
 
 test "session lifecycle - memory safety with transaction operations" {
     // Use GeneralPurposeAllocator to detect memory leaks
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const leaked = gpa.deinit();
         testing.expect(leaked == .ok) catch |err| {

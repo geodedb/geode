@@ -168,11 +168,11 @@ pub fn latLonEncode(coord: LatLon, writer: anytype) !void {
 }
 
 pub fn latLonDecode(reader: anytype) !LatLon {
-    const tag = try reader.readByte();
+    const tag = try reader.takeByte();
     if (tag != 0x12) return error.InvalidLatLonTag;
 
-    const lat = @as(f64, @bitCast(try reader.readInt(u64, .little)));
-    const lon = @as(f64, @bitCast(try reader.readInt(u64, .little)));
+    const lat = @as(f64, @bitCast(try reader.takeInt(u64, .little)));
+    const lon = @as(f64, @bitCast(try reader.takeInt(u64, .little)));
 
     return LatLon.initUnchecked(lat, lon);
 }
@@ -262,12 +262,12 @@ pub fn latLonAltEncode(coord: LatLonAlt, writer: anytype) !void {
 }
 
 pub fn latLonAltDecode(reader: anytype) !LatLonAlt {
-    const tag = try reader.readByte();
+    const tag = try reader.takeByte();
     if (tag != 0x13) return error.InvalidLatLonAltTag;
 
-    const lat = @as(f64, @bitCast(try reader.readInt(u64, .little)));
-    const lon = @as(f64, @bitCast(try reader.readInt(u64, .little)));
-    const alt = @as(f64, @bitCast(try reader.readInt(u64, .little)));
+    const lat = @as(f64, @bitCast(try reader.takeInt(u64, .little)));
+    const lon = @as(f64, @bitCast(try reader.takeInt(u64, .little)));
+    const alt = @as(f64, @bitCast(try reader.takeInt(u64, .little)));
 
     return LatLonAlt.initUnchecked(lat, lon, alt);
 }
@@ -699,22 +699,24 @@ test "Geographic encoding and decoding" {
     const coord = try latLonFromCoords(40.7128, -74.0060);
 
     var buffer: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try latLonEncode(coord, fbs.writer());
-    fbs.pos = 0;
-    const decoded_coord = try latLonDecode(fbs.reader());
+    try latLonEncode(coord, &writer);
+    const coord_len = writer.buffered().len;
+    var reader = std.Io.Reader.fixed(buffer[0..coord_len]);
+    const decoded_coord = try latLonDecode(&reader);
 
     try testing.expectEqual(coord.lat, decoded_coord.lat);
     try testing.expectEqual(coord.lon, decoded_coord.lon);
 
     // Test LatLonAlt encoding/decoding
-    fbs.pos = 0;
+    var writer2 = std.Io.Writer.fixed(&buffer);
     const coord_alt = try latLonAltFromCoords(40.7128, -74.0060, 100.0);
 
-    try latLonAltEncode(coord_alt, fbs.writer());
-    fbs.pos = 0;
-    const decoded_coord_alt = try latLonAltDecode(fbs.reader());
+    try latLonAltEncode(coord_alt, &writer2);
+    const alt_len = writer2.buffered().len;
+    var reader2 = std.Io.Reader.fixed(buffer[0..alt_len]);
+    const decoded_coord_alt = try latLonAltDecode(&reader2);
 
     try testing.expectEqual(coord_alt.lat, decoded_coord_alt.lat);
     try testing.expectEqual(coord_alt.lon, decoded_coord_alt.lon);

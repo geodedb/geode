@@ -9,7 +9,7 @@ const mfa = @import("../src/security/mfa.zig");
 pub fn main() !void {}
 
 test "TestCANARY_REQ_GQL_MFA_003_MfaPolicyEval_basic" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -51,7 +51,7 @@ fn makeUser(sm: *auth.SecurityManager, alloc: std.mem.Allocator, name: []const u
 }
 
 test "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var sm = try auth.SecurityManager.init(alloc);
@@ -65,7 +65,7 @@ test "TestCANARY_REQ_GQL_MFA_POLICY_001_TimeWindow" {
 }
 
 test "TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var sm = try auth.SecurityManager.init(alloc);
@@ -77,7 +77,7 @@ test "TestCANARY_REQ_GQL_MFA_POLICY_001_RiskScoreMin" {
 }
 
 test "TestCANARY_REQ_GQL_MFA_POLICY_001_ReauthInterval" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var sm = try auth.SecurityManager.init(alloc);

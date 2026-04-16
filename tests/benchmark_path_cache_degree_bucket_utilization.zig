@@ -18,7 +18,7 @@ fn makeQuery(pattern_variant: usize) planner_root.ast.Query {
 }
 
 pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const cfg = varcfg.load(allocator, "GEODE_PATHCACHE", 128, 8, 2); // increase trim edges to 2 for stability
@@ -49,7 +49,7 @@ pub fn runPathCacheDegreeBucketUtilizationVarianceEnvelope() !void {
     // Sort, trim, stats
     std.sort.pdq(f128, per_variant_means, {}, comptime std.sort.asc(f128));
     const trimmed = varcfg.trimSlice(f128, per_variant_means, cfg.trim_edges);
-    var gpa_local = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_local = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_local.deinit();
     const alloc_local = gpa_local.allocator();
     var stats = varcfg.computeStatsF128(alloc_local, trimmed);

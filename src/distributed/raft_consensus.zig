@@ -5,6 +5,13 @@
 
 const std = @import("std");
 
+
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
 fn compat_fillRandom(buf: []u8) void {
     if (comptime @import("builtin").os.tag == .linux) {
@@ -358,8 +365,8 @@ pub const PersistentStorage = struct {
     /// Atomically write current_term to {data_dir}/current_term.
     pub fn saveCurrentTerm(self: *PersistentStorage, term: u64) !void {
         try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(self.data_dir, .{});
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
+        defer dir.close(std.Io.Threaded.global_single_threaded.io());
         var buf: [32]u8 = undefined;
         const str = std.fmt.bufPrint(&buf, "{d}", .{term}) catch unreachable;
         try atomicWriteFile(dir, "current_term", str);
@@ -373,14 +380,14 @@ pub const PersistentStorage = struct {
     /// Atomically write voted_for to {data_dir}/voted_for, or delete the file if null.
     pub fn saveVotedFor(self: *PersistentStorage, voter: ?u64) !void {
         try ensureDir(self.data_dir);
-        var dir = try std.Io.Dir.cwd().openDir(self.data_dir, .{});
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), self.data_dir, .{});
+        defer dir.close(std.Io.Threaded.global_single_threaded.io());
         if (voter) |v| {
             var buf: [32]u8 = undefined;
             const str = std.fmt.bufPrint(&buf, "{d}", .{v}) catch unreachable;
             try atomicWriteFile(dir, "voted_for", str);
         } else {
-            dir.deleteFile("voted_for") catch |err| {
+            dir.deleteFile(std.Io.Threaded.global_single_threaded.io(), "voted_for") catch |err| {
                 if (err != error.FileNotFound) return err;
             };
         }
@@ -413,18 +420,18 @@ pub const PersistentStorage = struct {
     }
 
     fn readU64File(dir_path: []const u8, file_name: []const u8) !?u64 {
-        var dir = std.Io.Dir.cwd().openDir(dir_path, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        defer dir.close();
+        defer dir.close(std.Io.Threaded.global_single_threaded.io());
         const f = dir.openFile(std.Io.Threaded.global_single_threaded.io(), file_name, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        defer f.close();
+        defer f.close(std.Io.Threaded.global_single_threaded.io());
         var buf: [32]u8 = undefined;
-        const n = try f.readAll(&buf);
+        const n = try f.readPositionalAll(std.Io.Threaded.global_single_threaded.io(), &buf, 0);
         if (n == 0) return null;
         const trimmed = std.mem.trim(u8, buf[0..n], " \n\r\t");
         return std.fmt.parseInt(u64, trimmed, 10) catch null;
@@ -434,20 +441,21 @@ pub const PersistentStorage = struct {
     /// Write data to file_name atomically via write-to-temp-then-rename.
     /// SEC-D011: Crash-safe persistence -- writes to a .tmp file, fsyncs, then renames
     /// so that a crash mid-write never corrupts the final file.
-    fn atomicWriteFile(dir: std.fs.Dir, name: []const u8, data: []const u8) !void {
+    fn atomicWriteFile(dir: std.Io.Dir, name: []const u8, data: []const u8) !void {
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
         var tmp_buf: [256]u8 = undefined;
         const tmp_name = std.fmt.bufPrint(&tmp_buf, "{s}.tmp", .{name}) catch return error.FileNotFound;
 
-        const f = try dir.createFile(std.Io.Threaded.global_single_threaded.io(), tmp_name, .{});
+        const f = try dir.createFile(io_fs, tmp_name, .{});
         errdefer {
-            f.close();
-            dir.deleteFile(tmp_name) catch {};
+            f.close(io_fs);
+            dir.deleteFile(io_fs, tmp_name) catch {};
         }
-        try f.writeAll(data);
-        try f.sync();
-        f.close();
+        try f.writeStreamingAll(io_fs, data);
+        try f.sync(io_fs);
+        f.close(io_fs);
 
-        try dir.rename(tmp_name, name);
+        try dir.rename(tmp_name, dir, name, io_fs);
     }
 };
 
@@ -584,7 +592,7 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
             if (err == error.WouldBlock) {
                 retry_count += 1;
                 if (retry_count >= max_retries) return error.WouldBlock;
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                compat_sleep(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -611,7 +619,7 @@ pub fn readRaftFrame(allocator: Allocator, stream: anytype) !DecodedRaftFrame {
             if (err == error.WouldBlock) {
                 retry_count += 1;
                 if (retry_count >= max_retries) return error.WouldBlock;
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                compat_sleep(5 * std.time.ns_per_ms);
                 continue;
             }
             return err;
@@ -1235,7 +1243,7 @@ test "PersistentStorage: atomic write for saveCurrentTerm and saveVotedFor" {
 
     // Verify .tmp file does not persist (atomic rename should have cleaned up)
     var dir = try std.Io.Dir.cwd().openDir(dir_path, .{});
-    defer dir.close();
+    defer dir.close(std.Io.Threaded.global_single_threaded.io());
     const tmp_exists = dir.openFile(std.Io.Threaded.global_single_threaded.io(), "current_term.tmp", .{});
     if (tmp_exists) |f| {
         f.close();

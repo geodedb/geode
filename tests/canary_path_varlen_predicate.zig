@@ -1,5 +1,28 @@
 const std = @import("std");
 
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // Shared node struct and helper functions for tests
 const Node = struct { id: u32, value: i32, neighbors: []const u32 };
 
@@ -24,7 +47,7 @@ fn dfsCount(nodes: []const Node, current: u32, depth: u32, max_depth: u32, thres
 
 test "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate" {
     // Synthetic: we model a variable-length expansion of length 0..3 over an adjacency list with property filter value > threshold.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -48,7 +71,7 @@ test "TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate" {
 // Variance envelope: measure DFS expansion with predicate across multiple iterations.
 // CANARY: REQ=REQ-GQL-017; FEATURE="Path Execution"; ASPECT=PathVariableLengthPropertyPredicateVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicate; BENCH=BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 test "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const nodes = [_]Node{
@@ -62,10 +85,10 @@ test "BenchmarkCANARY_REQ_GQL_017_PathVariableLengthPropertyPredicateVarianceEnv
     defer alloc.free(samples);
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
-        const start = std.time.nanoTimestamp();
+        const start = compat_nanoTimestamp();
         var count: u32 = 0;
         dfsCount(&nodes, 0, 0, 3, 6, &count);
-        const end = std.time.nanoTimestamp();
+        const end = compat_nanoTimestamp();
         samples[i] = @as(u64, @intCast(end - start));
     }
     var sum: f128 = 0;

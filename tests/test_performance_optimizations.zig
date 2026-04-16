@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const testing = std.testing;
 
 // CANARY: REQ=REQ-PERF-TEST-001; FEATURE="PerformanceTests"; ASPECT=UnitTests; STATUS=IMPL; OWNER=test; UPDATED=2026-01-26
@@ -57,7 +80,7 @@ test "ThreadPool: parallel work execution" {
     // Wait for completion with timeout
     var timeout: u32 = 0;
     while (counter.load(.acquire) < num_tasks and timeout < 5000) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        compat_sleep(1 * std.time.ns_per_ms);
         timeout += 1;
     }
 
@@ -86,7 +109,7 @@ test "ThreadPool: shutdown while tasks pending" {
         fn call(context: *anyopaque) void {
             const c: *Context = @ptrCast(@alignCast(context));
             // Simulate slow work
-            std.Thread.sleep(10 * std.time.ns_per_ms);
+            compat_sleep(10 * std.time.ns_per_ms);
             _ = c.counter.fetchAdd(1, .release);
         }
     }.call;
@@ -124,7 +147,7 @@ test "ThreadPool: rejection when queue is full" {
         fn call(context: *anyopaque) void {
             const c: *Context = @ptrCast(@alignCast(context));
             // Very slow task to fill queue
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            compat_sleep(100 * std.time.ns_per_ms);
             _ = c.counter.fetchAdd(1, .release);
         }
     }.call;
@@ -190,7 +213,7 @@ test "ThreadPool: completion callback" {
     // Wait for completion
     var timeout: u32 = 0;
     while (!completion_called.load(.acquire) and timeout < 1000) {
-        std.Thread.sleep(1 * std.time.ns_per_ms);
+        compat_sleep(1 * std.time.ns_per_ms);
         timeout += 1;
     }
 
@@ -239,7 +262,7 @@ test "BoundedQueue: concurrent push/pop" {
             const context: *ProducerContext = @ptrCast(@alignCast(ctx));
             for (0..num_items) |_| {
                 while (!context.q.tryPush(1)) {
-                    std.Thread.sleep(1 * std.time.ns_per_us);
+                    compat_sleep(1 * std.time.ns_per_us);
                 }
                 _ = context.produced.fetchAdd(1, .release);
             }
@@ -258,7 +281,7 @@ test "BoundedQueue: concurrent push/pop" {
                 if (context.q.tryPop()) |_| {
                     _ = context.consumed.fetchAdd(1, .release);
                 } else {
-                    std.Thread.sleep(1 * std.time.ns_per_us);
+                    compat_sleep(1 * std.time.ns_per_us);
                 }
             }
         }
@@ -532,23 +555,23 @@ test "Performance: thread pool throughput baseline" {
         }
     }.call;
 
-    const start = std.time.nanoTimestamp();
+    const start = compat_nanoTimestamp();
 
     for (0..num_tasks) |_| {
         while (!pool.submit(.{
             .context = @ptrCast(&ctx),
             .callback = callback,
         })) {
-            std.Thread.sleep(1 * std.time.ns_per_us);
+            compat_sleep(1 * std.time.ns_per_us);
         }
     }
 
     // Wait for completion
     while (counter.load(.acquire) < num_tasks) {
-        std.Thread.sleep(1 * std.time.ns_per_us);
+        compat_sleep(1 * std.time.ns_per_us);
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = compat_nanoTimestamp();
     const elapsed_ms = @divFloor(end - start, std.time.ns_per_ms);
 
     // Should complete 10000 tasks in reasonable time (< 5 seconds)
@@ -571,7 +594,7 @@ test "Performance: scheduler overhead" {
         try scheduler.addStream(@intCast(i), 1000);
     }
 
-    const start = std.time.nanoTimestamp();
+    const start = compat_nanoTimestamp();
     const iterations = 10000;
 
     var order: [100]u64 = undefined;
@@ -579,7 +602,7 @@ test "Performance: scheduler overhead" {
         _ = scheduler.getScheduledStreams(&order);
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = compat_nanoTimestamp();
     const elapsed_ns = end - start;
     const per_call_ns = @divFloor(elapsed_ns, iterations);
 

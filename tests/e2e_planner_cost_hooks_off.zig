@@ -2,7 +2,7 @@ const std = @import("std");
 const stats_registry = @import("../src/planner/stats_registry.zig");
 
 test "planner cost hooks disabled by default" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

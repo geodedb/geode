@@ -38,7 +38,7 @@ test "BenchmarkCANARY_REQ_GQL_067_Closeness" {
         total += @as(u64, @intCast(end - start));
     }
     const avg = total / 3;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"closeness_centrality\",\"avg_ns\":{d}}\n", .{avg});
     try std.testing.expect(avg < 1_500_000_000);
 }

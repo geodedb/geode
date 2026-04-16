@@ -39,7 +39,7 @@ test "BenchmarkCANARY_REQ_GQL_067_BridgeLeverage" {
         total += @as(u64, @intCast(end - start));
     }
     const avg = total / 3;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"bridge_leverage_centrality\",\"avg_ns\":{d}}\n", .{avg});
     try std.testing.expect(avg < 1_800_000_000);
 }

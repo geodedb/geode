@@ -54,7 +54,7 @@ test "BenchmarkCANARY_REQ_GQL_062_DFSIterative" {
         try std.testing.expect(order.len == g.nodes.count());
     }
     const avg_ns = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_062_DFSIterative\",\n  \"nodes\": {d},\n  \"iterations\": {d},\n  \"avg_ns\": {d:.2}\n}\n", .{ g.nodes.count(), iterations, avg_ns });
     try std.testing.expect(avg_ns < 5_000_000);
 }

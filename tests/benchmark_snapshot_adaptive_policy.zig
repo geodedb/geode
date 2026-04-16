@@ -45,7 +45,7 @@ fn simulateAdaptive(ctx: *CompactionContext, rounds: usize, adaptive: bool) usiz
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_SnapshotAdaptivePolicy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

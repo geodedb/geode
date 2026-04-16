@@ -54,6 +54,6 @@ test "BenchmarkCANARY_REQ_GQL_021_QueryPlanCacheEvictVarianceEnvelope" {
     // Thresholds: CV < 0.19, p95 < 2.35x mean (eviction should be fairly stable)
     try std.testing.expect(cv < 0.19);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.35);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"query_plan_cache_evict_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

@@ -7,7 +7,7 @@ const dijkstra = @import("../src/graph/shortest_dijkstra.zig");
 // Deterministic: fixed PRNG seed, graph shape reproducible.
 
 test "BenchmarkCANARY_REQ_GQL_063_Dijkstra" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var prng = std.rand.DefaultPrng.init(0xD1A5_731A);
@@ -52,7 +52,7 @@ test "BenchmarkCANARY_REQ_GQL_063_Dijkstra" {
     try std.testing.expect(avg_ns < 50_000_000.0);
 
     // Emit JSON metric to stderr to keep stdout clean
-    var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
+    var bw = std.Io.bufferedWriter(std.Io.getStdErr().writer());
     const w = bw.writer();
     try w.print("{\"metric\":\"dijkstra_avg_ns\",\"value\":{d:.2}}\n", .{avg_ns});
     try bw.flush();

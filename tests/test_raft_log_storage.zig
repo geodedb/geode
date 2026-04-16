@@ -344,14 +344,13 @@ test "LogStorage: CRC corruption detected on read" {
 
     // Corrupt a byte in the record (flip a bit in the term field, which is at offset 4)
     {
-        const f = try std.fs.cwd().openFile(file_path, .{ .mode = .read_write });
-        defer f.close();
-        try f.seekTo(4); // term starts at offset 4 (after entry_len)
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const f = try std.Io.Dir.cwd().openFile(io_fs, file_path, .{ .mode = .read_write });
+        defer f.close(io_fs);
         var byte: [1]u8 = undefined;
-        _ = try f.read(&byte);
+        _ = try f.readPositionalAll(io_fs, &byte, 4);
         byte[0] ^= 0xFF;
-        try f.seekTo(4);
-        _ = try f.write(&byte);
+        try f.writePositionalAll(io_fs, &byte, 4);
     }
 
     // Reading should detect CRC mismatch

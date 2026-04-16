@@ -1,6 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const graph_storage_adapter = geode.graph_storage_adapter;
 
 // CANARY: REQ=REQ-PERF-MERGE-004; FEATURE="Execution"; ASPECT=AdapterMergeVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope; OWNER=engine; UPDATED=2026-04-08
@@ -51,14 +62,14 @@ fn meanNs(samples: []const u64) f64 {
 }
 
 test "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
 
     _ = try geode.graph_store.initGlobalStore(allocator, data_dir);
@@ -115,7 +126,7 @@ test "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope" {
 
     const mean = meanNs(samples);
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print(
         "{{\"benchmark\":\"merge_adapter_same_label_variance\",\"mean_ns\":{d},\"p95_ns\":{d},\"tail_head_ratio\":{d:.3},\"snapshots\":{d},\"label_scans\":{d},\"exact_lookups\":{d}}}\n",
         .{
@@ -131,14 +142,14 @@ test "BenchmarkCANARY_REQ_PERF_MERGE_004_AdapterMergeVarianceEnvelope" {
 
 // CANARY: REQ=REQ-PERF-MERGE-007; FEATURE="Execution"; ASPECT=RelationshipMergeAdjacencyEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope; OWNER=engine; UPDATED=2026-04-08
 test "BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(allocator, data_dir);
@@ -197,7 +208,7 @@ test "BenchmarkCANARY_REQ_PERF_MERGE_007_RelationshipMergeAdjacencyEnvelope" {
     const noise_ratio = high_mean / low_mean;
     try testing.expect(noise_ratio < 3.0);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print(
         "{{\"benchmark\":\"relationship_merge_adjacency_envelope\",\"low_noise_mean_ns\":{d},\"high_noise_mean_ns\":{d},\"high_low_ratio\":{d:.3},\"snapshots\":{d},\"label_scans\":{d},\"exact_lookups\":{d},\"edge_count\":{d}}}\n",
         .{

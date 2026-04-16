@@ -5,7 +5,7 @@ const streaming = @import("../src/streaming/cdc_enhanced.zig");
 // TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella
 
 test "TestCANARY_REQ_GQL_042_CDC_StreamingUmbrella" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

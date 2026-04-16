@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Validates pattern matching: anchors, wildcards, and failure.
 
 test "TestCANARY_REQ_GQL_032_PatternMatch" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

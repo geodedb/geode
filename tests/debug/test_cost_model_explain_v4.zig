@@ -5,7 +5,7 @@ const explain = @import("src/planner/cost_explain.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSONDynamicAlpha; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_075_ExplainJSONDynamicAlpha" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa.deinit());
     const allocator = gpa.allocator();
 

@@ -102,7 +102,7 @@ test "PEM private key detection" {
 }
 
 test "email masking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -113,7 +113,7 @@ test "email masking" {
 }
 
 test "phone masking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -124,7 +124,7 @@ test "phone masking" {
 }
 
 test "metadata filtering and redaction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -153,13 +153,13 @@ test "metadata filtering and redaction" {
     };
 
     // Create test metadata
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .{};
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("actor_id", std.json.Value{ .string = "test-user" }); // Should be allowed
-    try metadata_obj.put("password", std.json.Value{ .string = "secret123" }); // Should be redacted
-    try metadata_obj.put("unknown_field", std.json.Value{ .string = "value" }); // Should be filtered out
-    try metadata_obj.put("secret_data", std.json.Value{ .string = "sensitive" }); // Should be redacted
+    try metadata_obj.put(allocator, "actor_id", std.json.Value{ .string = "test-user" }); // Should be allowed
+    try metadata_obj.put(allocator, "password", std.json.Value{ .string = "secret123" }); // Should be redacted
+    try metadata_obj.put(allocator, "unknown_field", std.json.Value{ .string = "value" }); // Should be filtered out
+    try metadata_obj.put(allocator, "secret_data", std.json.Value{ .string = "sensitive" }); // Should be redacted
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -173,7 +173,7 @@ test "metadata filtering and redaction" {
                 allocator.free(entry.key_ptr.*);
                 freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -208,7 +208,7 @@ fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
                 freeJsonValue(allocator, item);
             }
             // Array in json.Value doesn't have managed allocator in Zig 0.15
-            arr.deinit();
+            // arr is Managed already owns allocator in json.Value
         },
         .object => |*obj| {
             var iter = obj.iterator();
@@ -216,7 +216,7 @@ fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
                 allocator.free(entry.key_ptr.*);
                 freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj.deinit();
+            obj.deinit(allocator);
         },
         else => {},
     }

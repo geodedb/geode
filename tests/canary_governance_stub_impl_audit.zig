@@ -77,7 +77,7 @@ fn walkAndAudit(alloc: std.mem.Allocator, root_dir: std.fs.Dir, prefix: []const 
 }
 
 test "TestCANARY_REQ_GQL_010_GovernanceStubImplAudit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var violations = std.ArrayList([]const u8).init(alloc);

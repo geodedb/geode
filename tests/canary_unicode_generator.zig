@@ -5,7 +5,7 @@ const gen = @import("../tools/gen_unicode_tables.zig");
 // Provides evidence for CANARY TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun by invoking the generator logic on
 // a tiny embedded UnicodeData-like snippet and ensuring output file emitted with CANARY line.
 test "TestCANARY_REQ_GQL_UNICODE_002_GeneratorDryRun" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Minimal UnicodeData excerpt: code;name;category;ccc;bidi;decomp

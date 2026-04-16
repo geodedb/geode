@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 test "profile compact omits zero-value optional fields" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

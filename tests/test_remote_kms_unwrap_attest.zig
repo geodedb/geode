@@ -6,7 +6,7 @@ const kms = @import("../src/security/kms_remote.zig");
 // CANARY: REQ=REQ-GQL-SEC-UNWRAP-001; FEATURE="PrivilegedUnwrapPath"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapTamperDetect; OWNER=security; UPDATED=2025-09-26
 
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_UnwrapSignatureVerify" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xA1B2C3D4);
     try server.start(8890);

@@ -5,7 +5,7 @@ const repl = @import("client/repl.zig");
 // Covers semicolon termination and blank line flush.
 
 test "TestCANARY_REQ_GQL_086_MultilineBuffering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var state = repl.Repl.init(gpa.allocator());
     defer state.deinit();

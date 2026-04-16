@@ -62,7 +62,7 @@ pub const LogStorage = struct {
 
     /// Close the log file.
     pub fn deinit(self: *LogStorage) void {
-        self.file.close();
+        self.file.close(std.Io.Threaded.global_single_threaded.io());
     }
 
     /// Append a single entry to the log with fsync.
@@ -92,25 +92,28 @@ pub const LogStorage = struct {
         @memcpy(body_buf[pos..], cmd_bytes);
 
         const crc = Crc32.hash(body_buf);
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
 
-        // Seek to end of file
-        try self.file.seekFromEnd(0);
+        // Seek to end of file - get current length
+        var offset = try self.file.length(io_fs);
 
         // Write entry_len
         var len_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &len_buf, record_len, .little);
-        try self.file.writeAll(&len_buf);
+        try self.file.writePositionalAll(io_fs, &len_buf, offset);
+        offset += 4;
 
         // Write body (header + command)
-        try self.file.writeAll(body_buf);
+        try self.file.writePositionalAll(io_fs, body_buf, offset);
+        offset += body_buf.len;
 
         // Write CRC32
         var crc_buf: [4]u8 = undefined;
         std.mem.writeInt(u32, &crc_buf, crc, .little);
-        try self.file.writeAll(&crc_buf);
+        try self.file.writePositionalAll(io_fs, &crc_buf, offset);
 
         // Fsync for durability
-        try self.file.sync();
+        try self.file.sync(io_fs);
     }
 
     /// Read all entries from the log, verifying CRC for each record.
@@ -118,7 +121,9 @@ pub const LogStorage = struct {
     /// (for .write variants) and the slice itself.
     /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=ReadAll; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn readAllEntries(self: *LogStorage, allocator: Allocator) ![]LogEntry {
-        try self.file.seekTo(0);
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        var offset: u64 = 0;
+        const file_len = try self.file.length(io_fs);
 
         var entries: std.ArrayList(LogEntry) = .empty;
         errdefer {
@@ -128,12 +133,13 @@ pub const LogStorage = struct {
             entries.deinit(allocator);
         }
 
-        while (true) {
+        while (offset < file_len) {
             // Read entry_len
             var len_buf: [4]u8 = undefined;
-            const len_read = self.file.readAll(&len_buf) catch break;
+            const len_read = self.file.readPositionalAll(io_fs, &len_buf, offset) catch break;
             if (len_read == 0) break; // EOF
             if (len_read < 4) return error.UnexpectedEof;
+            offset += len_read;
 
             const record_len = std.mem.readInt(u32, &len_buf, .little);
             if (record_len < HEADER_SIZE) return error.InvalidRecordLength;
@@ -142,13 +148,15 @@ pub const LogStorage = struct {
             const body = try allocator.alloc(u8, record_len);
             defer allocator.free(body);
 
-            const body_read = try self.file.readAll(body);
+            const body_read = try self.file.readPositionalAll(io_fs, body, offset);
             if (body_read < record_len) return error.UnexpectedEof;
+            offset += body_read;
 
             // Read CRC
             var crc_buf: [4]u8 = undefined;
-            const crc_read = try self.file.readAll(&crc_buf);
+            const crc_read = try self.file.readPositionalAll(io_fs, &crc_buf, offset);
             if (crc_read < 4) return error.UnexpectedEof;
+            offset += crc_read;
 
             const stored_crc = std.mem.readInt(u32, &crc_buf, .little);
             const computed_crc = Crc32.hash(body);
@@ -196,19 +204,21 @@ pub const LogStorage = struct {
     /// then truncates the file.
     /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=Truncate; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn truncateAfter(self: *LogStorage, last_index: u64, allocator: Allocator) !void {
-        try self.file.seekTo(0);
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        var offset: u64 = 0;
+        const file_len = try self.file.length(io_fs);
 
         var truncate_offset: u64 = 0;
 
-        while (true) {
-            // Record current position — this is where the current record starts
-            const record_start = try self.file.getPos();
+        while (offset < file_len) {
+            const record_start = offset;
 
             // Read entry_len
             var len_buf: [4]u8 = undefined;
-            const len_read = self.file.readAll(&len_buf) catch break;
+            const len_read = self.file.readPositionalAll(io_fs, &len_buf, offset) catch break;
             if (len_read == 0) break;
             if (len_read < 4) break;
+            offset += len_read;
 
             const record_len = std.mem.readInt(u32, &len_buf, .little);
             if (record_len < HEADER_SIZE) break;
@@ -217,43 +227,44 @@ pub const LogStorage = struct {
             const body = try allocator.alloc(u8, record_len);
             defer allocator.free(body);
 
-            const body_read = try self.file.readAll(body);
+            const body_read = try self.file.readPositionalAll(io_fs, body, offset);
             if (body_read < record_len) break;
+            offset += body_read;
 
             // Skip CRC
-            try self.file.seekBy(4);
+            offset += 4;
 
             // Parse index from body (offset 8..16)
             const index = std.mem.readInt(u64, body[8..16], .little);
 
             if (index <= last_index) {
-                // This record is kept — update truncate offset to after this record
                 truncate_offset = record_start + 4 + record_len + 4; // entry_len + body + crc
             } else {
-                // This record and everything after should be removed.
-                // We already know the truncate point from the previous iteration.
                 break;
             }
         }
 
         // Truncate the file
-        try self.file.setEndPos(truncate_offset);
+        try self.file.setLength(io_fs, truncate_offset);
 
-        try self.file.sync();
+        try self.file.sync(io_fs);
     }
 
     /// Return the index of the last entry, or 0 if the log is empty.
     /// CANARY: REQ=REQ-GQL-RAFT-LOG-PERSIST; FEATURE="Raft Log Persistence"; ASPECT=LastIndex; STATUS=TESTED; OWNER=distributed; UPDATED=2026-04-09
     pub fn lastIndex(self: *LogStorage, allocator: Allocator) !u64 {
-        try self.file.seekTo(0);
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        var offset: u64 = 0;
+        const file_len = try self.file.length(io_fs);
 
         var last: u64 = 0;
 
-        while (true) {
+        while (offset < file_len) {
             var len_buf: [4]u8 = undefined;
-            const len_read = self.file.readAll(&len_buf) catch break;
+            const len_read = self.file.readPositionalAll(io_fs, &len_buf, offset) catch break;
             if (len_read == 0) break;
             if (len_read < 4) break;
+            offset += len_read;
 
             const record_len = std.mem.readInt(u32, &len_buf, .little);
             if (record_len < HEADER_SIZE) break;
@@ -262,11 +273,12 @@ pub const LogStorage = struct {
             const body = try allocator.alloc(u8, record_len);
             defer allocator.free(body);
 
-            const body_read = try self.file.readAll(body);
+            const body_read = try self.file.readPositionalAll(io_fs, body, offset);
             if (body_read < record_len) break;
+            offset += body_read;
 
             // Skip CRC
-            try self.file.seekBy(4);
+            offset += 4;
 
             const index = std.mem.readInt(u64, body[8..16], .little);
             if (index > last) {

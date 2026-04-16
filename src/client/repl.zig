@@ -2,6 +2,17 @@ const std = @import("std");
 const repl_history = @import("repl/repl_history.zig");
 const repl_parse = @import("repl/repl_parse.zig");
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+
 // Facade for backward compatibility - delegates to new modules
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=ReplLaunchPrompt; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_ReplLaunchPrompt; OWNER=client; UPDATED=2025-09-23
 // CANARY: REQ=REQ-GQL-086; FEATURE="InteractiveRepl"; ASPECT=MultilineBuffering; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_086_MultilineBuffering; OWNER=client; UPDATED=2025-09-23
@@ -183,9 +194,9 @@ pub fn runOnce(in_stream: anytype, out_stream: anytype) !void {
 test "repl.runOnce prompt basic" {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
-    var in_mem = std.io.fixedBufferStream("RETURN 1\n");
+    var in_mem = std.Io.fixedBufferStream("RETURN 1\n");
     var out_buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
+    var fbs = std.Io.fixedBufferStream(&out_buf);
     try runOnce(in_mem.reader(), fbs.writer());
     try std.testing.expect(std.mem.startsWith(u8, out_buf[0..fbs.pos], "geode> "));
 }
@@ -221,7 +232,7 @@ test "TestCANARY_REQ_GQL_086_HistoryPersistence basic load append" {
     var tmp_dir = try std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     const hist_file_name = "history_test.txt";
-    const dir_path = try tmp_dir.dir.realpathAlloc(gpa.allocator(), ".");
+    const dir_path = try tmpDirRealpathAlloc(gpa.allocator(), &tmp_dir.sub_path);
     defer gpa.allocator().free(dir_path);
     const full_path = try std.fs.path.join(gpa.allocator(), &.{ dir_path, hist_file_name });
     defer gpa.allocator().free(full_path);

@@ -5,7 +5,7 @@ const planner = @import("../src/planner.zig");
 // Ensures deterministic ordering when cycles exist: 1->2->3->1 and additional branch 2->4.
 
 test "TestCANARY_REQ_GQL_016_PathCycleDeterminism" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

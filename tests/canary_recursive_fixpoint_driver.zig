@@ -19,7 +19,7 @@ fn stepExhaust(ctx_raw: *anyopaque, iter: u32) bool {
 }
 
 test "TestCANARY_REQ_GQL_079_FixpointDriver" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

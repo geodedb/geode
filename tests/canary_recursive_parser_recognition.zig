@@ -7,7 +7,7 @@ const ast = @import("../src/gql/ast.zig");
 // Ensures that a leading WITH RECURSIVE sets has_recursive_cte on the first Query statement
 // and that absence of the prefix leaves the flag false.
 test "TestCANARY_REQ_GQL_079_ParserRecognition" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

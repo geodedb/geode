@@ -5,7 +5,7 @@ const testing = std.testing;
 const materialized_views = @import("../src/query/enhanced_materialized_views.zig");
 
 test "End-to-end materialized view lifecycle" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -66,7 +66,7 @@ test "End-to-end materialized view lifecycle" {
 }
 
 test "Multi-view dependency management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -121,7 +121,7 @@ test "Multi-view dependency management" {
 }
 
 test "Refresh scheduler integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -166,7 +166,7 @@ test "Refresh scheduler integration" {
 }
 
 test "Error handling and recovery" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -205,7 +205,7 @@ test "Error handling and recovery" {
 }
 
 test "Performance and scalability" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -276,7 +276,7 @@ test "Performance and scalability" {
 }
 
 test "Memory efficiency validation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
@@ -318,7 +318,7 @@ test "Memory efficiency validation" {
 }
 
 test "Concurrent operation simulation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

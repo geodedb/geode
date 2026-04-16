@@ -9,6 +9,17 @@ const fuzzy_search = @import("fuzzy_search.zig");
 const result_pager = @import("result_pager.zig");
 const session_state = @import("session_state.zig");
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+
 // ============================================================================
 // Syntax Highlighting Tests
 // ============================================================================
@@ -274,15 +285,15 @@ test "result pager: page out of bounds returns false" {
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json_data, .{});
     defer parsed.deinit();
 
-    var output = std.ArrayList(u8){};
-    defer output.deinit(testing.allocator);
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
 
     // Page 0 should succeed
-    const result0 = try pager.displayPage(output.writer(testing.allocator), parsed.value, 0, .table);
+    const result0 = try pager.displayPage(&output.writer, parsed.value, 0, .table);
     try testing.expect(result0);
 
     // Page 10 (out of bounds) should fail
-    const result10 = try pager.displayPage(output.writer(testing.allocator), parsed.value, 10, .table);
+    const result10 = try pager.displayPage(&output.writer, parsed.value, 10, .table);
     try testing.expect(!result10);
 }
 
@@ -294,7 +305,7 @@ test "session state: save and load roundtrip" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(testing.allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(testing.allocator, &tmp_dir.sub_path);
     defer testing.allocator.free(tmp_path);
 
     const session_file = try std.fs.path.join(testing.allocator, &.{ tmp_path, "test_session.json" });
@@ -334,16 +345,19 @@ test "session state: handles null/missing fields" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(testing.allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(testing.allocator, &tmp_dir.sub_path);
     defer testing.allocator.free(tmp_path);
 
     const session_file = try std.fs.path.join(testing.allocator, &.{ tmp_path, "minimal_session.json" });
     defer testing.allocator.free(session_file);
 
     // Create minimal session file
-    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{});
-    defer file.close();
-    try file.writeAll("{\"format\": \"json\", \"variables\": {}}");
+    {
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_fs, session_file, .{});
+        defer file.close(io_fs);
+        try file.writeStreamingAll(io_fs, "{\"format\": \"json\", \"variables\": {}}");
+    }
 
     // Load
     var loaded = try session_state.SessionState.load(testing.allocator, session_file);

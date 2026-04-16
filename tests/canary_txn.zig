@@ -4,7 +4,7 @@ const txn = @import("../src/transactions/manager.zig");
 // TestCANARY_REQ_GQL_013_TxnCommit - canonical MVCC commit evidence (supersedes legacy TestCANARY_REQ_GQL_030_TxnCommit)
 // Verifies that commit transitions state and assigns commit timestamp > start.
 test "TestCANARY_REQ_GQL_013_TxnCommit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var mgr: txn.Manager = undefined;

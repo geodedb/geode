@@ -16,7 +16,7 @@ fn hasFlag(list: std.ArrayList([]const u8), needle: []const u8) bool {
 }
 
 test "TestCANARY_REQ_GQL_024_ImplDefinedFlagsProtocolIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

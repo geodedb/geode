@@ -57,7 +57,7 @@ test "BenchmarkCANARY_REQ_GQL_066_EdmondsKarp" {
         try std.testing.expect(f > 0);
     }
     const avg_ns = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_066_EdmondsKarp\",\n  \"iterations\": {d},\n  \"avg_ns\": {d:.2}\n}\n", .{ iterations, avg_ns });
     try std.testing.expect(avg_ns < 30_000_000);
 }

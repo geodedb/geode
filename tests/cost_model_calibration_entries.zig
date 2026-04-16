@@ -5,7 +5,7 @@ const explain = @import("../src/planner/cost_explain.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=CalibrationEntries; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelCalibrationEntries; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_075_CostModelCalibrationEntries" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ops = [_]seed.OpDescriptor{
         .{ .kind = .Scan },

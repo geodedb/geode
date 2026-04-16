@@ -3,7 +3,7 @@ const geode = @import("geode");
 const minimal = @import("clients/zig/client_minimal.zig");
 
 test "TestCANARY_ClientUnicode_Utf8ToUtf16" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var client = minimal.Client.init(gpa.allocator(), .{});
     const s = "Grüß"; // includes umlaut and ß after folding maybe
@@ -13,7 +13,7 @@ test "TestCANARY_ClientUnicode_Utf8ToUtf16" {
 }
 
 test "TestCANARY_ClientUnicode_Utf16ToUtf8" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var client = minimal.Client.init(gpa.allocator(), .{});
     const s = "Hello 🌍"; // includes surrogate pair when encoded
@@ -25,7 +25,7 @@ test "TestCANARY_ClientUnicode_Utf16ToUtf8" {
 }
 
 test "TestCANARY_ClientUnicode_Wtf8Lossy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var client = minimal.Client.init(gpa.allocator(), .{});
     // Construct invalid UTF-8 sequence (lone continuation) which WTF-8 should pass through replacement

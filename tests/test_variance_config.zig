@@ -5,7 +5,7 @@ const varcfg = @import("geode").benchmarks.variance_config;
 // CANARY: REQ=REQ-GQL-021; FEATURE="Bench Variance Infra"; ASPECT=VarianceConfigStats; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_VarianceConfigStats; OWNER=tooling; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_021_VarianceConfigStats" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     // Known dataset: symmetric values to test mean/median/mad

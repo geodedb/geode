@@ -3,6 +3,17 @@ const ast = @import("../gql/ast.zig");
 const graph_store = @import("../graph_store.zig");
 const query_traits = @import("../query/query_traits.zig");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 // Import from parent execution module
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
@@ -105,7 +116,7 @@ test "executeCallStatement routes read-only procedures through QueryReadSession"
     var store_tmp = testing.tmpDir(.{});
     defer store_tmp.cleanup();
 
-    const store_dir = try store_tmp.dir.realpathAlloc(testing.allocator, ".");
+    const store_dir = try tmpDirRealpathAlloc(testing.allocator, &store_tmp.sub_path);
     defer testing.allocator.free(store_dir);
 
     const store = try graph_store.initGlobalStore(testing.allocator, store_dir);
@@ -123,7 +134,7 @@ test "executeCallStatement routes read-only procedures through QueryReadSession"
     var catalog_tmp = testing.tmpDir(.{});
     defer catalog_tmp.cleanup();
 
-    const catalog_dir = try catalog_tmp.dir.realpathAlloc(testing.allocator, ".");
+    const catalog_dir = try tmpDirRealpathAlloc(testing.allocator, &catalog_tmp.sub_path);
     defer testing.allocator.free(catalog_dir);
 
     const catalog = try Catalog.init(testing.allocator, catalog_dir);

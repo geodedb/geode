@@ -7,7 +7,7 @@ const mfa_mod = @import("src/security/mfa.zig");
 // CANARY: REQ=REQ-GQL-MFA-002; FEATURE="MFA authentication enforcement"; ASPECT=SECURITY; STATUS=TESTED; TEST=tests/unit_mfa_enforcement.zig:1; OWNER=security; UPDATED=2025-09-26
 
 test "MFA enforcement: base auth returns MFARequired when user has MFA" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();
@@ -25,7 +25,7 @@ test "MFA enforcement: base auth returns MFARequired when user has MFA" {
 }
 
 test "MFA enforcement: authenticateWithMFA succeeds with correct code" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();
@@ -62,7 +62,7 @@ test "MFA enforcement: authenticateWithMFA succeeds with correct code" {
 }
 
 test "MFA enforcement: missing code fails" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     flags_mod.global().mfa.enableForTests();

@@ -54,7 +54,7 @@ test "BenchmarkCANARY_REQ_GQL_013_TxnConflictMatrixVarianceEnvelope" {
     }
     const st = stats(&samples_buf);
     const cv = if (st.mean > 0) st.stddev / st.mean else 0;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"txn_conflict_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(st.mean)), cv, @as(u64, @intFromFloat(st.p95)) });
     try std.testing.expect(cv < 0.20);
     try std.testing.expect(st.p95 < st.mean * 3.0);

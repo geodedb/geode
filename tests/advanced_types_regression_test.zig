@@ -298,7 +298,7 @@ test "TestCANARY_REQ_GQL_CRYPTO_TYPES_003_KeyPair comprehensive functionality" {
 test "TestCANARY_REQ_GQL_ADVANCED_TYPES_004_Binary encoding round-trip" {
     const allocator = testing.allocator;
     var buffer: [1024]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test VectorF32 encoding/decoding
     const vec_f32 = try vector.VectorF32.fromString("[1.5, 2.5, 3.5]", allocator);

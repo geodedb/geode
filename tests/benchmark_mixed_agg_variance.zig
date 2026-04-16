@@ -65,7 +65,7 @@ fn freeDataset(allocator: std.mem.Allocator, rows: []exec.BindingRow) void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_012_MixedAggregateVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

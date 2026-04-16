@@ -2,7 +2,7 @@ const std = @import("std");
 const queue_mod = @import("../src/containers/signaled_queue.zig");
 
 test "TestCANARY_REQ_GQL_068_SignaledQueueBasicEnqueueDequeue" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var q = queue_mod.SignaledQueue(u32).init(alloc);
@@ -14,7 +14,7 @@ test "TestCANARY_REQ_GQL_068_SignaledQueueBasicEnqueueDequeue" {
 }
 
 test "TestCANARY_REQ_GQL_068_SignaledQueueCloseSignalsConsumers" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var q = queue_mod.SignaledQueue(u8).init(alloc);

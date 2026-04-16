@@ -10,7 +10,7 @@ const gql_ast = @import("src/gql/ast.zig");
 // CANARY: REQ=REQ-GQL-079; FEATURE="RecursiveExecution"; ASPECT=ParserRecognition; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle; OWNER=engine; UPDATED=2025-09-26
 
 test "TestCANARY_REQ_GQL_079_ParserRecognitionNegativeCycle" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     var arena_state = std.heap.ArenaAllocator.init(gpa.allocator());
     defer arena_state.deinit();

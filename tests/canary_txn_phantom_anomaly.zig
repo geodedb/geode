@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const txn_mod = @import("txn");
 
 // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=PredicateRangeDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomDetection; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
@@ -12,7 +35,7 @@ const txn_mod = @import("txn");
 // Implementation detail: predicateRead records prefix; writes tracked with commit_ts.
 
 test "TestCANARY_REQ_GQL_023_PhantomDetection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -76,7 +99,7 @@ fn stats(data: []const u64) Stats {
 }
 
 test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const iters: usize = 200; // keep lightweight
@@ -107,9 +130,9 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomOverheadVarianceEnvelope" {
                 const key = std.fmt.bufPrint(&buf, "acct:{d}", .{k}) catch "acct:err";
                 mgr.recordWrite(key, &t);
             }
-            const start = std.time.microTimestamp();
+            const start = compat_microTimestamp();
             _ = mgr.commit(&t) catch {}; // ignore serialization failures
-            const end = std.time.microTimestamp();
+            const end = compat_microTimestamp();
             const dur: u64 = @intCast(end - start);
             s_ptr.*[i] = dur;
         }

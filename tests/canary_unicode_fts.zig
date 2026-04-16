@@ -15,7 +15,7 @@ fn ftsNormalize(alloc: std.mem.Allocator, s: []const u8) ![]u8 {
 }
 
 test "TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const doc_form = "Stra\xC3\x9Fe"; // Straße (ß)
@@ -28,7 +28,7 @@ test "TestCANARY_REQ_GQL_UNICODE_007_FtsNormalize" {
 }
 
 test "TestCANARY_REQ_GQL_UNICODE_008_AnalyzerLower" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const a = "E\xCC\x81"; // decomposed É

@@ -19,7 +19,7 @@ test "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2" {
 
     // Serialize using v2 (current implementation emits version 2)
     var buf: [4096]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     try reg.serialize(fbs.writer());
     const written = fbs.pos;
     try std.testing.expect(written > 32);
@@ -39,7 +39,7 @@ test "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistenceV2" {
 
     // Backward compatibility: craft a minimal v1 blob (biases only) then deserialize
     var v1buf: [512]u8 = undefined;
-    var wstream = std.io.fixedBufferStream(&v1buf);
+    var wstream = std.Io.fixedBufferStream(&v1buf);
     {
         const w = wstream.writer();
         try w.writeAll("ABIA");

@@ -3,7 +3,7 @@ const ext = @import("extended.zig");
 
 // CANARY: REQ=REQ-GQL-082; FEATURE="ExtendedBuiltins"; ASPECT=ENGINE; STATUS=TESTED; TEST=tests/types/extended_functions.zig; OWNER=engine; UPDATED=2025-09-26
 
-// Zig 0.16: std.io.fixedBufferStream was removed. Minimal in-memory buffer
+// Zig 0.16: std.Io.fixedBufferStream was removed. Minimal in-memory buffer
 // writer that implements writeAll for use with ext.formatUuid and similar
 // functions that accept an anytype writer.
 const FixedBufWriter = struct {
@@ -66,7 +66,7 @@ fn fn_uuid_v4(allocator: std.mem.Allocator, args: []const BuiltinValue) !Builtin
     while (i < 16) : (i += 1) u.bytes[i] = @as(u8, @intCast((i * 97 + 13) & 0xFF));
     u.bytes[6] = (u.bytes[6] & 0x0F) | 0x40;
     u.bytes[8] = (u.bytes[8] & 0x3F) | 0x80;
-    // Zig 0.16: std.io.fixedBufferStream was removed. Use a minimal
+    // Zig 0.16: std.Io.fixedBufferStream was removed. Use a minimal
     // buffer writer that implements writeAll for ext.formatUuid.
     var buf: [36]u8 = undefined;
     var bw = FixedBufWriter{ .buf = &buf };

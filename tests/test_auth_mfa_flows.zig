@@ -17,7 +17,7 @@ fn countAudit(a: *auth.AuditLog, ev: auth.AuditEventType) usize {
 }
 
 test "TestCANARY_REQ_GQL_AUTH_002_AuthPassword_no_mfa" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -30,7 +30,7 @@ test "TestCANARY_REQ_GQL_AUTH_002_AuthPassword_no_mfa" {
 }
 
 test "TestCANARY_REQ_GQL_AUTH_003_AuthMFA_flow_success" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     mfa.enableForTests();
@@ -60,7 +60,7 @@ test "TestCANARY_REQ_GQL_AUTH_003_AuthMFA_flow_success" {
 }
 
 test "TestCANARY_REQ_GQL_MFA_005_SuccessFlow_complete" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     mfa.enableForTests();

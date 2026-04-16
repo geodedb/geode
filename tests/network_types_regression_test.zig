@@ -137,7 +137,7 @@ test "TestCANARY_REQ_GQL_NET_TYPES_003_Mac comprehensive functionality" {
 
 test "TestCANARY_REQ_GQL_NET_TYPES_004_Binary encoding round-trip" {
     var buffer: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test IpAddr encoding/decoding
     const ipv4 = try IpAddr.fromString("10.0.0.1");

@@ -10,7 +10,7 @@ const print = std.debug.print;
 test "Performance integration: File I/O workflow simulation" {
     print("\n=== PERFORMANCE INTEGRATION: FILE I/O WORKFLOW ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -76,7 +76,7 @@ test "Performance integration: File I/O workflow simulation" {
 test "Performance integration: Memory-efficient data structures" {
     print("\n=== PERFORMANCE INTEGRATION: MEMORY EFFICIENCY ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -121,7 +121,7 @@ test "Performance integration: Memory-efficient data structures" {
 test "Performance integration: JSON-like data processing" {
     print("\n=== PERFORMANCE INTEGRATION: JSON-LIKE PROCESSING ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -180,7 +180,7 @@ test "Performance integration: JSON-like data processing" {
 test "Performance integration: Concurrent operation simulation" {
     print("\n=== PERFORMANCE INTEGRATION: CONCURRENT SIMULATION ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -237,7 +237,7 @@ test "Performance integration: Concurrent operation simulation" {
 test "Performance integration: End-to-end pipeline validation" {
     print("\n=== PERFORMANCE INTEGRATION: END-TO-END PIPELINE ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -300,7 +300,7 @@ test "Performance integration: End-to-end pipeline validation" {
 test "CANARY: REQ=REQ-PERF-INT-002 - Performance integration validation" {
     print("\n=== CANARY VALIDATION: PERFORMANCE INTEGRATION ===\n", .{});
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -116,7 +116,7 @@ pub fn fuzzySearch(
     candidates: []const []const u8,
     max_results: usize,
 ) ![]FuzzyMatch {
-    var matches = std.ArrayList(FuzzyMatch){};
+    var matches = std.ArrayList(FuzzyMatch).empty;
     defer matches.deinit(allocator);
 
     for (candidates, 0..) |text, i| {
@@ -153,7 +153,7 @@ pub const FuzzyFinder = struct {
         return .{
             .allocator = allocator,
             .candidates = candidates,
-            .query = std.ArrayList(u8){},
+            .query = std.ArrayList(u8).empty,
         };
     }
 

@@ -25,7 +25,7 @@ fn simulateUnique(batch: usize, allocator: std.mem.Allocator) u64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -57,6 +57,6 @@ test "BenchmarkCANARY_REQ_GQL_032_UniquePerfVarianceEnvelope" {
     try std.testing.expect(cv < 0.18);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.3);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"unique_perf_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

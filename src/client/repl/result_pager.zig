@@ -68,7 +68,7 @@ pub const ResultPager = struct {
         const page_rows = all_rows.items[start_row..end_row];
 
         // Create a temporary JSON structure for this page
-        var page_data = std.ArrayList(std.json.Value){};
+        var page_data: std.ArrayList(std.json.Value) = .empty;
         defer page_data.deinit(self.allocator);
 
         for (page_rows) |row| {
@@ -230,14 +230,16 @@ fn displayAsCsv(writer: anytype, allocator: std.mem.Allocator, columns: []const 
 
 fn displayAsJson(writer: anytype, allocator: std.mem.Allocator, columns: std.json.Array, rows: []std.json.Value) !void {
     // Create a JSON object with columns and rows
-    var root = std.json.ObjectMap.init(allocator);
-    try root.put("columns", .{ .array = columns });
+    var root: std.json.ObjectMap = .{};
+    defer root.deinit(allocator);
+    try root.put(allocator, "columns", .{ .array = columns });
 
     var rows_arr = std.json.Array.init(allocator);
+    defer rows_arr.deinit();
     for (rows) |row| {
         try rows_arr.append(row);
     }
-    try root.put("rows", .{ .array = rows_arr });
+    try root.put(allocator, "rows", .{ .array = rows_arr });
 
     const root_value = std.json.Value{ .object = root };
     const json_out = try std.json.Stringify.valueAlloc(allocator, root_value, .{});

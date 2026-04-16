@@ -36,7 +36,7 @@ fn tmpDirPath(alloc: std.mem.Allocator, tmp: anytype) ![]u8 {
 }
 
 test "TestCANARY_REQ_GQL_087_MigrationLedgerSchema_and_Apply" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 
@@ -62,7 +62,7 @@ test "TestCANARY_REQ_GQL_087_MigrationLedgerSchema_and_Apply" {
 }
 
 test "TestCANARY_REQ_GQL_087_DownReversalSafety" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 
@@ -92,7 +92,7 @@ test "TestCANARY_REQ_GQL_087_DownReversalSafety" {
 }
 
 test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 
@@ -112,7 +112,7 @@ test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
     defer migrate.freeStatusRows(alloc, rows);
 
     var buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     for (rows) |r| {
         if (!r.applied) continue;
@@ -129,7 +129,7 @@ test "TestCANARY_REQ_GQL_087_ChecksumValidation_and_PlanDryRun" {
 }
 
 test "TestCANARY_REQ_GQL_087_DriftPolicyOutcomeStrict" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 

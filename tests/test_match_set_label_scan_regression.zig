@@ -34,6 +34,40 @@
 // candidate loop itself.
 
 const std = @import("std");
+
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const geode = @import("geode");
 
 const execution = geode.execution;
@@ -58,7 +92,7 @@ const Harness = struct {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
-        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -131,7 +165,7 @@ fn seedStore(allocator: std.mem.Allocator, n_noise: usize, n_target: usize) ![]u
 /// Run `n_iters` MATCH (:Target {tid: i}) SET n.value = i*10 statements
 /// and return the total wall-clock in nanoseconds.
 fn runMatchSetLoop(h: *Harness, n_iters: usize) !u64 {
-    const start = std.time.nanoTimestamp();
+    const start = compat_nanoTimestamp();
     var i: usize = 0;
     while (i < n_iters) : (i += 1) {
         const tid_literal = i % 10; // reuse the first 10 Targets
@@ -140,7 +174,7 @@ fn runMatchSetLoop(h: *Harness, n_iters: usize) !u64 {
         var res = try h.runQuery(q);
         res.deinit(h.arena.allocator());
     }
-    const end = std.time.nanoTimestamp();
+    const end = compat_nanoTimestamp();
     return @intCast(end - start);
 }
 
@@ -234,7 +268,7 @@ test "REGRESSION: MATCH+REMOVE stays fast with noise nodes (label-indexed scan)"
     const target_ids = try seedStore(allocator, 5_000, 10);
     defer allocator.free(target_ids);
 
-    const start = std.time.nanoTimestamp();
+    const start = compat_nanoTimestamp();
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const tid_literal = i % 10;
@@ -243,7 +277,7 @@ test "REGRESSION: MATCH+REMOVE stays fast with noise nodes (label-indexed scan)"
         var res = try h.runQuery(q);
         res.deinit(h.arena.allocator());
     }
-    const elapsed_ns = std.time.nanoTimestamp() - start;
+    const elapsed_ns = compat_nanoTimestamp() - start;
     const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / std.time.ns_per_ms;
 
     if (elapsed_ms > 5_000.0) {

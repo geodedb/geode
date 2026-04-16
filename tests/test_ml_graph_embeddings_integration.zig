@@ -115,7 +115,7 @@ const MockGraphDatabase = struct {
 
 // Test: End-to-end Node2Vec embedding generation and similarity search
 test "CANARY_REQ_ML_001_Node2Vec_End_To_End_Integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -183,7 +183,7 @@ test "CANARY_REQ_ML_001_Node2Vec_End_To_End_Integration" {
 
 // Test: GraphSAGE training with neighbor aggregation
 test "CANARY_REQ_ML_002_GraphSAGE_Neighbor_Aggregation_Integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -271,7 +271,7 @@ test "CANARY_REQ_ML_002_GraphSAGE_Neighbor_Aggregation_Integration" {
 
 // Test: Multi-algorithm comparison and performance metrics
 test "CANARY_REQ_ML_003_Multi_Algorithm_Performance_Comparison" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -387,7 +387,7 @@ test "CANARY_REQ_ML_003_Multi_Algorithm_Performance_Comparison" {
 
 // Test: Real-time embedding updates and incremental learning
 test "CANARY_REQ_ML_004_Real_Time_Embedding_Updates" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -459,7 +459,7 @@ test "CANARY_REQ_ML_004_Real_Time_Embedding_Updates" {
 
 // Test: Large-scale graph embedding with memory management
 test "CANARY_REQ_ML_005_Large_Scale_Memory_Management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -16,7 +16,7 @@ test "TestCANARY_REQ_GQL_005_HelloRoundTrip" {
 
 // TestCANARY_REQ_GQL_030_TxnCommit
 test "TestCANARY_REQ_GQL_030_TxnCommit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var mgr: txn.Manager = undefined;
@@ -32,7 +32,7 @@ const graph_store = @import("geode").graph_store;
 const snapshot_pipeline = @import("../src/storage/snapshot_pipeline.zig");
 
 test "TestCANARY_REQ_GQL_028_SnapshotCompaction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

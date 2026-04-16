@@ -8,7 +8,7 @@ test "catalog operations end-to-end integration" {
     // This test validates that the enhanced catalog operations work end-to-end
     // through the server execution pipeline
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -105,7 +105,7 @@ test "catalog operations end-to-end integration" {
 // CANARY: REQ=REQ-GQL-CATALOG-004; FEATURE="Error Handling Regression"; ASPECT=ErrorTesting; STATUS=TESTED; TEST=geodetestlab/specs/geode_edge_cases_errors.yml; TEST=TestCatalogErrorHandling; OWNER=server; UPDATED=2025-10-04
 
 test "catalog operations error handling regression" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Evaluates performance of check constraint evaluation with chained AND clauses.
 
 test "BenchmarkCANARY_REQ_GQL_032_ConstraintPerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -9,7 +9,7 @@ const federation = @import("../src/distributed/federation.zig");
 const protocol = @import("../src/protocol.zig");
 
 test "End-to-end distributed query execution simulation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -53,7 +53,7 @@ test "End-to-end distributed query execution simulation" {
 }
 
 test "Multi-shard query with result merging" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -132,7 +132,7 @@ test "Multi-shard query with result merging" {
 }
 
 test "Query caching integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -180,7 +180,7 @@ test "Query caching integration" {
 }
 
 test "Parallel query execution simulation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -244,7 +244,7 @@ test "Parallel query execution simulation" {
 }
 
 test "Query optimization for different patterns" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -295,7 +295,7 @@ test "Query optimization for different patterns" {
 }
 
 test "Coordinator configuration and metrics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -339,7 +339,7 @@ test "Coordinator configuration and metrics" {
 }
 
 test "Error handling and recovery in distributed queries" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -382,7 +382,7 @@ test "Error handling and recovery in distributed queries" {
 }
 
 test "Large result set handling and memory management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

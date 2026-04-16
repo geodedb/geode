@@ -6,7 +6,7 @@ const path_cache_mod = @import("../src/planner/path_cache.zig");
 // CANARY: REQ=REQ-GQL-021; FEATURE="Query Planner"; ASPECT=GroupValidationHookPipelineIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_021_GroupValidationHookPipelineIntegration; OWNER=planner; UPDATED=2025-09-21
 
 fn run(q: []const u8) !pipeline.PipelineResult {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 4);
     defer cache.deinit();

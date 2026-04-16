@@ -5,7 +5,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-GRAPHTYPE-001; FEATURE="Graph Type Operations"; ASPECT=ComprehensiveTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; TEST=TestGraphTypeComprehensive; OWNER=parser; UPDATED=2025-10-04
 
 test "graph type parsing comprehensive tests" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -76,7 +76,7 @@ test "graph type parsing comprehensive tests" {
 }
 
 test "graph type drop operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -124,7 +124,7 @@ test "graph type drop operations" {
 }
 
 test "graph type server execution" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

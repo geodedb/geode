@@ -5,7 +5,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceGapDriftDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceGapDriftDetection; OWNER=tooling; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_010_GovernanceGapDriftDetection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Read original

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 test "RLS/ABAC enforcement and audit logging" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

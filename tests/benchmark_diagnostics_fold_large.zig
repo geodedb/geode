@@ -20,7 +20,7 @@ fn foldDiagnostics(allocator: std.mem.Allocator, n: usize) !struct { total_bytes
 }
 
 test "BenchmarkCANARY_REQ_GQL_010_DiagnosticsFoldLarge" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var timer = try std.time.Timer.start();

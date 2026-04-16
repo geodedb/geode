@@ -5,7 +5,7 @@ const graph_exec = @import("../src/server/graph/exec.zig");
 // This is a unit-level simulation: we construct a Node and ensure property map contains expected value.
 
 test "TestCANARY_REQ_GQL_017_PropertyAccess" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -24,7 +24,7 @@ test "TestCANARY_REQ_GQL_017_PropertyAccess" {
 
 // TestCANARY_REQ_GQL_017_PropertyAccessNull - ensure null variant stored and retrieved.
 test "TestCANARY_REQ_GQL_017_PropertyAccessNull" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -41,7 +41,7 @@ test "TestCANARY_REQ_GQL_017_PropertyAccessNull" {
 
 // TestCANARY_REQ_GQL_017_PropertyAccessMissing - ensure missing property yields error.Missing.
 test "TestCANARY_REQ_GQL_017_PropertyAccessMissing" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);
@@ -56,7 +56,7 @@ test "TestCANARY_REQ_GQL_017_PropertyAccessMissing" {
 
 // TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat - ensure decimal property formats precisely.
 test "TestCANARY_REQ_GQL_017_PropertyAccessDecimalFormat" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var props = std.StringHashMap(graph_exec.PropertyValue).init(allocator);

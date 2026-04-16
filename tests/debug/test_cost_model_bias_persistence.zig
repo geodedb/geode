@@ -29,7 +29,7 @@ test "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence" {
 
     // Serialize to memory buffer
     var mem_buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&mem_buf);
+    var fbs = std.Io.fixedBufferStream(&mem_buf);
     try reg.serialize(fbs.writer());
     // bytes written = fbs.pos (unused, but serialization success implied by no error)
 
@@ -45,7 +45,7 @@ test "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasPersistence" {
         try std.testing.expect(std.math.fabs(ob - rb) < 1e-9);
     }
     // Basic JSON helper sanity
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const json = try reg.toJson(alloc);

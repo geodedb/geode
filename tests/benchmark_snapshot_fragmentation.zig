@@ -2,7 +2,7 @@ const std = @import("std");
 // BenchmarkCANARY_REQ_GQL_028_SnapshotFragmentation - simulates snapshot fragmentation accumulation.
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -15,7 +15,7 @@ pub fn main() !void {
     }
     const ratio = if (dead + live > 0) @as(f64, @floatFromInt(dead)) / @as(f64, @floatFromInt(dead + live)) else 0.0;
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_028_SnapshotFragmentation\",\"dead\":{d},\"live\":{d},\"ratio\":{d:.4}}\n", .{ dead, live, ratio });
     _ = allocator;
 }

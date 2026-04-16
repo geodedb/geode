@@ -736,7 +736,11 @@ test "acquireLock increments lock_steal_count on expired lock" {
 
     // Acquire with a 1ms TTL, then sleep to let it expire.
     var h = try acquireLock(1);
-    std.Thread.sleep(2 * std.time.ns_per_ms);
+    {
+        const req = std.os.linux.timespec{ .sec = 0, .nsec = 2 * std.time.ns_per_ms };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    }
 
     // Second acquire should steal the expired lock.
     var h2 = try acquireLock(60_000);
@@ -772,7 +776,7 @@ test "acquireFileLock creates lockfile and blocks concurrent processes" {
     // Verify lockfile was created
     const lock_path = try std.fs.path.join(alloc, &.{ tmp_path, lock_filename });
     defer alloc.free(lock_path);
-    const stat = std.Io.Dir.cwd().statFile(lock_path);
+    const stat = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), lock_path, .{});
     try std.testing.expect(stat != error.FileNotFound);
 
     // Release lock
@@ -901,7 +905,7 @@ test "applyUpMigrations applies migration and persists ledger" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -929,7 +933,7 @@ test "applyUpMigrations skips already-applied versions" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -952,7 +956,7 @@ test "applyUpMigrations records failure metric on executor error" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "FAIL" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "FAIL" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     const executor = makeFailingExecutor();
@@ -972,8 +976,8 @@ test "applyDownMigration rolls back the latest applied migration" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
-    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql.down.gql", .data = "DROP GRAPH g2" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "002_add.gql.down.gql", .data = "DROP GRAPH g2" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1001,9 +1005,9 @@ test "statusReport returns discovered migration files with applied status" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
-    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql.down.gql", .data = "DROP GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "002_add.gql", .data = "CREATE GRAPH g2" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql.down.gql", .data = "DROP GRAPH g1" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     const rows = try statusReport(alloc, cfg);
@@ -1028,7 +1032,7 @@ test "driftCheck returns true for consistent ledger" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1052,7 +1056,7 @@ test "driftCheck returns false after simulated drift" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1080,7 +1084,7 @@ test "checksumValidate passes for matching manifest" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1110,7 +1114,7 @@ test "checksumValidate fails for mismatched manifest" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH g1" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1152,7 +1156,7 @@ test "applyUpMigrations stores SHA-256 content hash in ledger" {
     defer alloc.free(tmp_path);
 
     const script_content = "CREATE GRAPH sha256_test";
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = script_content });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1184,7 +1188,7 @@ test "checksumValidate accepts SHA-256 manifest (64-char hash)" {
     defer alloc.free(tmp_path);
 
     const script_content = "CREATE GRAPH sha_validate";
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = script_content });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1215,7 +1219,7 @@ test "checksumValidate rejects wrong SHA-256 hash" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH sha_wrong" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH sha_wrong" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1239,8 +1243,8 @@ test "planDryRun returns pending and rollback migrations" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "002_add.gql", .data = "ADD" });
-    try tmp.dir.writeFile(.{ .sub_path = "003_more.gql", .data = "MORE" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "002_add.gql", .data = "ADD" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "003_more.gql", .data = "MORE" });
 
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .allow_unsigned = true };
     var executed = false;
@@ -1462,14 +1466,14 @@ test "signMigrationFile creates valid .sig sidecar file" {
     defer alloc.free(tmp_path);
 
     const script_content = "CREATE GRAPH signed_test";
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = script_content });
 
     var key = [_]u8{0xAB} ** 32;
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
     try signMigrationFile(alloc, cfg, "001_init.gql");
 
     // Verify the .sig file was created and contains the correct HMAC
-    const sig_contents = try tmp.dir.readFileAlloc(alloc, "001_init.gql.sig", 128);
+    const sig_contents = try tmp.dir.readFileAlloc(std.Io.Threaded.global_single_threaded.io(), "001_init.gql.sig", alloc, .limited(128));
     defer alloc.free(sig_contents);
     const trimmed = std.mem.trim(u8, sig_contents, " \t\r\n");
     try std.testing.expectEqual(@as(usize, 64), trimmed.len);
@@ -1487,7 +1491,7 @@ test "verifyMigrationSignature accepts valid signature" {
     defer alloc.free(tmp_path);
 
     const script_content = "CREATE GRAPH verified_test";
-    try tmp.dir.writeFile(.{ .sub_path = "002_schema.gql", .data = script_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "002_schema.gql", .data = script_content });
 
     var key = [_]u8{0xCD} ** 32;
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
@@ -1507,7 +1511,7 @@ test "verifyMigrationSignature rejects tampered content" {
     defer alloc.free(tmp_path);
 
     const original_content = "CREATE GRAPH safe";
-    try tmp.dir.writeFile(.{ .sub_path = "003_tamper.gql", .data = original_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "003_tamper.gql", .data = original_content });
 
     var key = [_]u8{0xEF} ** 32;
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
@@ -1573,7 +1577,7 @@ test "applyUpMigrations rejects unsigned migration by default" {
     const tmp_path = try std.fmt.allocPrint(alloc, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
     defer alloc.free(tmp_path);
 
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH test" });
 
     // No hmac_key and allow_unsigned = false (default)
     const cfg = MigrationConfig{ .migrations_dir = tmp_path };
@@ -1597,7 +1601,7 @@ test "applyUpMigrations succeeds with valid signature" {
     defer alloc.free(tmp_path);
 
     const script_content = "CREATE GRAPH signed_apply";
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = script_content });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = script_content });
 
     var key = [_]u8{0x77} ** 32;
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
@@ -1624,13 +1628,13 @@ test "applyUpMigrations rejects tampered migration with valid sig for original" 
     defer alloc.free(tmp_path);
 
     // Write original content and sign it
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "CREATE GRAPH safe" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "CREATE GRAPH safe" });
     var key = [_]u8{0x88} ** 32;
     const cfg = MigrationConfig{ .migrations_dir = tmp_path, .hmac_key = &key };
     try signMigrationFile(alloc, cfg, "001_init.gql");
 
     // Tamper with the migration file after signing
-    try tmp.dir.writeFile(.{ .sub_path = "001_init.gql", .data = "DROP GRAPH safe; CREATE GRAPH evil" });
+    try tmp.dir.writeFile(std.Io.Threaded.global_single_threaded.io(), .{ .sub_path = "001_init.gql", .data = "DROP GRAPH safe; CREATE GRAPH evil" });
 
     var executed = false;
     const executor = makeTestExecutor(&executed);

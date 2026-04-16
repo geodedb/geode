@@ -148,7 +148,7 @@ fn computeMetrics(samples: []u64) Metrics {
 }
 
 pub fn runFederationMismatchLatencyVariance() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
     const iterations: usize = 64;
@@ -178,7 +178,7 @@ pub fn runFederationMismatchLatencyVariance() !void {
 
     // Serialize result JSON (buffer enlarged for new fields)
     var buf: [768]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_024_FederationMismatchLatencyVarianceEnvelope\",");
     try w.print("\"class\":\"General\",", .{});

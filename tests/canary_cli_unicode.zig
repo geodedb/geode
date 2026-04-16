@@ -14,7 +14,7 @@ fn run(argv: []const []const u8, allocator: std.mem.Allocator) !struct { code: u
 // We just assert success exit code (0) and presence of expected schema column to keep test stable.
 // CANARY: REQ=REQ-GQL-UNICODE-004; FEATURE="UnicodeCore"; ASPECT=CliNormalizationFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_NormalizeNfc; OWNER=clients; UPDATED=2025-09-27
 test "TestCANARY_ClientCli_NormalizeNfc" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Decomposed e + combining acute U+0065 U+0301
     const decomposed = "RETURN 'e\xCC\x81' AS v LIMIT 1"; // LIMIT to force schema+bindings
@@ -29,7 +29,7 @@ test "TestCANARY_ClientCli_NormalizeNfc" {
 // NOTE: We only verify success; semantic folding correctness is covered in core unicode tests.
 // CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CliFoldCaseFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_FoldCase; OWNER=clients; UPDATED=2025-09-27
 test "TestCANARY_ClientCli_FoldCase" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const q = "RETURN 'Stra\xC3\x9Fe' AS v LIMIT 1"; // Straße
     const res = try run(&.{ "./zig-out/bin/geode", q, "--fold-case" }, gpa.allocator());
@@ -43,7 +43,7 @@ test "TestCANARY_ClientCli_FoldCase" {
 // Expect successful execution.
 // CANARY: REQ=REQ-GQL-UNICODE-013; FEATURE="UnicodeUtf16"; ASPECT=CliUtf16HexInputFlag; STATUS=TESTED; TEST=TestCANARY_ClientCli_Utf16Input; OWNER=clients; UPDATED=2025-09-27
 test "TestCANARY_ClientCli_Utf16Input" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Because --utf16-input rewrites the entire query string from UTF-16 code units, we supply a minimal query:
     // RETURN 1 AS x  encoded as hexadecimal 16-bit units. This exercises the decode path; successful execution implies

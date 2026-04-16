@@ -6,12 +6,12 @@ const repl = @import("client/repl.zig");
 // Ensures prompt appears exactly once and precedes any output.
 
 test "TestCANARY_REQ_GQL_086_ReplLaunchPrompt" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Provide a single line of input which is ignored currently.
-    var in_stream = std.io.fixedBufferStream("QUIT\n");
+    var in_stream = std.Io.fixedBufferStream("QUIT\n");
     var out_buf: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
+    var fbs = std.Io.fixedBufferStream(&out_buf);
     try repl.runOnce(in_stream.reader(), fbs.writer());
     const out = out_buf[0..fbs.pos];
     try std.testing.expect(std.mem.startsWith(u8, out, "geode> "));

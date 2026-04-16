@@ -96,7 +96,7 @@ fn makeRandomQuery(alloc: std.mem.Allocator) planner_root.ast.Query {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheStructuralKeyCollisionEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const N: usize = 1500;

@@ -99,7 +99,7 @@ test "SELECT statement parsing" {
                 else => try testing.expect(false),
             }
         },
-        .Err => |_| try testing.expect(false),
+        .Err => try testing.expect(false),
     }
 }
 
@@ -121,7 +121,7 @@ test "SELECT DISTINCT" {
                 else => try testing.expect(false),
             }
         },
-        .Err => |_| try testing.expect(false),
+        .Err => try testing.expect(false),
     }
 }
 
@@ -146,18 +146,18 @@ test "Unordered pagination allowed" {
                 else => try testing.expect(false),
             }
         },
-        .Err => |_| try testing.expect(false),
+        .Err => try testing.expect(false),
     }
 }
 
 test "GQL Status JSON format" {
-    var buffer = std.ArrayList(u8).initCapacity(testing.allocator, 0) catch unreachable;
-    defer buffer.deinit(testing.allocator);
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
 
     const gql_status = status.syntaxError("unexpected token", 3, 12, "MATCH");
-    try status.writeJson(buffer.writer(testing.allocator), gql_status);
+    try status.writeJson(&buffer.writer, gql_status);
 
-    const json = buffer.items;
+    const json = buffer.written();
     // Check stable key order and exact format
     try testing.expect(std.mem.indexOf(u8, json, "\"sqlstate\":\"42601\"") != null);
     try testing.expect(std.mem.indexOf(u8, json, "\"class\":\"ERROR\"") != null);

@@ -296,7 +296,7 @@ pub const S3BackupManager = struct {
         const content = try self.getObject(metadata_key);
         defer self.allocator.free(content);
 
-        var stream = std.io.fixedBufferStream(content);
+        var stream = std.Io.fixedBufferStream(content);
         return try backup.BackupMetadata.fromJSON(stream.reader(), self.allocator);
     }
 

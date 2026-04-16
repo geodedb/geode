@@ -47,7 +47,7 @@ pub fn main() !void {
     const flags2 = assembleFlagsOnce();
     if (flags2.len != 0) return error.FlagEmittedTwice;
     // Print success sentinel for harness (stdout)
-    try std.io.getStdOut().writer().writeAll("E2E_FEDERATION_MISMATCH_FLAG_OK\n");
+    try std.Io.getStdOut().writer().writeAll("E2E_FEDERATION_MISMATCH_FLAG_OK\n");
 }
 
 test "TestCANARY_REQ_GQL_024_FederationMismatchFlagProtocol" {

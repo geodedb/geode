@@ -57,7 +57,7 @@ inline fn checkVariance(label: []const u8, st: anytype) !void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PlannerPreValidationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const samples = try runSamples(gpa.allocator(), 64);
     defer gpa.allocator().free(samples.pre);
@@ -67,7 +67,7 @@ test "BenchmarkCANARY_REQ_GQL_021_PlannerPreValidationVarianceEnvelope" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PlannerGroupValidationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const samples = try runSamples(gpa.allocator(), 64);
     defer gpa.allocator().free(samples.pre);

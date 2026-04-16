@@ -4,7 +4,7 @@ const keyrot = @import("geode").security.key_rotation; // adjust if module path 
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-STATE-001; FEATURE="KeyRotationStatePersistence"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_LoadSave; OWNER=security; UPDATED=2025-09-26
 
 test "key rotation save/load roundtrip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
     var reg = keyrot.KeyRegistry.init(alloc);
@@ -34,7 +34,7 @@ test "key rotation save/load roundtrip" {
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-STATE-001; FEATURE="KeyRotationStatePersistence"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_STATE_001_NoFile; OWNER=security; UPDATED=2025-09-26
 
 test "key rotation loadState missing file noop" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
     var reg = keyrot.KeyRegistry.init(alloc);

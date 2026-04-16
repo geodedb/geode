@@ -206,7 +206,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheMetricsExport" {
     // miss
     try std.testing.expect(cache.get("c") == null);
     var raw: [256]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&raw);
+    var fbs = std.Io.fixedBufferStream(&raw);
     try cache.writeMetricsJson(fbs.writer());
     const s = raw[0..fbs.pos];
     try std.testing.expect(std.mem.indexOf(u8, s, "hits") != null);

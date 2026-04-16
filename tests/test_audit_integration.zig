@@ -11,7 +11,7 @@ const test_support = @import("../src/audit/test_support.zig");
 
 // Test Case 1: Auth login success → exact RFC 5424 + CEF
 test "Case 1: Auth login success with exact syslog output" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -59,7 +59,7 @@ test "Case 1: Auth login success with exact syslog output" {
 
 // Test Case 2: Sensitive fields are never logged (but recognized keys appear redacted)
 test "Case 2: Sensitive data redaction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -130,7 +130,7 @@ test "Case 2: Sensitive data redaction" {
 
 // Test Case 3: DB update audit with allowlist fields
 test "Case 3: Database operation audit" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -208,7 +208,7 @@ test "Case 3: Database operation audit" {
 
 // Test Case 4: Rotation creates backups
 test "Case 4: File rotation functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -270,7 +270,7 @@ test "Case 4: File rotation functionality" {
 
 // Test Case 5: Default-deny blocks unknown fields
 test "Case 5: Default deny filtering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -334,7 +334,7 @@ test "Case 5: Default deny filtering" {
 
 // Test Case 6: Fail-closed on unredactable payload
 test "Case 6: Fail closed behavior" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

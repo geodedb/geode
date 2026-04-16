@@ -9,7 +9,7 @@ const benchmarkMemoryMappedIO = @import("../src/performance/memory_mapped_io.zig
 test "Memory-mapped I/O performance validation" {
     print("\n=== MEMORY-MAPPED I/O PERFORMANCE VALIDATION ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -38,7 +38,7 @@ test "Memory-mapped I/O performance validation" {
 test "Basic memory-mapped file operations" {
     print("\n=== BASIC MEMORY-MAPPED FILE OPERATIONS ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -83,7 +83,7 @@ test "Basic memory-mapped file operations" {
 test "CANARY: REQ=REQ-PERF-MMAP-001 - Memory-mapped I/O integration" {
     print("\n=== CANARY VALIDATION RESULTS ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

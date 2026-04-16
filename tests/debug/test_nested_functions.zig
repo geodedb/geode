@@ -4,7 +4,7 @@ const eval = @import("src/eval.zig");
 const execution = @import("src/execution.zig");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ally = gpa.allocator();
 

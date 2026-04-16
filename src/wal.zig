@@ -181,7 +181,7 @@ pub const WriteAheadLog = struct {
         const dir_path = if (sep) |s| path[0..s] else ".";
         const filename = if (sep) |s| path[s + 1 ..] else path;
 
-        const dir = std.Io.Dir.cwd().openDir(dir_path, .{}) catch |err| {
+        const dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), dir_path);
                 return init(allocator, path);

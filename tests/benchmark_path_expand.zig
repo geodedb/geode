@@ -3,7 +3,7 @@ const planner = @import("../src/planner.zig");
 
 // BenchmarkCANARY_REQ_GQL_016_PathPrune - measures path expansion breadth growth and pruning cost.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var adj = planner.AdjacencyList.init(allocator);
@@ -45,6 +45,6 @@ pub fn main() !void {
     }
     const elapsed = timer.read();
     const per_iter = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_016_PathPrune\",\"iterations\":{d},\"total_ns\":{d},\"ns_per_iter\":{d:.2},\"paths_total\":{d}}\n", .{ iterations, elapsed, per_iter, total_paths });
 }

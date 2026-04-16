@@ -1,10 +1,21 @@
 const std = @import("std");
 const geode = @import("geode");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const Value = geode.value_types.Value;
-var parity_campaign_mutex: std.Thread.Mutex = .{};
+var parity_campaign_mutex: std.Io.Mutex = .init;
 
 // CANARY: REQ=REQ-QUALITY-401-001; FEATURE="MatchOpsStagedParity"; ASPECT=GoldenParity; STATUS=TESTED; TEST=tests/test_match_operations_parity_campaign.zig; OWNER=execution; UPDATED=2026-02-16
 // Stage parity suite for MATCH refactor checkpoints. These golden assertions guard
@@ -23,7 +34,7 @@ const Harness = struct {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
-        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -95,8 +106,8 @@ fn expectValueInt(v: Value, expected: i64) !void {
 }
 
 test "match refactor parity: single-hop and aggregation goldens" {
-    parity_campaign_mutex.lock();
-    defer parity_campaign_mutex.unlock();
+    parity_campaign_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer parity_campaign_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -139,8 +150,8 @@ test "match refactor parity: single-hop and aggregation goldens" {
 }
 
 test "match refactor parity: variable-length and filtering goldens" {
-    parity_campaign_mutex.lock();
-    defer parity_campaign_mutex.unlock();
+    parity_campaign_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer parity_campaign_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

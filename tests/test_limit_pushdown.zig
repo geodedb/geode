@@ -1,10 +1,21 @@
 const std = @import("std");
 const geode = @import("geode");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const Value = geode.value_types.Value;
-var test_mutex: std.Thread.Mutex = .{};
+var test_mutex: std.Io.Mutex = .init;
 
 // CANARY: REQ=REQ-PERF-LIMIT-PUSHDOWN-001; FEATURE="LimitPushdown"; ASPECT=UnitTest; STATUS=TESTED; TEST=tests/test_limit_pushdown.zig; OWNER=engine; UPDATED=2026-03-13
 // Unit tests for LIMIT pushdown optimization in MATCH queries.
@@ -24,7 +35,7 @@ const Harness = struct {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
-        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -94,8 +105,8 @@ fn seedLargeGraph(allocator: std.mem.Allocator, count: usize) !void {
 // Test: LIMIT pushdown returns correct number of rows
 // ---------------------------------------------------------------------------
 test "limit pushdown: MATCH (u:User) RETURN u.name LIMIT 5 returns exactly 5 rows" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -116,8 +127,8 @@ test "limit pushdown: MATCH (u:User) RETURN u.name LIMIT 5 returns exactly 5 row
 // Test: LIMIT 1 returns exactly one row
 // ---------------------------------------------------------------------------
 test "limit pushdown: MATCH (u:User) RETURN u.name LIMIT 1 returns 1 row" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -138,8 +149,8 @@ test "limit pushdown: MATCH (u:User) RETURN u.name LIMIT 1 returns 1 row" {
 // Test: LIMIT with OFFSET pushdown
 // ---------------------------------------------------------------------------
 test "limit pushdown: MATCH LIMIT with OFFSET returns correct count" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -161,8 +172,8 @@ test "limit pushdown: MATCH LIMIT with OFFSET returns correct count" {
 // Test: LIMIT larger than result set returns all matching
 // ---------------------------------------------------------------------------
 test "limit pushdown: LIMIT larger than dataset returns all rows" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -184,8 +195,8 @@ test "limit pushdown: LIMIT larger than dataset returns all rows" {
 // (Must scan all nodes to sort correctly)
 // ---------------------------------------------------------------------------
 test "limit not pushed when ORDER BY present: correct sort order preserved" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -211,8 +222,8 @@ test "limit not pushed when ORDER BY present: correct sort order preserved" {
 // Test: LIMIT with DISTINCT is not pushed down
 // ---------------------------------------------------------------------------
 test "limit not pushed when DISTINCT present: correct dedup" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -234,8 +245,8 @@ test "limit not pushed when DISTINCT present: correct dedup" {
 // Test: LIMIT pushdown with label filtering (only matching labels)
 // ---------------------------------------------------------------------------
 test "limit pushdown: label filtering returns only matching label nodes" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -258,8 +269,8 @@ test "limit pushdown: label filtering returns only matching label nodes" {
 // Test: LIMIT pushdown with WHERE filter
 // ---------------------------------------------------------------------------
 test "limit pushdown: WHERE filter with LIMIT returns correct count" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -281,8 +292,8 @@ test "limit pushdown: WHERE filter with LIMIT returns correct count" {
 // Test: No-label full scan with LIMIT pushdown
 // ---------------------------------------------------------------------------
 test "limit pushdown: full scan without labels respects LIMIT" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -304,8 +315,8 @@ test "limit pushdown: full scan without labels respects LIMIT" {
 // Test: Aggregation with LIMIT is not pushed down
 // ---------------------------------------------------------------------------
 test "limit not pushed when aggregation present: correct count" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -12,7 +12,7 @@ fn writeTempPath(alloc: std.mem.Allocator) ![]u8 {
 }
 
 test "kms rotation produces envelopes persisted and restored" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var reg = rotation.KeyRegistry.init(&alloc);
@@ -58,7 +58,7 @@ test "kms rotation produces envelopes persisted and restored" {
 }
 
 test "negative envelope parse errors do not crash" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var reg = rotation.KeyRegistry.init(&alloc);

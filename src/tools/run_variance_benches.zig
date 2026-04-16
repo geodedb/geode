@@ -211,7 +211,7 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     // NOTE(schema_version=1): Adding explicit schema_version to detect stale runner binaries during CI and ensure
     // downstream tooling (bench_regress, variance dashboards) can evolve with backward compatibility.
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     const scale = 10000.0; // 1e4 precision scaling
     try w.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"path_multibranch_variance\",");
@@ -244,7 +244,7 @@ fn runPathMultiBranch(allocator: std.mem.Allocator) !void {
     // jitter_class heuristic: cv < 0.10 => low, < 0.20 => medium else high
     const jitter_class = if (st.cv < 0.10) "low" else if (st.cv < 0.20) "medium" else "high";
     var buf2: [768]u8 = undefined;
-    var fbs2 = std.io.fixedBufferStream(&buf2);
+    var fbs2 = std.Io.fixedBufferStream(&buf2);
     const w2 = fbs2.writer();
     try w2.writeAll("{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"path_multibranch_variance\",");
     inline for (.{
@@ -374,7 +374,7 @@ fn runSyntheticRaftCommitVariance(allocator: std.mem.Allocator) !void {
     // v1
     {
         var buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const w = fbs.writer();
         w.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"raft_commit_advancement_variance\",") catch {};
         inline for (.{
@@ -402,7 +402,7 @@ fn runSyntheticRaftCommitVariance(allocator: std.mem.Allocator) !void {
     {
         const jitter_class = if (st.cv < 0.10) "low" else if (st.cv < 0.20) "medium" else "high";
         var buf: [768]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const w = fbs.writer();
         w.writeAll("{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"raft_commit_advancement_variance\",") catch {};
         inline for (.{

@@ -9,7 +9,7 @@ const benchmod = mvcc_adv.bench;
 // Placeholder tests mapped to CANARY declarations. These validate minimal structural behavior only.
 
 test "TestCANARY_REQ_GQL_073_EarlyConflictDetection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var det = early.EarlyDetector.init(gpa.allocator());
     defer det.deinit();
@@ -26,7 +26,7 @@ test "TestCANARY_REQ_GQL_073_EarlyConflictDetection" {
 }
 
 test "TestCANARY_REQ_GQL_073_PredictiveVersionCheck" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var vs = predict.VersionSummary.init(gpa.allocator());
     defer vs.deinit();
@@ -53,7 +53,7 @@ test "TestCANARY_REQ_GQL_073_PartialRollbackMechanism" {
 }
 
 test "TestCANARY_REQ_GQL_073_RepairThroughputBench" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const done = try benchmod.simulateContention(10, 2, gpa.allocator());
     try std.testing.expect(done == 10);

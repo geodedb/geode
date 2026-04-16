@@ -6,7 +6,7 @@ const std = @import("std");
 // Measures time to remove parent and logically mark children removed.
 
 test "BenchmarkCANARY_REQ_GQL_032_CascadePerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -9,7 +9,7 @@ const mfa = @import("geode").mfa_test_support;
 pub fn main() !void {}
 
 test "TDE disabled returns FeatureDisabled" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     try std.testing.expectError(error.FeatureDisabled, tde.encrypt(gpa.allocator(), "abc", ""));
 }

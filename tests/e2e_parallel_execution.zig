@@ -14,7 +14,7 @@ test "Parallel ordered barrier deterministic" {
 }
 
 test "Parallel pool executes jobs" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var pool = try parallel.Pool.init(gpa.allocator(), 2);
     defer pool.deinit();
@@ -32,7 +32,7 @@ test "Parallel pool executes jobs" {
 }
 
 test "parallelMap produces deterministic ordered output" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var pool = try parallel.Pool.init(gpa.allocator(), 4);
     defer pool.deinit();

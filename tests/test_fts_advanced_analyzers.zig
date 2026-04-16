@@ -157,7 +157,7 @@ const MockLanguageAnalyzer = struct {
 
 // CANARY: REQ=REQ-GQL-FTS-ADV-002; FEATURE="Advanced Text Analyzers"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_Advanced_Text_Analyzers; OWNER=search; UPDATED=2025-10-04
 test "Advanced Text Analyzers: Simple analyzer" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -180,7 +180,7 @@ test "Advanced Text Analyzers: Simple analyzer" {
 }
 
 test "Advanced Text Analyzers: Whitespace analyzer with lowercase" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -203,7 +203,7 @@ test "Advanced Text Analyzers: Whitespace analyzer with lowercase" {
 }
 
 test "Advanced Text Analyzers: English analyzer with stop words and stemming" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -234,7 +234,7 @@ test "Advanced Text Analyzers: English analyzer with stop words and stemming" {
 }
 
 test "Advanced Text Analyzers: Standard analyzer with punctuation handling" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -268,7 +268,7 @@ test "Advanced Text Analyzers: Standard analyzer with punctuation handling" {
 }
 
 test "Advanced Text Analyzers: Performance comparison" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -313,7 +313,7 @@ test "Advanced Text Analyzers: Performance comparison" {
 }
 
 test "Advanced Text Analyzers: Multi-language text handling" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -347,7 +347,7 @@ test "Advanced Text Analyzers: Multi-language text handling" {
 }
 
 test "Advanced Text Analyzers: Edge cases and empty input" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -387,7 +387,7 @@ test "Advanced Text Analyzers: Edge cases and empty input" {
 }
 
 test "Advanced Text Analyzers: Stemming effectiveness" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

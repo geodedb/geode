@@ -59,7 +59,7 @@ test "TestCANARY_GQL39075_RQ_0002_RequiredErrors" {
 
 // RQ-0003: GQL Flagger enumerates all implementation-defined items.
 test "TestCANARY_GQL39075_RQ_0003_GqlFlaggerImplDefined" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const findings = try impl_flagger.collect(alloc, .{ .zero_length_paths_excluded = false });
@@ -225,7 +225,7 @@ test "TestCANARY_GQL39075_RQ_0023_GT01TransactionGating" {
 
 // RQ-0024: All implementation-defined items enumerated (Annex B).
 test "TestCANARY_GQL39075_RQ_0024_AllImplDefinedItemsEnumerated" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const flags = try conformance.collectImplDefinedFlags(alloc);

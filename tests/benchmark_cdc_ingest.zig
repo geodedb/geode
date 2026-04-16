@@ -7,7 +7,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 pub fn main() !void {}
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_Ingest" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

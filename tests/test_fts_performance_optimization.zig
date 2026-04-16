@@ -175,7 +175,7 @@ const FtsQueryType = enum {
 };
 
 test "FTS Performance Optimization: Baseline vs optimized indexing" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -198,7 +198,7 @@ test "FTS Performance Optimization: Baseline vs optimized indexing" {
 }
 
 test "FTS Performance Optimization: Query execution optimization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -227,7 +227,7 @@ test "FTS Performance Optimization: Query execution optimization" {
 }
 
 test "FTS Performance Optimization: Individual optimization impact" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -270,7 +270,7 @@ test "FTS Performance Optimization: Individual optimization impact" {
 }
 
 test "FTS Performance Optimization: Scalability analysis" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -303,7 +303,7 @@ test "FTS Performance Optimization: Scalability analysis" {
 }
 
 test "FTS Performance Optimization: Resource utilization efficiency" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -342,7 +342,7 @@ test "FTS Performance Optimization: Resource utilization efficiency" {
 }
 
 test "FTS Performance Optimization: Real-world usage simulation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

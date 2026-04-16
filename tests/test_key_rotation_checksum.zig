@@ -4,7 +4,7 @@ const keyrot = @import("../src/security/key_rotation.zig");
 // CANARY: REQ=REQ-GQL-SEC-KEYROT-STATE-CHK-001; FEATURE="KeyRotationStateChecksum"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_SEC_KEYROT_STATE_CHK_001; OWNER=security; UPDATED=2025-09-26
 
 test "rotation state checksum verifies integrity and rejects tamper" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
     var reg = keyrot.KeyRegistry.init(alloc);

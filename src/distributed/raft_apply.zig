@@ -208,7 +208,6 @@ fn applySchemaChange(allocator: Allocator, store_opt: ?*GraphStore, sc: SchemaCh
                 error.CannotDropDefaultGraph => {
                     log.warn("raft apply: attempted to drop default graph, ignoring", &.{});
                 },
-                else => return err,
             };
             log.info("raft apply: dropped graph via schema_change", &.{
                 Attr.string("graph", sc.graph),

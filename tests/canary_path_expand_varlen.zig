@@ -4,7 +4,7 @@ const planner = @import("../src/planner.zig");
 // TestCANARY_REQ_GQL_016_PathExpandVarLen - ensures variable length path expansion (1..3 hops) produces bounded results.
 
 test "TestCANARY_REQ_GQL_016_PathExpandVarLen" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

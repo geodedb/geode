@@ -259,7 +259,7 @@ pub fn main() !void {
     try writeBadge(alloc, badge_path, total, tested, partial, pending);
 
     // Transition validation (basic) + canary validation
-    validate(rows.items, canaries.items, std.io.getStdErr().writer()) catch |e| switch (e) {
+    validate(rows.items, canaries.items, std.Io.getStdErr().writer()) catch |e| switch (e) {
         error.ValidationFailed => return std.process.exit(2),
         else => return e,
     };

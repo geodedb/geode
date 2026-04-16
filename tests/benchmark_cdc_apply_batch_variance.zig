@@ -18,7 +18,7 @@ fn simulateApply(engine: anytype, batch: usize) void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var engine = try cdc.CdcEngine.init(allocator, .{ .adaptive_backpressure = true, .pending_backpressure_watermark = 12_000 });
@@ -55,6 +55,6 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_ApplyBatchLatencyVarianceEnvelope" {
     try std.testing.expect(cv < 0.22);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.6);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"cdc_apply_batch_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

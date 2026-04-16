@@ -5,7 +5,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 // Compares dynamic batch adaptation effect by measuring total flush count indirectly via buffer clears.
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -22,6 +22,6 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush" {
     const end_ns = std.time.nanoTimestamp();
     const elapsed = end_ns - start_ns;
     const eps = @as(f64, @floatFromInt(total)) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0);
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveFlush\",\"events\":{d},\"ns\":{d},\"eps\":{d:.2},\"dyn_batch\":{d}}\n", .{ total, elapsed, eps, engine.dynamic_batch_size });
 }

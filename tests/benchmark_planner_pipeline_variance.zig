@@ -32,7 +32,7 @@ fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 32);
     defer cache.deinit();

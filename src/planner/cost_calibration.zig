@@ -18,7 +18,7 @@ pub const Calibration = struct {
     ema_alpha: f64 = 0.3,
 
     pub fn init(allocator: std.mem.Allocator) Calibration {
-        return .{ .allocator = allocator, .samples = .{} };
+        return .{ .allocator = allocator, .samples = .empty };
     }
 
     pub fn deinit(self: *Calibration) void {

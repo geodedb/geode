@@ -5,7 +5,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-LIKE-001; FEATURE="LIKE Clause Parsing Fix"; ASPECT=RegressionTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; TEST=TestLikeClauseRegression; OWNER=parser; UPDATED=2025-10-04
 
 test "LIKE clause regression tests" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -95,7 +95,7 @@ test "LIKE clause regression tests" {
 }
 
 test "LIKE clause edge cases" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

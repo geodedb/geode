@@ -6,7 +6,7 @@ const builders = @import("../src/graph/builders.zig");
 // Generates a deterministic synthetic graph and measures average runtime.
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -55,6 +55,6 @@ pub fn main() !void {
     }
 
     // Emit JSON metric to stderr
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"biconnected\",\"nodes\":{d},\"avg_ns\":{d}}\n", .{ nodes, avg_ns });
 }

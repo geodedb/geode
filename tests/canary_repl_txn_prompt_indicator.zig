@@ -4,7 +4,7 @@ const repl_mod = @import("../src/client/repl.zig");
 // TestCANARY_REQ_GQL_086_TxnPromptIndicator: verifies prompt changes when transaction begins and ends.
 
 test "TestCANARY_REQ_GQL_086_TxnPromptIndicator" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var r = repl_mod.Repl.init(gpa.allocator());
     defer r.deinit();

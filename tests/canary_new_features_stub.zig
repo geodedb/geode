@@ -33,7 +33,7 @@ pub fn TestCANARY_REQ_GQL_081_MetricsRegistry() !void {
     g.query_latency_ms.observe(7);
     g.query_latency_ms.observe(15);
     var buf: [2048]u8 = undefined;
-    var fba = std.io.fixedBufferStream(&buf);
+    var fba = std.Io.fixedBufferStream(&buf);
     try g.exportPrometheus(fba.writer());
     const out = fba.getWritten();
     // Basic assertions
@@ -51,7 +51,7 @@ pub fn TestCANARY_REQ_GQL_081_PrometheusEndpoint() !void {
     g.query_latency_ms.observe(9);
     g.query_latency_ms.observe(60);
     var buf: [4096]u8 = undefined;
-    var fba = std.io.fixedBufferStream(&buf);
+    var fba = std.Io.fixedBufferStream(&buf);
     try g.exportPrometheus(fba.writer());
     const out = fba.getWritten();
     // Required lines (subset): bucket, count, active txns, snapshot bytes, hits/misses
@@ -68,7 +68,7 @@ pub fn TestCANARY_REQ_GQL_081_CoreMetricsSet() !void {
     g.query_latency_ms.observe(1);
     g.query_latency_ms.observe(5000);
     var buf: [4096]u8 = undefined;
-    var fba = std.io.fixedBufferStream(&buf);
+    var fba = std.Io.fixedBufferStream(&buf);
     try g.exportPrometheus(fba.writer());
     const out = fba.getWritten();
     // Check presence of +Inf bucket cumulative line (should exist after two observations)

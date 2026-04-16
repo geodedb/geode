@@ -45,7 +45,7 @@ fn optimizedSort(allocator: std.mem.Allocator, rows: [][]const u8) !struct { dur
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const n = 2000; // moderate size

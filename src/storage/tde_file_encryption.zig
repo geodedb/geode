@@ -94,7 +94,10 @@ pub fn loadKey(allocator: std.mem.Allocator) !?[KEY_BYTES]u8 {
 
 /// Check if TDE is enabled (GEODE_TDE_KEY is set)
 pub fn isEnabled(allocator: std.mem.Allocator) bool {
-    return std.process.hasEnvVar(allocator, "GEODE_TDE_KEY") catch false;
+    _ = allocator;
+    // Zig 0.16 compat: std.process.hasEnvVar removed; use std.c.getenv directly.
+    const key_z = "GEODE_TDE_KEY";
+    return std.c.getenv(key_z) != null;
 }
 
 /// Encrypt data using AES-256-GCM with an explicit key.

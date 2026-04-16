@@ -2,6 +2,17 @@ const std = @import("std");
 const geode = @import("geode");
 const schema = @import("schema");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 const proto_util = geode.proto_util;
@@ -15,7 +26,7 @@ const url_types = geode.types.url;
 const index_manager_mod = geode.index_manager;
 const advanced_optimizer = geode.advanced_types_optimizer;
 
-var test_mutex: std.Thread.Mutex = .{};
+var test_mutex: std.Io.Mutex = .init;
 
 // CANARY: REQ=REQ-GQL-ADVANCED-TYPES-GA-001; FEATURE="AdvancedTypesGAConformance"; ASPECT=Integration; STATUS=TESTED; TEST=tests/test_advanced_property_ga_conformance.zig; OWNER=engine; UPDATED=2026-04-01
 
@@ -33,7 +44,7 @@ const Harness = struct {
         var tmp = std.testing.tmpDir(.{});
         errdefer tmp.cleanup();
 
-        const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+        const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
         errdefer allocator.free(data_dir);
 
         graph_store.setDataDirOverride(allocator, data_dir);
@@ -235,8 +246,8 @@ fn expectIntList(value: Value, expected: []const i64) !void {
 }
 
 test "ga advanced property families round-trip through storage" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -281,8 +292,8 @@ test "ga advanced property families round-trip through storage" {
 }
 
 test "ga relationship all-properties replacement removes stale keys and preserves advanced values" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -320,8 +331,8 @@ test "ga relationship all-properties replacement removes stale keys and preserve
 }
 
 test "ga advanced runtime indexes populate and vector_knn uses scan and index paths" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -445,8 +456,8 @@ test "ga advanced runtime indexes populate and vector_knn uses scan and index pa
 }
 
 test "ga protocol extended lists and arrays project through the wire boundary" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -494,8 +505,8 @@ test "ga protocol extended lists and arrays project through the wire boundary" {
 }
 
 test "ga json array member access returns structured values" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -517,8 +528,8 @@ test "ga json array member access returns structured values" {
 }
 
 test "ga advanced optimizer reorders vector and spatial index work by effectiveness" {
-    test_mutex.lock();
-    defer test_mutex.unlock();
+    test_mutex.lock(std.Io.Threaded.global_single_threaded.io()) catch unreachable;
+    defer test_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();

@@ -2,7 +2,7 @@ const std = @import("std");
 
 // Negative test: reality_freshness fails when IMPLEMENTATION_REALITY.md lacks current generated_at date and max_days=0
 test "governance reality_freshness fails on stale reality doc" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const cwd = std.fs.cwd();

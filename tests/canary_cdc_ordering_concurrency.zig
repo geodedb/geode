@@ -17,7 +17,7 @@ fn worker(ctx: WorkerCtx) !void {
 }
 
 test "TestCANARY_REQ_GQL_042_CDC_OrderingConcurrency" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

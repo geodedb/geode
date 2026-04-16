@@ -47,7 +47,7 @@ fn expandWork(adj: []usize, branching: usize, depth: usize) void {
 }
 
 test "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const branching = 6;
@@ -85,6 +85,6 @@ test "BenchmarkCANARY_REQ_GQL_016_PathExpandBreadthVarianceEnvelope" {
     try std.testing.expect(cv < 0.18);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.4);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"path_expand_breadth_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

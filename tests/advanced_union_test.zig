@@ -3,7 +3,7 @@ const geode = @import("geode");
 
 // CANARY: REQ=REQ-GQL-012; FEATURE="AdvancedUnionOperations"; ASPECT=TypeInference; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_012_TypeInference; OWNER=engine; UPDATED=2025-10-03
 test "TestCANARY_REQ_GQL_012_TypeInference" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -41,7 +41,7 @@ test "TestCANARY_REQ_GQL_012_TypeInference" {
 
 // CANARY: REQ=REQ-GQL-013; FEATURE="AdvancedUnionOperations"; ASPECT=IntersectOperation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_IntersectOperation; OWNER=engine; UPDATED=2025-10-03
 test "TestCANARY_REQ_GQL_013_IntersectOperation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -65,7 +65,7 @@ test "TestCANARY_REQ_GQL_013_IntersectOperation" {
 
 // CANARY: REQ=REQ-GQL-014; FEATURE="AdvancedUnionOperations"; ASPECT=ExceptOperation; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_014_ExceptOperation; OWNER=engine; UPDATED=2025-10-03
 test "TestCANARY_REQ_GQL_014_ExceptOperation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -89,7 +89,7 @@ test "TestCANARY_REQ_GQL_014_ExceptOperation" {
 
 // CANARY: REQ=REQ-GQL-015; FEATURE="AdvancedUnionOperations"; ASPECT=OptimizationStrategy; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_015_OptimizationStrategy; OWNER=engine; UPDATED=2025-10-03
 test "TestCANARY_REQ_GQL_015_OptimizationStrategy" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -114,7 +114,7 @@ test "TestCANARY_REQ_GQL_015_OptimizationStrategy" {
 
 // CANARY: REQ=REQ-GQL-016; FEATURE="AdvancedUnionOperations"; ASPECT=MultiWayOptimization; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_016_MultiWayOptimization; OWNER=engine; UPDATED=2025-10-03
 test "TestCANARY_REQ_GQL_016_MultiWayOptimization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -207,9 +207,9 @@ test "uuid parse/format roundtrip" {
         break :blk tmp;
     };
     var buf: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    try formatUuid(u, fbs.writer());
-    const printed = fbs.getWritten();
+    var writer = std.Io.Writer.fixed(&buf);
+    try formatUuid(u, &writer);
+    const printed = writer.buffered();
     const parsed = try parseUuid(printed);
     try std.testing.expectEqualSlices(u8, &u.bytes, &parsed.bytes);
 }

@@ -55,7 +55,7 @@ test "BenchmarkCANARY_REQ_GQL_067_GreyCardinalComposite" {
         total += @as(u64, @intCast(end - start));
     }
     const avg = total / 3;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"grey_cardinal_centrality\",\"avg_ns\":{d}}\n", .{avg});
     try std.testing.expect(avg < 2_000_000_000);
 }

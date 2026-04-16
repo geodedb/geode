@@ -10,7 +10,7 @@ const bridges_artic = @import("../src/graph/connectivity_bridges_articulation.zi
 // Expected bridges: (0,1) and none of others (since 1-2 part of cycle with 2-4-1, 2-3 in chain? actually (2,3) is bridge)
 // Articulation points: 1,2
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

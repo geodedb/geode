@@ -11,7 +11,7 @@ const tarjan = @import("../src/graph/connectivity_tarjan_scc.zig");
 // Expect 4 SCCs: {0,1,2} {3,4,5} {6} {7}
 
 test "TestCANARY_REQ_GQL_064_TarjanSCC" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

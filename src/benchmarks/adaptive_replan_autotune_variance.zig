@@ -189,7 +189,7 @@ pub fn benchmarkAdaptiveReplanAutotuneVarianceEnvelope() !void {
 
     // Emit JSON line
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     w.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"adaptive_replan_autotune_variance\",") catch {};
     inline for (.{

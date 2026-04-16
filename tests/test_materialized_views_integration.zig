@@ -163,7 +163,7 @@ const MockMVCCManager = struct {
 };
 
 test "materialized view manager with distributed query coordinator integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -204,7 +204,7 @@ test "materialized view manager with distributed query coordinator integration" 
 }
 
 test "materialized view integration with MVCC transaction management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -242,7 +242,7 @@ test "materialized view integration with MVCC transaction management" {
 }
 
 test "end-to-end materialized view lifecycle with multiple refresh strategies" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -301,7 +301,7 @@ test "end-to-end materialized view lifecycle with multiple refresh strategies" {
 }
 
 test "materialized view query optimization and caching" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -344,7 +344,7 @@ test "materialized view query optimization and caching" {
 }
 
 test "materialized view dependency tracking and change propagation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -409,7 +409,7 @@ test "materialized view dependency tracking and change propagation" {
 }
 
 test "materialized view performance monitoring and statistics collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -462,7 +462,7 @@ test "materialized view performance monitoring and statistics collection" {
 }
 
 test "materialized view distributed refresh coordination" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -529,7 +529,7 @@ test "materialized view distributed refresh coordination" {
 }
 
 test "materialized view error handling and recovery scenarios" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

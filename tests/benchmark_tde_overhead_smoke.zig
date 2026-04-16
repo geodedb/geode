@@ -67,7 +67,7 @@ test "BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke" {
     const tde_enabled = page_encryption.shouldEncrypt();
 
     // Emit JSON to stdout for benchmark tracking
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{{\"bench\":\"BenchmarkCANARY_REQ_GQL_TDE_OVERHEAD_001_Smoke\",\"page_size\":{d},\"pages\":{d},\"enc_ns\":{d},\"base_ns\":{d},\"ratio\":{d:.4},\"tde_enabled\":{}}}\n", .{
         page_size,
         pages,

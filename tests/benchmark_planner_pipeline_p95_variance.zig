@@ -30,7 +30,7 @@ fn stats(values: []u64) struct { mean: f128, cv: f64 } {
 
 // New variance envelope that also asserts p95/mean ratio thresholds for each phase.
 test "BenchmarkCANARY_REQ_GQL_021_PlannerPipelineP95MeanVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try path_cache_mod.PathCache.init(gpa.allocator(), 16);
     defer cache.deinit();

@@ -43,7 +43,7 @@ test "BenchmarkCANARY_REQ_GQL_064_TarjanSCC" {
         res.deinit(alloc);
     }
     const avg = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_064_TarjanSCC\",\n  \"nodes\": {d},\n  \"edges\": {d},\n  \"iterations\": {d},\n  \"avg_ns\": {d:.2}\n}\n", .{ g.nodes.count(), g.edges.items.len, iterations, avg });
     // Loose performance guard
     try std.testing.expect(avg < 25_000_000); // 25 ms per run in debug

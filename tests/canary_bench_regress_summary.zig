@@ -14,7 +14,7 @@ fn writeTempFile(dir: std.fs.Dir, name: []const u8, content: []const u8) ![]cons
 // If not available, test is skipped gracefully.
 
 test "TestCANARY_REQ_GQL_010_BenchRegressionJsonSummaryEndToEnd" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

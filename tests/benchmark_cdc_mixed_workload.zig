@@ -5,7 +5,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 // Mix of insert/update/delete to measure overhead variety.
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -27,6 +27,6 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload" {
     const end_ns = std.time.nanoTimestamp();
     const elapsed = end_ns - start_ns;
     const per_sec = @as(f64, @floatFromInt(total)) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0);
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_042_CDC_MixedWorkload\",\"events\":{d},\"ns\":{d},\"eps\":{d:.2}}\n", .{ total, elapsed, per_sec });
 }

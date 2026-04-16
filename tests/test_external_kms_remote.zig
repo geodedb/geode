@@ -9,7 +9,7 @@ fn sleep(ms: u64) void {
 }
 
 test "remote kms generate envelope and registry rotateWithRemoteKms" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Start server

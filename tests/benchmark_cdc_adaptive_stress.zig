@@ -2,7 +2,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC"; ASPECT=AdaptiveStressHarness; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness; OWNER=streaming; UPDATED=2025-09-21
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveStressHarness" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

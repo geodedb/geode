@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const txn = @import("txn");
 
 // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection; OWNER=txn; UPDATED=2025-09-22
@@ -36,7 +59,7 @@ test "TestCANARY_REQ_GQL_023_PhantomPreventionRangeDetection" {
 
 // CANARY: REQ=REQ-GQL-023; FEATURE="MVCC Phantom Prevention"; ASPECT=RangeTracker; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope; OWNER=txn; UPDATED=2025-09-22
 test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -58,24 +81,24 @@ test "BenchmarkCANARY_REQ_GQL_023_PhantomPreventionOverheadVarianceEnvelope" {
     var i: usize = 0;
     while (i < iters) : (i += 1) {
         var t = mgr_base.begin();
-        const start = std.time.microTimestamp();
+        const start = compat_microTimestamp();
         // simulate a few predicate prefix reads only (baseline already uses prefix list mechanics)
         try mgr_base.predicateRead(&t, "cust:");
         try mgr_base.predicateRead(&t, "order:");
         _ = mgr_base.commit(&t) catch {}; // ignore serialization outcomes here
-        const end = std.time.microTimestamp();
+        const end = compat_microTimestamp();
         base_samples[i] = @as(f64, @floatFromInt(end - start));
     }
 
     i = 0;
     while (i < iters) : (i += 1) {
         var t = mgr_range.begin();
-        const start = std.time.microTimestamp();
+        const start = compat_microTimestamp();
         try mgr_range.predicateRead(&t, "cust:");
         try mgr_range.rangeRead(&t, "cust:100", "cust:300");
         try mgr_range.rangeRead(&t, "order:050", "order:999");
         _ = mgr_range.commit(&t) catch {};
-        const end = std.time.microTimestamp();
+        const end = compat_microTimestamp();
         range_samples[i] = @as(f64, @floatFromInt(end - start));
     }
 

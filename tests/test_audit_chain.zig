@@ -2,6 +2,17 @@ const std = @import("std");
 const testing = std.testing;
 const audit = @import("audit");
 const rls = @import("rls");
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const AuditLogger = audit.AuditLogger;
 const Config = AuditLogger.Config;
 const AuditEvent = rls.AuditLogger.AuditEvent;
@@ -14,7 +25,7 @@ test "AuditLogger initialization and basic logging" {
     const file_path = "audit_test_basic.jsonl";
 
     // Create config - use full path since AuditLogger expects full path
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
     const full_path = try std.fs.path.join(allocator, &.{ dir_path, file_path });
     defer allocator.free(full_path);
@@ -44,9 +55,12 @@ test "AuditLogger initialization and basic logging" {
     try logger.appendAuditEvent(&ev);
 
     // Verify file content
-    const file = try std.fs.openFileAbsolute(full_path, .{});
-    defer file.close();
-    const content = try file.readToEndAlloc(allocator, 1024);
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.openFileAbsolute(io_fs, full_path, .{});
+    defer file.close(io_fs);
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io_fs, &file_reader_buf);
+    const content = try file_reader.interface.allocRemaining(allocator, .unlimited);
     defer allocator.free(content);
 
     // GAP-0511: assertions updated to match the canonical JSON format emitted
@@ -63,7 +77,7 @@ test "AuditLogger chaining verification" {
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
     const full_path = try std.fs.path.join(allocator, &.{ dir_path, "audit_chain.jsonl" });
     defer allocator.free(full_path);
@@ -105,8 +119,9 @@ test "AuditLogger chaining verification" {
     try logger.appendAuditEvent(&ev2);
 
     // Read back and verify hash chain manually (simplified)
-    const file = try std.fs.openFileAbsolute(full_path, .{});
-    defer file.close();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.openFileAbsolute(io_fs, full_path, .{});
+    defer file.close(io_fs);
 
     // We expect 2 lines.
     // Parse JSON is hard in test without library, but we can check existence of hashes.
@@ -117,7 +132,7 @@ test "AuditLogger recovery from existing file" {
     const allocator = testing.allocator;
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
     const full_path = try std.fs.path.join(allocator, &.{ dir_path, "audit_recover.jsonl" });
     defer allocator.free(full_path);

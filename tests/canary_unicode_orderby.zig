@@ -4,7 +4,7 @@ const unicode = @import("../src/unicode/geode_unicode.zig");
 
 test "TestCANARY_REQ_GQL_UNICODE_010_OrderByNfc" {
     // Simulate ORDER BY comparator behavior by normalizing precomposed vs decomposed forms
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const a = "\xC9"; // É precomposed

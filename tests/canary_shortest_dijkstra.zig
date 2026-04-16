@@ -6,7 +6,7 @@ const dijkstra = @import("../src/graph/shortest_dijkstra.zig");
 // Verifies correctness on a small weighted graph with multiple equal-cost paths enforcing deterministic parent tie-break.
 
 test "TestCANARY_REQ_GQL_063_Dijkstra" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

@@ -182,7 +182,7 @@ pub const ParticipantNode = struct {
             .coordinator_id = try self.allocator.dupe(u8, msg.coordinator_id),
             .state = .preparing,
             .write_set = try self.allocator.dupe(u8, payload),
-            .locks = std.ArrayListUnmanaged(Lock){},
+            .locks = std.ArrayList(Lock).empty,
         };
         errdefer local_txn.deinit(self.allocator);
 
@@ -389,7 +389,7 @@ test "ParticipantNode.handleAbort: aborts prepared transaction, map becomes empt
         .coordinator_id = coordinator_id,
         .state = .prepared,
         .write_set = write_set,
-        .locks = std.ArrayListUnmanaged(ParticipantNode.Lock){},
+        .locks = std.ArrayList(ParticipantNode.Lock).empty,
     };
     try node.transactions.put(txn_id, local_txn);
 

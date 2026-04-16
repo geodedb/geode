@@ -189,7 +189,7 @@ const MockIndexOptimizer = struct {
 
 // CANARY: REQ=REQ-GQL-FTS-003; FEATURE="FTS IndexOptimizer Integration"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/fulltext_search_basic.yml; TEST=TestCANARY_FTS_IndexOptimizer_Integration; OWNER=search; UPDATED=2025-10-04
 test "FTS IndexOptimizer Integration: Basic query optimization" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -248,7 +248,7 @@ test "FTS IndexOptimizer Integration: Basic query optimization" {
 }
 
 test "FTS IndexOptimizer Integration: Cost comparison with sequential scan" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -291,7 +291,7 @@ test "FTS IndexOptimizer Integration: Cost comparison with sequential scan" {
 }
 
 test "FTS IndexOptimizer Integration: BM25 scoring performance" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -346,7 +346,7 @@ test "FTS IndexOptimizer Integration: BM25 scoring performance" {
 }
 
 test "FTS IndexOptimizer Integration: Multi-term query analysis" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -401,7 +401,7 @@ test "FTS IndexOptimizer Integration: Multi-term query analysis" {
 }
 
 test "FTS IndexOptimizer Integration: Query type performance characteristics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -463,7 +463,7 @@ test "FTS IndexOptimizer Integration: Query type performance characteristics" {
 }
 
 test "FTS IndexOptimizer Integration: Explain query plan generation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

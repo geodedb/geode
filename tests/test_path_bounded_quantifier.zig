@@ -18,7 +18,7 @@ fn assertStable(comptime N: usize, a: [N]u64, b: [N]u64) !void {
 }
 
 pub fn TestCANARY_REQ_GQL_016_BoundedQuantifierDeterminism() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const query = "MATCH (n)-[*1..2]->(m) RETURN n, m ORDER BY n"; // placeholder syntax
@@ -44,7 +44,7 @@ pub fn TestCANARY_REQ_GQL_016_BoundedQuantifierDeterminism() !void {
 
 pub fn BenchmarkCANARY_REQ_GQL_016_BoundedQuantifierDeterminism() !void {
     // Lightweight micro-benchmark hashing the AST for deterministic multi-branch bounded quantifier pattern.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const query = "MATCH (n)-[*1..2]->(m) RETURN n, m ORDER BY n";

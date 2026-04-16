@@ -20,6 +20,6 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, snapshot_path: []const u8, vec
     const data = try tde.readDecryptedFile(allocator, snapshot_path);
     defer allocator.free(data);
 
-    var stream = std.io.fixedBufferStream(data);
+    var stream = std.Io.fixedBufferStream(data);
     return try hnsw.persist.load(allocator, stream.reader());
 }

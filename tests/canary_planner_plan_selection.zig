@@ -1,11 +1,34 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const enumerator_mod = @import("planner_enumerator");
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanSelectionIntegration; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanSelectionIntegration; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanSelectionVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_024_PlanSelectionIntegration; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -15,7 +38,7 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 32 });
-    var buf = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+    var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     const best = try enumr.selectBestUnmanaged(root, alloc, &buf) orelse return error.UnexpectedEmptyEnumeration;
     // Expect cost non-negative and enumerate produced at least 2 plans
     try std.testing.expect(best.cost >= 0);
@@ -24,7 +47,7 @@ test "TestCANARY_REQ_GQL_024_PlanSelectionIntegration" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Construct deeper plan tree for enumeration
@@ -44,10 +67,10 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanSelectionVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumr = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 128 });
-        var buf = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
-        const start = std.time.nanoTimestamp();
+        var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+        const start = compat_nanoTimestamp();
         _ = try enumr.selectBestUnmanaged(join2, alloc, &buf);
-        const end = std.time.nanoTimestamp();
+        const end = compat_nanoTimestamp();
         samples[i] = @as(u64, @intCast(end - start));
         buf.deinit(alloc);
     }

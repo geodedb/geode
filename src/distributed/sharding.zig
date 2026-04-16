@@ -44,7 +44,7 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const Allocator = std.mem.Allocator;
-const net = std.net;
+const net = std.Io.net;
 
 const logging = @import("logging");
 const log = logging.scoped("sharding");
@@ -73,7 +73,7 @@ pub const ShardManager = struct {
 
     pub const ShardNode = struct {
         id: u64,
-        address: net.Address,
+        address: net.IpAddress,
         role: NodeRole,
         status: NodeStatus,
         last_heartbeat: i64,
@@ -151,7 +151,7 @@ pub const ShardManager = struct {
         context: *anyopaque,
         requestBatchFn: *const fn (
             context: *anyopaque,
-            source_addr: net.Address,
+            source_addr: net.IpAddress,
             shard_id: u64,
             offset: u64,
             count: u64,
@@ -159,7 +159,7 @@ pub const ShardManager = struct {
         ) TransportError![]u8,
         sendBatchFn: *const fn (
             context: *anyopaque,
-            target_addr: net.Address,
+            target_addr: net.IpAddress,
             shard_id: u64,
             data: []const u8,
             checksum: u32,
@@ -167,7 +167,7 @@ pub const ShardManager = struct {
 
         pub fn requestBatch(
             self: *TransportCallback,
-            source_addr: net.Address,
+            source_addr: net.IpAddress,
             shard_id: u64,
             offset: u64,
             count: u64,
@@ -178,7 +178,7 @@ pub const ShardManager = struct {
 
         pub fn sendBatch(
             self: *TransportCallback,
-            target_addr: net.Address,
+            target_addr: net.IpAddress,
             shard_id: u64,
             data: []const u8,
             checksum: u32,
@@ -260,7 +260,7 @@ pub const ShardManager = struct {
         const total_nodes = self.getTotalNodeCount();
         const ideal_per_shard = total_nodes / self.shards.count();
 
-        var migrations = std.ArrayList(Migration){};
+        var migrations = std.ArrayList(Migration).empty;
         defer migrations.deinit(self.allocator);
 
         // Identify shards that need rebalancing
@@ -405,7 +405,7 @@ pub const ShardManager = struct {
 
     // Query routing for distributed queries
     pub fn routeQuery(self: *ShardManager, query: Query) !QueryPlan {
-        var affected_shards = std.ArrayList(u64){};
+        var affected_shards = std.ArrayList(u64).empty;
         defer affected_shards.deinit(self.allocator);
 
         // Determine which shards are affected by the query
@@ -686,7 +686,7 @@ pub const ShardManager = struct {
         _ = self;
         return ShardNode{
             .id = @intCast(compat_timestamp()),
-            .address = try net.Address.parseIp4("127.0.0.1", 7567),
+            .address = try net.IpAddress.parseIp4("127.0.0.1", 7567),
             .role = .primary,
             .status = .healthy,
             .last_heartbeat = compat_timestamp(),
@@ -698,7 +698,7 @@ pub const ShardManager = struct {
         for (replicas, 0..) |*replica, i| {
             replica.* = ShardNode{
                 .id = @intCast(compat_timestamp() + i),
-                .address = try net.Address.parseIp4("127.0.0.1", @intCast(7568 + i)),
+                .address = try net.IpAddress.parseIp4("127.0.0.1", @intCast(7568 + i)),
                 .role = .replica,
                 .status = .healthy,
                 .last_heartbeat = compat_timestamp(),
@@ -976,7 +976,7 @@ pub const SimpleShardManager = struct {
 
     pub fn getReplicas(self: *ShardManager, key: []const u8) ![]Shard {
         const nodes = try self.consistent_hash.getNodes(key, self.replication_factor);
-        var replicas = std.ArrayList(Shard){};
+        var replicas = std.ArrayList(Shard).empty;
 
         for (nodes) |node| {
             var iter = self.shards.iterator();
@@ -1102,9 +1102,9 @@ pub const SimpleShardManager = struct {
         const threshold = avg_size / 2; // 50% deviation threshold
 
         // Find shards that need splitting or merging
-        var to_split = std.ArrayList(u64){};
+        var to_split = std.ArrayList(u64).empty;
         defer to_split.deinit(self.allocator);
-        var to_merge = std.ArrayList(u64){};
+        var to_merge = std.ArrayList(u64).empty;
         defer to_merge.deinit(self.allocator);
 
         iter = self.shards.iterator();
@@ -1156,7 +1156,7 @@ test "enhanced ShardManager addShard stores shard in map" {
         .id = shard_id,
         .primary = .{
             .id = 1,
-            .address = net.Address.initIp4(.{ 127, 0, 0, 1 }, 7001),
+            .address = try net.IpAddress.parseIp4("127.0.0.1", 7001),
             .role = .primary,
             .status = .healthy,
             .last_heartbeat = 0,
@@ -1208,7 +1208,7 @@ test "enhanced ShardManager setTransportCallback sets field" {
         .requestBatchFn = struct {
             fn f(
                 _: *anyopaque,
-                _: net.Address,
+                _: net.IpAddress,
                 _: u64,
                 _: u64,
                 _: u64,
@@ -1220,7 +1220,7 @@ test "enhanced ShardManager setTransportCallback sets field" {
         .sendBatchFn = struct {
             fn f(
                 _: *anyopaque,
-                _: net.Address,
+                _: net.IpAddress,
                 _: u64,
                 _: []const u8,
                 _: u32,
@@ -1248,7 +1248,7 @@ test "enhanced ShardManager getShardForKey with hash strategy returns added shar
         .id = shard_id,
         .primary = .{
             .id = 1,
-            .address = net.Address.initIp4(.{ 127, 0, 0, 1 }, 7002),
+            .address = try net.IpAddress.parseIp4("127.0.0.1", 7002),
             .role = .primary,
             .status = .healthy,
             .last_heartbeat = 0,

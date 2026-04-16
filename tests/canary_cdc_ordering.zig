@@ -5,7 +5,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // Ensures monotonic sequence assignment for emitted events.
 
 test "TestCANARY_REQ_GQL_042_CDC_Ordering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -35,6 +35,29 @@
 // lands.
 
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const testing = std.testing;
 const rls = @import("rls");
 const rls_types = @import("rls_types");
@@ -112,8 +135,8 @@ test "GAP-0510: compiled policy filters rows by property via checkRowAccessByUse
         },
         .check_expr = null,
         .enabled = true,
-        .created_at = std.time.milliTimestamp(),
-        .updated_at = std.time.milliTimestamp(),
+        .created_at = compat_milliTimestamp(),
+        .updated_at = compat_milliTimestamp(),
         .created_by = 0,
         .temporal = null,
         .data_classification = null,

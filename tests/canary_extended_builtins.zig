@@ -7,7 +7,7 @@ const ext_types = geode.ext_types;
 // CANARY: REQ=REQ-GQL-083; FEATURE="ExtendedDecimalFormatting"; ASPECT=FORMATTER; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_083_DecimalFormatterRoundTrip; OWNER=engine; UPDATED=2025-09-27
 
 test "TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var reg = try eval_ext.initFunctionRegistry(allocator);

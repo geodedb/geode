@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Measures throughput of pattern matching across mixed patterns.
 
 test "BenchmarkCANARY_REQ_GQL_032_PatternPerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -40,6 +40,6 @@ test "BenchmarkCANARY_REQ_GQL_032_PatternPerf" {
     const elapsed = end_ns - start_ns;
     const ops = iterations * patterns.len * inputs.len;
     const ops_per_sec = @as(f64, @floatFromInt(ops)) / (@as(f64, @floatFromInt(elapsed)) / 1_000_000_000.0);
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_032_PatternPerf\",\"ops\":{d},\"ns\":{d},\"ops_per_sec\":{d:.2}}\n", .{ ops, elapsed, ops_per_sec });
 }

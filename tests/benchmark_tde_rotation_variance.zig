@@ -43,6 +43,6 @@ test "BenchmarkCANARY_REQ_GQL_046_TDERotationVarianceEnvelope" {
     const p95 = sorted[@min(sorted.len - 1, (sorted.len * 95) / 100)];
     try std.testing.expect(cv < 0.22);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.55);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"tde_rotation_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

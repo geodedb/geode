@@ -5,7 +5,7 @@ const explain = @import("../src/planner/cost_explain.zig");
 // CANARY: REQ=REQ-GQL-075; FEATURE="Cost Model Enumeration Seed"; ASPECT=ExplainJSON; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_075_CostModelExplainJSON; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_075_CostModelExplainJSON" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ops = [_]seed.OpDescriptor{
         .{ .kind = .Scan },
@@ -26,7 +26,7 @@ test "TestCANARY_REQ_GQL_075_CostModelExplainJSON" {
 }
 
 test "TestCANARY_REQ_GQL_075_CostModelCardinalityCalibrationFeedback" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const ops = [_]seed.OpDescriptor{ .{ .kind = .Scan }, .{ .kind = .Expand }, .{ .kind = .Filter, .selectivity = 0.5 } };
     // Derive actual rows by perturbing estimates; we don't know estimates beforehand so we call explainChainWithCalibration.

@@ -37,7 +37,7 @@ test "TestCANARY_REQ_GQL_075_AdaptiveEstimatorBiasClampWarning" {
     try std.testing.expect(reg.high_clamp_warning[@intFromEnum(kind)]);
 
     // Build explain JSON and ensure warnings surface
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa.deinit());
     const allocator = gpa.allocator();
 

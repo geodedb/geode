@@ -581,10 +581,10 @@ pub const ExecutionResult = struct {
 
     // CANARY: REQ=REQ-LIB-MIGRATION-JSON-023; FEATURE="JSON Library Migration"; ASPECT=ResultSerialization; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-24
     pub fn toJsonWithFlags(self: ExecutionResult, allocator: std.mem.Allocator, external_flags: []const []const u8) ![]u8 {
-        var result = try std.ArrayList(u8).initCapacity(allocator, 256);
-        errdefer result.deinit(allocator);
+        var result: std.Io.Writer.Allocating = try .initCapacity(allocator, 256);
+        errdefer result.deinit();
 
-        var encoder = json_lib.streamingEncoder(allocator, result.writer(allocator), .{});
+        var encoder = json_lib.streamingEncoder(allocator, &result.writer, .{});
         defer encoder.deinit();
 
         // Build JSON object: {"status_class":"00000","columns":[...],"rows":[...],"flagger_findings":[...]}
@@ -609,10 +609,10 @@ pub const ExecutionResult = struct {
             try encoder.beginArray();
             for (row) |val| {
                 // Use writeValue to get JSON for this value, then write it raw
-                var val_buf = try std.ArrayList(u8).initCapacity(allocator, 64);
-                defer val_buf.deinit(allocator);
-                try writeValue(allocator, val_buf.writer(allocator), val);
-                try encoder.writeRaw(val_buf.items);
+                var val_buf: std.Io.Writer.Allocating = try .initCapacity(allocator, 64);
+                defer val_buf.deinit();
+                try writeValue(allocator, &val_buf.writer, val);
+                try encoder.writeRaw(val_buf.written());
             }
             try encoder.endArray();
         }
@@ -631,7 +631,7 @@ pub const ExecutionResult = struct {
 
         try encoder.endObject();
 
-        return result.toOwnedSlice(allocator);
+        return result.toOwnedSlice();
     }
 };
 

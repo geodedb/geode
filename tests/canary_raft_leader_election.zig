@@ -7,7 +7,7 @@ fn dummySend(_: []const u8, _: raft_mod.MessageType, _: []const u8) void {}
 fn dummyApply(_: []const u8) void {}
 
 test "TestCANARY_REQ_GQL_040_RaftLeaderElection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

@@ -135,7 +135,7 @@ test "readLine properly manages memory" {
     const allocator = testing.allocator;
 
     // Track allocations
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const leaked = gpa.deinit();
         testing.expect(leaked == .ok) catch |err| {

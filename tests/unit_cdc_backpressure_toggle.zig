@@ -21,7 +21,7 @@ fn makeEngine(gpa: std.mem.Allocator, watermark: usize) !*cdc.CDCEngine {
 }
 
 test "unit: CDC backpressure toggles when threshold crossed" {
-    var gpa_allocator = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa_allocator = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa_allocator.deinit());
     const gpa = gpa_allocator.allocator();
 

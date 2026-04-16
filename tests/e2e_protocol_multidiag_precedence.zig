@@ -62,7 +62,7 @@ fn assertUs001Flag(err: []const u8, present: bool) !void {
 // Precedence reference: US001, IllegalOrderKey, GroupByIllegal, TypeMismatch
 
 test "multidiag precedence: US001 only" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const res = try runCli(gpa.allocator(), "RETURN 1 LIMIT 2");
     try testing.expect(res.code == 2);
@@ -71,7 +71,7 @@ test "multidiag precedence: US001 only" {
 }
 
 test "multidiag precedence: IllegalOrderKey only" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const res = try runCli(gpa.allocator(), "RETURN a ORDER BY f(a)");
     try testing.expect(res.code == 2);
@@ -80,7 +80,7 @@ test "multidiag precedence: IllegalOrderKey only" {
 }
 
 test "multidiag precedence: US001 + IllegalOrderKey" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const res = try runCli(gpa.allocator(), "RETURN a ORDER BY f(a) LIMIT 5");
     try testing.expect(res.code == 2);
@@ -90,7 +90,7 @@ test "multidiag precedence: US001 + IllegalOrderKey" {
 }
 
 test "multidiag precedence: TypeMismatch + US001" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const res = try runCli(gpa.allocator(), "RETURN (\"a\" + 1) LIMIT 1");
     try testing.expect(res.code == 2);
@@ -101,7 +101,7 @@ test "multidiag precedence: TypeMismatch + US001" {
 }
 
 test "multidiag precedence: All three US001 + IllegalOrderKey + TypeMismatch" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const res = try runCli(gpa.allocator(), "RETURN (\"a\" + 1) AS a ORDER BY f(a) LIMIT 1");
     try testing.expect(res.code == 2);

@@ -23,6 +23,11 @@ fn compat_timestamp() i64 {
     }
     return @as(i64, ts.sec);
 }
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
 fn compat_microTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
     if (comptime @import("builtin").os.tag == .linux) {
@@ -106,7 +111,7 @@ pub const TemporalStorage = struct {
             .allocator = allocator,
             .nodes = std.AutoHashMap(u64, *TemporalNode).init(allocator),
             .edges = std.AutoHashMap(u64, *TemporalEdge).init(allocator),
-            .transaction_log = std.ArrayList(TransactionRecord){},
+            .transaction_log = std.ArrayList(TransactionRecord).empty,
             .current_transaction_id = std.atomic.Value(u64).init(1),
             .retention_policy = retention_policy,
         };
@@ -154,7 +159,7 @@ pub const TemporalStorage = struct {
             .id = id,
             .labels = labels,
             .properties = std.StringHashMap(VersionedValue).init(self.allocator),
-            .versions = std.ArrayList(TemporalVersion){},
+            .versions = std.ArrayList(TemporalVersion).empty,
             .created_at = TemporalVersion{
                 .transaction_id = txn_id,
                 .timestamp = timestamp,
@@ -438,7 +443,7 @@ pub const TemporalQueryExecutor = struct {
         _ = query;
 
         // Execute query with temporal filter
-        var results = std.ArrayList(TemporalBinding){};
+        var results = std.ArrayList(TemporalBinding).empty;
 
         // Example: Get all nodes as of the specified time
         var it = self.storage.nodes.iterator();
@@ -565,7 +570,7 @@ test "vacuum old versions" {
     try storage.createNode(3, &[_][]const u8{"Test"}, props);
 
     // Wait and update
-    std.Thread.sleep(1100 * std.time.ns_per_ms);
+    compat_sleep(1100 * std.time.ns_per_ms);
 
     try props.put("value", "v2");
     try storage.updateNode(3, props);

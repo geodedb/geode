@@ -77,7 +77,7 @@ test "BenchmarkCANARY_REQ_GQL_016_PathMultiBranchDeterminismVarianceEnvelope" {
     }
     const st = stats(timings);
     // Treat as Graph Analytics class threshold (≤0.23 CV, p95/mean ≤2.60)
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     // Assert thresholds
     try std.testing.expect(st.cv <= 0.23);
     try std.testing.expect(@as(f128, @floatFromInt(st.p95)) <= @as(f128, @floatCast(st.mean)) * 2.60);

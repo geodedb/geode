@@ -51,6 +51,6 @@ test "BenchmarkCANARY_REQ_GQL_083_CompactionVarianceEnvelope" {
     // Snapshot envelope: keep variance reasonable on local disk.
     try std.testing.expect(cv <= 0.50);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 3.00);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"snapshot_compaction_pipeline_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

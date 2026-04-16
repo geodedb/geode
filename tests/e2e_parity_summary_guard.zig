@@ -11,7 +11,7 @@ test "governance: parity summary guard (optional)" {
         // Collect hashes by test name
         var summary_map = std.StringHashMap(bool).init(allocator);
         defer summary_map.deinit();
-        var buf_reader = std.io.bufferedReader(file.reader());
+        var buf_reader = std.Io.bufferedReader(file.reader());
         var in_stream = buf_reader.reader();
         while (true) {
             var line = std.ArrayList(u8).init(allocator);

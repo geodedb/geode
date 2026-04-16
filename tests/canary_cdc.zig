@@ -5,7 +5,7 @@ const cdc = @import("../src/streaming/cdc_enhanced.zig");
 // TestCANARY_REQ_GQL_042_CDC_StartStop
 
 test "TestCANARY_REQ_GQL_042_CDC_StartStop" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var engine = try cdc.CDCEngine.init(allocator, .{ .enabled = false });

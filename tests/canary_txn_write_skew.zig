@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const txn = @import("txn");
 
 // CANARY: REQ=REQ-GQL-025; FEATURE="Transactions/MVCC"; ASPECT=WriteSkewDetection; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_025_WriteSkewDetection; BENCH=BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope; OWNER=txn; UPDATED=2025-09-21
@@ -58,14 +81,14 @@ test "BenchmarkCANARY_REQ_GQL_025_WriteSkewVarianceEnvelope" {
         mgr.recordWrite("doc:2:off", &t2);
         var t1c = t1;
         var t2c = t2;
-        const start = std.time.nanoTimestamp();
+        const start = compat_nanoTimestamp();
         _ = mgr.commit(&t1c) catch |e| {
             if (e != error.SerializationFailure and e != error.EarlyConflict) return e;
         };
         _ = mgr.commit(&t2c) catch |e| {
             if (e != error.SerializationFailure and e != error.EarlyConflict) return e;
         }; // one abort expected sometimes
-        const end = std.time.nanoTimestamp();
+        const end = compat_nanoTimestamp();
         samples[i] = @as(u64, @intCast(end - start));
         mgr.deinit();
     }

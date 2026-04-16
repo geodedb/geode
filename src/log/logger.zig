@@ -124,7 +124,7 @@ pub fn log(l: Level, msg: []const u8, kvs: anytype) void {
     var tbuf: [32]u8 = undefined;
     const ts = timestamp(&tbuf);
     var buf: [2048]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
+    var fbs = std.Io.fixedBufferStream(&buf);
     const w = fbs.writer();
     _ = w.writeAll("{") catch return;
     _ = w.writeAll("\"ts\":\"") catch return;

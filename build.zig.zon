@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpIu9AQAPZxjgM1lW4gKwyNqI6fR49tTCN7uWm3Yl",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#bf743b1f850d30705be5259a65325a2aed319254",
-            .hash = "geode_client_zig-0.2.1-8ysbV5ybCADHRiNEyyziIh815R8Uviq6ggIvikIWL3Hu",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#4b7cb8ba39252198c1681a949d6c7f82b7abe1e7",
+            .hash = "geode_client_zig-0.2.1-8ysbV5ybCAAZPBZ_YKQkxdIP0eLIoMvqHrnMc7_lUBKx",
         },
 
         // =======================================================================
@@ -168,8 +168,8 @@
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git#6afedb73cb7f794d895abb3c3614d6a81988cc83",
-            .hash = "audit-0.1.0-J9TtCCQhAwCed_BuOaShB2sYqYr5sjRA94KZVv7lmBRT",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git#efa6c8e6e0aaf5be0add3ee2571365b7a63e43c0",
+            .hash = "audit-0.1.0-J9TtCO1AAwDidOd7gOQUW9tGTAl2S135hccmCvCexEux",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics

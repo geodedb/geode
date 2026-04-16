@@ -12,7 +12,7 @@ const builders = @import("../src/graph/builders.zig");
 // Articulation: 2,3
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

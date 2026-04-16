@@ -4,7 +4,7 @@ const planner = @import("../src/planner.zig");
 // TestCANARY_REQ_GQL_016_PathExpandBfs - ensures BFS enumerates paths within hop bounds and deterministic ordering heuristic.
 // We build a simple chain 1-2-3 and expect paths of length 1 and 2.
 test "TestCANARY_REQ_GQL_016_PathExpandBfs" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var adj = planner.AdjacencyList.init(allocator);

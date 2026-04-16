@@ -16,7 +16,7 @@ const async_io_simple = @import("../src/performance/async_io_simple.zig");
 test "Integration: Buffered I/O + JSON processing pipeline" {
     print("\n=== INTEGRATION TEST: BUFFERED I/O + JSON PROCESSING ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -70,7 +70,7 @@ test "Integration: Buffered I/O + JSON processing pipeline" {
 test "Integration: Memory-mapped I/O + Async operations" {
     print("\n=== INTEGRATION TEST: MEMORY-MAPPED I/O + ASYNC OPERATIONS ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -119,7 +119,7 @@ test "Integration: Memory-mapped I/O + Async operations" {
 test "Integration: Full performance pipeline simulation" {
     print("\n=== INTEGRATION TEST: FULL PERFORMANCE PIPELINE ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -202,7 +202,7 @@ test "Integration: Full performance pipeline simulation" {
 test "Integration: Performance regression detection" {
     print("\n=== INTEGRATION TEST: PERFORMANCE REGRESSION DETECTION ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -276,7 +276,7 @@ test "Integration: Performance regression detection" {
 test "CANARY: REQ=REQ-PERF-INT-001 - Performance integration validation" {
     print("\n=== CANARY VALIDATION: PERFORMANCE INTEGRATION ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

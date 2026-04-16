@@ -2,6 +2,17 @@ const std = @import("std");
 const graph_store = @import("geode").graph_store;
 const varcfg = @import("geode").benchmarks.variance_config;
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+
 // CANARY: REQ=REQ-GQL-022; FEATURE="Storage Snapshot Load"; ASPECT=GraphStoreLoadOptimizationDeltaVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_022_GraphStoreLoadCorrectness; BENCH=BenchmarkCANARY_REQ_GQL_022_GraphStoreLoadOptimizationDeltaVarianceEnvelope; OWNER=storage; UPDATED=2026-02-04
 // Benchmark target (S-016): Guard snapshot load optimization delta stability
 // Acceptance: speedup CV<=0.18, p95/mean<=1.35 across N samples; mean speedup >=1.00 (non-regression)
@@ -45,13 +56,13 @@ fn sampleDelta(allocator: std.mem.Allocator) !struct { baseline: u64, optimized:
 }
 
 pub fn runRedoOptimizationDeltaVarianceEnvelope() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var td = std.testing.tmpDir(.{});
     defer td.cleanup();
-    const base = try td.dir.realpathAlloc(allocator, ".");
+    const base = try tmpDirRealpathAlloc(allocator, &td.sub_path);
     defer allocator.free(base);
 
     graph_store.setDataDirOverride(allocator, base);

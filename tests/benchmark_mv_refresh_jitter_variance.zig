@@ -26,7 +26,7 @@ fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
 test "BenchmarkCANARY_REQ_GQL_076_MvRefreshLatencyVarianceEnvelope" {
     // This benchmark simulates refresh latency by emulating N refresh cycles with variable trivial work.
     const runs: usize = 50; // >=40
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var latencies = try gpa.allocator().alloc(u64, runs);
     defer gpa.allocator().free(latencies);

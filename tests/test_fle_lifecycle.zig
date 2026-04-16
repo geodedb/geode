@@ -5,7 +5,7 @@ const fle_key_types = geode.fle_key_types;
 // const fle_commands = geode.fle_commands; // Not used directly in this test yet
 
 test "FLE complete lifecycle" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

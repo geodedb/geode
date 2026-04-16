@@ -50,7 +50,7 @@ pub fn main() !void {
     const dur_new = std.time.nanoTimestamp() - start_new;
 
     // Print results
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("Old comparator: calls = {d}, time = {d} ns\n", .{ old_count, dur_old.nano() });
     try stdout.print("New comparator: calls = {d}, time = {d} ns\n", .{ new_count, dur_new.nano() });
 }

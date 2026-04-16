@@ -7,7 +7,7 @@ fn dummySend(_: []const u8, _: raft_mod.MessageType, _: []const u8) void {}
 fn dummyApply(_: []const u8) void {}
 
 test "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var prng = std.rand.DefaultPrng.init(0xC0FFEE);
@@ -48,7 +48,7 @@ test "BenchmarkCANARY_REQ_GQL_040_RaftElectionLatency" {
     // Ensure average ticks reasonable (< 15 arbitrary sanity bound)
     try std.testing.expect(avg < 15.0);
     // Write a small JSON metrics artifact (stdout) to mirror other benches (not strictly required but useful)
-    var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
+    var bw = std.Io.bufferedWriter(std.Io.getStdErr().writer());
     const w = bw.writer();
     try w.print("{\"metric\":\"raft_election_avg_ticks\",\"value\":{d:.2}}\n", .{avg});
     try bw.flush();

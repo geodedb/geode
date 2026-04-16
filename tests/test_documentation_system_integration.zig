@@ -7,7 +7,7 @@ const expect = testing.expect;
 
 test "Documentation link integrity across all files" {
     // Test that all documentation links in CLAUDE.md point to existing files
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -66,7 +66,7 @@ test "Essential documentation files exist and are accessible" {
         };
 
         // Verify file is readable and has content
-        var gpa = std.heap.GeneralPurposeAllocator(.{});
+        var gpa = std.heap.DebugAllocator(.{});
         defer _ = gpa.deinit();
         const allocator = gpa.allocator();
 
@@ -84,7 +84,7 @@ test "Essential documentation files exist and are accessible" {
 
 test "Documentation cross-reference validation" {
     // Test that documentation files properly reference each other
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -116,7 +116,7 @@ test "Documentation cross-reference validation" {
 
 test "Documentation consistency across feature implementations" {
     // Test that recently implemented features have corresponding documentation
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -162,7 +162,7 @@ test "Documentation consistency across feature implementations" {
 
 test "Documentation navigation workflow efficiency" {
     // Test that users can efficiently navigate from CLAUDE.md to detailed information
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -208,7 +208,7 @@ test "Documentation system performance under load" {
     // Test that documentation system performs well when accessing multiple files
     const start_time = std.time.nanoTimestamp();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -250,7 +250,7 @@ test "Documentation system performance under load" {
 
 test "Documentation version consistency and freshness" {
     // Test that documentation reflects current implementation status
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -293,7 +293,7 @@ test "Documentation version consistency and freshness" {
 
 test "Documentation accessibility and user experience" {
     // Test that documentation is accessible to developers and users
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -370,7 +370,7 @@ test "TestCANARY_REQ_DOCUMENTATION_SYSTEM_INTEGRATION_001" {
     // This test verifies documentation system integration functionality
     // as specified in REQ-DOCUMENTATION-SYSTEM-INTEGRATION-001
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

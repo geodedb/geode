@@ -60,7 +60,7 @@ pub const VectorF32 = struct {
     }
 
     pub fn toString(self: VectorF32, allocator: std.mem.Allocator) ![]u8 {
-        var result = std.ArrayList(u8){};
+        var result = std.ArrayList(u8).empty;
         defer result.deinit(allocator);
 
         try result.append(allocator, '[');
@@ -109,10 +109,7 @@ pub const VectorF32 = struct {
         }
 
         // Sum the SIMD vector elements
-        var sum: f32 = 0.0;
-        for (0..8) |j| {
-            sum += sum_vec[j];
-        }
+        var sum: f32 = @reduce(.Add, sum_vec);
 
         // Handle remaining elements
         while (i < self.dim) : (i += 1) {
@@ -226,10 +223,7 @@ pub const VectorF32 = struct {
         }
 
         // Sum the SIMD vector elements
-        var result: f32 = 0.0;
-        for (0..8) |j| {
-            result += sum_vec[j];
-        }
+        var result: f32 = @reduce(.Add, sum_vec);
 
         // Handle remaining elements
         while (i < self.dim) : (i += 1) {
@@ -302,14 +296,14 @@ pub const VectorF32 = struct {
     }
 
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !VectorF32 {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         if (tag != 0x10) return error.InvalidVectorTag;
 
-        const dim = try reader.readInt(u16, .little);
+        const dim = try reader.takeInt(u16, .little);
         const data = try allocator.alloc(f32, dim);
 
         for (0..dim) |i| {
-            data[i] = @bitCast(try reader.readInt(u32, .little));
+            data[i] = @bitCast(try reader.takeInt(u32, .little));
         }
 
         return VectorF32{
@@ -367,7 +361,7 @@ pub const VectorI32 = struct {
     }
 
     pub fn toString(self: VectorI32, allocator: std.mem.Allocator) ![]u8 {
-        var result = std.ArrayList(u8){};
+        var result = std.ArrayList(u8).empty;
         defer result.deinit(allocator);
 
         try result.append(allocator, '[');
@@ -488,14 +482,14 @@ pub const VectorI32 = struct {
     }
 
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !VectorI32 {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         if (tag != 0x11) return error.InvalidVectorTag;
 
-        const dim = try reader.readInt(u16, .little);
+        const dim = try reader.takeInt(u16, .little);
         const data = try allocator.alloc(i32, dim);
 
         for (0..dim) |i| {
-            data[i] = try reader.readInt(i32, .little);
+            data[i] = try reader.takeInt(i32, .little);
         }
 
         return VectorI32{
@@ -594,11 +588,13 @@ test "Vector encoding and decoding" {
     defer vec_f32.deinit(allocator);
 
     var buffer: [64]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try vec_f32.encode(fbs.writer());
-    fbs.pos = 0;
-    const decoded_f32 = try VectorF32.decode(fbs.reader(), allocator);
+    try vec_f32.encode(&writer);
+    const written_bytes_f32 = writer.buffered().len;
+
+    var reader = std.Io.Reader.fixed(buffer[0..written_bytes_f32]);
+    const decoded_f32 = try VectorF32.decode(&reader, allocator);
     defer decoded_f32.deinit(allocator);
 
     try testing.expectEqual(vec_f32.dim, decoded_f32.dim);
@@ -607,13 +603,15 @@ test "Vector encoding and decoding" {
     }
 
     // Test VectorI32 encoding/decoding
-    fbs.pos = 0;
+    var writer2 = std.Io.Writer.fixed(&buffer);
     const vec_i32 = try VectorI32.fromString("[10, 20, 30]", allocator);
     defer vec_i32.deinit(allocator);
 
-    try vec_i32.encode(fbs.writer());
-    fbs.pos = 0;
-    const decoded_i32 = try VectorI32.decode(fbs.reader(), allocator);
+    try vec_i32.encode(&writer2);
+    const written_bytes_i32 = writer2.buffered().len;
+
+    var reader2 = std.Io.Reader.fixed(buffer[0..written_bytes_i32]);
+    const decoded_i32 = try VectorI32.decode(&reader2, allocator);
     defer decoded_i32.deinit(allocator);
 
     try testing.expectEqual(vec_i32.dim, decoded_i32.dim);

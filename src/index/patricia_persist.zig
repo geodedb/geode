@@ -70,7 +70,7 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, path: []const u8) !patricia.Pa
     defer allocator.free(data);
 
     // Create stream to read from decrypted data
-    var stream = std.io.fixedBufferStream(data);
+    var stream = std.Io.fixedBufferStream(data);
 
     var header: Header = undefined;
     _ = try stream.reader().readAll(std.mem.asBytes(&header));

@@ -84,7 +84,7 @@ test "TestCANARY_REQ_GQL_042_CDC_DiagnosticsProtocol" {
     var writer = buf.writer(allocator);
     try protobuf.encode(&writer, allocator, msg);
 
-    var reader = std.io.fixedBufferStream(buf.items).reader();
+    var reader = std.Io.fixedBufferStream(buf.items).reader();
     var decoded = try protobuf.decode(schema.ClientPacket, &reader, allocator);
     defer decoded.deinit(allocator);
     try testing.expect(decoded.quic != null);

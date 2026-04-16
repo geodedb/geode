@@ -16,7 +16,7 @@ fn collectAll(alloc: std.mem.Allocator, cur_ptr: anytype) ![]u32 {
 
 // Ensures: next advances, peek does not advance, reset returns to start, remaining/exhausted correct, empty slice safe.
 test "TestCANARY_REQ_GQL_068_Cursor" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

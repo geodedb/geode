@@ -18,7 +18,7 @@ fn makeChainGraph(allocator: std.mem.Allocator, n: usize) ![]const []const u64 {
 }
 
 test "BenchmarkCANARY_REQ_GQL_051_GPUOperatorKernelFoundations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

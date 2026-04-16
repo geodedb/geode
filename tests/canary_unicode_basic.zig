@@ -4,7 +4,7 @@ const unicode = @import("../unicode/geode_unicode.zig");
 // CANARY: REQ=REQ-GQL-UNICODE-005; FEATURE="UnicodeCore"; ASPECT=CaseFolding; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_005_FoldSharpS; OWNER=unicode; UPDATED=2025-09-27
 
 test "TestCANARY_REQ_GQL_UNICODE_004_NfcRoundTrip" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const input = "E\xCC\x81 and e\xCC\x81"; // E + combining acute, e + combining acute
@@ -15,7 +15,7 @@ test "TestCANARY_REQ_GQL_UNICODE_004_NfcRoundTrip" {
 }
 
 test "TestCANARY_REQ_GQL_UNICODE_005_FoldSharpS" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const input = "Stra\xC3\x9Fe"; // Straße

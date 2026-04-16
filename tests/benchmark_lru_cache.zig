@@ -29,7 +29,7 @@ test "BenchmarkCANARY_REQ_GQL_068_LRU" {
         total += @as(u64, @intCast(end - start));
     }
     const avg = total / 3;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"lru_cache\",\"avg_ns\":{d}}\n", .{avg});
     // Loose upper bound (debug) — adjust as perf evolves
     try std.testing.expect(avg < 2_200_000_000);

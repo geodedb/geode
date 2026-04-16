@@ -125,7 +125,7 @@ test "Large result set JSON generation performance" {
 
     // Simulate large query result serialization (like QUIC transport)
     var result_buffer: [256 * 1024]u8 = undefined; // 256KB buffer
-    var stream = std.io.fixedBufferStream(&result_buffer);
+    var stream = std.Io.fixedBufferStream(&result_buffer);
     var writer = stream.writer();
 
     // Write JSON result structure
@@ -187,7 +187,7 @@ test "CANARY: REQ=REQ-PERF-JSON-001 - JSON optimization integration" {
 
     // 2. Pre-allocation strategy simulation
     var buffer: [16384]u8 = undefined; // 16KB pre-allocated
-    var stream = std.io.fixedBufferStream(&buffer);
+    var stream = std.Io.fixedBufferStream(&buffer);
     var writer = stream.writer();
 
     try writer.writeAll("[");

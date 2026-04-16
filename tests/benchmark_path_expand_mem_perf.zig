@@ -28,6 +28,6 @@ test "BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf" {
     for (results) |r| allocator.free(r.edge_ids);
     allocator.free(results);
     const elapsed = end - start;
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_016_PathExpandMemPerf\",\"elapsed_ns\":{d},\"accum_edge_ids\":{d}}\n", .{ elapsed, total_edges });
 }

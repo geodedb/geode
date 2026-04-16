@@ -4,13 +4,13 @@
 const std = @import("std");
 
 pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
+    // Prints to stderr (it's a shortcut based on `std.Io.getStdErr()`)
     std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
 
     // stdout is for the actual output of your application, for example if you
     // are implementing gzip, then only the compressed bytes should be sent to
     // stdout, not any debugging messages.
-    // Zig 0.15 std.io removed getStdOut; use std.io.getStdOutBufferedWriter or fallback to stderr for demo
+    // Zig 0.15 std.Io removed getStdOut; use std.Io.getStdOutBufferedWriter or fallback to stderr for demo
     std.debug.print("Run `zig build test` to run the tests.\n", .{});
 }
 

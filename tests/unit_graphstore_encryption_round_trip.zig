@@ -7,7 +7,7 @@ const tde_file = geode.tde_file_encryption;
 // CANARY: REQ=REQ-GQL-TDE-002; FEATURE="Snapshot encryption"; ASPECT=TEST; STATUS=TESTED; OWNER=security; UPDATED=2026-02-04
 
 test "graphstore encryption round trip save+load" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

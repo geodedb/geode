@@ -1,6 +1,17 @@
 const std = @import("std");
 const repl_config = @import("repl_config.zig");
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+
 // CANARY: REQ=REQ-REPL-SESSION-001; FEATURE="REPL Session Persistence"; ASPECT=Implementation; STATUS=TESTED; TEST=test_session_state; OWNER=repl; UPDATED=2025-11-17
 
 /// Session state that can be persisted
@@ -50,7 +61,7 @@ pub const SessionState = struct {
     /// Save session state to file
     pub fn save(self: *const SessionState, allocator: std.mem.Allocator, path: []const u8) !void {
         // Create JSON representation
-        var json = std.ArrayList(u8){};
+        var json = std.ArrayList(u8).empty;
         defer json.deinit(allocator);
 
         try json.appendSlice(allocator, "{\n");
@@ -121,17 +132,21 @@ pub const SessionState = struct {
         try json.appendSlice(allocator, "}\n");
 
         // Write to file
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-        defer file.close();
-        try file.writeAll(json.items);
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_fs, path, .{});
+        defer file.close(io_fs);
+        try file.writeStreamingAll(io_fs, json.items);
     }
 
     /// Load session state from file
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !SessionState {
-        const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-        defer file.close();
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().openFile(io_fs, path, .{});
+        defer file.close(io_fs);
 
-        const content = try file.readToEndAlloc(allocator, 1 << 20); // 1MB max
+        var file_reader_buf: [4096]u8 = undefined;
+        var file_reader = file.reader(io_fs, &file_reader_buf);
+        const content = try file_reader.interface.allocRemaining(allocator, .limited(1 << 20)); // 1MB max
         defer allocator.free(content);
 
         // Parse JSON
@@ -220,7 +235,7 @@ test "SessionState save and load" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp_dir.sub_path);
     defer allocator.free(tmp_path);
 
     const session_file = try std.fs.path.join(allocator, &.{ tmp_path, "test_session.json" });
@@ -265,16 +280,19 @@ test "SessionState handles missing fields" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp_dir.sub_path);
     defer allocator.free(tmp_path);
 
     const session_file = try std.fs.path.join(allocator, &.{ tmp_path, "minimal_session.json" });
     defer allocator.free(session_file);
 
     // Create minimal session file
-    const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), session_file, .{});
-    defer file.close();
-    try file.writeAll("{\"format\": \"json\"}");
+    {
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_fs, session_file, .{});
+        defer file.close(io_fs);
+        try file.writeStreamingAll(io_fs, "{\"format\": \"json\"}");
+    }
 
     // Load
     var loaded = try SessionState.load(allocator, session_file);

@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Validates negated character class and normal class interplay.
 
 test "TestCANARY_REQ_GQL_032_PatternRegexNegClass" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

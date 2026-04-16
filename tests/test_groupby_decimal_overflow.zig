@@ -6,7 +6,7 @@ const ast = @import("../src/ast.zig");
 // Validates deterministic NULL on decimal SUM/AVG overflow (no wrap) per implementation-defined policy (document in flagger later).
 
 test "TestCANARY_REQ_GQL_012_DecimalOverflowHandling" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

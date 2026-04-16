@@ -5,7 +5,7 @@ const pr = geode.graph.pagerank;
 // CANARY: REQ=REQ-GQL-067; FEATURE="Centrality"; ASPECT=PageRankVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope; OWNER=graph; UPDATED=2025-09-21
 
 test "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -56,6 +56,6 @@ test "BenchmarkCANARY_REQ_GQL_067_PageRankVarianceEnvelope" {
     try std.testing.expect(cv < 0.18);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.5);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"pagerank_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

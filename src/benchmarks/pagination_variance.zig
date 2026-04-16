@@ -61,7 +61,7 @@ pub fn benchmarkPaginationOrderedVarianceEnvelope() !void {
     // Emit schema_version=1 line
     {
         var buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const w = fbs.writer();
         const scale = 10000.0;
         w.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_ordered_planning_variance\",") catch {};
@@ -87,7 +87,7 @@ pub fn benchmarkPaginationOrderedVarianceEnvelope() !void {
     // schema_version=2 (extended fields + thresholds)
     {
         var buf: [640]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const w = fbs.writer();
         const scale = 10000.0;
         const jitter_class = if (cv < 0.10) "low" else if (cv < 0.20) "medium" else "high";

@@ -51,7 +51,7 @@ test "BenchmarkCANARY_REQ_GQL_075_AdvancedCostModelCalibrationVarianceEnvelope" 
     // Enumerate synthetic logical plans via enumerator stub (if available) or build a small tree set.
     // We'll generate balanced vs left-deep join trees with varying leaf counts to exercise cost factors.
     const runs: usize = 60; // >=48 samples
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     var costs = try gpa.allocator().alloc(f64, runs);

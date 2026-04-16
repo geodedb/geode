@@ -6,7 +6,7 @@ const constraints = @import("../src/storage/constraints.zig");
 // a set of patterns that would otherwise explode combinatorially.
 
 test "BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -44,7 +44,7 @@ test "BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf" {
     const elapsed = end - start;
     const after_ast = gpa.getStats();
     const used_bytes = after_ast.allocated - before_ast.allocated; // net allocated (approx)
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_032_PatternStateDedupPerf\",\"elapsed_ns\":{d},\"matches\":{d},\"net_alloc_bytes\":{d}}\n", .{ elapsed, total_matches, used_bytes });
     _ = allocator;
 }

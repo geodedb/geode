@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Measures cost of inserting many unique integer properties.
 
 test "BenchmarkCANARY_REQ_GQL_032_UniquePerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

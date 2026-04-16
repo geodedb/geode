@@ -244,25 +244,25 @@ pub const Signature = struct {
     }
 
     pub fn decode(reader: anytype, allocator: std.mem.Allocator) !Signature {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         if (tag != 0x15) return error.InvalidSignatureTag;
 
-        const alg_byte = try reader.readByte();
+        const alg_byte = try reader.takeByte();
         const alg = @as(SignatureAlg, @enumFromInt(alg_byte));
 
         // Read signature
-        const sig_len = try reader.readInt(u16, .little);
+        const sig_len = try reader.takeInt(u16, .little);
         const signature = try allocator.alloc(u8, sig_len);
-        try reader.readNoEof(signature);
+        try reader.readSliceAll(signature);
 
         // Read public key if present
-        const has_pubkey = try reader.readByte();
+        const has_pubkey = try reader.takeByte();
         var public_key: ?[]const u8 = null;
 
         if (has_pubkey == 1) {
-            const pubkey_len = try reader.readInt(u16, .little);
+            const pubkey_len = try reader.takeInt(u16, .little);
             const pubkey_data = try allocator.alloc(u8, pubkey_len);
-            try reader.readNoEof(pubkey_data);
+            try reader.readSliceAll(pubkey_data);
             public_key = pubkey_data;
         }
 
@@ -313,7 +313,7 @@ pub const KeyPair = struct {
             },
             .ECDSA_P256 => {
                 // Use P256 key generation
-                const key_pair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generate();
+                const key_pair = std.crypto.sign.ecdsa.EcdsaP256Sha256.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
                 const private_key = try allocator.alloc(u8, 32);
                 const public_key = try allocator.alloc(u8, 33); // Compressed format
                 @memcpy(private_key, &key_pair.secret_key.bytes);
@@ -328,7 +328,7 @@ pub const KeyPair = struct {
             },
             .ECDSA_P384 => {
                 // Use P384 key generation
-                const key_pair = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.generate();
+                const key_pair = std.crypto.sign.ecdsa.EcdsaP384Sha384.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
                 const private_key = try allocator.alloc(u8, 48);
                 const public_key = try allocator.alloc(u8, 49); // Compressed format
                 @memcpy(private_key, &key_pair.secret_key.bytes);
@@ -647,11 +647,12 @@ test "Cryptographic encoding and decoding" {
     defer sig.deinit(allocator);
 
     var buffer: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try sig.encode(fbs.writer());
-    fbs.pos = 0;
-    const decoded_sig = try Signature.decode(fbs.reader(), allocator);
+    try sig.encode(&writer);
+    const sig_len = writer.buffered().len;
+    var reader = std.Io.Reader.fixed(buffer[0..sig_len]);
+    const decoded_sig = try Signature.decode(&reader, allocator);
     defer decoded_sig.deinit(allocator);
 
     try testing.expectEqual(sig.alg, decoded_sig.alg);
@@ -793,12 +794,13 @@ test "GAP-0253: ECDSA P256 signature encoding roundtrip" {
 
     // Encode to binary
     var buffer: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try signature.encode(fbs.writer());
+    var writer = std.Io.Writer.fixed(&buffer);
+    try signature.encode(&writer);
+    const written_len = writer.buffered().len;
 
     // Decode from binary
-    fbs.pos = 0;
-    const decoded = try Signature.decode(fbs.reader(), allocator);
+    var reader = std.Io.Reader.fixed(buffer[0..written_len]);
+    const decoded = try Signature.decode(&reader, allocator);
     defer decoded.deinit(allocator);
 
     try testing.expectEqual(signature.alg, decoded.alg);
@@ -824,12 +826,13 @@ test "GAP-0253: ECDSA P384 signature encoding roundtrip" {
 
     // Encode to binary
     var buffer: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
-    try signature.encode(fbs.writer());
+    var writer = std.Io.Writer.fixed(&buffer);
+    try signature.encode(&writer);
+    const written_len = writer.buffered().len;
 
     // Decode from binary
-    fbs.pos = 0;
-    const decoded = try Signature.decode(fbs.reader(), allocator);
+    var reader = std.Io.Reader.fixed(buffer[0..written_len]);
+    const decoded = try Signature.decode(&reader, allocator);
     defer decoded.deinit(allocator);
 
     try testing.expectEqual(signature.alg, decoded.alg);

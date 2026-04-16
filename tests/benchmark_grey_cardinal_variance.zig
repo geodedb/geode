@@ -72,7 +72,7 @@ test "BenchmarkCANARY_REQ_GQL_067_GreyCardinalVarianceEnvelope" {
     }
     const s = stats(samples);
     const cv = if (s.mean > 0) s.stddev / s.mean else 0;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"grey_cardinal_variance\",\"mean_ns\":{d},\"stddev_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(s.mean)), @as(u64, @intFromFloat(s.stddev)), cv, @as(u64, @intFromFloat(s.p95)) });
     // Guardrails: coefficient of variation < 0.15 and p95 < 3x mean (avoid pathological jitter)
     try std.testing.expect(cv < 0.15);

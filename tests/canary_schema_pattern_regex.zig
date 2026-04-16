@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Validates extended regex subset: ., ?, character classes, ranges, anchors, *.
 
 test "TestCANARY_REQ_GQL_032_PatternRegex" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

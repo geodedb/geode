@@ -21,7 +21,7 @@ fn buildMesh(allocator: std.mem.Allocator, n: u32) !builders.Graph {
 }
 
 test "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var g = try buildMesh(allocator, 42);
@@ -58,6 +58,6 @@ test "BenchmarkCANARY_REQ_GQL_067_ClosenessVarianceEnvelope" {
     try std.testing.expect(cv < 0.20);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.5);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"closeness_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

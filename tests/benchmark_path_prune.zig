@@ -4,7 +4,7 @@ const planner = @import("../src/planner.zig");
 // BenchmarkCANARY_REQ_GQL_016_PathPrune - measures path expansion on a branching graph to observe pruning behavior.
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -43,6 +43,6 @@ pub fn main() !void {
     defer allocator.free(results);
     const elapsed = timer.read();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_016_PathPrune\",\"paths\":{d},\"elapsed_ns\":{d}}\n", .{ results.len, elapsed });
 }

@@ -13,7 +13,7 @@ fn makeNode(allocator: std.mem.Allocator, id: u64, peer_ids: []const u64) !*raft
 }
 
 test "TestCANARY_REQ_GQL_070_AppendEntriesSuccess" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const n1 = try makeNode(allocator, 1, &.{2});
@@ -41,7 +41,7 @@ test "TestCANARY_REQ_GQL_070_AppendEntriesSuccess" {
 }
 
 test "TestCANARY_REQ_GQL_070_AppendEntriesTermMismatch" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const n1 = try makeNode(allocator, 1, &.{2});

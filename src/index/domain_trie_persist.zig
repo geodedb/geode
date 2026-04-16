@@ -35,7 +35,7 @@ pub fn loadSnapshot(allocator: std.mem.Allocator, file_path: []const u8) !Domain
     defer allocator.free(data);
 
     // Create stream to read from decrypted data
-    var stream = std.io.fixedBufferStream(data);
+    var stream = std.Io.fixedBufferStream(data);
 
     // Read and validate magic number
     var magic: [4]u8 = undefined;

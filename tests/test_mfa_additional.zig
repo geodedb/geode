@@ -5,7 +5,7 @@ const mfa = @import("../src/security/mfa.zig");
 // Additional MFA coverage tests (reauth interval elapsed, role match any/all, recovery single-use)
 
 fn makeManager() !auth.SecurityManager {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     // Intentionally leak allocator for test lifetime (Zig test harness ends process)
     return try auth.SecurityManager.init(gpa.allocator());
 }

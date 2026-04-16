@@ -168,36 +168,36 @@ pub fn renderTransportResponseWithStreams(
 
         const root_value = std.json.Value{ .object = root };
         const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
-        try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), json_out);
-        try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
+        try out.writeAll(json_out);
+        try out.writeAll("\n");
         return view.has_error or (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00"));
     }
 
     if (view.has_error) {
         if (view.error_message.len > 0) {
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: ");
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.error_message);
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n");
+            try err_out.writeAll("Error: ");
+            try err_out.writeAll(view.error_message);
+            try err_out.writeAll("\r\n");
         } else if (view.error_status.len > 0) {
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error (");
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.error_status);
-            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ")\r\n");
+            try err_out.writeAll("Error (");
+            try err_out.writeAll(view.error_status);
+            try err_out.writeAll(")\r\n");
         }
         return true;
     }
 
     if (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00")) {
-        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error (");
-        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.status_class);
-        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ")\r\n");
+        try err_out.writeAll("Error (");
+        try err_out.writeAll(view.status_class);
+        try err_out.writeAll(")\r\n");
         return true;
     }
 
     if (view.result_kind != .rows) {
         if (view.result_payload) |payload| {
-            try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), payload);
+            try out.writeAll(payload);
             if (payload.len == 0 or payload[payload.len - 1] != '\n') {
-                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n");
+                try out.writeAll("\r\n");
             }
         }
         return false;
@@ -207,30 +207,30 @@ pub fn renderTransportResponseWithStreams(
         if (rows_text) |rows| {
             // CSV header
             for (view.columns, 0..) |col, i| {
-                if (i > 0) _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ",") catch {};
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), col.name) catch {};
+                if (i > 0) _ = out.writeAll(",") catch {};
+                _ = out.writeAll(col.name) catch {};
             }
-            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
+            _ = out.writeAll("\n") catch {};
             // CSV rows
             for (rows.items) |row| {
                 for (row.items, 0..) |cell, i| {
-                    if (i > 0) _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ",") catch {};
+                    if (i > 0) _ = out.writeAll(",") catch {};
                     // Quote fields containing comma, newline, or quote
                     if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"") catch {};
+                        _ = out.writeAll("\"") catch {};
                         for (cell) |c| {
                             if (c == '"') {
-                                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"\"") catch {};
+                                _ = out.writeAll("\"\"") catch {};
                             } else {
-                                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), &[_]u8{c}) catch {};
+                                _ = out.writeAll(&[_]u8{c}) catch {};
                             }
                         }
-                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"") catch {};
+                        _ = out.writeAll("\"") catch {};
                     } else {
-                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), cell) catch {};
+                        _ = out.writeAll(cell) catch {};
                     }
                 }
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
+                _ = out.writeAll("\n") catch {};
             }
         }
         return false;
@@ -263,51 +263,50 @@ pub fn renderTransportResponseWithStreams(
             const printSeparator = struct {
                 fn f(writer: anytype, widths: []const usize) void {
                     var out_writer = writer;
-                    const io_ps = std.Io.Threaded.global_single_threaded.io();
-                    _ = out_writer.writeStreamingAll(io_ps, "+") catch {};
+                    out_writer.writeAll("+") catch {};
                     for (widths) |w| {
-                        for (0..w + 2) |_| _ = out_writer.writeStreamingAll(io_ps, "-") catch {};
-                        _ = out_writer.writeStreamingAll(io_ps, "+") catch {};
+                        for (0..w + 2) |_| out_writer.writeAll("-") catch {};
+                        out_writer.writeAll("+") catch {};
                     }
-                    _ = out_writer.writeStreamingAll(io_ps, "\r\n") catch {};
+                    out_writer.writeAll("\r\n") catch {};
                 }
             }.f;
 
             printSeparator(out, col_widths.items);
 
-            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "|") catch {};
+            _ = out.writeAll("|") catch {};
             for (view.columns, 0..) |col, i| {
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), col.name) catch {};
+                _ = out.writeAll(" ") catch {};
+                _ = out.writeAll(col.name) catch {};
                 const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
-                for (col.name.len..width) |_| _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " |") catch {};
+                for (col.name.len..width) |_| _ = out.writeAll(" ") catch {};
+                _ = out.writeAll(" |") catch {};
             }
-            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
+            _ = out.writeAll("\r\n") catch {};
 
             printSeparator(out, col_widths.items);
 
             for (rows.items) |row| {
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "|") catch {};
+                _ = out.writeAll("|") catch {};
                 for (row.items, 0..) |cell, i| {
-                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
-                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), cell) catch {};
+                    _ = out.writeAll(" ") catch {};
+                    _ = out.writeAll(cell) catch {};
                     const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                    for (cell.len..width) |_| _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
-                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " |") catch {};
+                    for (cell.len..width) |_| _ = out.writeAll(" ") catch {};
+                    _ = out.writeAll(" |") catch {};
                 }
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
+                _ = out.writeAll("\r\n") catch {};
             }
 
             printSeparator(out, col_widths.items);
 
             const row_count = rows.items.len;
             if (row_count == 1) {
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "(1 row)\r\n") catch {};
+                _ = out.writeAll("(1 row)\r\n") catch {};
             } else {
                 const count_str = std.fmt.allocPrint(allocator, "({d} rows)\r\n", .{row_count}) catch "(? rows)\r\n";
                 defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), count_str) catch {};
+                _ = out.writeAll(count_str) catch {};
             }
         }
     }

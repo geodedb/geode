@@ -31,7 +31,7 @@ pub const ConsistentHash = struct {
     pub fn init(allocator: Allocator, virtual_nodes: u32, hash_fn: HashFunction) ConsistentHash {
         return .{
             .allocator = allocator,
-            .ring = std.ArrayList(Node){},
+            .ring = std.ArrayList(Node).empty,
             .virtual_nodes = virtual_nodes,
             .hash_fn = hash_fn,
         };
@@ -118,7 +118,7 @@ pub const ConsistentHash = struct {
         if (self.ring.items.len == 0) return &[_]Node{};
 
         const max_count = @min(count, self.ring.items.len / self.virtual_nodes);
-        var nodes = std.ArrayList(Node){};
+        var nodes = std.ArrayList(Node).empty;
         errdefer nodes.deinit(self.allocator);
         var seen_ids = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_ids.deinit();

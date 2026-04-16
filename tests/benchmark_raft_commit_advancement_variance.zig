@@ -55,6 +55,6 @@ test "BenchmarkCANARY_REQ_GQL_070_CommitAdvancementVarianceEnvelope" {
     // Control-path threshold (slightly tighter than general Graph Analytics)
     try std.testing.expect(st.cv <= 0.22);
     try std.testing.expect(@as(f128, @floatFromInt(st.p95)) <= @as(f128, @floatCast(st.mean)) * 2.55);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"raft_commit_advancement_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(st.mean)), st.cv, st.p95 });
 }

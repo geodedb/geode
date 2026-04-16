@@ -24,7 +24,7 @@ fn signature(alloc: std.mem.Allocator, comps: [][]u32) ![][]u32 {
 }
 
 test "TestCANARY_REQ_GQL_064_Kosaraju" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

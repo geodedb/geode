@@ -49,7 +49,7 @@ fn stats(values: []u64) struct { mean: f64, cv: f64, p95: u64 } {
 }
 
 test "BenchmarkCANARY_REQ_GQL_004_PaginationPrefetchVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const runs = 40;

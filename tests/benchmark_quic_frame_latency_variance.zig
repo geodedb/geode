@@ -73,7 +73,7 @@ fn simulateRoundTrip(payload: []const u8) u64 {
 test "BenchmarkCANARY_REQ_GQL_074_QuicFrameLatencyVarianceEnvelope" {
     // Produce N samples for encode, decode, and RTT using representative payload sizes.
     const runs: usize = 64; // >= 48 as required.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

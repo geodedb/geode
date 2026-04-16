@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // NOTE: Use root planner module via relative import. This file is only compiled
 // through a module whose root is src/planner, so the parent reference is stable.
 // Tests that compile this file as its own root must import it through the same
@@ -57,7 +80,7 @@ pub fn runPipeline(
     var timer = phase_timing_mod.PhaseTimer.init(&timings);
     var adaptive = adaptive_replan_mod.AdaptiveReplan.init(cfg.adaptive_threshold_ppm, cfg.adaptive_window);
     // Sub-phase: pre-validation timing (synthetic) -- splits rewrite into two logical sub-parts.
-    const sub_pre_start = std.time.nanoTimestamp();
+    const sub_pre_start = compat_nanoTimestamp();
 
     // Derive synthetic signature from query; perform real rewrite hook pass on a tiny fabricated Query.
     timer.begin(.rewrite);
@@ -79,7 +102,7 @@ pub fn runPipeline(
     };
     _ = rewrite_hooks.performRewrite(&mini_q);
     timer.end(.rewrite);
-    const sub_pre_end = std.time.nanoTimestamp();
+    const sub_pre_end = compat_nanoTimestamp();
     const pre_validation_ns: u64 = @intCast(sub_pre_end - sub_pre_start);
 
     // Path cache lookup (if enabled)
@@ -96,7 +119,7 @@ pub fn runPipeline(
     }
 
     // Cardinality estimation phase (embed real group validation hook sub-phase at start)
-    const sub_group_start = std.time.nanoTimestamp();
+    const sub_group_start = compat_nanoTimestamp();
     timer.begin(.cardinality);
     // Group validation hook over same fabricated query (adds negligible overhead)
     _ = rewrite_hooks.performGroupValidation(allocator, &mini_q) catch |err| switch (err) {
@@ -114,7 +137,7 @@ pub fn runPipeline(
         while (spin2 > 0) : (spin2 -= 1) std.mem.doNotOptimizeAway(spin2);
     }
     timer.end(.cardinality);
-    const sub_group_end = std.time.nanoTimestamp();
+    const sub_group_end = compat_nanoTimestamp();
     const group_validation_ns: u64 = @intCast(sub_group_end - sub_group_start);
 
     // Projection prune phase (synthetic) - simulate pruning unused projections.
@@ -307,7 +330,7 @@ pub fn planQuerySelectBest(
     const tree = try buildLogicalTree(q, allocator);
     // Enumerate all candidates (unmanaged) then apply refined cost model for final selection
     var pe = enumerator_mod.PlanEnumerator.init(allocator, enum_cfg);
-    var buf = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+    var buf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     defer buf.deinit(allocator);
     try pe.enumerateUnmanaged(tree, allocator, &buf);
     if (buf.items.len == 0) return .{ .best = null, .total_candidates = 0, .pruned = pe.stats.pruned };
@@ -763,7 +786,7 @@ test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelo
         }
         var r: usize = 0;
         while (r < repetitions_per_variant) : (r += 1) {
-            const t0 = std.time.nanoTimestamp();
+            const t0 = compat_nanoTimestamp();
             const key = structural_key.deriveStructuralKey(ally, q) catch break;
             // Scan for DB markers
             var acc: usize = 0;
@@ -773,7 +796,7 @@ test "BenchmarkCANARY_REQ_GQL_021_PathCacheDegreeBucketUtilizationVarianceEnvelo
             }
             if (acc == 0xFFFF) std.mem.doNotOptimizeAway(&acc);
             ally.free(key);
-            const t1 = std.time.nanoTimestamp();
+            const t1 = compat_nanoTimestamp();
             samples[idx] = @intCast(t1 - t0);
             idx += 1;
         }

@@ -5,7 +5,7 @@ const protocol = @import("../src/protocol.zig");
 // CANARY: REQ=REQ-GQL-032; FEATURE="Schema Constraints Negative"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_032_ConstraintUniqueViolation,TestCANARY_REQ_GQL_032_ConstraintTypeMismatch; OWNER=schema; UPDATED=2025-09-20
 
 test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var sc = constraints_mod.SchemaConstraints.init(allocator);
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_032_ConstraintUniqueViolation" {
 }
 
 test "TestCANARY_REQ_GQL_032_ConstraintTypeMismatch" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var sc = constraints_mod.SchemaConstraints.init(allocator);

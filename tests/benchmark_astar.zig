@@ -6,7 +6,7 @@ const astar = @import("../src/graph/shortest_astar.zig");
 // Measure average A* run time on a random directed sparse graph. Heuristic = zero (degenerates to Dijkstra upper bound).
 // Deterministic via fixed PRNG seed.
 test "BenchmarkCANARY_REQ_GQL_063_AStar" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var prng = std.rand.DefaultPrng.init(0xA57A7000);
@@ -42,7 +42,7 @@ test "BenchmarkCANARY_REQ_GQL_063_AStar" {
     const avg = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(trials));
     // Expect under 60ms
     try std.testing.expect(avg < 60_000_000.0);
-    var bw = std.io.bufferedWriter(std.io.getStdErr().writer());
+    var bw = std.Io.bufferedWriter(std.Io.getStdErr().writer());
     const w = bw.writer();
     try w.print("{\"metric\":\"astar_avg_ns\",\"value\":{d:.2}}\n", .{avg});
     try bw.flush();

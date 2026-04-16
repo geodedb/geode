@@ -787,7 +787,7 @@ pub fn main() !void {
 }
 
 fn printHelp() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print(
         \\Usage: geode-auth <command> [options]
         \\
@@ -802,7 +802,7 @@ fn printHelp() !void {
 }
 
 fn printUserHelp() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print(
         \\Usage: geode-auth user <subcommand> [options]
         \\
@@ -819,7 +819,7 @@ fn printUserHelp() !void {
 }
 
 fn printRoleHelp() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print(
         \\Usage: geode-auth role <subcommand> [options]
         \\
@@ -835,7 +835,7 @@ fn printRoleHelp() !void {
 }
 
 fn printPolicyHelp() !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print(
         \\Usage: geode-auth policy <subcommand> [options]
         \\
@@ -852,7 +852,7 @@ fn printPolicyHelp() !void {
 
 // CANARY: REQ=REQ-CLI-USER-CMD-001; FEATURE="User CLI Commands"; ASPECT=UserManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn handleUserCommand(allocator: Allocator, args: [][]const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
 
     if (args.len < 1) {
         try printUserHelp();
@@ -964,7 +964,7 @@ fn handleUserCommand(allocator: Allocator, args: [][]const u8) !void {
 
 // CANARY: REQ=REQ-CLI-ROLE-CMD-001; FEATURE="Role CLI Commands"; ASPECT=RoleManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn handleRoleCommand(allocator: Allocator, args: [][]const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
 
     if (args.len < 1) {
         try printRoleHelp();
@@ -1065,7 +1065,7 @@ fn handleRoleCommand(allocator: Allocator, args: [][]const u8) !void {
 
 // CANARY: REQ=REQ-CLI-POLICY-CMD-001; FEATURE="Policy CLI Commands"; ASPECT=PolicyManagement; STATUS=TESTED; TEST=tests/test_user_management_comprehensive.zig; OWNER=security; UPDATED=2026-01-15
 fn handlePolicyCommand(allocator: Allocator, args: [][]const u8) !void {
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
 
     if (args.len < 1) {
         try printPolicyHelp();

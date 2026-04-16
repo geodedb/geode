@@ -234,13 +234,14 @@ pub const IdMap = struct {
 
     /// Save the id map to a file atomically (write to temp then rename).
     /// `dir` is the directory containing the graph data.
-    pub fn save(self: *const IdMap, dir: std.fs.Dir) !void {
+    pub fn save(self: *const IdMap, dir: std.Io.Dir) !void {
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
         const tmp_name = "id_map.dat.tmp";
         const final_name = "id_map.dat";
 
         // Create temp file
-        const file = try dir.createFile(std.Io.Threaded.global_single_threaded.io(), tmp_name, .{});
-        defer file.close();
+        const file = try dir.createFile(io_fs, tmp_name, .{});
+        defer file.close(io_fs);
 
         const total_entries: u32 = self.node_uuid_to_slot.count() + self.edge_uuid_to_slot.count();
 
@@ -250,26 +251,34 @@ pub const IdMap = struct {
             .version = FILE_VERSION,
             .entry_count = total_entries,
         };
-        try file.writeAll(std.mem.asBytes(&header));
+        var offset: u64 = 0;
+        try file.writePositionalAll(io_fs, std.mem.asBytes(&header), offset);
+        offset += @sizeOf(FileHeader);
 
         // Write node entries: type_tag(u8=0) | uuid(u128) | slot(u64)
         var node_iter = self.node_uuid_to_slot.iterator();
         while (node_iter.next()) |entry| {
-            try file.writeAll(&[_]u8{0}); // node tag
-            try file.writeAll(std.mem.asBytes(&entry.key_ptr.*));
-            try file.writeAll(std.mem.asBytes(&entry.value_ptr.*));
+            try file.writePositionalAll(io_fs, &[_]u8{0}, offset);
+            offset += 1;
+            try file.writePositionalAll(io_fs, std.mem.asBytes(&entry.key_ptr.*), offset);
+            offset += @sizeOf(u128);
+            try file.writePositionalAll(io_fs, std.mem.asBytes(&entry.value_ptr.*), offset);
+            offset += @sizeOf(u64);
         }
 
         // Write edge entries: type_tag(u8=1) | uuid(u128) | slot(u64)
         var edge_iter = self.edge_uuid_to_slot.iterator();
         while (edge_iter.next()) |entry| {
-            try file.writeAll(&[_]u8{1}); // edge tag
-            try file.writeAll(std.mem.asBytes(&entry.key_ptr.*));
-            try file.writeAll(std.mem.asBytes(&entry.value_ptr.*));
+            try file.writePositionalAll(io_fs, &[_]u8{1}, offset);
+            offset += 1;
+            try file.writePositionalAll(io_fs, std.mem.asBytes(&entry.key_ptr.*), offset);
+            offset += @sizeOf(u128);
+            try file.writePositionalAll(io_fs, std.mem.asBytes(&entry.value_ptr.*), offset);
+            offset += @sizeOf(u64);
         }
 
         // Atomic rename
-        try dir.rename(tmp_name, final_name);
+        try dir.rename(tmp_name, dir, final_name, io_fs);
     }
 
     /// Load an id map from id_map.dat in the given directory.

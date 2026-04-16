@@ -34,7 +34,7 @@ test "BenchmarkCANARY_REQ_GQL_067_PageRank" {
         total_ns += @as(u64, @intCast(end - start));
     }
     const avg = total_ns / 5;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"pagerank\",\"avg_ns\":{d}}\n", .{avg});
     // Expect average under 250ms
     try std.testing.expect(avg < 250_000_000);

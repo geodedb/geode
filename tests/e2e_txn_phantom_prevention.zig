@@ -2,7 +2,7 @@ const std = @import("std");
 
 test "phantom prevention with range tracking" {
     // Test phantom prevention is enabled by default
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

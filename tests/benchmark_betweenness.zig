@@ -38,7 +38,7 @@ test "BenchmarkCANARY_REQ_GQL_067_Betweenness" {
         total += @as(u64, @intCast(end - start));
     }
     const avg = total / 3;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"betweenness_centrality\",\"avg_ns\":{d}}\n", .{avg});
     // Loose bound (algorithm is O(V*(V+E))): ensure under 2s in debug for this size
     try std.testing.expect(avg < 2_000_000_000);

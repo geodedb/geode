@@ -479,7 +479,7 @@ pub fn captureNodePreImage(allocator: Allocator, store: *graph_store.GraphStore,
     const node = store.getNodePtr(node_id) orelse return;
 
     // Capture properties as MapEntry list
-    var props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    var props = std.ArrayList(proto_schema.MapEntry).empty;
     errdefer {
         for (props.items) |*e| e.deinit(allocator);
         props.deinit(allocator);
@@ -495,7 +495,7 @@ pub fn captureNodePreImage(allocator: Allocator, store: *graph_store.GraphStore,
     entry.pre_image_props = props;
 
     // Capture labels (for DELETE undo re-creation)
-    var labels = std.ArrayListUnmanaged([]const u8){};
+    var labels = std.ArrayList([]const u8).empty;
     errdefer {
         for (labels.items) |lbl| allocator.free(lbl);
         labels.deinit(allocator);
@@ -515,7 +515,7 @@ pub fn captureNodePreImage(allocator: Allocator, store: *graph_store.GraphStore,
 pub fn captureEdgePreImage(allocator: Allocator, store: *graph_store.GraphStore, edge_id: u64, entry: *UndoEntry) !void {
     const edge = store.getEdgePtr(edge_id) orelse return;
 
-    var props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    var props = std.ArrayList(proto_schema.MapEntry).empty;
     errdefer {
         for (props.items) |*e| e.deinit(allocator);
         props.deinit(allocator);
@@ -1147,7 +1147,7 @@ pub const Coordinator = struct {
         const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), log_file, .{});
         defer file.close();
 
-        var buf_reader = std.io.bufferedReader(file.reader());
+        var buf_reader = std.Io.bufferedReader(file.reader());
         var reader = buf_reader.reader();
         while (true) {
             var len_buf: [4]u8 = undefined;
@@ -1872,7 +1872,7 @@ test "applyUndoOperation UPDATE node restores pre-image properties" {
     try store.setNodeProperty(200, "age", .{ .Int = 99 });
 
     // Build an undo entry for UPDATE with pre-image = original values.
-    var pre_props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    var pre_props = std.ArrayList(proto_schema.MapEntry).empty;
     const name_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Alice", .kind = .STRING } } };
     const age_val = proto_schema.Value{ .kind = .{ .int_val = .{ .value = 30, .kind = .INT } } };
     try pre_props.append(testing.allocator, .{ .key = "name", .value = name_val });
@@ -1911,11 +1911,11 @@ test "applyUndoOperation DELETE node re-creates node from pre-image" {
     try store.setNodeProperty(201, "model", .{ .String = "Sedan" });
 
     // Build undo entry for DELETE with pre-image.
-    var pre_props = std.ArrayListUnmanaged(proto_schema.MapEntry){};
+    var pre_props = std.ArrayList(proto_schema.MapEntry).empty;
     const model_val = proto_schema.Value{ .kind = .{ .string_val = .{ .value = "Sedan", .kind = .STRING } } };
     try pre_props.append(testing.allocator, .{ .key = "model", .value = model_val });
 
-    var pre_labels = std.ArrayListUnmanaged([]const u8){};
+    var pre_labels = std.ArrayList([]const u8).empty;
     try pre_labels.append(testing.allocator, try testing.allocator.dupe(u8, "Car"));
 
     var undo = UndoEntry{

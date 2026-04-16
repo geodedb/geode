@@ -1,6 +1,17 @@
 const std = @import("std");
 const repl = @import("client/repl.zig");
 
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 // Dedicated CANARY test file for HistoryPersistence aspect (S-113).
 
 test "TestCANARY_REQ_GQL_086_HistoryPersistence file round trip" {
@@ -8,7 +19,7 @@ test "TestCANARY_REQ_GQL_086_HistoryPersistence file round trip" {
     var tmp = try std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const hist_name = "hist_round_trip.txt";
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
     const full_path = try std.fs.path.join(allocator, &.{ dir_path, hist_name });
     defer allocator.free(full_path);

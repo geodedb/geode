@@ -8,7 +8,7 @@ const eval_ext = @import("../src/eval_extended.zig");
 pub fn main() !void {}
 
 test "TestCANARY_REQ_GQL_082_AdapterBridgeUuidV4" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

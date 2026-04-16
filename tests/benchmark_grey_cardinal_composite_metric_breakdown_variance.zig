@@ -129,7 +129,7 @@ test "BenchmarkCANARY_REQ_GQL_067_GreyCardinalCompositeMetricBreakdownVarianceEn
         try std.testing.expect(sc.cv < 0.16);
         try std.testing.expect(sc.p95 < sc.mean * 2.2);
     }
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print(
         "{\"benchmark\":\"grey_cardinal_composite_metric_breakdown_variance\",\"total_mean_ns\":{d},\"total_cv\":{d:.4},\"total_p95_ns\":{d},\"bt_cv\":{d:.4},\"cl_cv\":{d:.4},\"ev_cv\":{d:.4},\"pr_cv\":{d:.4}}\n",
         .{ @as(u64, @intFromFloat(s_total.mean)), s_total.cv, @as(u64, @intFromFloat(s_total.p95)), s_bt.cv, s_cl.cv, s_ev.cv, s_pr.cv },

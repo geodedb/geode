@@ -2,7 +2,7 @@ const std = @import("std");
 const adv = @import("geode").fts_advanced_stub;
 
 test "Advanced FTS disabled returns FeatureDisabled" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     try std.testing.expectError(error.FeatureDisabled, adv.phraseQuery(gpa.allocator(), "body", "sample phrase", 10));
 }

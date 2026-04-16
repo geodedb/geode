@@ -197,7 +197,7 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
     // Emit schema_version=1
     {
         var buf: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const jw = fbs.writer();
         const scale = 10000.0;
         jw.writeAll("{\"schema_version\":1,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};
@@ -231,7 +231,7 @@ pub fn benchmarkPaginationExecutionVarianceEnvelope() !void {
         }
         const jitter_class = if (cv < 0.10) "low" else if (cv < 0.20) "medium" else "high";
         var buf: [768]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fbs = std.Io.fixedBufferStream(&buf);
         const jw2 = fbs.writer();
         const scale = 10000.0;
         jw2.writeAll("{\"schema_version\":2,\"kind\":\"VarianceEnvelope\",\"benchmark\":\"pagination_execution_variance\",") catch {};

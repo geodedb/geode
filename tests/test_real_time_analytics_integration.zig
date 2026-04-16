@@ -82,7 +82,7 @@ const MockGraphDatabase = struct {
 
 // Test: End-to-end real-time analytics with ML integration
 test "CANARY_REQ_ANALYTICS_001_End_To_End_ML_Analytics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -166,7 +166,7 @@ test "CANARY_REQ_ANALYTICS_001_End_To_End_ML_Analytics" {
 
 // Test: CDC integration with real-time analytics
 test "CANARY_REQ_ANALYTICS_002_CDC_Integration_Workflow" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -217,7 +217,7 @@ test "CANARY_REQ_ANALYTICS_002_CDC_Integration_Workflow" {
 
 // Test: Pattern detection with social network simulation
 test "CANARY_REQ_ANALYTICS_003_Social_Network_Pattern_Detection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -285,7 +285,7 @@ test "CANARY_REQ_ANALYTICS_003_Social_Network_Pattern_Detection" {
 
 // Test: Anomaly detection with statistical analysis
 test "CANARY_REQ_ANALYTICS_004_Anomaly_Detection_Statistical_Analysis" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -347,7 +347,7 @@ test "CANARY_REQ_ANALYTICS_004_Anomaly_Detection_Statistical_Analysis" {
 
 // Test: High-throughput streaming analytics performance
 test "CANARY_REQ_ANALYTICS_005_High_Throughput_Performance" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -415,7 +415,7 @@ test "CANARY_REQ_ANALYTICS_005_High_Throughput_Performance" {
 
 // Test: ML and analytics integration with similarity search
 test "CANARY_REQ_ANALYTICS_006_ML_Similarity_Search_Integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

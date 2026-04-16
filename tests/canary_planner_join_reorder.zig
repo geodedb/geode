@@ -14,13 +14,13 @@ fn buildQueryWithReturns(n: usize, allocator: std.mem.Allocator) geode.planner.a
 }
 
 test "TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const q = buildQueryWithReturns(5, allocator); // builds left-deep synthetic join tree of 5 scans
     var pe = enumerator.PlanEnumerator.init(allocator, .{ .max_plans = 256, .enable_join_commutativity = true });
     defer pe.deinit();
-    var buf = std.ArrayListUnmanaged(enumerator.CandidatePlan){};
+    var buf = std.ArrayList(enumerator.CandidatePlan).empty;
     defer buf.deinit(allocator);
     try pe.enumerateUnmanaged(.{ .op = .project, .children = &.{pipeline.buildLogicalTree(q, allocator) catch unreachable} }, allocator, &buf);
     try std.testing.expect(pe.stats.unique_join_signatures > 0);
@@ -29,7 +29,7 @@ test "TestCANARY_REQ_GQL_024_PlanJoinReorderDiversity" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanJoinReorderVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const runs: usize = 40;

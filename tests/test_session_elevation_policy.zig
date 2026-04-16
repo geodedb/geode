@@ -4,7 +4,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-MFA-010; FEATURE="ConfigurableElevationTTL"; ASPECT=TEST; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_010_ElevationTTL; OWNER=security; UPDATED=2025-09-26
 
 test "custom elevation ttl applied" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = &gpa.allocator;
     var auth = try geode.security.AuthContext.init(alloc); // adjust if different constructor

@@ -4,7 +4,7 @@ const pipeline = @import("../src/planner/pipeline.zig");
 const path_cache_mod = @import("../src/planner/path_cache.zig");
 
 test "TestCANARY_REQ_GQL_021_PlannerPipelineWrapperIntegration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     // Build a minimal ast.Query resembling earlier planner tests
     var q: ast.Query = undefined;

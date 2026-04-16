@@ -752,7 +752,7 @@ pub const RecursiveQueryProcessor = struct {
         const reader = file.reader();
 
         // Read row count
-        const row_count = try reader.readInt(u64, .little);
+        const row_count = try reader.takeInt(u64, .little);
 
         var rows = try std.ArrayList(RecursiveExecution.WorkingTable.Row).initCapacity(
             execution.allocator,
@@ -762,7 +762,7 @@ pub const RecursiveQueryProcessor = struct {
         var i: u64 = 0;
         while (i < row_count) : (i += 1) {
             // Read value count
-            const value_count = try reader.readInt(u32, .little);
+            const value_count = try reader.takeInt(u32, .little);
 
             // Read values
             var values = try execution.allocator.alloc(eval.Value, value_count);
@@ -771,19 +771,19 @@ pub const RecursiveQueryProcessor = struct {
             }
 
             // Read depth
-            const depth = try reader.readInt(u32, .little);
+            const depth = try reader.takeInt(u32, .little);
 
             // Read path
-            const has_path = try reader.readByte();
+            const has_path = try reader.takeByte();
             const path: ?[]const u8 = if (has_path == 1) blk: {
-                const path_len = try reader.readInt(u32, .little);
+                const path_len = try reader.takeInt(u32, .little);
                 const path_buf = try execution.allocator.alloc(u8, path_len);
                 _ = try reader.readAll(path_buf);
                 break :blk path_buf;
             } else null;
 
             // Read cycle flag
-            const cycle_detected = (try reader.readByte()) == 1;
+            const cycle_detected = (try reader.takeByte()) == 1;
 
             try rows.append(RecursiveExecution.WorkingTable.Row{
                 .values = values,

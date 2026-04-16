@@ -6,6 +6,13 @@
 
 const std = @import("std");
 
+
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -127,7 +134,7 @@ test "TestCANARY_REQ_DIST_REGISTRY_001_NodeCRUD" {
 
     // updateHeartbeat keeps status active and updates timestamp
     const before = info.?.last_heartbeat;
-    std.Thread.sleep(1 * std.time.ns_per_ms); // ensure clock advances
+    compat_sleep(1 * std.time.ns_per_ms); // ensure clock advances
     registry.updateHeartbeat(1);
     const after = registry.getNodeInfo(1).?;
     try testing.expectEqual(NodeStatus.active, after.status);

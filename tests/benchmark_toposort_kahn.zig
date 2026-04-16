@@ -49,7 +49,7 @@ test "BenchmarkCANARY_REQ_GQL_062_TopoKahn" {
         try std.testing.expect(order.len == g.nodes.count());
     }
     const avg = @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(iterations));
-    const w = std.io.getStdOut().writer();
+    const w = std.Io.getStdOut().writer();
     try w.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_062_TopoKahn\",\n  \"nodes\": {d},\n  \"iterations\": {d},\n  \"avg_ns\": {d:.2}\n}\n", .{ g.nodes.count(), iterations, avg });
     try std.testing.expect(avg < 8_000_000);
 }

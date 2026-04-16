@@ -81,7 +81,7 @@ fn simulateWorkload(reg: *seed.AdaptiveBiasRegistry, kind: seed.LogicalOpKind, s
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer {
         const res = gpa.deinit();
         std.debug.assert(res == .ok);

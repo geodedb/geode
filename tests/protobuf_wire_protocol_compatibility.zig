@@ -44,7 +44,7 @@ test "protobuf: HelloRequest roundtrip" {
 test "protobuf: ExecuteRequest roundtrip" {
     const allocator = testing.allocator;
 
-    var params = std.ArrayList(schema.Param){};
+    var params = std.ArrayList(schema.Param).empty;
     defer {
         for (params.items) |*param| {
             param.deinit(allocator);

@@ -7,7 +7,7 @@ const cdc_mod = @import("../src/streaming/cdc_enhanced.zig");
 // CANARY: REQ=REQ-GQL-042; FEATURE="CDC Engine"; ASPECT=AdaptiveDiffPerfThresholdEnv; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf; OWNER=streaming; UPDATED=2025-09-20
 
 test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -50,7 +50,7 @@ test "BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf" {
         }
     } else |_| {}
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_042_CDC_AdaptiveDiffPerf\",\"baseline_eps\":{d:.2},\"adaptive_eps\":{d:.2},\"ratio\":{d:.3},\"min_ratio\":{d:.3}}\n", .{ baseline_eps, adaptive_eps, ratio, min_ratio });
     if (adaptive_eps < baseline_eps * min_ratio) {
         return error.AdaptivePerfRegression;

@@ -56,7 +56,7 @@ fn printOut(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn printOutRaw(data: []const u8) void {
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     stderr.writeAll(data) catch {};
 }
 

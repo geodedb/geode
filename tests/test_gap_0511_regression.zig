@@ -1,6 +1,17 @@
 const std = @import("std");
 const testing = std.testing;
 const geode = @import("geode");
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const graph_storage_adapter = geode.graph_storage_adapter;
 
 fn execQuery(
@@ -29,7 +40,7 @@ test "GAP-0511: Sequential MERGE transactions do not stall on index rebuilds" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(allocator, data_dir);
@@ -90,7 +101,7 @@ test "GAP-0511: Adapter-backed MERGE avoids QueryReadSession snapshots" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
@@ -132,7 +143,7 @@ test "GAP-0511: Adapter-backed DELETE avoids QueryReadSession snapshots" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
@@ -178,7 +189,7 @@ test "GAP-0511: Relationship MERGE resolves endpoints without label scans" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
@@ -221,7 +232,7 @@ test "GAP-0511: Relationship DELETE resolves endpoints without label scans" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(testing.allocator, data_dir);
@@ -270,7 +281,7 @@ test "GAP-0511: global store startup repairs corrupted free.store" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const data_dir = try tmp.dir.realpathAlloc(testing.allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(testing.allocator, &tmp.sub_path);
     defer testing.allocator.free(data_dir);
 
     var graph_uuid: [16]u8 = undefined;
@@ -321,7 +332,7 @@ test "GAP-0511: rebuild_mutex prevents concurrent rebuild races" {
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
 
     _ = try geode.graph_store.initGlobalStore(allocator, data_dir);
@@ -358,7 +369,7 @@ test "GAP-0511: commitDeferRebuilds leaves pending rebuilds for separate flush" 
 
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const data_dir = try tmp.dir.realpathAlloc(allocator, ".");
+    const data_dir = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(data_dir);
 
     const store = try geode.graph_store.initGlobalStore(allocator, data_dir);

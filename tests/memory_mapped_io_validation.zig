@@ -7,7 +7,7 @@ const memory_mapped_io = @import("../src/performance/memory_mapped_io.zig");
 test "Memory-mapped I/O performance validation" {
     print("\n=== MEMORY-MAPPED I/O PERFORMANCE VALIDATION ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -36,7 +36,7 @@ test "Memory-mapped I/O performance validation" {
 test "Memory-mapped array functionality" {
     print("\n=== MEMORY-MAPPED ARRAY FUNCTIONALITY ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -89,7 +89,7 @@ test "Memory-mapped array functionality" {
 test "Chunked memory mapping" {
     print("\n=== CHUNKED MEMORY MAPPING VALIDATION ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -153,7 +153,7 @@ test "Chunked memory mapping" {
 test "CANARY: REQ=REQ-PERF-MMAP-001 - Memory-mapped I/O integration" {
     print("\n=== CANARY VALIDATION RESULTS ===\n");
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

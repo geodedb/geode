@@ -41,7 +41,7 @@ test "fuzz: ORDER BY numeric stability" {
     while (iter < 50) : (iter += 1) {
         // Build a simple RETURN of constants with ORDER BY x LIMIT to force sort path.
         var buf: [256]u8 = undefined;
-        var fba = std.io.fixedBufferStream(&buf);
+        var fba = std.Io.fixedBufferStream(&buf);
         const w = fba.writer();
         w.writeAll("RETURN ") catch {};
         const n = 5 + @as(usize, rnd.intRangeAtMost(usize, 0, 5));

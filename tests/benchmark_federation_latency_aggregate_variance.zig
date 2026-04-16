@@ -9,7 +9,7 @@ const agg = @import("distributed/federation_latency_aggregate.zig");
 //   CV <= 0.30, p95/mean <= 2.6
 // These bounds ensure stable aggregate maintenance cost under jitter.
 test "BenchmarkCANARY_REQ_GQL_024_FederationLatencyAggregateVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator(); // presently unused (no allocations expected beyond std)
     _ = alloc; // silence unused warning if Zig version complains

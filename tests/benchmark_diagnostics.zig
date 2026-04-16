@@ -13,7 +13,7 @@ fn next(r: *u64) u64 {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -53,6 +53,6 @@ pub fn main() !void {
     const per_op = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations));
 
     // Output JSON line so CI can parse
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_010_DiagnosticsFold\",\"iterations\":{d},\"total_ns\":{d},\"ns_per_iter\":{d:.2}}\n", .{ iterations, total_ns, per_op });
 }

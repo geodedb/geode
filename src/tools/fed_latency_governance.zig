@@ -163,7 +163,7 @@ pub fn main() !void {
     };
 
     var out_buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
+    var fbs = std.Io.fixedBufferStream(&out_buf);
     if (want_txt) {
         try fbs.writer().print("READINESS={s} reason={s} streak={d} recent_iqr={d:.4} recent_mad={d:.4} fail_tail={d}\n", .{ if (gov.readiness) "ready" else "not_ready", gov.reason, gov.streak, gov.recent_cv_iqr, gov.recent_cv_mad, gov.failures });
     } else {

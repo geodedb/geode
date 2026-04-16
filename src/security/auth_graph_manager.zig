@@ -73,6 +73,17 @@ const user_storage = @import("user_storage");
 const pooled = @import("transport/thread_pool");
 const UserStorageBackend = user_storage.UserStorageBackend;
 const logging = @import("logging");
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
 const log = logging.scoped("auth_graph_manager");
 const Attr = logging.Attr;
 
@@ -1022,7 +1033,7 @@ test "resolveHmacKey auto-generates key file when data_dir exists but key file m
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    const dir_path = tmp_dir.dir.realpathAlloc(testing.allocator, ".") catch unreachable;
+    const dir_path = tmpDirRealpathAlloc(testing.allocator, &tmp_dir.sub_path) catch unreachable;
     defer testing.allocator.free(dir_path);
 
     // First call should auto-generate the key file

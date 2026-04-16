@@ -60,6 +60,6 @@ test "BenchmarkCANARY_REQ_GQL_028_SnapshotIOThrottleVarianceEnvelope" {
     // Thresholds: CV < 0.21, p95 < 2.45x mean
     try std.testing.expect(cv < 0.21);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.45);
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"snapshot_io_throttle_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

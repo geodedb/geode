@@ -11,7 +11,7 @@ fn fileAgeSeconds(fs: *std.fs.File) !u64 {
 }
 
 test "TestCANARY_REQ_GQL_010_NextFreshnessAndSingleH1" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa.deinit());
     const alloc = gpa.allocator();
 

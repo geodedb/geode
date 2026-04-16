@@ -2,7 +2,7 @@ const std = @import("std");
 
 test "materialized view complete and incremental refresh" {
     // Simulate MV refresh operations
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
 
     const RefreshResult = struct {

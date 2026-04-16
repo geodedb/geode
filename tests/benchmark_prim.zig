@@ -42,7 +42,7 @@ test "BenchmarkCANARY_REQ_GQL_065_Prim" {
     const avg = total_ns / 5;
     // Basic sanity: MST edges count <= nodes-1
     // Print JSON metric to stderr
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"prim_mst\",\"avg_ns\":{d}}\n", .{avg});
     // Threshold: should be comfortably under 150ms on expected hardware
     try std.testing.expect(avg < 150_000_000);

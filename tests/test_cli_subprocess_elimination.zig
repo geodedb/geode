@@ -74,7 +74,7 @@ test "CLI unified binary architecture eliminates subprocess spawning" {
 
 test "Server configuration supports unified binary operation" {
     // Test that server configuration works for unified binary
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -106,7 +106,7 @@ test "Server configuration supports unified binary operation" {
 
 test "Client configuration supports unified binary operation" {
     // Test that client configuration works for unified binary
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -208,7 +208,7 @@ test "Command handler function signatures support unified binary" {
     }.handler;
 
     // Verify the handler can be assigned and called
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -228,7 +228,7 @@ test "Command handler function signatures support unified binary" {
 
 test "Memory management in unified binary configuration" {
     // Test memory management for configuration structures
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -280,7 +280,7 @@ test "No subprocess-related imports in unified binary CLI" {
 
 test "Configuration validation for unified binary operation" {
     // Test that configuration validation works correctly for unified binary
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

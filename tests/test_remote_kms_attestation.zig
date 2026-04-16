@@ -3,7 +3,7 @@ const kms = @import("security/kms_remote");
 // CANARY: REQ=REQ-GQL-TDE-ATTEST-001; FEATURE="RemoteKmsAttestation"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify|TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect; OWNER=security; UPDATED=2025-09-26
 
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var server = kms.RemoteKmsServer.init(alloc, 0x1234);
@@ -47,7 +47,7 @@ test "TestCANARY_REQ_GQL_TDE_ATTEST_001_SignatureVerify" {
 }
 
 test "TestCANARY_REQ_GQL_TDE_ATTEST_001_TamperDetect" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     var server = kms.RemoteKmsServer.init(alloc, 0x9999);

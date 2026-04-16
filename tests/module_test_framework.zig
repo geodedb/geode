@@ -16,13 +16,13 @@ const std = @import("std");
 /// Wrapper around testing allocator that tracks allocations
 /// Helps identify memory leaks in isolated module tests
 pub const TestAllocator = struct {
-    gpa: std.heap.GeneralPurposeAllocator(.{}),
+    gpa: std.heap.DebugAllocator(.{}),
     allocations: usize,
     deallocations: usize,
 
     pub fn init() TestAllocator {
         return .{
-            .gpa = std.heap.GeneralPurposeAllocator(.{}){},
+            .gpa = std.heap.DebugAllocator(.{}){},
             .allocations = 0,
             .deallocations = 0,
         };
@@ -506,7 +506,7 @@ test "TestAllocator tracks allocations" {
 }
 
 test "MockFileSystem basic operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -528,7 +528,7 @@ test "MockFileSystem basic operations" {
 }
 
 test "MockNetwork send and receive" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -548,7 +548,7 @@ test "MockNetwork send and receive" {
 }
 
 test "MockStorage CRUD operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -574,7 +574,7 @@ test "MockStorage CRUD operations" {
 }
 
 test "TestState management" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

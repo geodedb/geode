@@ -866,7 +866,7 @@ pub const SecurityManager = struct {
     // ---- Sessions ----
     pub fn createSession(self: *Self, user_id: UserId) ![]const u8 {
         var raw: [32]u8 = undefined;
-        crypto.random.bytes(&raw);
+        std.Io.Threaded.global_single_threaded.io().random(&raw);
         const enc = std.base64.url_safe_no_pad.Encoder;
         const token = try self.allocator.alloc(u8, enc.calcSize(raw.len));
         _ = enc.encode(token, &raw);

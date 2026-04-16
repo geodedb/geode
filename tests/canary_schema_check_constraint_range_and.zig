@@ -6,7 +6,7 @@ const protocol = @import("../src/protocol.zig");
 // Validates extended operators (<, <=, >, >=, !=, =) and logical AND chaining.
 
 test "TestCANARY_REQ_GQL_032_CheckConstraintRangeAnd" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

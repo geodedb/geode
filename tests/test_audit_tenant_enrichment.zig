@@ -23,6 +23,40 @@
 // calls with explicit tenant (propagation through the adapter).
 
 const std = @import("std");
+
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const testing = std.testing;
 const audit = @import("audit");
 const rls = @import("rls");
@@ -38,7 +72,7 @@ fn withLogger(
     file_name: []const u8,
     body: *const fn (*AuditLogger) anyerror!void,
 ) ![]u8 {
-    const dir_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const dir_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(dir_path);
     const full_path = try std.fs.path.join(allocator, &.{ dir_path, file_name });
     defer allocator.free(full_path);
@@ -51,9 +85,12 @@ fn withLogger(
 
     try body(&logger);
 
-    const file = try std.fs.openFileAbsolute(full_path, .{});
-    defer file.close();
-    return try file.readToEndAlloc(allocator, 1 << 20);
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.openFileAbsolute(io_fs, full_path, .{});
+    defer file.close(io_fs);
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io_fs, &file_reader_buf);
+    return try file_reader.interface.allocRemaining(allocator, .unlimited);
 }
 
 test "GAP-0511: anytype adapter enriches tenant_id from per-thread context" {
@@ -70,7 +107,7 @@ test "GAP-0511: anytype adapter enriches tenant_id from per-thread context" {
             // The enrichment fallback in appendEventLocked must fill this in
             // from the per-thread audit tenant context.
             try logger.logEvent(.{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = AuditEvent.EventType.access_granted,
                 .user_id = @as(u64, 42),
                 .resource = "test_resource",
@@ -112,7 +149,7 @@ test "GAP-0511: typed AuditEvent path respects explicit tenant_id" {
     const body = struct {
         fn run(logger: *AuditLogger) !void {
             var ev = AuditEvent{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = .access_granted,
                 .severity = .info,
                 .tenant_id = "tenant_explicit",
@@ -157,7 +194,7 @@ test "GAP-0511: no tenant context means null tenant in output (no fabrication)" 
     const body = struct {
         fn run(logger: *AuditLogger) !void {
             try logger.logEvent(.{
-                .timestamp = std.time.milliTimestamp(),
+                .timestamp = compat_milliTimestamp(),
                 .event_type = AuditEvent.EventType.system_event,
                 .user_id = @as(u64, 0),
                 .resource = "background_task",

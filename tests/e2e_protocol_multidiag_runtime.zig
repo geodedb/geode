@@ -20,7 +20,7 @@ fn runCli(alloc: std.mem.Allocator, query: []const u8) !struct { code: u8, out: 
 }
 
 test "protocol: runtime multi-diagnostic TypeMismatch + US001" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Expression ("a" + 1) yields TypeMismatch; LIMIT without ORDER triggers US001

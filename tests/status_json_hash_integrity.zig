@@ -3,7 +3,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Status JSON Hash Integrity"; ASPECT=StatusJsonHashIntegrity; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity; OWNER=tooling; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_010_StatusJsonHashIntegrity" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa.deinit());
     const alloc = gpa.allocator();
 

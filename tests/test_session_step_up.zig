@@ -5,7 +5,7 @@ const auth = @import("../src/security/auth.zig");
 // CANARY: REQ=REQ-GQL-MFA-009; FEATURE="Session step-up mark"; ASPECT=SECURITY; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_MFA_009_StepUpMark; OWNER=security; UPDATED=2025-09-26
 
 test "TestCANARY_REQ_GQL_MFA_008_StepUpRequire_and_mark_flow" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

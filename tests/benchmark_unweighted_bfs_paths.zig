@@ -6,7 +6,7 @@ const shortest = @import("../src/graph/shortest_unweighted_bfs_paths.zig");
 // CANARY: REQ=REQ-GQL-063; FEATURE="Shortest Paths"; ASPECT=UnweightedBFSPaths; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_063_UnweightedBFSPaths; BENCH=BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths; OWNER=graph; UPDATED=2025-09-20
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -73,6 +73,6 @@ pub fn main() !void {
     }
 
     const avg_ns = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_063_UnweightedBFSPaths\",\n  \"nodes\": {d},\n  \"edges\": {d},\n  \"iterations\": {d},\n  \"avg_ns_per_query\": {d:.2}\n}\n", .{ node_ids.items.len, g.edges.items.len, iterations, avg_ns });
 }

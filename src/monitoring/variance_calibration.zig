@@ -14,14 +14,14 @@ pub const Suggestion = struct {
 };
 
 pub fn calibrate(reader: anytype, allocator: std.mem.Allocator, maximum: usize) !Suggestion {
-    var cvs = std.ArrayListUnmanaged(f64){};
+    var cvs = std.ArrayList(f64).empty;
     defer cvs.deinit(allocator);
-    var ratios = std.ArrayListUnmanaged(f64){};
+    var ratios = std.ArrayList(f64).empty;
     defer ratios.deinit(allocator);
 
     // Read entire stream up to a sane cap (8 MiB) then tokenize by newlines.
     const MaxBytes = 8 * 1024 * 1024;
-    const data = try reader.readAllAlloc(allocator, MaxBytes);
+    const data = try reader.allocRemaining(allocator, .limited(MaxBytes));
     defer allocator.free(data);
 
     var it = std.mem.tokenizeScalar(u8, data, '\n');

@@ -59,7 +59,7 @@ test "BenchmarkCANARY_REQ_GQL_062_BFS" {
         try std.testing.expect(order.len == g.nodes.count());
     }
     const avg_ns = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(iterations));
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\n  \"benchmark\": \"BenchmarkCANARY_REQ_GQL_062_BFS\",\n  \"nodes\": {d},\n  \"iterations\": {d},\n  \"avg_ns\": {d:.2}\n}\n", .{ g.nodes.count(), iterations, avg_ns });
 
     // Guard: BFS avg should be under a loose threshold (e.g., < 5e6 ns for debug on this size)

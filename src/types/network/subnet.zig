@@ -230,20 +230,20 @@ pub const Subnet = union(enum) {
     }
 
     pub fn decode(reader: anytype) !Subnet {
-        const tag = try reader.readByte();
+        const tag = try reader.takeByte();
         return switch (tag) {
             0x06 => {
                 var network: [4]u8 = undefined;
                 try reader.readNoEof(&network);
-                const prefix_len = try reader.readByte();
+                const prefix_len = try reader.takeByte();
                 return Subnet{ .v4 = IPv4Subnet{ .network = network, .prefix_len = prefix_len } };
             },
             0x07 => {
                 var network: [8]u16 = undefined;
                 for (&network) |*segment| {
-                    segment.* = try reader.readInt(u16, .big);
+                    segment.* = try reader.takeInt(u16, .big);
                 }
-                const prefix_len = try reader.readByte();
+                const prefix_len = try reader.takeByte();
                 return Subnet{ .v6 = IPv6Subnet{ .network = network, .prefix_len = prefix_len } };
             },
             else => error.InvalidSubnetTag,
@@ -312,7 +312,7 @@ test "Subnet overlap detection" {
 test "Subnet encoding/decoding" {
     const testing = std.testing;
     var buffer: [32]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buffer);
+    var fbs = std.Io.fixedBufferStream(&buffer);
 
     // Test IPv4 subnet round-trip
     const ipv4_subnet = try Subnet.fromString("10.0.0.0/8");

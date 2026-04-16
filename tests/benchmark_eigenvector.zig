@@ -34,7 +34,7 @@ test "BenchmarkCANARY_REQ_GQL_067_Eigenvector" {
         total_ns += @as(u64, @intCast(end - start));
     }
     const avg = total_ns / 5;
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"eigenvector_centrality\",\"avg_ns\":{d}}\n", .{avg});
     try std.testing.expect(avg < 300_000_000);
 }

@@ -28,7 +28,7 @@ fn stats(values: []u64) struct { mean: f64, stddev: f64, cv: f64, p95: u64 } {
 test "BenchmarkCANARY_REQ_GQL_077_InvertedIndexQueryLatencyVarianceEnvelope" {
     // Simulate index build + repeated query lookups with modest variance.
     const runs: usize = 56; // >=48
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var query_lat = try gpa.allocator().alloc(u64, runs);
     defer gpa.allocator().free(query_lat);

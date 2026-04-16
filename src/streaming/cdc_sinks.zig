@@ -180,7 +180,7 @@ pub const FileSink = struct {
 
     pub fn deinit(self: *FileSink) void {
         if (self.file) |f| {
-            f.close();
+            f.close(std.Io.Threaded.global_single_threaded.io());
         }
     }
 
@@ -285,13 +285,14 @@ test "FileSink - writes events to file" {
     try sink.send(&events);
 
     // Verify file exists
-    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), "test_cdc_sink.log", .{});
-    defer file.close();
-    const stat = try file.stat();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io_fs, "test_cdc_sink.log", .{});
+    defer file.close(io_fs);
+    const stat = try file.stat(io_fs);
     try testing.expect(stat.size > 0);
 
     // Cleanup
-    try std.Io.Dir.cwd().deleteFile("test_cdc_sink.log");
+    try std.Io.Dir.cwd().deleteFile(io_fs, "test_cdc_sink.log");
 }
 
 test "SinkRegistry - register and retrieve sinks" {

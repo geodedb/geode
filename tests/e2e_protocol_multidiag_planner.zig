@@ -17,7 +17,7 @@ fn runCli(alloc: std.mem.Allocator, query: []const u8) !struct { code: u8, out: 
 // Expect precedence to pick US001 as primary and additional_statuses to include GroupByIllegal.
 
 test "protocol: planner multi-diagnostic GroupByIllegal + US001" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const q = "RETURN a, b GROUP BY a LIMIT 5";

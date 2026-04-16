@@ -47,7 +47,7 @@ pub const TenantQuotaManager = struct {
             .allocator = allocator,
             .quotas = .empty,
             .usage = .empty,
-            .mu = .{},
+            .mu = .init,
             .default_quota = .{},
         };
     }

@@ -18,12 +18,12 @@ fn makeSampleLines(list: *std.ArrayListUnmanaged(u8), alloc: std.mem.Allocator) 
 }
 
 fn runCalibration(alloc: std.mem.Allocator) !calibrate.Suggestion {
-    var backing = std.ArrayListUnmanaged(u8){};
+    var backing = std.ArrayList(u8).empty;
     defer backing.deinit(alloc);
     try backing.ensureTotalCapacity(alloc, 1024);
     try makeSampleLines(&backing, alloc);
-    var fbs = std.io.fixedBufferStream(backing.items);
-    return try calibrate.calibrate(fbs.reader(), alloc, 1000);
+    var reader = std.Io.Reader.fixed(backing.items);
+    return try calibrate.calibrate(&reader, alloc, 1000);
 }
 
 // Test names follow CANARY naming conventions
@@ -33,7 +33,7 @@ pub fn main() !void {}
 // The trimming logic should drop nothing (len < 20) and hence pick max cv 0.50 *1.05
 // This is acceptable; we assert within epsilon.
 test "TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const s = try runCalibration(alloc);
@@ -43,7 +43,7 @@ test "TestCANARY_REQ_GQL_004_PaginationVarianceAutoCalibration" {
 // Cost model variance calibration test (ratio field)
 // Max p95_mean_ratio is 2.40; expect *1.10 headroom.
 test "TestCANARY_REQ_GQL_075_CostModelVarianceAutoCalibration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const s = try runCalibration(alloc);

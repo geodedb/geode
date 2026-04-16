@@ -169,7 +169,7 @@ pub fn main() !void {
 
     if (want_txt) {
         var out_buf2: [256]u8 = undefined;
-        var fbs2 = std.io.fixedBufferStream(&out_buf2);
+        var fbs2 = std.Io.fixedBufferStream(&out_buf2);
         try fbs2.writer().print(
             "FED_STREAK current={d} longest={d} eligible={s} min={d} last_reason={s} records={d}\n",
             .{ current_streak, longest_streak, if (eligible) "yes" else "no", min_streak, last_reason, total },
@@ -186,7 +186,7 @@ pub fn main() !void {
     }
 
     var out_buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&out_buf);
+    var fbs = std.Io.fixedBufferStream(&out_buf);
     const w = fbs.writer();
     try w.writeAll("{");
     try w.print("\"current_streak\":{d},", .{current_streak});
@@ -210,7 +210,7 @@ pub fn main() !void {
 
 test "fed_latency_streak_basic" {
     const sample = "{\"promotion_ready\":true,\"max_cv\":0.21}\n{\"promotion_ready\":true,\"max_cv\":0.19}\n{\"promotion_ready\":false,\"max_cv\":0.30}\n";
-    var fbs = std.io.fixedBufferStream(sample);
+    var fbs = std.Io.fixedBufferStream(sample);
     var reader = fbs.reader();
     var lines: usize = 0;
     var cur: usize = 0;

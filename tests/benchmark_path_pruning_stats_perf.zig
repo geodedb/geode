@@ -32,6 +32,6 @@ test "BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf" {
     allocator.free(results);
 
     const elapsed = end - start;
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_016_PathPruningStatsPerf\",\"elapsed_ns\":{d},\"paths\":{d},\"edges_in_paths\":{d}}\n", .{ elapsed, @as(usize, results.len), total_edges });
 }

@@ -3,7 +3,7 @@ const graph_store = @import("geode").graph_store;
 
 // BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact - synthetic benchmark for snapshot rewrite/compaction.
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -38,6 +38,6 @@ pub fn main() !void {
     }
     const ns = timer.read();
 
-    const stdout = std.io.getStdOut().writer();
+    const stdout = std.Io.getStdOut().writer();
     try stdout.print("{\"benchmark\":\"BenchmarkCANARY_REQ_GQL_028_GraphStoreCompact\",\"rounds\":{d},\"nodes\":{d},\"total_ns\":{d}}\n", .{ rounds, store.getNodeCount(), ns });
 }

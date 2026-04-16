@@ -49,6 +49,6 @@ test "BenchmarkCANARY_REQ_GQL_051_GPUFlaggerEnumerationVarianceEnvelope" {
     try std.testing.expect(cv < 0.18);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.3);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"gpu_flagger_enumeration_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

@@ -9,7 +9,7 @@ const file_sink = audit_lib.file_sink;
 const time = audit_lib.time;
 
 test "syslog RFC5424 formatting" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -81,7 +81,7 @@ test "syslog severity and facility calculation" {
 }
 
 test "file sink JSON formatting" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -90,8 +90,8 @@ test "file sink JSON formatting" {
 
     // Create test directory
     const test_dir = "zig-out/tmp/test-file-sink";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -104,10 +104,10 @@ test "file sink JSON formatting" {
     defer sink.deinit();
 
     // Create test metadata
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
-    try metadata_obj.put("user_action", std.json.Value{ .string = "profile_update" });
-    try metadata_obj.put("request_size", std.json.Value{ .integer = 1024 });
+    var metadata_obj: std.json.ObjectMap = .{};
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "user_action", std.json.Value{ .string = "profile_update" });
+    try metadata_obj.put(allocator, "request_size", std.json.Value{ .integer = 1024 });
     const metadata = std.json.Value{ .object = metadata_obj };
 
     const event = events.AuditEvent{
@@ -129,10 +129,13 @@ test "file sink JSON formatting" {
     try sink.write(&event, metadata);
 
     // Read back the file and verify JSON format
-    const file = try std.fs.cwd().openFile(file_config.path, .{});
-    defer file.close();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io_fs, file_config.path, .{});
+    defer file.close(io_fs);
 
-    const content = try file.readToEndAlloc(allocator, 8192);
+    var file_reader_buf: [4096]u8 = undefined;
+    var file_reader = file.reader(io_fs, &file_reader_buf);
+    const content = try file_reader.interface.allocRemaining(allocator, .limited(8192));
     defer allocator.free(content);
 
     // Parse the JSON line
@@ -163,7 +166,7 @@ test "file sink JSON formatting" {
 }
 
 test "file rotation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -172,8 +175,8 @@ test "file rotation" {
 
     // Create test directory
     const test_dir = "zig-out/tmp/test-rotation";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -210,12 +213,12 @@ test "file rotation" {
     // Check that backup files exist (Zig 0.15 access returns void on success, error on failure)
     // CANARY: REQ=REQ-QUALITY-GAP-413-015; FEATURE="OrphanedTestRemediation"; ASPECT=FileAccessAPI; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
     const file_exists = blk: {
-        std.fs.cwd().access(test_dir ++ "/rotate.log", .{}) catch break :blk false;
+        std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), test_dir ++ "/rotate.log", .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(file_exists);
     const backup_exists = blk: {
-        std.fs.cwd().access(test_dir ++ "/rotate.log.1", .{}) catch break :blk false;
+        std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), test_dir ++ "/rotate.log.1", .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(backup_exists);

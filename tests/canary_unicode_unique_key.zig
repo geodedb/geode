@@ -4,7 +4,7 @@ const unicode = @import("../src/unicode/geode_unicode.zig");
 // CANARY: REQ=REQ-GQL-UNICODE-011; FEATURE="UnicodeUniqueKeys"; ASPECT=NormalizeLabel; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize; OWNER=unicode; UPDATED=2025-09-27
 
 test "TestCANARY_REQ_GQL_UNICODE_011_UniqueKeyNormalize" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var mgr = cm.ConstraintManager.init(gpa.allocator());
     defer mgr.deinit();

@@ -36,7 +36,7 @@ fn tmpDirPath(alloc: std.mem.Allocator, tmp: anytype) ![]u8 {
 }
 
 test "TestCANARY_REQ_GQL_087_ObservabilityMetrics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 
@@ -58,7 +58,7 @@ test "TestCANARY_REQ_GQL_087_ObservabilityMetrics" {
 }
 
 test "TestCANARY_REQ_GQL_087_CliParityStatusCommand" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(gpa.deinit() == .ok);
     const alloc = gpa.allocator();
 

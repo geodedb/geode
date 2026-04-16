@@ -7,7 +7,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-UNICODE-006; FEATURE="UnicodeBuildIntegration"; ASPECT=BuildStep; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables; OWNER=unicode; UPDATED=2025-09-27
 
 test "TestCANARY_REQ_GQL_UNICODE_006_BuildIncludesTables" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const input = "e\xCC\x81"; // e + COMBINING ACUTE
     const maybe_norm = geode.unicode.nfcNormalize(gpa.allocator(), input) catch |e| {

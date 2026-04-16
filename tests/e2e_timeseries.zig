@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const timeseries_lib = @import("timeseries_lib");
 const timeseries = timeseries_lib;
 const chunk_storage = timeseries_lib.chunk_storage;
@@ -15,9 +38,9 @@ test "e2e_timeseries: basic store operations" {
     const humidity_key = timeseries.SeriesKey{ .device_id = 1, .metric = "humidity" };
 
     // Generate realistic time-series data
-    var temp_points: std.ArrayList(timeseries.Point) = .{};
+    var temp_points: std.ArrayList(timeseries.Point) = .empty;
     defer temp_points.deinit(allocator);
-    var humidity_points: std.ArrayList(timeseries.Point) = .{};
+    var humidity_points: std.ArrayList(timeseries.Point) = .empty;
     defer humidity_points.deinit(allocator);
 
     var i: i64 = 0;
@@ -84,7 +107,7 @@ test "e2e_timeseries: chunk storage with compression" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var dir_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_timeseries_chunks_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .max_points_per_chunk = 1000,
@@ -94,7 +117,7 @@ test "e2e_timeseries: chunk storage with compression" {
     defer storage.deinit();
 
     // Generate high-frequency time-series data
-    var points: std.ArrayList(timeseries.Point) = .{};
+    var points: std.ArrayList(timeseries.Point) = .empty;
     defer points.deinit(allocator);
 
     // Simulate 1 hour of data at 10Hz (36,000 points)
@@ -145,7 +168,7 @@ test "e2e_timeseries: retention policy" {
     const pid = if (@import("builtin").os.tag == .linux) std.os.linux.getpid() else 0;
     var dir_buf: [128]u8 = undefined;
     const test_dir = std.fmt.bufPrint(&dir_buf, "/tmp/test_retention_policy_{d}", .{pid}) catch unreachable;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    defer std.Io.Dir.cwd().deleteTree(std.Io.Threaded.global_single_threaded.io(), test_dir) catch {};
 
     var storage = try chunk_storage.ChunkStorage.init(allocator, test_dir, .{
         .retention_days = 1, // 1 day retention for testing
@@ -199,7 +222,7 @@ test "e2e_timeseries: GQL function integration" {
     const key = timeseries.SeriesKey{ .device_id = 42, .metric = "cpu_usage" };
 
     // Insert CPU usage data (0-100%)
-    var points: std.ArrayList(timeseries.Point) = .{};
+    var points: std.ArrayList(timeseries.Point) = .empty;
     defer points.deinit(allocator);
 
     var i: i64 = 0;
@@ -363,9 +386,9 @@ test "e2e_timeseries: performance benchmark" {
         };
     }
 
-    const start_time = std.time.milliTimestamp();
+    const start_time = compat_milliTimestamp();
     try store.insertMany(key, points);
-    const write_time = std.time.milliTimestamp() - start_time;
+    const write_time = compat_milliTimestamp() - start_time;
 
     const write_throughput = @as(f64, @floatFromInt(num_points * 1000)) / @as(f64, @floatFromInt(write_time));
 
@@ -374,7 +397,7 @@ test "e2e_timeseries: performance benchmark" {
     std.debug.print("  Write time: {} ms for {} points\n", .{ write_time, num_points });
 
     // Benchmark query performance
-    const query_start = std.time.milliTimestamp();
+    const query_start = compat_milliTimestamp();
 
     // Run various queries
     _ = store.last(key);
@@ -382,7 +405,7 @@ test "e2e_timeseries: performance benchmark" {
     const samples = try store.sampleBy(key, 10000, 1000000000, 1001000000, .avg, allocator);
     allocator.free(samples);
 
-    const query_time = std.time.milliTimestamp() - query_start;
+    const query_time = compat_milliTimestamp() - query_start;
 
     std.debug.print("  Query time: {} ms\n", .{query_time});
 

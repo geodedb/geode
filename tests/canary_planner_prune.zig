@@ -1,4 +1,27 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const enumerator_mod = @import("planner_enumerator");
 
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationCostPrune; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
@@ -11,7 +34,7 @@ fn buildDeepTree(depth: usize, leaf: enumerator_mod.LogicalPlan) enumerator_mod.
 }
 
 test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
@@ -20,8 +43,8 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
     var enum_prune = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 1024, .enable_prune = true, .prune_factor = 1.2 });
     var enum_full = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 1024, .enable_prune = false });
 
-    var list_prune = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
-    var list_full = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+    var list_prune = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+    var list_full = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     try enum_prune.enumerateUnmanaged(root, alloc, &list_prune);
     try enum_full.enumerateUnmanaged(root, alloc, &list_full);
 
@@ -44,7 +67,7 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationCostPrune" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const leaf = enumerator_mod.LogicalPlan{ .op = .scan, .children = &[_]enumerator_mod.LogicalPlan{} };
@@ -58,15 +81,15 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationCostPruneVarianceEnvelope" {
     while (i < iterations) : (i += 1) {
         var ep = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 2048, .enable_prune = true, .prune_factor = 1.3 });
         var ef = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 2048, .enable_prune = false });
-        var lp = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
-        var lf = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
-        const start_p = std.time.nanoTimestamp();
+        var lp = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+        var lf = std.ArrayList(enumerator_mod.CandidatePlan).empty;
+        const start_p = compat_nanoTimestamp();
         try ep.enumerateUnmanaged(root, alloc, &lp);
-        const end_p = std.time.nanoTimestamp();
+        const end_p = compat_nanoTimestamp();
         samples_prune[i] = @as(u64, @intCast(end_p - start_p));
-        const start_f = std.time.nanoTimestamp();
+        const start_f = compat_nanoTimestamp();
         try ef.enumerateUnmanaged(root, alloc, &lf);
-        const end_f = std.time.nanoTimestamp();
+        const end_f = compat_nanoTimestamp();
         samples_full[i] = @as(u64, @intCast(end_f - start_f));
         lp.deinit(alloc);
         lf.deinit(alloc);

@@ -1,11 +1,34 @@
 const std = @import("std");
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const enumerator_mod = @import("planner_enumerator");
 
 // Promote IMPL to TESTED after this test passes.
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationEngine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationEngine; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 
 test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -14,7 +37,7 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
     const root = enumerator_mod.LogicalPlan{ .op = .join, .children = join_children[0..] };
 
     var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{});
-    var plans = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+    var plans = std.ArrayList(enumerator_mod.CandidatePlan).empty;
     defer plans.deinit(alloc);
     try plans.ensureTotalCapacity(alloc, 16);
     defer plans.deinit(alloc);
@@ -28,7 +51,7 @@ test "TestCANARY_REQ_GQL_024_PlanEnumerationEngine" {
 // We keep this simple: run enumeration multiple times, capture duration stats; enforce CV and p95/mean thresholds.
 // CANARY: REQ=REQ-GQL-024; FEATURE="Cost Based Optimizer"; ASPECT=PlanEnumerationVarianceEnvelope; STATUS=BENCHED; TEST=TestCANARY_REQ_GQL_024_PlanEnumerationEngine; BENCH=BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope; OWNER=planner; UPDATED=2025-09-21
 test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -50,11 +73,11 @@ test "BenchmarkCANARY_REQ_GQL_024_PlanEnumerationVarianceEnvelope" {
     var i: usize = 0;
     while (i < iterations) : (i += 1) {
         var enumerator = enumerator_mod.PlanEnumerator.init(alloc, .{ .max_plans = 512 });
-        var plans_iter = std.ArrayListUnmanaged(enumerator_mod.CandidatePlan){};
+        var plans_iter = std.ArrayList(enumerator_mod.CandidatePlan).empty;
         try plans_iter.ensureTotalCapacity(alloc, 32);
-        const start = std.time.nanoTimestamp();
+        const start = compat_nanoTimestamp();
         try enumerator.enumerateUnmanaged(root, alloc, &plans_iter);
-        const end = std.time.nanoTimestamp();
+        const end = compat_nanoTimestamp();
         samples[i] = @as(u64, @intCast(end - start));
         plans_iter.deinit(alloc);
     }

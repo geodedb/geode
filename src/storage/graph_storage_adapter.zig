@@ -2740,7 +2740,7 @@ test "StorageAdapter: per-graph audit logger is created and accessible" {
     defer allocator.free(audit_path);
 
     // statFile returns a Stat struct on success; an error means the file does not exist.
-    _ = std.Io.Dir.cwd().statFile(audit_path) catch |err| {
+    _ = std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), audit_path, .{}) catch |err| {
         std.debug.print("audit.jsonl should exist: {}\n", .{err});
         return err;
     };
@@ -2775,11 +2775,11 @@ test "StorageAdapter: per-graph timeseries store is created and accessible" {
     const ts_dir = try std.fmt.allocPrint(allocator, "{s}/timeseries", .{graph_dir});
     defer allocator.free(ts_dir);
 
-    var dir = std.Io.Dir.cwd().openDir(ts_dir, .{}) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), ts_dir, .{}) catch |err| {
         std.debug.print("timeseries dir open failed: {}\n", .{err});
         return err;
     };
-    dir.close();
+    dir.close(std.Io.Threaded.global_single_threaded.io());
 }
 
 test "StorageAdapter: per-graph FTS index is created, persists, and accessible" {
@@ -2820,11 +2820,11 @@ test "StorageAdapter: per-graph FTS index is created, persists, and accessible" 
         const fts_dir = try std.fmt.allocPrint(allocator, "{s}/fts", .{graph_dir});
         defer allocator.free(fts_dir);
 
-        var dir = std.Io.Dir.cwd().openDir(fts_dir, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), fts_dir, .{}) catch |err| {
             std.debug.print("fts dir open failed: {}\n", .{err});
             return err;
         };
-        dir.close();
+        dir.close(std.Io.Threaded.global_single_threaded.io());
 
         // deinit triggers saveToDisk for the FTS index.
     }
@@ -2892,7 +2892,7 @@ test "StorageAdapter: reopen repairs corrupted free.store" {
 
         try std.testing.expectEqualStrings("Alice", name_prop.string);
         try std.testing.expectEqual(@as(u64, 1), try adapter.nodeCount(graph_name));
-        const repaired_stat = try std.Io.Dir.cwd().statFile(free_store_path);
+        const repaired_stat = try std.Io.Dir.cwd().statFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{});
         try std.testing.expectEqual(@as(u64, 0), repaired_stat.size);
     }
 }
@@ -2923,21 +2923,21 @@ test "StorageAdapter: dropGraph removes graph directory and subsystem data" {
 
     // Verify graph directory exists before drop.
     {
-        var dir = std.Io.Dir.cwd().openDir(graph_dir, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), graph_dir, .{}) catch |err| {
             std.debug.print("graph dir should exist before drop: {}\n", .{err});
             return err;
         };
-        dir.close();
+        dir.close(std.Io.Threaded.global_single_threaded.io());
     }
 
     // Drop the graph — this should deinit subsystems and delete the directory.
     adapter.dropGraph("__geode_security");
 
     // Verify graph directory is removed.
-    const dir_result = std.Io.Dir.cwd().openDir(graph_dir, .{});
+    const dir_result = std.Io.Dir.cwd().openDir(std.Io.Threaded.global_single_threaded.io(), graph_dir, .{});
     if (dir_result) |*d| {
         var dir_copy = d.*;
-        dir_copy.close();
+        dir_copy.close(std.Io.Threaded.global_single_threaded.io());
         return error.TestExpectedError; // directory should not exist
     } else |err| {
         try std.testing.expect(err == error.FileNotFound);

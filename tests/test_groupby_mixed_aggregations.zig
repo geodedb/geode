@@ -22,7 +22,7 @@ fn buildRows(allocator: std.mem.Allocator) ![]exec.BindingRow {
 }
 
 test "TestCANARY_REQ_GQL_012_MixedAggregationBreadth" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

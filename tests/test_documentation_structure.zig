@@ -28,7 +28,7 @@ test "CLAUDE.md file size constraint validation" {
 
 test "Essential project information presence in CLAUDE.md" {
     // Test that CLAUDE.md contains essential project guidance
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -62,7 +62,7 @@ test "Essential project information presence in CLAUDE.md" {
 
 test "Documentation links structure validation" {
     // Test that CLAUDE.md contains proper links to detailed documentation
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -93,7 +93,7 @@ test "Documentation links structure validation" {
 
 test "Reference architecture link format validation" {
     // Test that documentation links follow consistent format
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -126,7 +126,7 @@ test "Reference architecture link format validation" {
 
 test "Essential guidance sections structure" {
     // Test that CLAUDE.md maintains proper section hierarchy
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -165,7 +165,7 @@ test "Essential guidance sections structure" {
 
 test "No excessive detail in streamlined CLAUDE.md" {
     // Test that CLAUDE.md doesn't contain overly detailed implementation content
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -208,7 +208,7 @@ test "Performance characteristics of streamlined CLAUDE.md" {
     // Test that the streamlined file has good performance characteristics
     const start_time = std.time.nanoTimestamp();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -236,7 +236,7 @@ test "Performance characteristics of streamlined CLAUDE.md" {
 
 test "Markdown format validity in CLAUDE.md" {
     // Test that CLAUDE.md maintains valid markdown structure
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -279,7 +279,7 @@ test "Markdown format validity in CLAUDE.md" {
 
 test "CANARY compliance markers in documentation structure" {
     // Test that documentation includes proper CANARY governance tracking
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -303,7 +303,7 @@ test "TestCANARY_REQ_DOCUMENTATION_STRUCTURE_001" {
     // This test verifies documentation structure functionality
     // as specified in REQ-DOCUMENTATION-STRUCTURE-001
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{});
+    var gpa = std.heap.DebugAllocator(.{});
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

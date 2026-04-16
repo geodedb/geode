@@ -13,7 +13,7 @@ test "TestCANARY_REQ_GQL_085_LogLevelCliParsing" {
 
 // Placeholder tests for filtering / JSON format / client parity (STUB aspects)
 test "TestCANARY_REQ_GQL_085_LogEmitterFiltering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var list = std.ArrayList(u8).init(gpa.allocator());
     defer list.deinit();
@@ -33,7 +33,7 @@ test "TestCANARY_REQ_GQL_085_LogEmitterFiltering" {
 }
 
 test "TestCANARY_REQ_GQL_085_LogJSONFormat" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var list = std.ArrayList(u8).init(gpa.allocator());
     defer list.deinit();
@@ -53,7 +53,7 @@ test "TestCANARY_REQ_GQL_085_LogJSONFormat" {
 
 test "TestCANARY_REQ_GQL_085_ClientLoggingParity" {
     // Exercise that logging from 'client' and 'server' contexts produce same JSON key set and ordering.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var list_client = std.ArrayList(u8).init(gpa.allocator());
     defer list_client.deinit();

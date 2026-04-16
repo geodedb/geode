@@ -21,7 +21,7 @@ fn runCli(alloc: std.mem.Allocator, query: []const u8) !struct { code: u8, out: 
 // If planning refuses due to parse-time IllegalOrderKey, we still expect both US001 and IllegalOrderKey.
 
 test "protocol: parse+eval multi-diagnostic US001 + IllegalOrderKey + TypeMismatch" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     const q = "RETURN (\"a\" + 1) AS a ORDER BY f(a) LIMIT 2";

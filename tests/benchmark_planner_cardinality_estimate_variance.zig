@@ -70,6 +70,6 @@ test "BenchmarkCANARY_REQ_GQL_021_PlannerCardinalityEstimateVarianceEnvelope" {
     try std.testing.expect(cv < 0.18);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.4);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"planner_cardinality_estimate_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

@@ -6,7 +6,7 @@ const bridges_artic = @import("../src/graph/connectivity_bridges_articulation.zi
 // Measures articulation/bridge detection over deterministic sparse graph.
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 
@@ -46,5 +46,5 @@ pub fn main() !void {
     }
     const avg_ns = total_ns / trials;
     if (avg_ns > 160_000_000) return error.BenchmarkTooSlow;
-    try std.io.getStdErr().writer().print("{\"benchmark\":\"bridges_articulation\",\"nodes\":{d},\"avg_ns\":{d}}\n", .{ nodes, avg_ns });
+    try std.Io.getStdErr().writer().print("{\"benchmark\":\"bridges_articulation\",\"nodes\":{d},\"avg_ns\":{d}}\n", .{ nodes, avg_ns });
 }

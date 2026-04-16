@@ -1,4 +1,38 @@
 const std = @import("std");
+
+
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+// Zig 0.16 compat helpers for test code
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_microTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
+}
+fn compat_nanoTimestamp() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
+}
+fn compat_sleep(ns: u64) void {
+    const req = std.os.linux.timespec{ .sec = 0, .nsec = @intCast(ns) };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
+}
+
 const graph_store = @import("geode").graph_store;
 
 // CANARY: REQ=REQ-GQL-028; FEATURE="SnapshotCompaction"; ASPECT=CorruptPageRecoveryLatency; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency; OWNER=storage; UPDATED=2026-02-04
@@ -16,12 +50,12 @@ fn stddev(a: []const f64, m: f64) f64 {
 }
 
 test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(tmp_path);
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
@@ -34,14 +68,13 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
 
     const path = try graph_store.getPersistenceFilePath(allocator);
     defer allocator.free(path);
-    var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-    defer file.close();
-    const end = try file.getEndPos();
+    const io_fs = std.Io.Threaded.global_single_threaded.io();
+    var file = try std.Io.Dir.cwd().openFile(io_fs, path, .{ .mode = .read_write });
+    defer file.close(io_fs);
+    const end = try file.length(io_fs);
     if (end > 1) {
-        try file.seekTo(end - 1);
         var buf: [1]u8 = .{0x00};
-        _ = try file.write(&buf);
-        try file.seekTo(0);
+        try file.writePositionalAll(io_fs, &buf, end - 1);
     }
 
     var store2 = try graph_store.GraphStore.init(allocator);
@@ -50,7 +83,7 @@ test "TestCANARY_REQ_GQL_028_CorruptPageRecoveryLatency" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const iters: usize = 180;
@@ -59,7 +92,7 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
     var i: usize = 0;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp.sub_path);
     defer allocator.free(tmp_path);
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
@@ -76,21 +109,20 @@ test "BenchmarkCANARY_REQ_GQL_028_CorruptPageRecoveryLatencyVarianceEnvelope" {
 
         const path = try graph_store.getPersistenceFilePath(allocator);
         defer allocator.free(path);
-        var file = try std.fs.cwd().openFile(path, .{ .mode = .read_write });
-        defer file.close();
-        const end = try file.getEndPos();
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
+        var file = try std.Io.Dir.cwd().openFile(io_fs, path, .{ .mode = .read_write });
+        defer file.close(io_fs);
+        const end = try file.length(io_fs);
         if (end > 8) {
-            try file.seekTo(end - 4);
             var zeros: [4]u8 = .{ 0, 0, 0, 0 };
-            _ = try file.write(&zeros);
-            try file.seekTo(0);
+            try file.writePositionalAll(io_fs, &zeros, end - 4);
         }
 
-        const start = std.time.microTimestamp();
+        const start = compat_microTimestamp();
         var store2 = try graph_store.GraphStore.init(allocator);
         defer store2.deinit();
         _ = store2.loadFromFile() catch {}; // tolerate checksum mismatch
-        const endt = std.time.microTimestamp();
+        const endt = compat_microTimestamp();
         samples[i] = @as(f64, @floatFromInt(endt - start));
     }
     const m = mean(samples);

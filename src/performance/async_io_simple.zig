@@ -12,7 +12,7 @@ const Allocator = std.mem.Allocator;
 /// - Development/testing of async I/O interfaces
 ///
 /// For production async I/O, use:
-/// - `std.io.poll` for polling-based async
+/// - `std.Io.poll` for polling-based async
 /// - `std.Thread` with thread pools for true parallelism
 /// - Platform-specific APIs (io_uring on Linux, IOCP on Windows)
 ///

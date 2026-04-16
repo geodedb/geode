@@ -35,7 +35,7 @@ fn makeNode(allocator: std.mem.Allocator, id: u64, peers: []const u64) !*raft.Ra
 }
 
 test "BenchmarkCANARY_REQ_GQL_070_AppendEntriesVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const leader = try makeNode(allocator, 1, &.{2});

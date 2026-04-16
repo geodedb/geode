@@ -5,7 +5,7 @@ const pc_mod = @import("../src/planner/path_cache.zig");
 // CANARY: REQ=REQ-GQL-021; FEATURE="PathCache"; ASPECT=PathCacheEntropyVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_021_PathCacheEntropyVarianceEnvelope; OWNER=planner; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_021_PathCacheEntropyStats" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try pc_mod.PathCache.init(gpa.allocator(), 32);
     defer cache.deinit();
@@ -25,7 +25,7 @@ test "TestCANARY_REQ_GQL_021_PathCacheEntropyStats" {
 }
 
 test "BenchmarkCANARY_REQ_GQL_021_PathCacheEntropyVarianceEnvelope" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var cache = try pc_mod.PathCache.init(gpa.allocator(), 128);
     defer cache.deinit();

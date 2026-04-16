@@ -55,6 +55,6 @@ test "BenchmarkCANARY_REQ_GQL_017_PropertyAccessHotPathVarianceEnvelope" {
     try std.testing.expect(cv < 0.15);
     try std.testing.expect(@as(f128, @floatFromInt(p95)) < mean * 2.2);
 
-    const stderr = std.io.getStdErr().writer();
+    const stderr = std.Io.getStdErr().writer();
     try stderr.print("{\"benchmark\":\"property_access_hotpath_variance\",\"mean_ns\":{d},\"cv\":{d:.4},\"p95_ns\":{d}}\n", .{ @as(u64, @intFromFloat(mean)), cv, p95 });
 }

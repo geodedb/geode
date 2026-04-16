@@ -84,7 +84,7 @@ pub fn highlight(allocator: std.mem.Allocator, input: []const u8, use_colors: bo
     }
 
     const alloc = allocator;
-    var result = std.ArrayList(u8){};
+    var result = std.ArrayList(u8).empty;
     errdefer result.deinit(alloc);
 
     var i: usize = 0;
@@ -208,7 +208,7 @@ pub fn highlightInputLine(allocator: std.mem.Allocator, line: []const u8, use_co
 
 /// Strip ANSI color codes from text
 pub fn stripColors(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
-    var result = std.ArrayList(u8){};
+    var result = std.ArrayList(u8).empty;
     errdefer result.deinit(allocator);
 
     var in_escape = false;

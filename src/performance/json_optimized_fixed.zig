@@ -329,14 +329,23 @@ pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct 
     var processor = try OptimizedJsonProcessor.init(allocator);
     defer processor.deinit();
 
+    // Zig 0.16 compat: std.time.Timer removed; use clock_gettime.
+    const getNanos = struct {
+        fn get() u64 {
+            var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        }
+    }.get;
+
     // Benchmark parsing
-    var timer = try std.time.Timer.start();
+    const parse_start = getNanos();
     for (0..iterations) |_| {
         const parsed = try processor.parseJsonValue(test_json);
         parsed.deinit();
         processor.reset();
     }
-    const parse_time = timer.read();
+    const parse_time = getNanos() - parse_start;
 
     // Benchmark serialization
     const schema = [_]SchemaColumn{
@@ -346,12 +355,12 @@ pub fn benchmarkJsonProcessing(allocator: Allocator, iterations: usize) !struct 
     };
     const rows = [_][]const u8{test_json};
 
-    timer.reset();
+    const serialize_start = getNanos();
     for (0..iterations) |_| {
         _ = try processor.serializeQueryResult(&schema, &rows);
         processor.reset();
     }
-    const serialize_time = timer.read();
+    const serialize_time = getNanos() - serialize_start;
 
     return .{
         .parse_ns = parse_time / iterations,

@@ -5,7 +5,7 @@ const geode = @import("geode");
 // CANARY: REQ=REQ-GQL-CATALOG-001; FEATURE="Enhanced Catalog Operations"; ASPECT=RegressionTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_catalog_operations_comprehensive.yml; TEST=TestCatalogOperationsRegression; OWNER=parser; UPDATED=2025-10-04
 
 test "catalog operations regression tests" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -124,7 +124,7 @@ test "catalog operations regression tests" {
 }
 
 test "catalog operations error cases" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -156,7 +156,7 @@ test "catalog operations error cases" {
 // CANARY: REQ=REQ-GQL-CATALOG-002; FEATURE="Graph Type Operations"; ASPECT=FrameworkTesting; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; TEST=TestGraphTypeFramework; OWNER=parser; UPDATED=2025-10-04
 
 test "graph type operations framework" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

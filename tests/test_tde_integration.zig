@@ -2,6 +2,17 @@ const std = @import("std");
 const graph_store = @import("../src/graph_store.zig");
 const tde_file = @import("../src/storage/tde_file_encryption.zig");
 
+// Zig 0.16 compat: Io.Dir.realpathAlloc removed. Build an absolute path by joining cwd with the relative tmp sub_path.
+fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) ![]u8 {
+    var cwd_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const rc = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
+    const cwd_len = if (@as(isize, @bitCast(rc)) < 0) return error.GetCwdFailed else rc;
+    var actual_len = cwd_len;
+    while (actual_len > 0 and cwd_buf[actual_len - 1] == 0) : (actual_len -= 1) {}
+    return std.fmt.allocPrint(allocator, "{s}/.zig-cache/tmp/{s}", .{ cwd_buf[0..actual_len], tmp_sub_path });
+}
+
+
 // Basic integration tests for file-level TDE with GraphStore snapshots.
 // Scenarios:
 // 1) TDE disabled: file not encrypted (no TDE magic header).
@@ -17,7 +28,7 @@ test "tde: graphstore plaintext when disabled" {
     defer tmp_dir.cleanup();
 
     const allocator = std.testing.allocator;
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp_dir.sub_path);
     defer allocator.free(tmp_path);
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);
@@ -46,7 +57,7 @@ test "tde: graphstore encrypt/decrypt round trip" {
     defer tmp_dir.cleanup();
 
     const allocator = std.testing.allocator;
-    const tmp_path = try tmp_dir.dir.realpathAlloc(allocator, ".");
+    const tmp_path = try tmpDirRealpathAlloc(allocator, &tmp_dir.sub_path);
     defer allocator.free(tmp_path);
     graph_store.setDataDirOverride(allocator, tmp_path);
     defer graph_store.setDataDirOverride(allocator, null);

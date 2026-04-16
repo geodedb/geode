@@ -4,7 +4,7 @@ const regress = @import("../src/tools/bench_regress.zig");
 // Validates that writeBaseline helper produces a line containing kind and metric name/value.
 
 test "TestCANARY_REQ_GQL_010_BenchBaselineRefresh" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const tmp_dir = try std.fs.cwd().makeOpenPath(".tmp_bench_baseline", .{});

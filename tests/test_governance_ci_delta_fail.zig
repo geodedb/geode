@@ -1,7 +1,7 @@
 const std = @import("std");
 
 test "governance evidence_delta fails on removed REQ without override" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
     // Copy current status.json to status_prev.json then simulate removal by writing trimmed current without first REQ occurrence.

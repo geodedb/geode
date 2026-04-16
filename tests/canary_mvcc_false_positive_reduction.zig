@@ -4,7 +4,7 @@ const mvcc_adv = @import("../src/transactions/mvcc_adv/early_detect.zig");
 // Validates that overlapping pure reads do NOT produce a conflict but adding a write does.
 
 test "TestCANARY_REQ_GQL_073_FalsePositiveReduction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     var det = mvcc_adv.EarlyDetector.init(allocator);

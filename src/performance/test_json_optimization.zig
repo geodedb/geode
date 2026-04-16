@@ -1,4 +1,11 @@
 const std = @import("std");
+
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime.
+fn compat_getNanos() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
 const testing = std.testing;
 const json_opt = @import("json_optimized_fixed.zig");
 
@@ -221,7 +228,7 @@ test "Large result set streaming performance" {
 
     var writer = processor.getStreamingWriter();
 
-    var timer = try std.time.Timer.start();
+    const timer_start = compat_getNanos();
 
     try writer.writeObjectStart();
     try writer.writeFieldName("large_array");
@@ -240,7 +247,7 @@ test "Large result set streaming performance" {
     try writer.writeArrayEnd();
     try writer.writeObjectEnd();
 
-    const elapsed = timer.read();
+    const elapsed = compat_getNanos() - timer_start;
     const result = processor.getResult();
 
     std.debug.print("\nLarge Result Set Streaming:\n", .{});
@@ -317,9 +324,9 @@ test "CANARY: REQ=REQ-PERF-JSON-001" {
         try rows.append(allocator, row);
     }
 
-    var timer = try std.time.Timer.start();
+    const timer2_start = compat_getNanos();
     const result = try processor.serializeQueryResult(&schema, rows.items);
-    const processing_time = timer.read();
+    const processing_time = compat_getNanos() - timer2_start;
 
     // Validate result structure
     try testing.expect(std.mem.indexOf(u8, result, "\"schema\":[") != null);

@@ -29,7 +29,7 @@ fn runScript(alloc: std.mem.Allocator, path: []const u8) ![]u8 {
 pub fn main() !void {}
 
 test "TestCANARY_REQ_GQL_010_GovernanceScript" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer std.debug.assert(!gpa.deinit());
     const alloc = gpa.allocator();
 

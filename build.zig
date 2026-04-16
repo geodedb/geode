@@ -115,7 +115,6 @@ pub fn build(b: *std.Build) void {
     const uri_dep = b.dependency("uri", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const uri_mod = uri_dep.module("uri");
 
@@ -123,7 +122,6 @@ pub fn build(b: *std.Build) void {
     const yaml_dep = b.dependency("yaml", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const yaml_mod = yaml_dep.module("yaml");
 
@@ -131,7 +129,6 @@ pub fn build(b: *std.Build) void {
     const toml_dep = b.dependency("toml", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const toml_mod = toml_dep.module("toml");
 
@@ -139,7 +136,6 @@ pub fn build(b: *std.Build) void {
     const strings_dep = b.dependency("strings", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const strings_mod = strings_dep.module("strings");
 
@@ -154,7 +150,6 @@ pub fn build(b: *std.Build) void {
     const vulkan_dep = b.dependency("vulkan", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const vulkan_mod = vulkan_dep.module("vulkan");
 
@@ -166,7 +161,6 @@ pub fn build(b: *std.Build) void {
     const json_dep = b.dependency("json", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .uri = false,
     });
     const json_mod = json_dep.module("json");
@@ -194,7 +188,6 @@ pub fn build(b: *std.Build) void {
     const slog_dep = b.dependency("slog", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .json = false,
     });
     const slog_mod = slog_dep.module("slogz");
@@ -204,7 +197,6 @@ pub fn build(b: *std.Build) void {
     const config_dep = b.dependency("config", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .json = false,
         .yaml = false,
         .toml = false,
@@ -222,7 +214,6 @@ pub fn build(b: *std.Build) void {
     const cli_dep = b.dependency("cli", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .config = false,
     });
     const cli_mod = cli_dep.module("zig_cli");
@@ -232,7 +223,6 @@ pub fn build(b: *std.Build) void {
     const dns_dep = b.dependency("dns", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .cli = false,
     });
     const dns_mod = dns_dep.module("dns");
@@ -246,7 +236,6 @@ pub fn build(b: *std.Build) void {
     const mcp_dep = b.dependency("mcp", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
         .json = false,
     });
     const mcp_mod = mcp_dep.module("mcp");
@@ -263,7 +252,6 @@ pub fn build(b: *std.Build) void {
     const grpc_dep = b.dependency("grpc_zig", .{
         .target = target,
         .optimize = optimize,
-        .spice = false,
     });
     const grpc_server_mod = grpc_dep.module("grpc-server");
     const grpc_client_mod = grpc_dep.module("grpc-client");
@@ -1815,9 +1803,7 @@ pub fn build(b: *std.Build) void {
     kms_remote_mod.addImport("logging", logging_mod);
     kms_remote_mod.addImport("json", json_mod);
     remote_kms_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
-    if (target.result.os.tag == .windows) {
-        remote_kms_tests.root_module.link_libc = true;
-    }
+    remote_kms_tests.root_module.link_libc = true;
     test_step.dependOn(&remote_kms_tests.step);
 
     // Remote KMS hardening tests (negative auth matrix, expired attestation, concurrency stress & variance bench)
@@ -1825,9 +1811,7 @@ pub fn build(b: *std.Build) void {
     remote_kms_hardening_tests.root_module.addImport("transport/quic", transport_quic_mod);
     remote_kms_hardening_tests.root_module.addImport("vendor_quic", quic_ext_mod);
     remote_kms_hardening_tests.root_module.addImport("security/kms_remote", kms_remote_mod);
-    if (target.result.os.tag == .windows) {
-        remote_kms_hardening_tests.root_module.link_libc = true;
-    }
+    remote_kms_hardening_tests.root_module.link_libc = true;
     test_step.dependOn(&remote_kms_hardening_tests.step);
 
     // Standalone executable to surface concurrency variance benchmark JSON (tests suppress stdout on success)
@@ -1925,6 +1909,7 @@ pub fn build(b: *std.Build) void {
     mfa_mod.addImport("auth_lib", auth_ext_mod);
     mfa_mod.addImport("mfa_policy", mfa_policy_mod);
     const auth_mod = b.createModule(.{ .root_source_file = b.path("src/security/geode_auth_lib.zig"), .target = target, .optimize = optimize });
+    auth_mod.link_libc = true;
     auth_mod.addImport("logging", logging_mod);
     auth_mod.addImport("auth_lib", auth_ext_mod);
     auth_mod.addImport("mfa_policy", mfa_policy_mod);
@@ -2300,6 +2285,7 @@ pub fn build(b: *std.Build) void {
     const tde_file_encryption_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/storage/tde_file_encryption.zig"), .target = target, .optimize = optimize }),
     });
+    tde_file_encryption_test.root_module.link_libc = true;
     tde_file_encryption_test.root_module.addImport("logging", logging_mod);
     test_step.dependOn(&tde_file_encryption_test.step);
 
@@ -2311,6 +2297,7 @@ pub fn build(b: *std.Build) void {
     const streaming_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/streaming/cdc_enhanced.zig"), .target = target, .optimize = optimize }),
     });
+    streaming_test.root_module.link_libc = true;
     streaming_test.root_module.addImport("logging", logging_mod);
     streaming_test.root_module.addImport("json", json_mod);
     streaming_test.root_module.addImport("transport/thread_pool", thread_pool_mod);
@@ -2495,6 +2482,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    tde_file_mod.link_libc = true;
     tde_file_mod.addImport("logging", logging_mod);
     const tde_enforcement_test_mod = b.createModule(.{
         .root_source_file = b.path("src/security/test_tde_enforcement.zig"),
@@ -2504,6 +2492,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "tde_file", .module = tde_file_mod },
         },
     });
+    tde_enforcement_test_mod.link_libc = true;
     const tde_enforcement_tests = b.addTest(.{ .root_module = tde_enforcement_test_mod });
     test_step.dependOn(&tde_enforcement_tests.step);
 
@@ -2535,6 +2524,7 @@ pub fn build(b: *std.Build) void {
 
     // GAP-413 FIXED: test_transports.zig (7 tests) - syslog and file sink tests
     const test_transports_mod = b.createModule(.{ .root_source_file = b.path("tests/test_transports.zig"), .target = target, .optimize = optimize });
+    test_transports_mod.link_libc = true;
     test_transports_mod.addImport("audit_lib", audit_ext_mod);
     const test_transports_tests = b.addTest(.{ .root_module = test_transports_mod });
     test_step.dependOn(&test_transports_tests.step);
@@ -2570,6 +2560,7 @@ pub fn build(b: *std.Build) void {
     // REMEDIATION: Requires API updates or test file refactoring
 
     const audit_chain_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_chain.zig"), .target = target, .optimize = optimize });
+    audit_chain_test_mod.link_libc = true;
     audit_chain_test_mod.addImport("audit", audit_security_mod);
     audit_chain_test_mod.addImport("rls", rls_mod);
     const audit_chain_tests = b.addTest(.{ .root_module = audit_chain_test_mod });
@@ -2578,6 +2569,7 @@ pub fn build(b: *std.Build) void {
 
     // GAP-0511 regression: audit tenant_id enrichment + adapter propagation
     const audit_tenant_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_tenant_enrichment.zig"), .target = target, .optimize = optimize });
+    audit_tenant_test_mod.link_libc = true;
     audit_tenant_test_mod.addImport("audit", audit_security_mod);
     audit_tenant_test_mod.addImport("rls", rls_mod);
     const audit_tenant_tests = b.addTest(.{ .root_module = audit_tenant_test_mod });

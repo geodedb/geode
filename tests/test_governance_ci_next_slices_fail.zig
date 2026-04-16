@@ -4,7 +4,7 @@ const std = @import("std");
 // CANARY: REQ=REQ-GQL-010; FEATURE="Governance"; ASPECT=GovernanceNextSlicesNegative; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_010_GovernanceNextSlicesNegative; OWNER=tooling; UPDATED=2025-09-22
 
 test "TestCANARY_REQ_GQL_010_GovernanceNextSlicesNegative" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const alloc = gpa.allocator();
 

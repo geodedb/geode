@@ -12,7 +12,7 @@ const quic = @import("transport/quic");
 // CANARY: REQ=REQ-GQL-TDE-EXT-KMS-REMOTE-001; FEATURE="RemoteKMSPrototype"; ASPECT=ConcurrencyStressVariance; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance; OWNER=security; UPDATED=2025-09-26
 
 fn withServer(port: u16, auth: []const u8, body: fn (*kms.RemoteKmsServer) anyerror!void) !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0xdeadbeefcafebabe);
     try server.start(port);
@@ -118,7 +118,7 @@ test "TestCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_ConcurrencyStress" {
 // Benchmark skeleton for concurrency variance (JSON prints). Not executed by default test filter beyond build.
 pub fn runUnwrapConcurrencyVariance() !void {
     const port: u16 = 13054;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     var server = kms.RemoteKmsServer.init(gpa.allocator(), 0x123456789abcdef0);
     try server.start(port);
@@ -129,10 +129,17 @@ pub fn runUnwrapConcurrencyVariance() !void {
     var times = try gpa.allocator().alloc(u64, iterations);
     defer gpa.allocator().free(times);
     var idx: usize = 0;
+    const getNanos = struct {
+        fn get() u64 {
+            var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+            _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+            return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+        }
+    }.get;
     while (idx < iterations) : (idx += 1) {
-        var t = try std.time.Timer.start();
+        const t_start = getNanos();
         _ = try client.unwrap(env);
-        times[idx] = t.read();
+        times[idx] = getNanos() - t_start;
     }
     // stats
     std.sort.heap(u64, times, {}, comptime struct {
@@ -155,8 +162,7 @@ pub fn runUnwrapConcurrencyVariance() !void {
     const stdev = std.math.sqrt(variance);
     const cv = stdev / mean_f;
     var buf: [512]u8 = undefined;
-    var fbs = std.io.fixedBufferStream(&buf);
-    const w = fbs.writer();
+    var w = std.Io.Writer.fixed(&buf);
     try w.writeAll("{\"bench\":\"BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance\",");
     try w.writeAll("\"iterations\":");
     try w.print("{d}", .{iterations});
@@ -165,12 +171,9 @@ pub fn runUnwrapConcurrencyVariance() !void {
     try w.writeAll(",\"p95_mean_ratio\":");
     try w.print("{d:.4}", .{p95_mean_ratio});
     try w.writeAll("}\n");
-    const line = fbs.getWritten();
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    _ = try stdout.writeAll(line);
+    const line = w.buffered();
+    const stdout = std.Io.File.stdout();
+    try stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line);
 }
 
 test "BenchmarkCANARY_REQ_GQL_TDE_EXT_KMS_REMOTE_001_UnwrapConcurrencyVariance_Run" {
