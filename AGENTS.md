@@ -282,9 +282,9 @@ make geodetestlab-spec SPEC=<relevant_spec>  # Relevant integration tests
 
 ## Common Gotchas
 
-### Zig 0.15.1 API
+### Zig 0.16.0 API
 
-ArrayList/HashMap require explicit allocator parameters:
+ArrayList/HashMap require explicit allocator parameters (unchanged since 0.15.1):
 
 ```zig
 var list = std.ArrayList(u8).init(allocator);
