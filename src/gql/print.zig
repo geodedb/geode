@@ -435,10 +435,11 @@ pub fn printExpr(w: anytype, e: ast.Expr, prec: u8) !void {
 
 // Helper to stringify a single expression with options, for granular tests and utilities.
 pub fn stringifyExprAlloc(allocator: std.mem.Allocator, e: ast.Expr, opts: PrintOptions) ![]u8 {
-    var buf = std.ArrayList(u8).empty;
-    errdefer buf.deinit(allocator);
-    try printExprWith(buf.writer(allocator), e, 0, opts);
-    return buf.toOwnedSlice(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aw.deinit();
+    try printExprWith(&aw.writer, e, 0, opts);
+    var al = aw.toArrayList();
+    return try al.toOwnedSlice(allocator);
 }
 
 pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !void {
@@ -479,40 +480,40 @@ pub fn printExprWith(w: anytype, e: ast.Expr, prec: u8, opts: PrintOptions) !voi
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).empty;
-            defer buf.deinit(alloc);
-            try temporal.formatDate(buf.writer(alloc), d.parsed);
-            try w.print("DATE\"{s}\"", .{buf.items});
+            var aw: std.Io.Writer.Allocating = .init(alloc);
+            defer aw.deinit();
+            try temporal.formatDate(&aw.writer, d.parsed);
+            try w.print("DATE\"{s}\"", .{aw.writer.buffer[0..aw.writer.end]});
         },
         .DateTime => |dt| if (!opts.normalize_temporals) {
             try w.print("DATETIME\"{s}\"", .{dt.raw});
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).empty;
-            defer buf.deinit(alloc);
-            try temporal.formatDateTime(buf.writer(alloc), dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
-            try w.print("DATETIME\"{s}\"", .{buf.items});
+            var aw: std.Io.Writer.Allocating = .init(alloc);
+            defer aw.deinit();
+            try temporal.formatDateTime(&aw.writer, dt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            try w.print("DATETIME\"{s}\"", .{aw.writer.buffer[0..aw.writer.end]});
         },
         .Time => |t| if (!opts.normalize_temporals) {
             try w.print("TIME\"{s}\"", .{t.raw});
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).empty;
-            defer buf.deinit(alloc);
-            try temporal.formatTime(buf.writer(alloc), t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
-            try w.print("TIME\"{s}\"", .{buf.items});
+            var aw: std.Io.Writer.Allocating = .init(alloc);
+            defer aw.deinit();
+            try temporal.formatTime(&aw.writer, t.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            try w.print("TIME\"{s}\"", .{aw.writer.buffer[0..aw.writer.end]});
         },
         .LocalDateTime => |ldt| if (!opts.normalize_temporals) {
             try w.print("LOCAL DATETIME\"{s}\"", .{ldt.raw});
         } else {
             // P2-3: Use provided allocator instead of page_allocator
             const alloc = opts.allocator orelse return error.AllocatorRequired;
-            var buf = std.ArrayList(u8).empty;
-            defer buf.deinit(alloc);
-            try temporal.formatDateTime(buf.writer(alloc), ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
-            try w.print("LOCAL DATETIME\"{s}\"", .{buf.items});
+            var aw: std.Io.Writer.Allocating = .init(alloc);
+            defer aw.deinit();
+            try temporal.formatDateTime(&aw.writer, ldt.parsed, .{ .clamp_frac_digits = opts.clamp_frac_digits });
+            try w.print("LOCAL DATETIME\"{s}\"", .{aw.writer.buffer[0..aw.writer.end]});
         },
         .StartsWith => |sw| {
             try printExprWith(w, sw.value.*, 0, opts);

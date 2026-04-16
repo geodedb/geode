@@ -11,6 +11,10 @@ const keymap_emacs = @import("keymap_emacs.zig");
 const keymap_vi = @import("keymap_vi.zig");
 const platform = @import("platform.zig");
 
+fn replIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const ReplLoop = struct {
     pub const Keymap = enum { emacs, vi };
     pub const Format = enum { table, csv, json };
@@ -51,7 +55,7 @@ pub const ReplLoop = struct {
 
         if (!is_tty) {
             const stderr_file = platform.getStderrHandle();
-            try stderr_file.writeAll("Error [GEODE-E0002]: interactive shell requires a TTY\n");
+            try stderr_file.writeStreamingAll(replIo(), "Error [GEODE-E0002]: interactive shell requires a TTY\n");
             std.process.exit(2);
         }
 
@@ -84,7 +88,7 @@ pub const ReplLoop = struct {
 
         // Print connected message after successful connection (we're in raw mode so use stderr writeAll)
         const stdout_file = platform.getStdoutHandle();
-        try stdout_file.writeAll("Connected!\r\n");
+        try stdout_file.writeStreamingAll(replIo(), "Connected!\r\n");
 
         // CANARY: REQ=REQ-SHELL-AUTH-003; FEATURE="ShellAuthHandshake"; ASPECT=HelloWithCredentials; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-28
         // Issue #387: Use authenticated hello if credentials are provided, otherwise standard hello
@@ -93,12 +97,12 @@ pub const ReplLoop = struct {
             if (!auth_result.success) {
                 const stderr_file = platform.getStderrHandle();
                 if (auth_result.error_message) |msg| {
-                    try stderr_file.writeAll("\r\nError [GEODE-E0021]: Authentication failed: ");
-                    try stderr_file.writeAll(msg);
-                    try stderr_file.writeAll("\r\n");
+                    try stderr_file.writeStreamingAll(replIo(), "\r\nError [GEODE-E0021]: Authentication failed: ");
+                    try stderr_file.writeStreamingAll(replIo(), msg);
+                    try stderr_file.writeStreamingAll(replIo(), "\r\n");
                     opts.allocator.free(msg);
                 } else {
-                    try stderr_file.writeAll("\r\nError [GEODE-E0021]: Authentication failed\r\n");
+                    try stderr_file.writeStreamingAll(replIo(), "\r\nError [GEODE-E0021]: Authentication failed\r\n");
                 }
                 // Restore terminal before exit — std.process.exit bypasses defers,
                 // leaving the terminal in raw mode (OPOST disabled) for the next session.
@@ -115,9 +119,9 @@ pub const ReplLoop = struct {
             session.hello() catch |err| {
                 if (err == error.AuthenticationRequired) {
                     const stderr_file = platform.getStderrHandle();
-                    try stderr_file.writeAll("\r\nError [GEODE-E0022]: Server requires authentication.\r\n");
-                    try stderr_file.writeAll("Use --username/-U and --password/-P options to provide credentials.\r\n");
-                    try stderr_file.writeAll("Example: geode shell --server localhost:3141 -U myuser -P mypassword\r\n");
+                    try stderr_file.writeStreamingAll(replIo(), "\r\nError [GEODE-E0022]: Server requires authentication.\r\n");
+                    try stderr_file.writeStreamingAll(replIo(), "Use --username/-U and --password/-P options to provide credentials.\r\n");
+                    try stderr_file.writeStreamingAll(replIo(), "Example: geode shell --server localhost:3141 -U myuser -P mypassword\r\n");
                     restoreTerminalMode(original_termios) catch {};
                     std.process.exit(22);
                 }
@@ -164,20 +168,20 @@ pub const ReplLoop = struct {
         const stdin_file = platform.getStdinHandle();
 
         // Simple welcome message without colors
-        try stdout_file.writeAll("Geode Shell (plain mode)\n");
+        try stdout_file.writeStreamingAll(replIo(), "Geode Shell (plain mode)\n");
 
         // Initialize session
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
         session.graph = opts.graph;
         try session.connect();
-        try stdout_file.writeAll("Connected!\n");
+        try stdout_file.writeStreamingAll(replIo(), "Connected!\n");
 
         // Authenticate if needed
         if (opts.username != null and opts.password != null) {
             const auth_result = try session.helloWithAuth(opts.username.?, opts.password.?);
             if (!auth_result.success) {
-                try stdout_file.writeAll("Error: Authentication failed\n");
+                try stdout_file.writeStreamingAll(replIo(), "Error: Authentication failed\n");
                 std.process.exit(21);
             }
             if (auth_result.session_token) |token| {
@@ -187,7 +191,7 @@ pub const ReplLoop = struct {
         } else {
             session.hello() catch |err| {
                 if (err == error.AuthenticationRequired) {
-                    try stdout_file.writeAll("Error: Server requires authentication\n");
+                    try stdout_file.writeStreamingAll(replIo(), "Error: Server requires authentication\n");
                     std.process.exit(22);
                 }
                 return err;
@@ -234,7 +238,7 @@ pub const ReplLoop = struct {
         while (!state.quit_requested) {
             // Print prompt
             const prompt = if (state.in_txn) "geode(txn)> " else "geode> ";
-            try stdout_file.writeAll(prompt);
+            try stdout_file.writeStreamingAll(replIo(), prompt);
 
             // Read line
             var pos: usize = 0;
@@ -248,28 +252,28 @@ pub const ReplLoop = struct {
 
                 // Handle special characters
                 if (byte[0] == '\n' or byte[0] == '\r') {
-                    try stdout_file.writeAll("\n");
+                    try stdout_file.writeStreamingAll(replIo(), "\n");
                     break;
                 } else if (byte[0] == 4) { // Ctrl+D
                     if (pos == 0) {
-                        try stdout_file.writeAll("\n");
+                        try stdout_file.writeStreamingAll(replIo(), "\n");
                         state.quit_requested = true;
                         break;
                     }
                 } else if (byte[0] == 3) { // Ctrl+C
-                    try stdout_file.writeAll("^C\n");
+                    try stdout_file.writeStreamingAll(replIo(), "^C\n");
                     pos = 0;
                     break;
                 } else if (byte[0] == 127 or byte[0] == 8) { // Backspace
                     if (pos > 0) {
                         pos -= 1;
-                        try stdout_file.writeAll("\x08 \x08"); // Erase character
+                        try stdout_file.writeStreamingAll(replIo(), "\x08 \x08"); // Erase character
                     }
                 } else if (byte[0] >= 32 and byte[0] < 127) {
                     line_buf[pos] = byte[0];
                     pos += 1;
                     // Echo character in plain mode (we disabled terminal echo)
-                    try stdout_file.writeAll(&byte);
+                    try stdout_file.writeStreamingAll(replIo(), &byte);
                 }
             }
 
@@ -295,7 +299,7 @@ pub const ReplLoop = struct {
                 repl_dispatch.handleMetaCommand(&state, line) catch |err| {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error\n";
-                    try stdout_file.writeAll(msg);
+                    try stdout_file.writeStreamingAll(replIo(), msg);
                 };
                 continue;
             }
@@ -304,11 +308,11 @@ pub const ReplLoop = struct {
             repl_dispatch.executeGql(&state, line) catch |err| {
                 var buf: [256]u8 = undefined;
                 const msg = std.fmt.bufPrint(&buf, "Error: {s}\n", .{@errorName(err)}) catch "Error\n";
-                try stdout_file.writeAll(msg);
+                try stdout_file.writeStreamingAll(replIo(), msg);
             };
         }
 
-        try stdout_file.writeAll("Goodbye!\n");
+        try stdout_file.writeStreamingAll(replIo(), "Goodbye!\n");
     }
 };
 
@@ -523,7 +527,7 @@ fn updateCursorOnly(state: *ReplState) !void {
     if (cursor_pos.rows_from_end > 0) {
         var move_buf: [32]u8 = undefined;
         const move_str = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{cursor_pos.rows_from_end}) catch return;
-        try stdout_file.writeAll(move_str);
+        try stdout_file.writeStreamingAll(replIo(), move_str);
     } else if (cursor_pos.rows_from_end == 0 and total_lines > 0) {
         // We might need to move down if cursor was moved
     }
@@ -531,7 +535,7 @@ fn updateCursorOnly(state: *ReplState) !void {
     // Move to correct column
     var col_buf: [32]u8 = undefined;
     const col_str = std.fmt.bufPrint(&col_buf, "\r\x1b[{d}C", .{cursor_pos.col}) catch return;
-    try stdout_file.writeAll(col_str);
+    try stdout_file.writeStreamingAll(replIo(), col_str);
 }
 
 fn renderPrompt(state: *ReplState) !void {
@@ -547,7 +551,7 @@ fn renderPrompt(state: *ReplState) !void {
     // In plain mode, just print prompt without terminal control sequences
     // This makes shell output predictable for automated testing
     if (state.plain_mode) {
-        try stdout_file.writeAll(prompt);
+        try stdout_file.writeStreamingAll(replIo(), prompt);
         return;
     }
 
@@ -561,22 +565,22 @@ fn renderPrompt(state: *ReplState) !void {
     if (state.last_cursor_row > 0) {
         var move_buf: [32]u8 = undefined;
         const move_str = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{state.last_cursor_row}) catch "\x1b[1A";
-        try stdout_file.writeAll(move_str);
+        try stdout_file.writeStreamingAll(replIo(), move_str);
     }
 
     // Move to beginning of line and clear from here to end of screen
     // This clears all our previous content but nothing above where we started
-    try stdout_file.writeAll("\r\x1b[J");
+    try stdout_file.writeStreamingAll(replIo(), "\r\x1b[J");
 
-    try stdout_file.writeAll(prompt);
+    try stdout_file.writeStreamingAll(replIo(), prompt);
 
     // Write buffer - let terminal handle wrapping naturally
     // Only handle explicit newlines in the buffer
     for (state.buffer.items) |c| {
         if (c == '\n') {
-            try stdout_file.writeAll("\r\n");
+            try stdout_file.writeStreamingAll(replIo(), "\r\n");
         } else {
-            try stdout_file.writeAll(&[_]u8{c});
+            try stdout_file.writeStreamingAll(replIo(), &[_]u8{c});
         }
     }
 
@@ -590,13 +594,13 @@ fn renderPrompt(state: *ReplState) !void {
     if (cursor_pos.rows_from_end > 0) {
         var move_buf: [32]u8 = undefined;
         const move_str = std.fmt.bufPrint(&move_buf, "\x1b[{d}A", .{cursor_pos.rows_from_end}) catch return;
-        try stdout_file.writeAll(move_str);
+        try stdout_file.writeStreamingAll(replIo(), move_str);
     }
 
     // Move to correct column
     var col_buf: [32]u8 = undefined;
     const col_str = std.fmt.bufPrint(&col_buf, "\r\x1b[{d}C", .{cursor_pos.col}) catch return;
-    try stdout_file.writeAll(col_str);
+    try stdout_file.writeStreamingAll(replIo(), col_str);
 
     // Update tracking state
     state.content_changed = false;
@@ -634,7 +638,7 @@ fn processInput(state: *ReplState) !void {
             const stdout = platform.getStdoutHandle();
             if (state.buffer.items.len == 0 and !state.is_continuation) {
                 // Ctrl+C on empty buffer with no continuation - exit shell
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                 state.quit_requested = true;
                 break :outer;
             } else if (state.is_continuation) {
@@ -646,7 +650,7 @@ fn processInput(state: *ReplState) !void {
                 state.last_visual_lines = 0;
                 state.last_cursor_row = 0;
                 state.content_changed = true;
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
             } else {
                 // Clear current line buffer
                 state.buffer.clearRetainingCapacity();
@@ -654,7 +658,7 @@ fn processInput(state: *ReplState) !void {
                 state.last_visual_lines = 0;
                 state.last_cursor_row = 0;
                 state.content_changed = true;
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
             }
             break :outer;
         }
@@ -673,7 +677,7 @@ fn processInput(state: *ReplState) !void {
                     if (platform.checkAndClearSigint()) {
                         const stdout = platform.getStdoutHandle();
                         if (state.buffer.items.len == 0 and !state.is_continuation) {
-                            try stdout.writeAll("\r\n^C\r\n");
+                            try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                             state.quit_requested = true;
                             break :outer;
                         } else {
@@ -684,7 +688,7 @@ fn processInput(state: *ReplState) !void {
                             state.last_visual_lines = 0;
                             state.last_cursor_row = 0;
                             state.content_changed = true;
-                            try stdout.writeAll("\r\n^C\r\n");
+                            try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                             break :outer;
                         }
                     }
@@ -717,7 +721,7 @@ fn processInput(state: *ReplState) !void {
                 if (platform.checkAndClearSigint()) {
                     const stdout = platform.getStdoutHandle();
                     if (state.buffer.items.len == 0 and !state.is_continuation) {
-                        try stdout.writeAll("\r\n^C\r\n");
+                        try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                         state.quit_requested = true;
                         break :outer;
                     } else {
@@ -728,7 +732,7 @@ fn processInput(state: *ReplState) !void {
                         state.last_visual_lines = 0;
                         state.last_cursor_row = 0;
                         state.content_changed = true;
-                        try stdout.writeAll("\r\n^C\r\n");
+                        try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                         break :outer;
                     }
                 }
@@ -821,7 +825,7 @@ fn processInput(state: *ReplState) !void {
             // This allows users to hit enter on empty line without triggering parser/lexer
             if (input.len == 0 and !state.is_continuation) {
                 const stdout = platform.getStdoutHandle();
-                try stdout.writeAll("\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n");
                 state.last_visual_lines = 0;
                 state.last_cursor_row = 0;
                 state.content_changed = true;
@@ -852,7 +856,7 @@ fn processInput(state: *ReplState) !void {
                     state.last_cursor_row = 0;
                     state.content_changed = true;
                     const stdout = platform.getStdoutHandle();
-                    try stdout.writeAll("\r\n");
+                    try stdout.writeStreamingAll(replIo(), "\r\n");
                     break :outer; // Exit input loop for new line
                 }
 
@@ -910,9 +914,9 @@ fn processInput(state: *ReplState) !void {
                             // Issue #388: Don't display WouldBlock errors - these are normal async I/O behavior
                             if (err != error.WouldBlock) {
                                 const stderr = platform.getStderrHandle();
-                                stderr.writeAll("REPL error: ") catch {};
-                                stderr.writeAll(@errorName(err)) catch {};
-                                stderr.writeAll("\r\n") catch {};
+                                stderr.writeStreamingAll(replIo(), "REPL error: ") catch {};
+                                stderr.writeStreamingAll(replIo(), @errorName(err)) catch {};
+                                stderr.writeStreamingAll(replIo(), "\r\n") catch {};
                             }
                         };
 
@@ -936,7 +940,7 @@ fn processInput(state: *ReplState) !void {
                         state.last_cursor_row = 0; // Reset cursor row tracking
                         state.content_changed = true;
                         const stdout = platform.getStdoutHandle();
-                        try stdout.writeAll("\r\n");
+                        try stdout.writeStreamingAll(replIo(), "\r\n");
                     }
                 }
             }
@@ -947,7 +951,7 @@ fn processInput(state: *ReplState) !void {
             const stdout = platform.getStdoutHandle();
             if (state.buffer.items.len == 0 and !state.is_continuation) {
                 // Ctrl+C on empty buffer with no continuation - exit shell
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
                 state.quit_requested = true;
                 break :outer;
             } else if (state.is_continuation) {
@@ -959,7 +963,7 @@ fn processInput(state: *ReplState) !void {
                 state.last_visual_lines = 0;
                 state.last_cursor_row = 0;
                 state.content_changed = true;
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
             } else {
                 // Clear current line buffer
                 state.buffer.clearRetainingCapacity();
@@ -967,7 +971,7 @@ fn processInput(state: *ReplState) !void {
                 state.last_visual_lines = 0;
                 state.last_cursor_row = 0;
                 state.content_changed = true;
-                try stdout.writeAll("\r\n^C\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n^C\r\n");
             }
             break :outer;
         }
@@ -1327,7 +1331,7 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
         .clear_screen => {
             // Clear screen and redraw prompt
             const stdout_file = platform.getStdoutHandle();
-            try stdout_file.writeAll("\x1b[2J\x1b[H");
+            try stdout_file.writeStreamingAll(replIo(), "\x1b[2J\x1b[H");
             state.last_visual_lines = 0;
             state.last_cursor_row = 0;
             state.content_changed = true;
@@ -1348,7 +1352,7 @@ fn processAction(state: *ReplState, action: KeyAction) !void {
 fn handleSearch(state: *ReplState) !void {
     // Simplified search - just find in history
     const stdout_file = platform.getStdoutHandle();
-    try stdout_file.writeAll("\r\n(reverse-i-search)`': ");
+    try stdout_file.writeStreamingAll(replIo(), "\r\n(reverse-i-search)`': ");
 
     state.search_buffer.clearRetainingCapacity();
 
@@ -1363,7 +1367,7 @@ fn handleSearch(state: *ReplState) !void {
             state.searching = false;
             state.buffer.clearRetainingCapacity();
             state.cursor = 0;
-            try stdout_file.writeAll("\r\n^C\r\n");
+            try stdout_file.writeStreamingAll(replIo(), "\r\n^C\r\n");
             break;
         }
 
@@ -1378,7 +1382,7 @@ fn handleSearch(state: *ReplState) !void {
                         state.searching = false;
                         state.buffer.clearRetainingCapacity();
                         state.cursor = 0;
-                        try stdout_file.writeAll("\r\n^C\r\n");
+                        try stdout_file.writeStreamingAll(replIo(), "\r\n^C\r\n");
                         break;
                     }
                     continue;
@@ -1395,7 +1399,7 @@ fn handleSearch(state: *ReplState) !void {
                     state.searching = false;
                     state.buffer.clearRetainingCapacity();
                     state.cursor = 0;
-                    try stdout_file.writeAll("\r\n^C\r\n");
+                    try stdout_file.writeStreamingAll(replIo(), "\r\n^C\r\n");
                     break;
                 }
                 continue;
@@ -1491,7 +1495,7 @@ fn handleSearch(state: *ReplState) !void {
 
         var search_line_buf: [1024]u8 = undefined;
         const search_line = try std.fmt.bufPrint(&search_line_buf, "\r(reverse-i-search)`{s}': {s}", .{ state.search_buffer.items, if (found) state.buffer.items else "" });
-        try stdout_file.writeAll(search_line);
+        try stdout_file.writeStreamingAll(replIo(), search_line);
     }
 }
 
@@ -1560,7 +1564,7 @@ fn enterRawMode() !TerminalState {
 
     // Enable bracketed paste mode - terminal will wrap pastes with escape sequences
     const stdout = platform.getStdoutHandle();
-    try stdout.writeAll("\x1b[?2004h");
+    try stdout.writeStreamingAll(replIo(), "\x1b[?2004h");
 
     return original;
 }
@@ -1600,7 +1604,7 @@ fn enterPlainRawMode() !TerminalState {
 fn restoreTerminalMode(original: TerminalState) !void {
     // Disable bracketed paste mode before restoring terminal
     const stdout = platform.getStdoutHandle();
-    stdout.writeAll("\x1b[?2004l") catch {};
+    stdout.writeStreamingAll(replIo(), "\x1b[?2004l") catch {};
 
     if (builtin.os.tag == .windows) {
         const handle = try std.os.windows.GetStdHandle(std.os.windows.STD_INPUT_HANDLE);
@@ -1625,96 +1629,96 @@ fn printWelcomeMessage() !void {
 
     // Use \r\n throughout so output renders correctly even if a previous
     // session left the terminal in raw mode (OPOST disabled).
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Box top
-    try stdout.writeAll(green);
-    try stdout.writeAll("  ");
+    try stdout.writeStreamingAll(replIo(), green);
+    try stdout.writeStreamingAll(replIo(), "  ");
     var i: usize = 0;
     while (i < 64) : (i += 1) {
-        try stdout.writeAll("=");
+        try stdout.writeStreamingAll(replIo(), "=");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Title lines with proper centered spacing
-    try stdout.writeAll("  ");
-    try stdout.writeAll(bold);
+    try stdout.writeStreamingAll(replIo(), "  ");
+    try stdout.writeStreamingAll(replIo(), bold);
     const build_options = @import("build_options");
     const title = "          Welcome to Geode Shell " ++ build_options.version;
-    try stdout.writeAll(title);
-    try stdout.writeAll(reset);
-    try stdout.writeAll(green);
+    try stdout.writeStreamingAll(replIo(), title);
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), green);
     // Pad to match box width
     const title_len = title.len;
     const padding = 64 - title_len;
     var j: usize = 0;
     while (j < padding) : (j += 1) {
-        try stdout.writeAll(" ");
+        try stdout.writeStreamingAll(replIo(), " ");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
-    try stdout.writeAll("  ");
-    try stdout.writeAll("      Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "  ");
+    try stdout.writeStreamingAll(replIo(), "      Interactive GQL REPL (ISO/IEC 39075:2024 compliant)");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Box bottom
-    try stdout.writeAll("  ");
+    try stdout.writeStreamingAll(replIo(), "  ");
     i = 0;
     while (i < 64) : (i += 1) {
-        try stdout.writeAll("=");
+        try stdout.writeStreamingAll(replIo(), "=");
     }
-    try stdout.writeAll(reset);
-    try stdout.writeAll("\r\n\r\n");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "\r\n\r\n");
 
     // Commands section
-    try stdout.writeAll(cyan);
-    try stdout.writeAll("  Quick commands to get started:");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), cyan);
+    try stdout.writeStreamingAll(replIo(), "  Quick commands to get started:");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
-    try stdout.writeAll("    ");
-    try stdout.writeAll(yellow);
-    try stdout.writeAll("\\help");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("          Show all available commands\r\n");
+    try stdout.writeStreamingAll(replIo(), "    ");
+    try stdout.writeStreamingAll(replIo(), yellow);
+    try stdout.writeStreamingAll(replIo(), "\\help");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "          Show all available commands\r\n");
 
-    try stdout.writeAll("    ");
-    try stdout.writeAll(yellow);
-    try stdout.writeAll("\\quit");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("          Exit the shell (also \\exit)\r\n");
+    try stdout.writeStreamingAll(replIo(), "    ");
+    try stdout.writeStreamingAll(replIo(), yellow);
+    try stdout.writeStreamingAll(replIo(), "\\quit");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "          Exit the shell (also \\exit)\r\n");
 
-    try stdout.writeAll("    ");
-    try stdout.writeAll(yellow);
-    try stdout.writeAll("\\clear");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("         Clear screen\r\n");
+    try stdout.writeStreamingAll(replIo(), "    ");
+    try stdout.writeStreamingAll(replIo(), yellow);
+    try stdout.writeStreamingAll(replIo(), "\\clear");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "         Clear screen\r\n");
 
-    try stdout.writeAll("    ");
-    try stdout.writeAll(yellow);
-    try stdout.writeAll("RETURN 1;");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("      Execute a simple GQL query\r\n");
+    try stdout.writeStreamingAll(replIo(), "    ");
+    try stdout.writeStreamingAll(replIo(), yellow);
+    try stdout.writeStreamingAll(replIo(), "RETURN 1;");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "      Execute a simple GQL query\r\n");
 
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Tips section
-    try stdout.writeAll(cyan);
-    try stdout.writeAll("  Tips:");
-    try stdout.writeAll(reset);
-    try stdout.writeAll("\r\n");
-    try stdout.writeAll("    • Meta commands start with \\ or / (e.g., \\help or /help)\r\n");
-    try stdout.writeAll("    • End GQL statements with semicolon (;)\r\n");
-    try stdout.writeAll("    • Use Ctrl+C to exit (on empty line) or cancel input\r\n");
-    try stdout.writeAll("    • Use Ctrl+D to exit on empty line\r\n");
+    try stdout.writeStreamingAll(replIo(), cyan);
+    try stdout.writeStreamingAll(replIo(), "  Tips:");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), "\r\n");
+    try stdout.writeStreamingAll(replIo(), "    • Meta commands start with \\ or / (e.g., \\help or /help)\r\n");
+    try stdout.writeStreamingAll(replIo(), "    • End GQL statements with semicolon (;)\r\n");
+    try stdout.writeStreamingAll(replIo(), "    • Use Ctrl+C to exit (on empty line) or cancel input\r\n");
+    try stdout.writeStreamingAll(replIo(), "    • Use Ctrl+D to exit on empty line\r\n");
 
-    try stdout.writeAll("\r\n");
-    try stdout.writeAll("  Type ");
-    try stdout.writeAll(yellow);
-    try stdout.writeAll("\\help");
-    try stdout.writeAll(reset);
-    try stdout.writeAll(" for more information.\r\n");
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
+    try stdout.writeStreamingAll(replIo(), "  Type ");
+    try stdout.writeStreamingAll(replIo(), yellow);
+    try stdout.writeStreamingAll(replIo(), "\\help");
+    try stdout.writeStreamingAll(replIo(), reset);
+    try stdout.writeStreamingAll(replIo(), " for more information.\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Note: Don't call sync() on stdout - it panics on ttys/pipes
 }

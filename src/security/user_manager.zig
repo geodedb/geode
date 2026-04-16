@@ -604,20 +604,21 @@ pub const UserManager = struct {
         };
         std.mem.sortUnstable([]const u8, keys.items, {}, SortCtx.lessThan);
 
-        var buf = std.ArrayList(u8).empty;
-        errdefer buf.deinit(self.allocator);
-        var writer = buf.writer(self.allocator);
+        var aw: std.Io.Writer.Allocating = .init(self.allocator);
+        errdefer aw.deinit();
+        var writer = &aw.writer;
 
         try writer.writeByte('{');
         for (keys.items, 0..) |key, i| {
             if (i != 0) try writer.writeByte(',');
-            try writeJsonString(&writer, key);
+            try writeJsonString(writer, key);
             try writer.writeByte(':');
-            try writeJsonString(&writer, user.attributes.get(key).?);
+            try writeJsonString(writer, user.attributes.get(key).?);
         }
         try writer.writeByte('}');
 
-        return try buf.toOwnedSlice(self.allocator);
+        var al = aw.toArrayList();
+        return try al.toOwnedSlice(self.allocator);
     }
 
     fn persistUser(self: *Self, user: *auth.User, bump_auth_version: bool) !void {

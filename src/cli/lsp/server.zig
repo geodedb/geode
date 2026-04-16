@@ -168,90 +168,90 @@ pub const Server = struct {
 
         const capabilities = ServerCapabilities{};
 
-        var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
+        var response = std.json.ObjectMap{};
+        defer response.deinit(self.allocator);
 
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
 
-        var result = std.json.ObjectMap.init(self.allocator);
-        defer result.deinit();
+        var result = std.json.ObjectMap{};
+        defer result.deinit(self.allocator);
 
-        var caps = std.json.ObjectMap.init(self.allocator);
-        defer caps.deinit();
+        var caps = std.json.ObjectMap{};
+        defer caps.deinit(self.allocator);
 
-        try caps.put("textDocumentSync", .{ .integer = capabilities.textDocumentSync });
-        try caps.put("hoverProvider", .{ .bool = capabilities.hoverProvider });
-        try caps.put("definitionProvider", .{ .bool = capabilities.definitionProvider });
-        try caps.put("documentFormattingProvider", .{ .bool = capabilities.documentFormattingProvider });
-        try caps.put("documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
-        try caps.put("referencesProvider", .{ .bool = capabilities.referencesProvider });
+        try caps.put(self.allocator, "textDocumentSync", .{ .integer = capabilities.textDocumentSync });
+        try caps.put(self.allocator, "hoverProvider", .{ .bool = capabilities.hoverProvider });
+        try caps.put(self.allocator, "definitionProvider", .{ .bool = capabilities.definitionProvider });
+        try caps.put(self.allocator, "documentFormattingProvider", .{ .bool = capabilities.documentFormattingProvider });
+        try caps.put(self.allocator, "documentSymbolProvider", .{ .bool = capabilities.documentSymbolProvider });
+        try caps.put(self.allocator, "referencesProvider", .{ .bool = capabilities.referencesProvider });
 
-        var completion = std.json.ObjectMap.init(self.allocator);
-        defer completion.deinit();
+        var completion = std.json.ObjectMap{};
+        defer completion.deinit(self.allocator);
         var triggers = std.json.Array.init(self.allocator);
         defer triggers.deinit();
         try triggers.append(.{ .string = "." });
         try triggers.append(.{ .string = ":" });
         try triggers.append(.{ .string = "$" });
-        try completion.put("triggerCharacters", .{ .array = triggers });
-        try caps.put("completionProvider", .{ .object = completion });
+        try completion.put(self.allocator, "triggerCharacters", .{ .array = triggers });
+        try caps.put(self.allocator, "completionProvider", .{ .object = completion });
 
         // Signature help provider
-        var sig_help = std.json.ObjectMap.init(self.allocator);
-        defer sig_help.deinit();
+        var sig_help = std.json.ObjectMap{};
+        defer sig_help.deinit(self.allocator);
         var sig_triggers = std.json.Array.init(self.allocator);
         defer sig_triggers.deinit();
         try sig_triggers.append(.{ .string = "(" });
         try sig_triggers.append(.{ .string = "," });
-        try sig_help.put("triggerCharacters", .{ .array = sig_triggers });
-        try caps.put("signatureHelpProvider", .{ .object = sig_help });
+        try sig_help.put(self.allocator, "triggerCharacters", .{ .array = sig_triggers });
+        try caps.put(self.allocator, "signatureHelpProvider", .{ .object = sig_help });
 
         // Semantic tokens provider
-        var sem_tokens = std.json.ObjectMap.init(self.allocator);
-        defer sem_tokens.deinit();
-        try sem_tokens.put("full", .{ .bool = true });
+        var sem_tokens = std.json.ObjectMap{};
+        defer sem_tokens.deinit(self.allocator);
+        try sem_tokens.put(self.allocator, "full", .{ .bool = true });
 
-        var legend = std.json.ObjectMap.init(self.allocator);
-        defer legend.deinit();
+        var legend = std.json.ObjectMap{};
+        defer legend.deinit(self.allocator);
 
         var token_types = std.json.Array.init(self.allocator);
         defer token_types.deinit();
         for (protocol.SemanticTokenTypes.types) |t| {
             try token_types.append(.{ .string = t });
         }
-        try legend.put("tokenTypes", .{ .array = token_types });
+        try legend.put(self.allocator, "tokenTypes", .{ .array = token_types });
 
         var token_modifiers = std.json.Array.init(self.allocator);
         defer token_modifiers.deinit();
         for (protocol.SemanticTokenTypes.modifiers) |m| {
             try token_modifiers.append(.{ .string = m });
         }
-        try legend.put("tokenModifiers", .{ .array = token_modifiers });
+        try legend.put(self.allocator, "tokenModifiers", .{ .array = token_modifiers });
 
-        try sem_tokens.put("legend", .{ .object = legend });
-        try caps.put("semanticTokensProvider", .{ .object = sem_tokens });
+        try sem_tokens.put(self.allocator, "legend", .{ .object = legend });
+        try caps.put(self.allocator, "semanticTokensProvider", .{ .object = sem_tokens });
 
-        try result.put("capabilities", .{ .object = caps });
+        try result.put(self.allocator, "capabilities", .{ .object = caps });
 
-        var server_info = std.json.ObjectMap.init(self.allocator);
-        defer server_info.deinit();
-        try server_info.put("name", .{ .string = "geode-lsp" });
-        try server_info.put("version", .{ .string = "1.0.0" });
-        try result.put("serverInfo", .{ .object = server_info });
+        var server_info = std.json.ObjectMap{};
+        defer server_info.deinit(self.allocator);
+        try server_info.put(self.allocator, "name", .{ .string = "geode-lsp" });
+        try server_info.put(self.allocator, "version", .{ .string = "1.0.0" });
+        try result.put(self.allocator, "serverInfo", .{ .object = server_info });
 
-        try response.put("result", .{ .object = result });
+        try response.put(self.allocator, "result", .{ .object = result });
 
         try self.sendJsonValue(.{ .object = response });
     }
 
     fn handleShutdown(self: *Server, id: std.json.Value) !void {
-        var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
+        var response = std.json.ObjectMap{};
+        defer response.deinit(self.allocator);
 
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
-        try response.put("result", .null);
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
+        try response.put(self.allocator, "result", .null);
 
         try self.sendJsonValue(.{ .object = response });
     }
@@ -319,17 +319,17 @@ pub const Server = struct {
 
         if (hover) |h| {
             // Build response - don't use defer deinit as objects are nested
-            var response = std.json.ObjectMap.init(self.allocator);
-            try response.put("jsonrpc", .{ .string = "2.0" });
-            try response.put("id", id);
+            var response = std.json.ObjectMap{};
+            try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+            try response.put(self.allocator, "id", id);
 
-            var result = std.json.ObjectMap.init(self.allocator);
-            var contents = std.json.ObjectMap.init(self.allocator);
-            try contents.put("kind", .{ .string = h.contents.kind.toString() });
-            try contents.put("value", .{ .string = h.contents.value });
+            var result = std.json.ObjectMap{};
+            var contents = std.json.ObjectMap{};
+            try contents.put(self.allocator, "kind", .{ .string = h.contents.kind.toString() });
+            try contents.put(self.allocator, "value", .{ .string = h.contents.value });
 
-            try result.put("contents", .{ .object = contents });
-            try response.put("result", .{ .object = result });
+            try result.put(self.allocator, "contents", .{ .object = contents });
+            try response.put(self.allocator, "result", .{ .object = result });
 
             try self.sendJsonValue(.{ .object = response });
         } else {
@@ -371,26 +371,26 @@ pub const Server = struct {
 
         for (items) |item| {
             // Build completion item - don't use defer as objects are stored in array
-            var obj = std.json.ObjectMap.init(self.allocator);
+            var obj = std.json.ObjectMap{};
 
-            try obj.put("label", .{ .string = item.label });
+            try obj.put(self.allocator, "label", .{ .string = item.label });
             if (item.kind) |k| {
-                try obj.put("kind", .{ .integer = @intFromEnum(k) });
+                try obj.put(self.allocator, "kind", .{ .integer = @intFromEnum(k) });
             }
             if (item.detail) |d| {
-                try obj.put("detail", .{ .string = d });
+                try obj.put(self.allocator, "detail", .{ .string = d });
             }
             if (item.insertText) |t| {
-                try obj.put("insertText", .{ .string = t });
+                try obj.put(self.allocator, "insertText", .{ .string = t });
             }
 
             try array.append(.{ .object = obj });
         }
 
-        var response = std.json.ObjectMap.init(self.allocator);
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
-        try response.put("result", .{ .array = array });
+        var response = std.json.ObjectMap{};
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
+        try response.put(self.allocator, "result", .{ .array = array });
 
         try self.sendJsonValue(.{ .object = response });
     }
@@ -525,46 +525,46 @@ pub const Server = struct {
 
         for (symbols) |sym| {
             // Build symbol object - don't use defer as objects are stored in array
-            var obj = std.json.ObjectMap.init(self.allocator);
+            var obj = std.json.ObjectMap{};
 
-            try obj.put("name", .{ .string = sym.name });
-            try obj.put("kind", .{ .integer = @intFromEnum(sym.kind) });
+            try obj.put(self.allocator, "name", .{ .string = sym.name });
+            try obj.put(self.allocator, "kind", .{ .integer = @intFromEnum(sym.kind) });
 
             if (sym.detail) |d| {
-                try obj.put("detail", .{ .string = d });
+                try obj.put(self.allocator, "detail", .{ .string = d });
             }
 
             // Build range object
-            var range = std.json.ObjectMap.init(self.allocator);
-            var start_pos = std.json.ObjectMap.init(self.allocator);
-            try start_pos.put("line", .{ .integer = sym.range.start.line });
-            try start_pos.put("character", .{ .integer = sym.range.start.character });
-            var end_pos = std.json.ObjectMap.init(self.allocator);
-            try end_pos.put("line", .{ .integer = sym.range.end.line });
-            try end_pos.put("character", .{ .integer = sym.range.end.character });
-            try range.put("start", .{ .object = start_pos });
-            try range.put("end", .{ .object = end_pos });
-            try obj.put("range", .{ .object = range });
+            var range = std.json.ObjectMap{};
+            var start_pos = std.json.ObjectMap{};
+            try start_pos.put(self.allocator, "line", .{ .integer = sym.range.start.line });
+            try start_pos.put(self.allocator, "character", .{ .integer = sym.range.start.character });
+            var end_pos = std.json.ObjectMap{};
+            try end_pos.put(self.allocator, "line", .{ .integer = sym.range.end.line });
+            try end_pos.put(self.allocator, "character", .{ .integer = sym.range.end.character });
+            try range.put(self.allocator, "start", .{ .object = start_pos });
+            try range.put(self.allocator, "end", .{ .object = end_pos });
+            try obj.put(self.allocator, "range", .{ .object = range });
 
             // Build selection range object
-            var sel_range = std.json.ObjectMap.init(self.allocator);
-            var sel_start = std.json.ObjectMap.init(self.allocator);
-            try sel_start.put("line", .{ .integer = sym.selectionRange.start.line });
-            try sel_start.put("character", .{ .integer = sym.selectionRange.start.character });
-            var sel_end = std.json.ObjectMap.init(self.allocator);
-            try sel_end.put("line", .{ .integer = sym.selectionRange.end.line });
-            try sel_end.put("character", .{ .integer = sym.selectionRange.end.character });
-            try sel_range.put("start", .{ .object = sel_start });
-            try sel_range.put("end", .{ .object = sel_end });
-            try obj.put("selectionRange", .{ .object = sel_range });
+            var sel_range = std.json.ObjectMap{};
+            var sel_start = std.json.ObjectMap{};
+            try sel_start.put(self.allocator, "line", .{ .integer = sym.selectionRange.start.line });
+            try sel_start.put(self.allocator, "character", .{ .integer = sym.selectionRange.start.character });
+            var sel_end = std.json.ObjectMap{};
+            try sel_end.put(self.allocator, "line", .{ .integer = sym.selectionRange.end.line });
+            try sel_end.put(self.allocator, "character", .{ .integer = sym.selectionRange.end.character });
+            try sel_range.put(self.allocator, "start", .{ .object = sel_start });
+            try sel_range.put(self.allocator, "end", .{ .object = sel_end });
+            try obj.put(self.allocator, "selectionRange", .{ .object = sel_range });
 
             try array.append(.{ .object = obj });
         }
 
-        var response = std.json.ObjectMap.init(self.allocator);
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
-        try response.put("result", .{ .array = array });
+        var response = std.json.ObjectMap{};
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
+        try response.put(self.allocator, "result", .{ .array = array });
         try self.sendJsonValue(.{ .object = response });
     }
 
@@ -605,51 +605,51 @@ pub const Server = struct {
             }
 
             // Build response - don't use defer deinit as objects are nested in the response
-            var response = std.json.ObjectMap.init(self.allocator);
-            try response.put("jsonrpc", .{ .string = "2.0" });
-            try response.put("id", id);
+            var response = std.json.ObjectMap{};
+            try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+            try response.put(self.allocator, "id", id);
 
-            var result = std.json.ObjectMap.init(self.allocator);
+            var result = std.json.ObjectMap{};
             var sigs = std.json.Array.init(self.allocator);
 
             for (sh.signatures) |sig| {
-                var sig_obj = std.json.ObjectMap.init(self.allocator);
-                try sig_obj.put("label", .{ .string = sig.label });
+                var sig_obj = std.json.ObjectMap{};
+                try sig_obj.put(self.allocator, "label", .{ .string = sig.label });
 
                 if (sig.documentation) |doc_content| {
-                    var doc_obj = std.json.ObjectMap.init(self.allocator);
-                    try doc_obj.put("kind", .{ .string = doc_content.kind.toString() });
-                    try doc_obj.put("value", .{ .string = doc_content.value });
-                    try sig_obj.put("documentation", .{ .object = doc_obj });
+                    var doc_obj = std.json.ObjectMap{};
+                    try doc_obj.put(self.allocator, "kind", .{ .string = doc_content.kind.toString() });
+                    try doc_obj.put(self.allocator, "value", .{ .string = doc_content.value });
+                    try sig_obj.put(self.allocator, "documentation", .{ .object = doc_obj });
                 }
 
                 if (sig.parameters) |ps| {
                     var params_arr = std.json.Array.init(self.allocator);
 
                     for (ps) |p| {
-                        var param_obj = std.json.ObjectMap.init(self.allocator);
-                        try param_obj.put("label", .{ .string = p.label });
+                        var param_obj = std.json.ObjectMap{};
+                        try param_obj.put(self.allocator, "label", .{ .string = p.label });
                         try params_arr.append(.{ .object = param_obj });
                     }
-                    try sig_obj.put("parameters", .{ .array = params_arr });
+                    try sig_obj.put(self.allocator, "parameters", .{ .array = params_arr });
                 }
 
                 if (sig.activeParameter) |ap| {
-                    try sig_obj.put("activeParameter", .{ .integer = ap });
+                    try sig_obj.put(self.allocator, "activeParameter", .{ .integer = ap });
                 }
 
                 try sigs.append(.{ .object = sig_obj });
             }
 
-            try result.put("signatures", .{ .array = sigs });
+            try result.put(self.allocator, "signatures", .{ .array = sigs });
             if (sh.activeSignature) |as| {
-                try result.put("activeSignature", .{ .integer = as });
+                try result.put(self.allocator, "activeSignature", .{ .integer = as });
             }
             if (sh.activeParameter) |ap| {
-                try result.put("activeParameter", .{ .integer = ap });
+                try result.put(self.allocator, "activeParameter", .{ .integer = ap });
             }
 
-            try response.put("result", .{ .object = result });
+            try response.put(self.allocator, "result", .{ .object = result });
             try self.sendJsonValue(.{ .object = response });
         } else {
             try self.sendResult(id, .null);
@@ -692,28 +692,28 @@ pub const Server = struct {
 
         for (locations) |loc| {
             // Build location object - don't use defer as objects are stored in array
-            var obj = std.json.ObjectMap.init(self.allocator);
+            var obj = std.json.ObjectMap{};
 
-            try obj.put("uri", .{ .string = loc.uri });
+            try obj.put(self.allocator, "uri", .{ .string = loc.uri });
 
-            var range = std.json.ObjectMap.init(self.allocator);
-            var start_pos = std.json.ObjectMap.init(self.allocator);
-            try start_pos.put("line", .{ .integer = loc.range.start.line });
-            try start_pos.put("character", .{ .integer = loc.range.start.character });
-            var end_pos = std.json.ObjectMap.init(self.allocator);
-            try end_pos.put("line", .{ .integer = loc.range.end.line });
-            try end_pos.put("character", .{ .integer = loc.range.end.character });
-            try range.put("start", .{ .object = start_pos });
-            try range.put("end", .{ .object = end_pos });
-            try obj.put("range", .{ .object = range });
+            var range = std.json.ObjectMap{};
+            var start_pos = std.json.ObjectMap{};
+            try start_pos.put(self.allocator, "line", .{ .integer = loc.range.start.line });
+            try start_pos.put(self.allocator, "character", .{ .integer = loc.range.start.character });
+            var end_pos = std.json.ObjectMap{};
+            try end_pos.put(self.allocator, "line", .{ .integer = loc.range.end.line });
+            try end_pos.put(self.allocator, "character", .{ .integer = loc.range.end.character });
+            try range.put(self.allocator, "start", .{ .object = start_pos });
+            try range.put(self.allocator, "end", .{ .object = end_pos });
+            try obj.put(self.allocator, "range", .{ .object = range });
 
             try array.append(.{ .object = obj });
         }
 
-        var response = std.json.ObjectMap.init(self.allocator);
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
-        try response.put("result", .{ .array = array });
+        var response = std.json.ObjectMap{};
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
+        try response.put(self.allocator, "result", .{ .array = array });
         try self.sendJsonValue(.{ .object = response });
     }
 
@@ -738,19 +738,19 @@ pub const Server = struct {
         defer self.allocator.free(sem_tokens.data);
 
         // Build response - don't use defer deinit as objects are nested
-        var response = std.json.ObjectMap.init(self.allocator);
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
+        var response = std.json.ObjectMap{};
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
 
-        var result = std.json.ObjectMap.init(self.allocator);
+        var result = std.json.ObjectMap{};
         var data_arr = std.json.Array.init(self.allocator);
 
         for (sem_tokens.data) |val| {
             try data_arr.append(.{ .integer = val });
         }
 
-        try result.put("data", .{ .array = data_arr });
-        try response.put("result", .{ .object = result });
+        try result.put(self.allocator, "data", .{ .array = data_arr });
+        try response.put(self.allocator, "result", .{ .object = result });
         try self.sendJsonValue(.{ .object = response });
     }
 
@@ -780,18 +780,38 @@ pub const Server = struct {
             first = false;
 
             try buffer.appendSlice(alloc, "{\"range\":{\"start\":{\"line\":");
-            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.start.line});
+            {
+                var _tmp_buf: [64]u8 = undefined;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.start.line}) catch return error.OutOfMemory;
+                try buffer.appendSlice(alloc, _tmp_str);
+            }
             try buffer.appendSlice(alloc, ",\"character\":");
-            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.start.character});
+            {
+                var _tmp_buf: [64]u8 = undefined;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.start.character}) catch return error.OutOfMemory;
+                try buffer.appendSlice(alloc, _tmp_str);
+            }
             try buffer.appendSlice(alloc, "},\"end\":{\"line\":");
-            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.end.line});
+            {
+                var _tmp_buf: [64]u8 = undefined;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.end.line}) catch return error.OutOfMemory;
+                try buffer.appendSlice(alloc, _tmp_str);
+            }
             try buffer.appendSlice(alloc, ",\"character\":");
-            try std.fmt.format(buffer.writer(alloc), "{d}", .{diag.range.end.character});
+            {
+                var _tmp_buf: [64]u8 = undefined;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{diag.range.end.character}) catch return error.OutOfMemory;
+                try buffer.appendSlice(alloc, _tmp_str);
+            }
             try buffer.appendSlice(alloc, "}}");
 
             if (diag.severity) |sev| {
                 try buffer.appendSlice(alloc, ",\"severity\":");
-                try std.fmt.format(buffer.writer(alloc), "{d}", .{@intFromEnum(sev)});
+                {
+                var _tmp_buf: [64]u8 = undefined;
+                const _tmp_str = std.fmt.bufPrint(&_tmp_buf, "{d}", .{@intFromEnum(sev)}) catch return error.OutOfMemory;
+                try buffer.appendSlice(alloc, _tmp_str);
+            }
             }
 
             try buffer.appendSlice(alloc, ",\"message\":\"");
@@ -823,29 +843,29 @@ pub const Server = struct {
     }
 
     fn sendResult(self: *Server, id: std.json.Value, result: std.json.Value) !void {
-        var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
+        var response = std.json.ObjectMap{};
+        defer response.deinit(self.allocator);
 
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
-        try response.put("result", result);
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
+        try response.put(self.allocator, "result", result);
 
         try self.sendJsonValue(.{ .object = response });
     }
 
     fn sendError(self: *Server, id: std.json.Value, code: i32, message: []const u8) !void {
-        var response = std.json.ObjectMap.init(self.allocator);
-        defer response.deinit();
+        var response = std.json.ObjectMap{};
+        defer response.deinit(self.allocator);
 
-        try response.put("jsonrpc", .{ .string = "2.0" });
-        try response.put("id", id);
+        try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+        try response.put(self.allocator, "id", id);
 
-        var err = std.json.ObjectMap.init(self.allocator);
-        defer err.deinit();
-        try err.put("code", .{ .integer = code });
-        try err.put("message", .{ .string = message });
+        var err = std.json.ObjectMap{};
+        defer err.deinit(self.allocator);
+        try err.put(self.allocator, "code", .{ .integer = code });
+        try err.put(self.allocator, "message", .{ .string = message });
 
-        try response.put("error", .{ .object = err });
+        try response.put(self.allocator, "error", .{ .object = err });
 
         try self.sendJsonValue(.{ .object = response });
     }

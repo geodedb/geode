@@ -301,30 +301,30 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                     // Print results
                     const pr = gql.printer;
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var out = try std.ArrayList(u8).initCapacity(ally, 0);
-                    defer out.deinit(ally);
-                    try out.appendSlice(ally, "demo-sort: session_offset_minutes=");
-                    try out.writer(ally).print("{d}", .{so});
-                    try out.appendSlice(ally, "; order= ");
-                    try out.writer(ally).print("{s}", .{if (k0.desc) "DESC" else "ASC"});
-                    try out.appendSlice(ally, "; nulls=");
+                    var aw: std.Io.Writer.Allocating = .init(ally);
+                    defer aw.deinit();
+                    const w = &aw.writer;
+                    try w.print("demo-sort: session_offset_minutes={d}; order= {s}; nulls=", .{
+                        so,
+                        if (k0.desc) @as([]const u8, "DESC") else "ASC",
+                    });
                     const np = switch (k0.nulls) {
                         .default => "default",
                         .first => "first",
                         .last => "last",
                     };
-                    try out.writer(ally).print("{s}\n", .{np});
-                    try out.appendSlice(ally, "sorted rows (id -> key):\n");
+                    try w.print("{s}\n", .{np});
+                    try w.writeAll("sorted rows (id -> key):\n");
                     for (rows) |r| {
                         const s = try pr.stringifyExprAlloc(ally, r.key, .{});
                         defer ally.free(s);
-                        try out.writer(ally).print("  {d} -> {s}\n", .{ r.id, s });
+                        try w.print("  {d} -> {s}\n", .{ r.id, s });
                     }
                     // Write once
                     const outf = if (builtin.os.tag == .windows) std.Io.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch {
                         std.process.exit(1);
                     } } else std.Io.File{ .handle = std.posix.STDOUT_FILENO, .flags = .{ .nonblocking = false } };
-                    _ = try outf.write(out.items);
+                    try outf.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), aw.writer.buffer[0..aw.writer.end]);
                 },
                 else => {
                     std.debug.print("demo-sort: first statement is not a Query\n", .{});

@@ -299,7 +299,7 @@ pub const AuditLogger = struct {
     pub fn deinit(self: *AuditLogger) void {
         self.digest_buf.deinit(self.allocator);
         if (self.file) |f| {
-            f.close();
+            f.close(std.Io.Threaded.global_single_threaded.io());
         }
         if (self.owned_path) |p| {
             self.allocator.free(p);

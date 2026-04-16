@@ -273,20 +273,25 @@ pub const IdMap = struct {
     }
 
     /// Load an id map from id_map.dat in the given directory.
-    pub fn load(allocator: Allocator, dir: std.fs.Dir) !IdMap {
+    pub fn load(allocator: Allocator, dir: std.Io.Dir) !IdMap {
         var self = IdMap.init(allocator);
         errdefer self.deinit();
 
-        const file = dir.openFile(std.Io.Threaded.global_single_threaded.io(), "id_map.dat", .{}) catch |err| {
+        const idm_io = std.Io.Threaded.global_single_threaded.io();
+        const file = dir.openFile(idm_io, "id_map.dat", .{}) catch |err| {
             if (err == error.FileNotFound) return self;
             return err;
         };
-        defer file.close();
+        defer file.close(idm_io);
+
+        // Use positional reads with tracked offset
+        var file_offset: u64 = 0;
 
         // Read and validate header
         var header: FileHeader = undefined;
         const header_bytes = std.mem.asBytes(&header);
-        const n = try file.readAll(header_bytes);
+        const n = try file.readPositionalAll(idm_io, header_bytes, file_offset);
+        file_offset += n;
         if (n < header_bytes.len) return error.UnexpectedEndOfFile;
 
         if (!std.mem.eql(u8, &header.magic, &FILE_MAGIC)) return error.InvalidFormat;
@@ -295,17 +300,20 @@ pub const IdMap = struct {
         // Read entries
         for (0..header.entry_count) |_| {
             var tag_buf: [1]u8 = undefined;
-            const tag_n = try file.readAll(&tag_buf);
+            const tag_n = try file.readPositionalAll(idm_io, &tag_buf, file_offset);
+            file_offset += tag_n;
             if (tag_n < 1) return error.UnexpectedEndOfFile;
             const type_tag = tag_buf[0];
 
             var uuid_bytes: [@sizeOf(u128)]u8 = undefined;
-            const uuid_n = try file.readAll(&uuid_bytes);
+            const uuid_n = try file.readPositionalAll(idm_io, &uuid_bytes, file_offset);
+            file_offset += uuid_n;
             if (uuid_n < uuid_bytes.len) return error.UnexpectedEndOfFile;
             const uuid: u128 = @bitCast(uuid_bytes);
 
             var slot_bytes: [@sizeOf(u64)]u8 = undefined;
-            const slot_n = try file.readAll(&slot_bytes);
+            const slot_n = try file.readPositionalAll(idm_io, &slot_bytes, file_offset);
+            file_offset += slot_n;
             if (slot_n < slot_bytes.len) return error.UnexpectedEndOfFile;
             const slot: u64 = @bitCast(slot_bytes);
 

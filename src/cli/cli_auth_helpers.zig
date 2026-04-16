@@ -72,7 +72,8 @@ fn resolveStateDir(allocator: std.mem.Allocator) ![]u8 {
     } else |_| {}
 
     if (builtin.os.tag != .windows) {
-        return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{std.posix.getuid()});
+        const uid = if (builtin.os.tag == .linux) std.os.linux.getuid() else std.c.getuid();
+        return std.fmt.allocPrint(allocator, "/tmp/geode-{d}", .{uid});
     }
     return std.fs.path.join(allocator, &.{ ".", ".geode", "state" });
 }

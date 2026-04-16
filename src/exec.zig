@@ -2036,15 +2036,21 @@ fn encodeValueKey(allocator: std.mem.Allocator, buf: *std.ArrayList(u8), v: Bind
         },
         .Int => |n| {
             try buf.append(allocator, 'I');
-            try buf.writer(allocator).print("{d};", .{n});
+            var tmp_buf: [64]u8 = undefined;
+            const int_str = std.fmt.bufPrint(&tmp_buf, "{d};", .{n}) catch return error.OutOfMemory;
+            try buf.appendSlice(allocator, int_str);
         },
         .Decimal => |d| {
             try buf.append(allocator, 'D');
-            try buf.writer(allocator).print("{d}@{d};", .{ d.coeff, d.scale });
+            var tmp_buf: [128]u8 = undefined;
+            const dec_str = std.fmt.bufPrint(&tmp_buf, "{d}@{d};", .{ d.coeff, d.scale }) catch return error.OutOfMemory;
+            try buf.appendSlice(allocator, dec_str);
         },
         .Str => |s| {
             try buf.append(allocator, 'S');
-            try buf.writer(allocator).print("{d}:", .{s.len});
+            var tmp_buf: [32]u8 = undefined;
+            const len_str = std.fmt.bufPrint(&tmp_buf, "{d}:", .{s.len}) catch return error.OutOfMemory;
+            try buf.appendSlice(allocator, len_str);
             try buf.appendSlice(allocator, s);
         },
         .List => |l| {

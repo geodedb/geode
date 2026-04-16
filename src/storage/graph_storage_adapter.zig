@@ -1621,14 +1621,14 @@ pub const StorageAdapter = struct {
         const free_store_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ graph_dir, free_store_path_name });
         defer allocator.free(free_store_path);
 
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
+        const trunc_io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(trunc_io, free_store_path, .{ .mode = .read_write }) catch |err| switch (err) {
             error.FileNotFound => return false,
             else => return err,
         };
-        defer file.close();
+        defer file.close(trunc_io);
 
-        try file.setEndPos(0);
-        try file.seekTo(0);
+        try file.setLength(trunc_io, 0);
         return true;
     }
 
@@ -1676,7 +1676,7 @@ pub const StorageAdapter = struct {
         var header_buf: [free_store_header_size]u8 = undefined;
         for (graph_store_file_names) |file_name| {
             const max_pages = try self.maxPersistedPagesForStorePath(graph_dir, file_name);
-            const bytes_read = try file.preadAll(&header_buf, offset);
+            const bytes_read = try file.readPositionalAll(io_fv, &header_buf, offset);
             if (bytes_read != header_buf.len) return false;
 
             const total_pages = std.mem.readInt(u64, header_buf[0..8], .little);

@@ -1263,9 +1263,12 @@ fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: 
         ts,
     }) catch return;
 
-    // Send via UDP
-    const socket = std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0) catch return;
-    defer std.posix.close(socket);
+    // Send via UDP using linux syscalls (std.posix.socket removed in Zig 0.16)
+    const linux = std.os.linux;
+    const sock_rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    if (@as(isize, @bitCast(sock_rc)) < 0) return;
+    const sock_fd: i32 = @intCast(sock_rc);
+    defer _ = linux.close(sock_fd);
 
     // Parse IP address
     var addr_bytes: [4]u8 = undefined;
@@ -1292,8 +1295,11 @@ fn sendSyslogMessage(host: []const u8, port: u16, category: []const u8, action: 
         addr_bytes[i] = std.fmt.parseInt(u8, seg, 10) catch return;
     }
 
-    const addr = std.net.Address.initIp4(addr_bytes, port);
-    _ = std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen()) catch return;
+    var sa: linux.sockaddr.in = .{
+        .port = std.mem.nativeToBig(u16, port),
+        .addr = std.mem.readInt(u32, &addr_bytes, .big),
+    };
+    _ = linux.sendto(sock_fd, message.ptr, message.len, 0, @ptrCast(&sa), @sizeOf(linux.sockaddr.in));
 }
 
 // CANARY: REQ=REQ-AUDIT-CLI-004; FEATURE="Windows Event Log Integration"; ASPECT=EventLogging; STATUS=TESTED; TEST=TestCANARY_REQ_AUDIT_CLI_004_WindowsEventLog; OWNER=audit; UPDATED=2025-09-30

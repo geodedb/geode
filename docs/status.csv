@@ -4103,7 +4103,7 @@ REQ-TIMESERIES-WIRE-002,TimeseriesServerWiring,ExecutionContext,TESTED,,,engine,
 REQ-TIMESERIES-WIRE-003,TimeseriesServerWiring,ServerInit,TESTED,,,server,2026-04-01,src/server/main.zig
 REQ-TLS-CERT-002,TLSCertVerification,Core,EXEMPT,,,cli,2026-01-12,src/cli/main.zig
 REQ-TRACEABILITY-001,Requirement Traceability Tests,Governance,TESTED,,,compliance,2026-01-15,tests/test_requirement_traceability.zig
-REQ-TRANSPORT-001,AmplificationProtection,LocalhostExemption,IMPLEMENTED,,,transport,2025-10-15,zig-pkg/quic-0.1.11-gBIqUY32NQCtI8R_1ZY9fAHmJM0XHGNMiLohyCxdeQ9s/src/quic/conn.zig
+REQ-TRANSPORT-001,AmplificationProtection,LocalhostExemption,TESTED,,,transport,2025-10-15,zig-pkg/quic-0.1.11-gBIqUY32NQCtI8R_1ZY9fAHmJM0XHGNMiLohyCxdeQ9s/src/quic/conn.zig
 REQ-TRIG-001,TrigonometricFunctions,Sin,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TRIG-002,TrigonometricFunctions,Cos,TESTED,,,eval,2026-01-15,tests/test_gap_0193_impl_verification.zig
 REQ-TS-CHUNK-001,ChunkStorage,Storage,TESTED,,,timeseries,2026-04-01,src/timeseries/chunk_storage.zig

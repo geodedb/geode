@@ -1227,7 +1227,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
         var line_iter = std.mem.splitSequence(u8, contents, "\n");
         while (line_iter.next()) |raw_line| {
-            const line = std.mem.trimRight(u8, raw_line, "\r");
+            const line = std.mem.trimEnd(u8, raw_line, "\r");
             const trimmed = std.mem.trim(u8, line, " \t");
 
             // Skip empty lines and comments
@@ -2179,7 +2179,7 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
 /// Check if a trimmed statement is a transaction begin (START TRANSACTION or BEGIN)
 fn isTransactionBegin(trimmed: []const u8) bool {
     // Remove trailing semicolons for comparison
-    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
+    const stmt = std.mem.trimEnd(u8, trimmed, "; \t");
     if (stmt.len == 0) return false;
     // Case-insensitive check for BEGIN or START TRANSACTION
     if (std.ascii.eqlIgnoreCase(stmt, "BEGIN") or
@@ -2190,7 +2190,7 @@ fn isTransactionBegin(trimmed: []const u8) bool {
 
 /// Check if a trimmed statement is a transaction end (COMMIT or ROLLBACK)
 fn isTransactionEnd(trimmed: []const u8) bool {
-    const stmt = std.mem.trimRight(u8, trimmed, "; \t");
+    const stmt = std.mem.trimEnd(u8, trimmed, "; \t");
     if (stmt.len == 0) return false;
     if (std.ascii.eqlIgnoreCase(stmt, "COMMIT") or
         std.ascii.eqlIgnoreCase(stmt, "ROLLBACK"))

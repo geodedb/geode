@@ -1251,15 +1251,14 @@ pub const GraphStore = struct {
     /// Serialize a PropertyValue to bytes for merge property index keys.
     /// Returns the number of bytes written, or null if the type is not indexable.
     fn serializePropValueForIndex(buf: []u8, value: PropertyValue) ?usize {
-        var stream = std.io.fixedBufferStream(buf);
-        const writer = stream.writer().any();
+        var writer: std.Io.Writer = .fixed(buf);
         switch (value) {
             .String => |s| writer.writeAll(s) catch return null,
-            .Int => |i| std.fmt.format(writer, "{d}", .{i}) catch return null,
+            .Int => |i| writer.print("{d}", .{i}) catch return null,
             .Bool => |b| writer.writeAll(if (b) "true" else "false") catch return null,
             else => return null,
         }
-        return stream.pos;
+        return writer.end;
     }
 
     /// Build a merge property index key into a stack buffer.
@@ -3886,7 +3885,7 @@ pub const GraphStore = struct {
         const graph_uuid = GraphStore.getGraphUuid(graph_name) orelse return null;
         const uuid_hex = std.fmt.bytesToHex(graph_uuid, .lower);
         const uuid_path = try std.fmt.allocPrint(self.allocator, "{s}/graphs/{s}", .{ self.data_dir, uuid_hex });
-        std.Io.Dir.cwd().access(uuid_path, .{}) catch |err| {
+        std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), uuid_path, .{}) catch |err| {
             self.allocator.free(uuid_path);
             if (err == error.FileNotFound) return null;
             return err;
@@ -3898,13 +3897,14 @@ pub const GraphStore = struct {
         const graph_dir_path = (try self.resolveGraphStorageDirPath(graph_name)) orelse return null;
         defer self.allocator.free(graph_dir_path);
 
-        var dir = std.Io.Dir.cwd().openDir(graph_dir_path, .{}) catch |err| {
+        const gs_io = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.cwd().openDir(gs_io, graph_dir_path, .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };
-        defer dir.close();
+        defer dir.close(gs_io);
 
-        dir.access("id_map.dat", .{}) catch |err| {
+        dir.access(gs_io, "id_map.dat", .{}) catch |err| {
             if (err == error.FileNotFound) return null;
             return err;
         };

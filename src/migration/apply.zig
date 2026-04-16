@@ -43,7 +43,7 @@ pub fn applyUpMigrations(alloc: std.mem.Allocator, cfg: MigrationConfig, names: 
     for (staged.items) |entry| {
         const path = root.joinPath(alloc, cfg, entry.name) catch return error.OutOfMemory;
         defer alloc.free(path);
-        const script = std.Io.Dir.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
+        const script = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), path, alloc, std.Io.Limit.limited(max_script_bytes)) catch return error.MigrationFileMissing;
         defer alloc.free(script);
         try lock_mod.verifyMigrationSignature(alloc, cfg, entry.name, script);
         executor.execFn(executor.context, script) catch |err| {
@@ -79,7 +79,7 @@ pub fn applyDownMigration(alloc: std.mem.Allocator, cfg: MigrationConfig, execut
     defer alloc.free(down_name);
     const down_path = root.joinPath(alloc, cfg, down_name) catch return error.OutOfMemory;
     defer alloc.free(down_path);
-    const script = std.Io.Dir.cwd().readFileAlloc(alloc, down_path, max_script_bytes) catch return error.DownScriptMissing;
+    const script = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), down_path, alloc, std.Io.Limit.limited(max_script_bytes)) catch return error.DownScriptMissing;
     defer alloc.free(script);
     executor.execFn(executor.context, script) catch |err| {
         std.log.warn("migration: down-migration executor failed on version {d}: {}", .{ latest.version, err });

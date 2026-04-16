@@ -1441,7 +1441,7 @@ pub fn evalExpr(allocator: std.mem.Allocator, e: ast.Expr, env: Env) EvalError!V
             };
 
             // Build result list
-            var result_list = std.ArrayListUnmanaged(Value){};
+            var result_list: std.ArrayListUnmanaged(Value) = .empty;
 
             for (source_list) |item| {
                 // Create new environment with variable binding

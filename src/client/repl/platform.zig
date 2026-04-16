@@ -121,7 +121,7 @@ pub fn restoreSignalHandlers() void {
 }
 
 // POSIX signal handler for SIGINT
-fn posixSigintHandler(_: c_int) callconv(.c) void {
+fn posixSigintHandler(_: std.posix.SIG) callconv(.c) void {
     sigint_received.store(true, .seq_cst);
 }
 

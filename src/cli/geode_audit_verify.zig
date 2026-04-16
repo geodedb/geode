@@ -53,9 +53,9 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
         }
         return error.ReadError;
     };
-    defer file.close();
+    defer file.close(std.Io.Threaded.global_single_threaded.io());
     var buf: [4096]u8 = undefined;
-    var rd = file.reader(&buf);
+    var rd = file.reader(std.Io.Threaded.global_single_threaded.io(), &buf);
     var line_buf = std.ArrayList(u8).empty;
     defer line_buf.deinit(allocator);
 

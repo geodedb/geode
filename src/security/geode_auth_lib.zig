@@ -1651,6 +1651,7 @@ pub fn hashPasswordArgon2id(allocator: Allocator, password: []const u8) ![]const
         &salt,
         argon2_params,
         .argon2id,
+        std.Io.Threaded.global_single_threaded.io(),
     ) catch |err| {
         log.err("Argon2id hashing failed", &.{
             Attr.string("error", @errorName(err)),
@@ -1757,6 +1758,7 @@ pub fn verifyPasswordArgon2id(allocator: Allocator, password: []const u8, phc_st
         &salt,
         argon2_params,
         .argon2id,
+        std.Io.Threaded.global_single_threaded.io(),
     ) catch return false;
 
     // Constant-time comparison to prevent timing attacks

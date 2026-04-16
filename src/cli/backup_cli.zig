@@ -2197,10 +2197,12 @@ const SimplifiedRestoreManager = struct {
         var reader = std.Io.Reader.fixed(file_data);
 
         // Read and verify header
-        const header = reader.readStruct(BackupHeader) catch |err| {
+        var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
+        reader.readSliceAll(&header_buf) catch |err| {
             std.debug.print("RESTORE: Failed to read backup header: {}\n", .{err});
             return error.InvalidBackupFile;
         };
+        const header: BackupHeader = std.mem.bytesToValue(BackupHeader, &header_buf);
 
         if (header.magic != BACKUP_MAGIC) {
             std.debug.print("RESTORE: Invalid backup file magic (expected 0x{x}, got 0x{x})\n", .{ BACKUP_MAGIC, header.magic });

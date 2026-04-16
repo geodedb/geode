@@ -52,14 +52,16 @@ pub const FileLock = struct {
         const path = std.fs.path.join(alloc, &.{ cfg.migrations_dir, root.lock_filename }) catch return error.OutOfMemory;
         defer alloc.free(path);
         const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .truncate = false, .read = true }) catch return error.FileSystemError;
-        errdefer file.close();
-        if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
-        if (builtin.os.tag != .windows) file.lock(.exclusive) catch return error.AlreadyLocked;
+        errdefer file.close(std.Io.Threaded.global_single_threaded.io());
+        const lock_io = std.Io.Threaded.global_single_threaded.io();
+        if (builtin.os.tag != .windows) file.setPermissions(lock_io, std.Io.File.Permissions.fromMode(0o600)) catch {};
+        if (builtin.os.tag != .windows) file.lock(lock_io, .exclusive) catch return error.AlreadyLocked;
         return .{ .file = file };
     }
     pub fn release(self: *FileLock) void {
-        if (builtin.os.tag != .windows) self.file.unlock(std.Io.Threaded.global_single_threaded.io());
-        self.file.close();
+        const rel_io = std.Io.Threaded.global_single_threaded.io();
+        if (builtin.os.tag != .windows) self.file.unlock(rel_io);
+        self.file.close(rel_io);
     }
 };
 
@@ -82,7 +84,7 @@ pub fn verifyMigrationSignature(alloc: std.mem.Allocator, cfg: MigrationConfig, 
     defer alloc.free(sig_name);
     const sig_path = root.joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
     defer alloc.free(sig_path);
-    const sig_contents = std.Io.Dir.cwd().readFileAlloc(alloc, sig_path, 128) catch return error.MigrationSignatureMissing;
+    const sig_contents = std.Io.Dir.cwd().readFileAlloc(std.Io.Threaded.global_single_threaded.io(), sig_path, alloc, std.Io.Limit.limited(128)) catch return error.MigrationSignatureMissing;
     defer alloc.free(sig_contents);
     const sig_hex = std.mem.trim(u8, sig_contents, " \t\r\n");
     if (sig_hex.len != 64) return error.MigrationSignatureInvalid;
@@ -102,16 +104,17 @@ pub fn signMigrationFile(alloc: std.mem.Allocator, cfg: MigrationConfig, name: [
     const hmac_key = cfg.hmac_key orelse return error.MigrationSignatureMissing;
     const path = root.joinPath(alloc, cfg, name) catch return error.OutOfMemory;
     defer alloc.free(path);
-    const script = std.Io.Dir.cwd().readFileAlloc(alloc, path, max_script_bytes) catch return error.MigrationFileMissing;
+    const sign_io = std.Io.Threaded.global_single_threaded.io();
+    const script = std.Io.Dir.cwd().readFileAlloc(sign_io, path, alloc, std.Io.Limit.limited(max_script_bytes)) catch return error.MigrationFileMissing;
     defer alloc.free(script);
     const hex_sig = computeHmacSha256(hmac_key, script);
     const sig_name = std.fmt.allocPrint(alloc, "{s}.sig", .{name}) catch return error.OutOfMemory;
     defer alloc.free(sig_name);
     const sig_path = root.joinPath(alloc, cfg, sig_name) catch return error.OutOfMemory;
     defer alloc.free(sig_path);
-    var file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), sig_path, .{ .truncate = true }) catch return error.FileSystemError;
-    defer file.close();
-    if (builtin.os.tag != .windows) file.chmod(0o600) catch {};
-    file.writeAll(&hex_sig) catch return error.FileSystemError;
-    file.writeAll("\n") catch return error.FileSystemError;
+    var file = std.Io.Dir.cwd().createFile(sign_io, sig_path, .{ .truncate = true }) catch return error.FileSystemError;
+    defer file.close(sign_io);
+    if (builtin.os.tag != .windows) file.setPermissions(sign_io, std.Io.File.Permissions.fromMode(0o600)) catch {};
+    file.writeStreamingAll(sign_io, &hex_sig) catch return error.FileSystemError;
+    file.writeStreamingAll(sign_io, "\n") catch return error.FileSystemError;
 }
