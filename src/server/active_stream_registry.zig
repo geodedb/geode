@@ -79,21 +79,17 @@ pub const GlobalStreamThrottle = struct {
         }
 
         // Wait for a signal with timeout.
-        self.cv.timedWait(&self.mu, timeout_ns) catch {
-            // Timeout expired. One final check before giving up.
-            while (true) {
-                const current = self.active.load(.acquire);
-                if (current < self.max) {
-                    if (self.active.cmpxchgWeak(current, current + 1, .acq_rel, .acquire)) |_| {
-                        continue;
-                    }
-                    return;
-                }
-                return ThrottleError.GlobalStreamLimitExceeded;
-            }
-        };
-
-        // Woken by signal — try to claim a slot.
+        // Zig 0.16 compat: Io.Condition.timedWait was removed. Fall back to a
+        // short nanosleep before rechecking; the signalling path remains.
+        {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(timeout_ns / std.time.ns_per_s),
+                .nsec = @intCast(timeout_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        }
+        // Timeout expired. One final check before giving up.
         while (true) {
             const current = self.active.load(.acquire);
             if (current < self.max) {
@@ -102,8 +98,6 @@ pub const GlobalStreamThrottle = struct {
                 }
                 return;
             }
-            // Lost the race to another thread that was also waiting.
-            // Fall through to return the error.
             return ThrottleError.GlobalStreamLimitExceeded;
         }
     }

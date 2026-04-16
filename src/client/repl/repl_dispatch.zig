@@ -13,6 +13,27 @@ fn sleepNs(ns: u64) void {
     };
     _ = std.os.linux.nanosleep(&req, null);
 }
+
+// Zig 0.16 compat helper to obtain the default single-threaded I/O handle.
+fn replIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+// Zig 0.16 compat: std.time.Timer was removed. Minimal replacement using clock_gettime.
+const CompatTimer = struct {
+    start_ns: i128,
+    pub fn start() !CompatTimer {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        return .{ .start_ns = @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec) };
+    }
+    pub fn read(self: *CompatTimer) u64 {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        const now_ns = @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+        return @intCast(now_ns - self.start_ns);
+    }
+};
 const builtin = @import("builtin");
 const repl_errors = @import("repl_errors.zig");
 const repl_render = @import("repl_render.zig");
@@ -87,21 +108,21 @@ fn syncSessionStateFromResult(
 
     if (!result.indicatesFailure()) return;
 
-    var root = std.json.ObjectMap.init(session.allocator);
+    var root = @as(std.json.ObjectMap, .empty);
     errdefer query_result_accumulator.freeJsonValue(session.allocator, .{ .object = root });
 
-    try root.put("status_class", .{ .string = try session.allocator.dupe(u8, result.status_class) });
+    try root.put(session.allocator, "status_class", .{ .string = try session.allocator.dupe(u8, result.status_class) });
     if (result.status_subclass.len > 0) {
-        try root.put("status_subclass", .{ .string = try session.allocator.dupe(u8, result.status_subclass) });
+        try root.put(session.allocator, "status_subclass", .{ .string = try session.allocator.dupe(u8, result.status_subclass) });
     }
     if (result.has_error) {
         if (result.error_message.len > 0) {
             const message = try session.allocator.dupe(u8, result.error_message);
-            try root.put("error", .{ .string = message });
-            try root.put("message", .{ .string = try session.allocator.dupe(u8, result.error_message) });
+            try root.put(session.allocator, "error", .{ .string = message });
+            try root.put(session.allocator, "message", .{ .string = try session.allocator.dupe(u8, result.error_message) });
         }
         if (result.error_status.len > 0) {
-            try root.put("error_code", .{ .string = try session.allocator.dupe(u8, result.error_status) });
+            try root.put(session.allocator, "error_code", .{ .string = try session.allocator.dupe(u8, result.error_status) });
         }
     }
 
@@ -109,13 +130,13 @@ fn syncSessionStateFromResult(
     for (result.additional_statuses.items) |item| {
         try additional.append(.{ .string = try session.allocator.dupe(u8, item) });
     }
-    try root.put("additional_statuses", .{ .array = additional });
+    try root.put(session.allocator, "additional_statuses", .{ .array = additional });
 
     var flagger = std.json.Array.init(session.allocator);
     for (result.flagger_findings.items) |item| {
         try flagger.append(.{ .string = try session.allocator.dupe(u8, item) });
     }
-    try root.put("flagger_findings", .{ .array = flagger });
+    try root.put(session.allocator, "flagger_findings", .{ .array = flagger });
 
     const root_value = std.json.Value{ .object = root };
     session.last_response = try std.json.Stringify.valueAlloc(
@@ -254,66 +275,66 @@ fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
 }
 
 fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const proto_schema.MapEntry) !std.json.ObjectMap {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
     for (entries) |entry| {
         const key = try allocator.dupe(u8, entry.key);
         const val = if (entry.value) |v|
             try protoValueToJson(allocator, v)
         else
             std.json.Value.null;
-        try obj.put(key, val);
+        try obj.put(allocator, key, val);
     }
     return obj;
 }
 
 fn protoNodeToJson(allocator: std.mem.Allocator, node: proto_schema.NodeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put("id", try jsonNumberFromU64(allocator, node.id));
+    var obj = @as(std.json.ObjectMap, .empty);
+    try obj.put(allocator, "id", try jsonNumberFromU64(allocator, node.id));
 
     var labels = std.json.Array.init(allocator);
     for (node.labels.items) |label| {
         try labels.append(.{ .string = try allocator.dupe(u8, label) });
     }
-    try obj.put("labels", .{ .array = labels });
+    try obj.put(allocator, "labels", .{ .array = labels });
 
     const props_obj = try protoMapEntriesToJson(allocator, node.properties.items);
-    try obj.put("properties", .{ .object = props_obj });
+    try obj.put(allocator, "properties", .{ .object = props_obj });
     return .{ .object = obj };
 }
 
 fn protoEdgeToJson(allocator: std.mem.Allocator, edge: proto_schema.EdgeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put("id", try jsonNumberFromU64(allocator, edge.id));
-    try obj.put("from", try jsonNumberFromU64(allocator, edge.from_id));
-    try obj.put("to", try jsonNumberFromU64(allocator, edge.to_id));
-    try obj.put("label", .{ .string = try allocator.dupe(u8, edge.label) });
+    var obj = @as(std.json.ObjectMap, .empty);
+    try obj.put(allocator, "id", try jsonNumberFromU64(allocator, edge.id));
+    try obj.put(allocator, "from", try jsonNumberFromU64(allocator, edge.from_id));
+    try obj.put(allocator, "to", try jsonNumberFromU64(allocator, edge.to_id));
+    try obj.put(allocator, "label", .{ .string = try allocator.dupe(u8, edge.label) });
 
     const props_obj = try protoMapEntriesToJson(allocator, edge.properties.items);
-    try obj.put("properties", .{ .object = props_obj });
+    try obj.put(allocator, "properties", .{ .object = props_obj });
     return .{ .object = obj };
 }
 
 fn protoPathToJson(allocator: std.mem.Allocator, path: proto_schema.PathValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
 
     var nodes = std.json.Array.init(allocator);
     for (path.nodes.items) |node| {
         try nodes.append(try protoNodeToJson(allocator, node));
     }
-    try obj.put("nodes", .{ .array = nodes });
+    try obj.put(allocator, "nodes", .{ .array = nodes });
 
     var edges = std.json.Array.init(allocator);
     for (path.edges.items) |edge| {
         try edges.append(try protoEdgeToJson(allocator, edge));
     }
-    try obj.put("edges", .{ .array = edges });
+    try obj.put(allocator, "edges", .{ .array = edges });
     return .{ .object = obj };
 }
 
 fn protoExtendedToJson(allocator: std.mem.Allocator, ext: proto_schema.ExtendedValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
     if (ext.type_name.len > 0) {
-        try obj.put("type", .{ .string = try allocator.dupe(u8, ext.type_name) });
+        try obj.put(allocator, "type", .{ .string = try allocator.dupe(u8, ext.type_name) });
     }
     if (ext.data) |data| {
         const val: std.json.Value = switch (data) {
@@ -323,7 +344,7 @@ fn protoExtendedToJson(allocator: std.mem.Allocator, ext: proto_schema.ExtendedV
             .double_val => |f| .{ .float = f },
             .bool_val => |b| .{ .bool = b },
         };
-        try obj.put("value", val);
+        try obj.put(allocator, "value", val);
     }
     return .{ .object = obj };
 }
@@ -362,19 +383,19 @@ fn protoValueToJson(allocator: std.mem.Allocator, value: proto_schema.Value) err
 fn buildColumnsJsonArray(allocator: std.mem.Allocator, columns: []const ColumnInfo) !std.json.Array {
     var arr = std.json.Array.init(allocator);
     for (columns) |col| {
-        var obj = std.json.ObjectMap.init(allocator);
-        try obj.put("name", .{ .string = try allocator.dupe(u8, col.name) });
-        try obj.put("type", .{ .string = try allocator.dupe(u8, col.type) });
+        var obj = @as(std.json.ObjectMap, .empty);
+        try obj.put(allocator, "name", .{ .string = try allocator.dupe(u8, col.name) });
+        try obj.put(allocator, "type", .{ .string = try allocator.dupe(u8, col.type) });
         try arr.append(.{ .object = obj });
     }
     return arr;
 }
 
 fn rowToJsonArray(allocator: std.mem.Allocator, row: proto_schema.Row, columns: []const ColumnInfo) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
     for (row.values.items, 0..) |val, idx| {
         const name = if (idx < columns.len) columns[idx].name else "?";
-        try obj.put(try allocator.dupe(u8, name), try protoValueToJson(allocator, val));
+        try obj.put(allocator, try allocator.dupe(u8, name), try protoValueToJson(allocator, val));
     }
     return .{ .object = obj };
 }
@@ -445,19 +466,19 @@ fn executionResponseToJson(
     defer arena.deinit();
     const a = arena.allocator();
 
-    var root = std.json.ObjectMap.init(a);
+    var root = @as(std.json.ObjectMap, .empty);
 
     const status_class = if (exec_resp.status) |st|
         if (st.status_class.len > 0) st.status_class else "00000"
     else
         "00000";
-    try root.put("status_class", .{ .string = try a.dupe(u8, status_class) });
+    try root.put(a, "status_class", .{ .string = try a.dupe(u8, status_class) });
 
     var additional_arr = std.json.Array.init(a);
     var flagger_arr = std.json.Array.init(a);
     if (exec_resp.status) |st| {
         if (st.status_subclass.len > 0) {
-            try root.put("status_subclass", .{ .string = try a.dupe(u8, st.status_subclass) });
+            try root.put(a, "status_subclass", .{ .string = try a.dupe(u8, st.status_subclass) });
         }
         for (st.additional_statuses.items) |item| {
             try additional_arr.append(.{ .string = try a.dupe(u8, item) });
@@ -466,8 +487,8 @@ fn executionResponseToJson(
             try flagger_arr.append(.{ .string = try a.dupe(u8, item) });
         }
     }
-    try root.put("additional_statuses", .{ .array = additional_arr });
-    try root.put("flagger_findings", .{ .array = flagger_arr });
+    try root.put(a, "additional_statuses", .{ .array = additional_arr });
+    try root.put(a, "flagger_findings", .{ .array = flagger_arr });
 
     if (exec_resp.payload) |payload| {
         switch (payload) {
@@ -475,66 +496,66 @@ fn executionResponseToJson(
                 if (schema_def.columns.items.len > 0) {
                     var cols = std.json.Array.init(a);
                     for (schema_def.columns.items) |col| {
-                        var col_obj = std.json.ObjectMap.init(a);
-                        try col_obj.put("name", .{ .string = try a.dupe(u8, col.name) });
-                        try col_obj.put("type", .{ .string = try a.dupe(u8, col.type) });
+                        var col_obj = @as(std.json.ObjectMap, .empty);
+                        try col_obj.put(a, "name", .{ .string = try a.dupe(u8, col.name) });
+                        try col_obj.put(a, "type", .{ .string = try a.dupe(u8, col.type) });
                         try cols.append(.{ .object = col_obj });
                     }
-                    try root.put("columns", .{ .array = cols });
+                    try root.put(a, "columns", .{ .array = cols });
                 }
             },
             .page => |page| {
                 const cols = columns orelse &[_]ColumnInfo{};
                 if (cols.len > 0) {
                     const cols_array = try buildColumnsJsonArray(a, cols);
-                    try root.put("columns", .{ .array = cols_array });
+                    try root.put(a, "columns", .{ .array = cols_array });
                 }
                 const rows_array = try buildRowsJsonArray(a, page.rows.items, cols);
-                try root.put("rows", .{ .array = rows_array });
-                try root.put("ordered", .{ .bool = page.ordered });
+                try root.put(a, "rows", .{ .array = rows_array });
+                try root.put(a, "ordered", .{ .bool = page.ordered });
                 var ok_arr = std.json.Array.init(a);
                 for (page.order_keys.items) |key| {
                     try ok_arr.append(.{ .string = try a.dupe(u8, key) });
                 }
-                try root.put("order_keys", .{ .array = ok_arr });
+                try root.put(a, "order_keys", .{ .array = ok_arr });
             },
             .@"error" => |err| {
                 if (err.message.len > 0) {
-                    try root.put("error", .{ .string = try a.dupe(u8, err.message) });
-                    try root.put("message", .{ .string = try a.dupe(u8, err.message) });
+                    try root.put(a, "error", .{ .string = try a.dupe(u8, err.message) });
+                    try root.put(a, "message", .{ .string = try a.dupe(u8, err.message) });
                 }
                 if (err.code.len > 0) {
-                    try root.put("error_code", .{ .string = try a.dupe(u8, err.code) });
+                    try root.put(a, "error_code", .{ .string = try a.dupe(u8, err.code) });
                 }
             },
             .metrics => |metrics| {
-                var metrics_obj = std.json.ObjectMap.init(a);
-                try metrics_obj.put("parse_ns", .{ .integer = metrics.parse_duration_ns });
-                try metrics_obj.put("plan_ns", .{ .integer = metrics.plan_duration_ns });
-                try metrics_obj.put("execute_ns", .{ .integer = metrics.execute_duration_ns });
-                try metrics_obj.put("total_ns", .{ .integer = metrics.total_duration_ns });
-                try root.put("metrics", .{ .object = metrics_obj });
+                var metrics_obj = @as(std.json.ObjectMap, .empty);
+                try metrics_obj.put(a, "parse_ns", .{ .integer = metrics.parse_duration_ns });
+                try metrics_obj.put(a, "plan_ns", .{ .integer = metrics.plan_duration_ns });
+                try metrics_obj.put(a, "execute_ns", .{ .integer = metrics.execute_duration_ns });
+                try metrics_obj.put(a, "total_ns", .{ .integer = metrics.total_duration_ns });
+                try root.put(a, "metrics", .{ .object = metrics_obj });
             },
             .explain => |explain| {
                 const explain_json = try explain_payload.explainPayloadToJson(a, explain);
                 if (std.json.parseFromSlice(std.json.Value, a, explain_json, .{})) |parsed| {
                     defer a.free(explain_json);
-                    try root.put("explain", parsed.value);
+                    try root.put(a, "explain", parsed.value);
                 } else |_| {
-                    try root.put("explain", .{ .string = explain_json });
+                    try root.put(a, "explain", .{ .string = explain_json });
                 }
             },
             .profile => |profile| {
                 const profile_json = try profile_payload.profilePayloadToJson(a, profile);
                 if (std.json.parseFromSlice(std.json.Value, a, profile_json, .{})) |parsed| {
                     defer a.free(profile_json);
-                    try root.put("profile", parsed.value);
+                    try root.put(a, "profile", parsed.value);
                 } else |_| {
-                    try root.put("profile", .{ .string = profile_json });
+                    try root.put(a, "profile", .{ .string = profile_json });
                 }
             },
             .heartbeat => {
-                try root.put("heartbeat", .{ .bool = true });
+                try root.put(a, "heartbeat", .{ .bool = true });
             },
         }
     }
@@ -559,7 +580,7 @@ fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json
             break :blk .{ .array = out };
         },
         .object => |obj| blk: {
-            var out = std.json.ObjectMap.init(allocator);
+            var out = @as(std.json.ObjectMap, .empty);
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 try out.put(try allocator.dupe(u8, entry.key_ptr.*), try cloneJsonValue(allocator, entry.value_ptr.*));
@@ -945,7 +966,7 @@ pub const ClientSession = struct {
             // Display reconnection attempt
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "\r\nConnection lost. Reconnecting (attempt {d}/{d})...\r\n", .{ attempt + 1, self.reconnect_config.max_attempts }) catch "";
-            stdout.writeAll(msg) catch {};
+            stdout.writeStreamingAll(replIo(), msg) catch {};
 
             // Wait before attempting (except first attempt)
             if (attempt > 0) {
@@ -959,7 +980,7 @@ pub const ClientSession = struct {
             self.connect() catch |err| {
                 var err_buf: [256]u8 = undefined;
                 const err_msg = std.fmt.bufPrint(&err_buf, "  Attempt {d} failed: {s}\r\n", .{ attempt + 1, @errorName(err) }) catch "";
-                stderr.writeAll(err_msg) catch {};
+                stderr.writeStreamingAll(replIo(), err_msg) catch {};
                 continue;
             };
 
@@ -968,7 +989,7 @@ pub const ClientSession = struct {
                 const auth_result = self.helloWithAuth(self.cached_username.?, self.cached_password.?) catch |err| {
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "  Auth handshake failed: {s}\r\n", .{@errorName(err)}) catch "";
-                    stderr.writeAll(err_msg) catch {};
+                    stderr.writeStreamingAll(replIo(), err_msg) catch {};
                     // Close connection and retry
                     if (self.connection) |conn| {
                         conn.deinit();
@@ -978,7 +999,7 @@ pub const ClientSession = struct {
                     continue;
                 };
                 if (!auth_result.success) {
-                    stderr.writeAll("  Authentication failed after reconnect\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "  Authentication failed after reconnect\r\n") catch {};
                     if (auth_result.error_message) |em| self.allocator.free(em);
                     if (auth_result.session_token) |st| self.allocator.free(st);
                     if (self.connection) |conn| {
@@ -993,7 +1014,7 @@ pub const ClientSession = struct {
                 self.hello() catch |err| {
                     var err_buf: [256]u8 = undefined;
                     const err_msg = std.fmt.bufPrint(&err_buf, "  Handshake failed: {s}\r\n", .{@errorName(err)}) catch "";
-                    stderr.writeAll(err_msg) catch {};
+                    stderr.writeStreamingAll(replIo(), err_msg) catch {};
                     // Close connection and retry
                     if (self.connection) |conn| {
                         conn.deinit();
@@ -1006,12 +1027,12 @@ pub const ClientSession = struct {
 
             // Success!
             self.reconnect_count += 1;
-            stdout.writeAll("  Reconnected successfully!\r\n") catch {};
+            stdout.writeStreamingAll(replIo(), "  Reconnected successfully!\r\n") catch {};
             return true;
         }
 
         // All attempts failed
-        stderr.writeAll("  All reconnection attempts failed.\r\n") catch {};
+        stderr.writeStreamingAll(replIo(), "  All reconnection attempts failed.\r\n") catch {};
         return false;
     }
 
@@ -1220,7 +1241,7 @@ pub const ClientSession = struct {
             return error.Interrupted;
         }
 
-        const params = std.ArrayList(proto_schema.Param){};
+        const params = std.ArrayList(proto_schema.Param).empty;
         const exec_req = proto_schema.ExecuteRequest{
             .session_id = self.session_id orelse "",
             .query = gql,
@@ -1559,7 +1580,7 @@ pub const ClientSession = struct {
                 var buf: [64]u8 = undefined;
                 const max_sec = (max_retries * 50) / 1000;
                 const progress_msg = std.fmt.bufPrint(&buf, "       Waiting for server response... ({d}/{d}s)\r", .{ elapsed_sec, max_sec }) catch "";
-                stderr.writeAll(progress_msg) catch {};
+                stderr.writeStreamingAll(replIo(), progress_msg) catch {};
             }
 
             // Check for Ctrl+C interrupt - rollback needs special handling
@@ -1567,17 +1588,17 @@ pub const ClientSession = struct {
                 if (!first_interrupt_received) {
                     // First Ctrl+C - warn user about data corruption risk
                     first_interrupt_received = true;
-                    stderr.writeAll("\r\n") catch {};
-                    stderr.writeAll("╔══════════════════════════════════════════════════════════════╗\r\n") catch {};
-                    stderr.writeAll("║  WARNING: CANCELLING ROLLBACK MAY CAUSE DATA CORRUPTION      ║\r\n") catch {};
-                    stderr.writeAll("╠══════════════════════════════════════════════════════════════╣\r\n") catch {};
-                    stderr.writeAll("║  The transaction rollback is in progress.                    ║\r\n") catch {};
-                    stderr.writeAll("║  Interrupting now may leave the database in an inconsistent  ║\r\n") catch {};
-                    stderr.writeAll("║  state with partial changes applied.                         ║\r\n") catch {};
-                    stderr.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n") catch {};
-                    stderr.writeAll("║  Press Ctrl+C again to force cancel (NOT RECOMMENDED)        ║\r\n") catch {};
-                    stderr.writeAll("║  Or wait for rollback to complete safely.                   ║\r\n") catch {};
-                    stderr.writeAll("╚══════════════════════════════════════════════════════════════╝\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "╔══════════════════════════════════════════════════════════════╗\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  WARNING: CANCELLING ROLLBACK MAY CAUSE DATA CORRUPTION      ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "╠══════════════════════════════════════════════════════════════╣\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  The transaction rollback is in progress.                    ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  Interrupting now may leave the database in an inconsistent  ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  state with partial changes applied.                         ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "╟──────────────────────────────────────────────────────────────╢\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  Press Ctrl+C again to force cancel (NOT RECOMMENDED)        ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "║  Or wait for rollback to complete safely.                   ║\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "╚══════════════════════════════════════════════════════════════╝\r\n") catch {};
                     continue; // Keep waiting for rollback
                 } else {
                     // Second Ctrl+C - user really wants to cancel
@@ -1765,21 +1786,21 @@ pub const ClientSession = struct {
             }
         }
 
-        var root = std.json.ObjectMap.init(a);
-        try root.put("status_class", .{ .string = try a.dupe(u8, status_class) });
+        var root = @as(std.json.ObjectMap, .empty);
+        try root.put(a, "status_class", .{ .string = try a.dupe(u8, status_class) });
         if (status_subclass.len > 0) {
-            try root.put("status_subclass", .{ .string = try a.dupe(u8, status_subclass) });
+            try root.put(a, "status_subclass", .{ .string = try a.dupe(u8, status_subclass) });
         }
 
         if (self.last_columns) |cols| {
             const cols_array = try buildColumnsJsonArray(a, cols);
-            try root.put("columns", .{ .array = cols_array });
+            try root.put(a, "columns", .{ .array = cols_array });
         }
-        try root.put("ordered", .{ .bool = ordered });
-        try root.put("order_keys", .{ .array = order_keys });
-        try root.put("rows", .{ .array = all_rows });
-        try root.put("additional_statuses", .{ .array = additional_arr });
-        try root.put("flagger_findings", .{ .array = flagger_arr });
+        try root.put(a, "ordered", .{ .bool = ordered });
+        try root.put(a, "order_keys", .{ .array = order_keys });
+        try root.put(a, "rows", .{ .array = all_rows });
+        try root.put(a, "additional_statuses", .{ .array = additional_arr });
+        try root.put(a, "flagger_findings", .{ .array = flagger_arr });
 
         const root_value = std.json.Value{ .object = root };
         const json = try std.json.Stringify.valueAlloc(self.allocator, root_value, .{});
@@ -1856,7 +1877,7 @@ pub const ClientSession = struct {
             if (checkForInterrupt()) {
                 if (!first_interrupt_received) {
                     first_interrupt_received = true;
-                    stderr.writeAll("\r\n  (Draining buffers... press Ctrl+C again to force cancel)\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "\r\n  (Draining buffers... press Ctrl+C again to force cancel)\r\n") catch {};
                     continue;
                 } else {
                     return error.Interrupted;
@@ -1876,7 +1897,7 @@ pub const ClientSession = struct {
                     last_progress_update = total_drained;
                     var buf: [48]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "\r  Draining... {d} responses cleared", .{total_drained}) catch "";
-                    stderr.writeAll(msg) catch {};
+                    stderr.writeStreamingAll(replIo(), msg) catch {};
                 }
             }
 
@@ -1886,7 +1907,7 @@ pub const ClientSession = struct {
 
         // Clear the progress line if we showed any
         if (last_progress_update > 0) {
-            stderr.writeAll("\r                                          \r") catch {};
+            stderr.writeStreamingAll(replIo(), "\r                                          \r") catch {};
         }
 
         return total_drained;
@@ -1913,7 +1934,7 @@ pub const ClientSession = struct {
                 if (!first_interrupt_received) {
                     first_interrupt_received = true;
                     spinner.stop(null);
-                    stderr.writeAll("  (Press Ctrl+C again to force cancel)\r\n") catch {};
+                    stderr.writeStreamingAll(replIo(), "  (Press Ctrl+C again to force cancel)\r\n") catch {};
                     spinner.setMessage("[1/2] Draining...");
                     spinner.startBackground();
                     continue;
@@ -1959,38 +1980,39 @@ pub fn promptTransactionRecovery(pending_state: *const PendingTransactionState) 
     const stdin = platform.getStdinHandle();
 
     // Display transaction state information
-    try stdout.writeAll("\r\n");
-    try stdout.writeAll("╔══════════════════════════════════════════════════════════════╗\r\n");
-    try stdout.writeAll("║           TRANSACTION RECOVERY REQUIRED                      ║\r\n");
-    try stdout.writeAll("╠══════════════════════════════════════════════════════════════╣\r\n");
-    try stdout.writeAll("║ Connection was lost while a transaction was active.         ║\r\n");
-    try stdout.writeAll("║ The transaction has been rolled back on the server.         ║\r\n");
-    try stdout.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
+    try stdout.writeStreamingAll(replIo(), "╔══════════════════════════════════════════════════════════════╗\r\n");
+    try stdout.writeStreamingAll(replIo(), "║           TRANSACTION RECOVERY REQUIRED                      ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "╠══════════════════════════════════════════════════════════════╣\r\n");
+    try stdout.writeStreamingAll(replIo(), "║ Connection was lost while a transaction was active.         ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "║ The transaction has been rolled back on the server.         ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "╟──────────────────────────────────────────────────────────────╢\r\n");
 
     // Show transaction details
     var buf: [256]u8 = undefined;
     const stmt_msg = std.fmt.bufPrint(&buf, "║ Statements executed in transaction: {d:<24} ║\r\n", .{pending_state.statements_in_txn}) catch "";
-    try stdout.writeAll(stmt_msg);
+    try stdout.writeStreamingAll(replIo(), stmt_msg);
 
     if (pending_state.current_graph) |graph| {
         const graph_msg = std.fmt.bufPrint(&buf, "║ Graph context: {s:<45} ║\r\n", .{graph}) catch "";
-        try stdout.writeAll(graph_msg);
+        try stdout.writeStreamingAll(replIo(), graph_msg);
     } else {
-        try stdout.writeAll("║ Graph context: (default)                                     ║\r\n");
+        try stdout.writeStreamingAll(replIo(), "║ Graph context: (default)                                     ║\r\n");
     }
 
-    try stdout.writeAll("╟──────────────────────────────────────────────────────────────╢\r\n");
-    try stdout.writeAll("║ How would you like to proceed?                               ║\r\n");
-    try stdout.writeAll("║                                                              ║\r\n");
-    try stdout.writeAll("║   [R] Resume - Start a new transaction and continue         ║\r\n");
-    try stdout.writeAll("║   [C] Cancel - Continue without a transaction               ║\r\n");
-    try stdout.writeAll("║   [A] Abort  - Disconnect and exit                          ║\r\n");
-    try stdout.writeAll("╚══════════════════════════════════════════════════════════════╝\r\n");
-    try stdout.writeAll("\r\nYour choice [R/C/A]: ");
+    try stdout.writeStreamingAll(replIo(), "╟──────────────────────────────────────────────────────────────╢\r\n");
+    try stdout.writeStreamingAll(replIo(), "║ How would you like to proceed?                               ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "║                                                              ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "║   [R] Resume - Start a new transaction and continue         ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "║   [C] Cancel - Continue without a transaction               ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "║   [A] Abort  - Disconnect and exit                          ║\r\n");
+    try stdout.writeStreamingAll(replIo(), "╚══════════════════════════════════════════════════════════════╝\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\nYour choice [R/C/A]: ");
 
     // Read user input
     var input_buf: [16]u8 = undefined;
-    const bytes_read = stdin.read(&input_buf) catch {
+    const input_vec = [_][]u8{&input_buf};
+    const bytes_read = stdin.readStreaming(replIo(), &input_vec) catch {
         return .cancel_transaction; // Default to cancel on error
     };
 
@@ -2010,7 +2032,7 @@ pub fn promptTransactionRecovery(pending_state: *const PendingTransactionState) 
         'c' => .cancel_transaction,
         'a' => .abort_reconnection,
         else => blk: {
-            try stdout.writeAll("Invalid choice. Defaulting to Cancel.\r\n");
+            try stdout.writeStreamingAll(replIo(), "Invalid choice. Defaulting to Cancel.\r\n");
             break :blk .cancel_transaction;
         },
     };
@@ -2038,7 +2060,7 @@ pub fn handleConnectionError(state: anytype, err: anyerror) !bool {
     const reconnected = state.session.reconnect() catch |reconnect_err| {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Reconnection failed: {s}\r\n", .{@errorName(reconnect_err)}) catch "";
-        stderr.writeAll(msg) catch {};
+        stderr.writeStreamingAll(replIo(), msg) catch {};
         return false;
     };
 
@@ -2051,7 +2073,7 @@ pub fn handleConnectionError(state: anytype, err: anyerror) !bool {
         state.session.restoreGraphContext(graph) catch |restore_err| {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "Warning: Could not restore graph context: {s}\r\n", .{@errorName(restore_err)}) catch "";
-            stderr.writeAll(msg) catch {};
+            stderr.writeStreamingAll(replIo(), msg) catch {};
         };
     }
 
@@ -2066,17 +2088,17 @@ pub fn handleConnectionError(state: anytype, err: anyerror) !bool {
                     state.session.begin() catch |begin_err| {
                         var buf: [256]u8 = undefined;
                         const msg = std.fmt.bufPrint(&buf, "Warning: Could not start new transaction: {s}\r\n", .{@errorName(begin_err)}) catch "";
-                        stderr.writeAll(msg) catch {};
+                        stderr.writeStreamingAll(replIo(), msg) catch {};
                         state.in_txn = false;
                     };
                     state.in_txn = true;
                     const stdout = platform.getStdoutHandle();
-                    stdout.writeAll("New transaction started. Please re-execute your statements.\r\n") catch {};
+                    stdout.writeStreamingAll(replIo(), "New transaction started. Please re-execute your statements.\r\n") catch {};
                 },
                 .cancel_transaction => {
                     state.in_txn = false;
                     const stdout = platform.getStdoutHandle();
-                    stdout.writeAll("Continuing without transaction.\r\n") catch {};
+                    stdout.writeStreamingAll(replIo(), "Continuing without transaction.\r\n") catch {};
                 },
                 .abort_reconnection => {
                     state.quit_requested = true;
@@ -2099,7 +2121,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     const stdout = platform.getStdoutHandle();
 
     // Move to new line before displaying any output
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n");
 
     // Parse command
     const space_idx = std.mem.indexOf(u8, input[1..], " ");
@@ -2114,157 +2136,157 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         const reset = if (use_color) "\x1b[0m" else "";
         const bold = if (use_color) "\x1b[1m" else "";
 
-        try stdout.writeAll(green);
-        try stdout.writeAll(bold);
-        try stdout.writeAll("=== Geode Shell Commands ===\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), green);
+        try stdout.writeStreamingAll(replIo(), bold);
+        try stdout.writeStreamingAll(replIo(), "=== Geode Shell Commands ===\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Meta-Commands (start with \\ or /):\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\help, \\h, \\?");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("     Show this help\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\quit, \\q, \\exit");
-        try stdout.writeAll(reset);
-        try stdout.writeAll(" Exit the shell\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\clear");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("            Clear screen\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Meta-Commands (start with \\ or /):\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\help, \\h, \\?");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "     Show this help\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\quit, \\q, \\exit");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), " Exit the shell\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\clear");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "            Clear screen\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("History:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\history [n]");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("      Show last n history entries\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\history -c");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("       Clear history\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "History:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\history [n]");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "      Show last n history entries\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\history -c");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "       Clear history\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Connection:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\connect <addr>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("   Connect to server\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\disconnect");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("       Disconnect from server\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Connection:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\connect <addr>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "   Connect to server\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\disconnect");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "       Disconnect from server\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Graphs:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\use <graph>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("      Switch to graph\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\graph");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("            Show current graph\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\graphs");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("           List all graphs\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Graphs:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\use <graph>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "      Switch to graph\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\graph");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "            Show current graph\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\graphs");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "           List all graphs\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Transactions:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\begin");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("            Start transaction\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\commit");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("           Commit transaction\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\rollback");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("         Rollback transaction\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Transactions:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\begin");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "            Start transaction\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\commit");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "           Commit transaction\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\rollback");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "         Rollback transaction\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Settings:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\timing on|off");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("    Toggle query timing\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\format <fmt>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("     Set output format (table|csv|json)\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\set <opt> <val>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  Set option (e.g., keymap emacs|vi)\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Settings:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\timing on|off");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "    Toggle query timing\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\format <fmt>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "     Set output format (table|csv|json)\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\set <opt> <val>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  Set option (e.g., keymap emacs|vi)\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(cyan);
-        try stdout.writeAll("Other:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\echo <text>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("      Echo text\r\n");
-        try stdout.writeAll("  ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("\\source <file>");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("    Execute commands from file\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), cyan);
+        try stdout.writeStreamingAll(replIo(), "Other:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\echo <text>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "      Echo text\r\n");
+        try stdout.writeStreamingAll(replIo(), "  ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "\\source <file>");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "    Execute commands from file\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(green);
-        try stdout.writeAll("Keyboard Shortcuts:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  Ctrl+C            Exit (on empty line) or cancel input\r\n");
-        try stdout.writeAll("  Ctrl+D            Exit (on empty line)\r\n");
-        try stdout.writeAll("  Ctrl+L            Clear screen\r\n");
-        try stdout.writeAll("  Ctrl+P/N          Navigate history\r\n");
-        try stdout.writeAll("  Ctrl+A/E          Move to beginning/end of line\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), green);
+        try stdout.writeStreamingAll(replIo(), "Keyboard Shortcuts:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  Ctrl+C            Exit (on empty line) or cancel input\r\n");
+        try stdout.writeStreamingAll(replIo(), "  Ctrl+D            Exit (on empty line)\r\n");
+        try stdout.writeStreamingAll(replIo(), "  Ctrl+L            Clear screen\r\n");
+        try stdout.writeStreamingAll(replIo(), "  Ctrl+P/N          Navigate history\r\n");
+        try stdout.writeStreamingAll(replIo(), "  Ctrl+A/E          Move to beginning/end of line\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
-        try stdout.writeAll(green);
-        try stdout.writeAll("GQL Queries:\r\n");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("  Type GQL directly and end with semicolon (;)\r\n");
-        try stdout.writeAll("  Example: ");
-        try stdout.writeAll(yellow);
-        try stdout.writeAll("MATCH (n) RETURN n LIMIT 5;");
-        try stdout.writeAll(reset);
-        try stdout.writeAll("\r\n");
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), green);
+        try stdout.writeStreamingAll(replIo(), "GQL Queries:\r\n");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "  Type GQL directly and end with semicolon (;)\r\n");
+        try stdout.writeStreamingAll(replIo(), "  Example: ");
+        try stdout.writeStreamingAll(replIo(), yellow);
+        try stdout.writeStreamingAll(replIo(), "MATCH (n) RETURN n LIMIT 5;");
+        try stdout.writeStreamingAll(replIo(), reset);
+        try stdout.writeStreamingAll(replIo(), "\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
 
         // Note: Don't sync() stdout - causes panics on ttys
     } else if (std.mem.eql(u8, cmd, "quit") or std.mem.eql(u8, cmd, "q") or std.mem.eql(u8, cmd, "exit")) {
@@ -2272,7 +2294,7 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "history")) {
         if (std.mem.eql(u8, args, "-c")) {
             try state.history.clear();
-            try stdout.writeAll("History cleared\r\n");
+            try stdout.writeStreamingAll(replIo(), "History cleared\r\n");
         } else {
             const n = if (args.len > 0) std.fmt.parseInt(usize, args, 10) catch 10 else 10;
             const start = if (state.history.entries.items.len > n)
@@ -2283,11 +2305,11 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             for (state.history.entries.items[start..], start..) |entry, i| {
                 var buf: [1024]u8 = undefined;
                 const line = try std.fmt.bufPrint(&buf, "{d:4}: {s}\r\n", .{ i + 1, entry });
-                try stdout.writeAll(line);
+                try stdout.writeStreamingAll(replIo(), line);
             }
         }
     } else if (std.mem.eql(u8, cmd, "clear")) {
-        try stdout.writeAll("\x1b[2J\x1b[H"); // Clear screen and home cursor
+        try stdout.writeStreamingAll(replIo(), "\x1b[2J\x1b[H"); // Clear screen and home cursor
     } else if (std.mem.eql(u8, cmd, "connect")) {
         if (args.len > 0) {
             // Save the current transport before deinit
@@ -2298,31 +2320,31 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             try state.session.hello();
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Connected to {s}\r\n", .{args});
-            try stdout.writeAll(msg);
+            try stdout.writeStreamingAll(replIo(), msg);
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [512]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\connect <host:port>\r\n", .{});
-            try stderr.writeAll(msg);
+            try stderr.writeStreamingAll(replIo(), msg);
         }
     } else if (std.mem.eql(u8, cmd, "disconnect")) {
         state.session.connected = false;
-        try stdout.writeAll("Disconnected\r\n");
+        try stdout.writeStreamingAll(replIo(), "Disconnected\r\n");
     } else if (std.mem.eql(u8, cmd, "use")) {
         // \use <graph> - Switch to a different graph
         if (args.len > 0) {
             // Strip trailing semicolon if present (user might type "/use mydb;")
-            const graph_name = std.mem.trimRight(u8, args, ";");
+            const graph_name = std.mem.trimEnd(u8, args, ";");
             if (graph_name.len == 0) {
                 const stderr = platform.getStderrHandle();
-                try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
                 return;
             }
 
             // Validate graph name to prevent GQL injection (S5)
             if (!isValidGraphName(graph_name)) {
                 const stderr = platform.getStderrHandle();
-                try stderr.writeAll("Error [GEODE-E2002]: Invalid graph name — must match [a-zA-Z_][a-zA-Z0-9_]*\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Invalid graph name — must match [a-zA-Z_][a-zA-Z0-9_]*\r\n");
                 return;
             }
 
@@ -2339,19 +2361,19 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             state.session.graph = try state.allocator.dupe(u8, graph_name);
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Switched to graph: {s}\r\n", .{graph_name});
-            try stdout.writeAll(msg);
+            try stdout.writeStreamingAll(replIo(), msg);
         } else {
             const stderr = platform.getStderrHandle();
-            try stderr.writeAll("Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
+            try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Usage: \\use <graph_name>\r\n");
         }
     } else if (std.mem.eql(u8, cmd, "graph")) {
         // \graph - Show current graph
         if (state.current_graph) |graph| {
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Current graph: {s}\r\n", .{graph});
-            try stdout.writeAll(msg);
+            try stdout.writeStreamingAll(replIo(), msg);
         } else {
-            try stdout.writeAll("No graph selected (using default)\r\n");
+            try stdout.writeStreamingAll(replIo(), "No graph selected (using default)\r\n");
         }
     } else if (std.mem.eql(u8, cmd, "graphs")) {
         // \graphs - List all graphs
@@ -2359,27 +2381,27 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "begin")) {
         try state.session.begin();
         state.in_txn = true;
-        try stdout.writeAll("Transaction started\r\n");
+        try stdout.writeStreamingAll(replIo(), "Transaction started\r\n");
     } else if (std.mem.eql(u8, cmd, "commit")) {
         try state.session.commit();
         state.in_txn = false;
-        try stdout.writeAll("Transaction committed\r\n");
+        try stdout.writeStreamingAll(replIo(), "Transaction committed\r\n");
     } else if (std.mem.eql(u8, cmd, "rollback")) {
         try state.session.rollback();
         state.in_txn = false;
-        try stdout.writeAll("Transaction rolled back\r\n");
+        try stdout.writeStreamingAll(replIo(), "Transaction rolled back\r\n");
     } else if (std.mem.eql(u8, cmd, "timing")) {
         if (std.mem.eql(u8, args, "on")) {
             state.show_timing = true;
-            try stdout.writeAll("Timing is on\r\n");
+            try stdout.writeStreamingAll(replIo(), "Timing is on\r\n");
         } else if (std.mem.eql(u8, args, "off")) {
             state.show_timing = false;
-            try stdout.writeAll("Timing is off\r\n");
+            try stdout.writeStreamingAll(replIo(), "Timing is off\r\n");
         } else {
             const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\timing on|off\r\n", .{});
-            try stderr.writeAll(msg);
+            try stderr.writeStreamingAll(replIo(), msg);
         }
     } else if (std.mem.eql(u8, cmd, "format")) {
         if (std.mem.eql(u8, args, "table")) {
@@ -2392,12 +2414,12 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
             const stderr = platform.getStderrHandle();
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\format table|csv|json\r\n", .{});
-            try stderr.writeAll(msg);
+            try stderr.writeStreamingAll(replIo(), msg);
             return;
         }
         var buf: [256]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "Output format set to {s}\r\n", .{args});
-        try stdout.writeAll(msg);
+        try stdout.writeStreamingAll(replIo(), msg);
     } else if (std.mem.eql(u8, cmd, "set")) {
         const parts = try splitOnce(state.allocator, args, ' ');
         defer state.allocator.free(parts[0]);
@@ -2406,42 +2428,42 @@ pub fn handleMetaCommand(state: anytype, input: []const u8) !void {
         if (std.mem.eql(u8, parts[0], "keymap")) {
             if (std.mem.eql(u8, parts[1], "emacs")) {
                 state.keymap = .emacs;
-                try stdout.writeAll("Keymap set to emacs\r\n");
+                try stdout.writeStreamingAll(replIo(), "Keymap set to emacs\r\n");
             } else if (std.mem.eql(u8, parts[1], "vi")) {
                 state.keymap = .vi;
                 state.vi_mode = .insert;
-                try stdout.writeAll("Keymap set to vi\r\n");
+                try stdout.writeStreamingAll(replIo(), "Keymap set to vi\r\n");
             } else {
                 const stderr = platform.getStderrHandle();
                 var buf: [256]u8 = undefined;
                 const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2002]: Usage: \\set keymap emacs|vi\r\n", .{});
-                try stderr.writeAll(msg);
+                try stderr.writeStreamingAll(replIo(), msg);
             }
         } else {
             var buf: [256]u8 = undefined;
             const msg = try std.fmt.bufPrint(&buf, "Unknown option: {s}\r\n", .{parts[0]});
-            try stdout.writeAll(msg);
+            try stdout.writeStreamingAll(replIo(), msg);
         }
     } else if (std.mem.eql(u8, cmd, "echo")) {
         var buf: [512]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "{s}\r\n", .{args});
-        try stdout.writeAll(msg);
+        try stdout.writeStreamingAll(replIo(), msg);
     } else if (std.mem.eql(u8, cmd, "source")) {
         // \source <file> - Execute commands from a GQL file
         if (args.len > 0) {
             try executeSourceFile(state, args);
         } else {
             const stderr = platform.getStderrHandle();
-            try stderr.writeAll("Error [GEODE-E2002]: Usage: \\source <filename>\r\n");
+            try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2002]: Usage: \\source <filename>\r\n");
         }
     } else if (std.mem.eql(u8, cmd, "connet")) { // Typo detection
         const stderr = platform.getStderrHandle();
-        try stderr.writeAll("Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
+        try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2001]: Unknown command '\\connet'. Did you mean '\\connect'?\r\n");
     } else {
         const stderr = platform.getStderrHandle();
         var buf: [256]u8 = undefined;
         const msg = try std.fmt.bufPrint(&buf, "Error [GEODE-E2001]: Unknown command '\\{s}'\r\n", .{cmd});
-        try stderr.writeAll(msg);
+        try stderr.writeStreamingAll(replIo(), msg);
     }
 }
 
@@ -2465,7 +2487,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
 
     // CRITICAL FIX: Move to new line before displaying results
     // This prevents overlapping with the prompt (skip when suppressing output)
-    if (!suppress) try stdout.writeAll("\r\n");
+    if (!suppress) try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // CANARY: REQ=REQ-MULTI-GRAPH-031; FEATURE="MultiGraphIsolation"; ASPECT=DropGraphReset; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=repl; UPDATED=2025-12-23
     // Check if this is a DROP GRAPH statement that drops the current graph
@@ -2499,7 +2521,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
     }
 
     // Start timing the query execution
-    var timer = try std.time.Timer.start();
+    var timer = try CompatTimer.start();
 
     // CANARY: REQ=REQ-SHELL-RECONNECT-011; FEATURE="ShellAutoReconnect"; ASPECT=ExecuteWithRetry; STATUS=TESTED; OWNER=cli; UPDATED=2026-01-29
     // Execute query via QUIC with automatic reconnection on connection errors
@@ -2559,7 +2581,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             .readServerMessageFn = ShellProtocolAdapter.readServerMessage,
         };
 
-        const empty_params = std.ArrayList(proto_schema.Param){};
+        const empty_params = std.ArrayList(proto_schema.Param).empty;
         var result = query_runner.collectQuery(state.allocator, &protocol_client, .{
             .session_id = state.session.session_id orelse "",
             .query_text = scoped_gql,
@@ -2577,12 +2599,12 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 const should_retry = handleConnectionError(state, err) catch |handle_err| {
                     var buf: [256]u8 = undefined;
                     const msg = std.fmt.bufPrint(&buf, "Error during reconnection handling: {s}\r\n", .{@errorName(handle_err)}) catch "";
-                    stderr.writeAll(msg) catch {};
+                    stderr.writeStreamingAll(replIo(), msg) catch {};
                     return error.QueryExecutionFailed;
                 };
 
                 if (should_retry) {
-                    timer = std.time.Timer.start() catch return error.QueryExecutionFailed;
+                    timer = CompatTimer.start() catch return error.QueryExecutionFailed;
                     continue;
                 }
             }
@@ -2591,15 +2613,15 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
                 return err;
             }
             if (err == error.InvalidResponse) {
-                try stderr.writeAll("Error: Server returned an invalid response (protocol mismatch or server error)\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error: Server returned an invalid response (protocol mismatch or server error)\r\n");
             } else if (err == error.ConnectionReset or err == error.BrokenPipe) {
-                try stderr.writeAll("Error: Connection to server was lost\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error: Connection to server was lost\r\n");
             } else if (err == error.Timeout) {
-                try stderr.writeAll("Error: Query timed out\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error: Query timed out\r\n");
             } else {
-                try stderr.writeAll("Error executing query: ");
-                try stderr.writeAll(@errorName(err));
-                try stderr.writeAll("\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error executing query: ");
+                try stderr.writeStreamingAll(replIo(), @errorName(err));
+                try stderr.writeStreamingAll(replIo(), "\r\n");
             }
             return error.QueryExecutionFailed;
         };
@@ -2629,7 +2651,7 @@ pub fn executeGql(state: anytype, gql: []const u8) !void {
             const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
             var buf: [256]u8 = undefined;
             const timing_msg = try std.fmt.bufPrint(&buf, "Query executed in {d:.2} ms\r\n", .{duration_ms});
-            try stdout.writeAll(timing_msg);
+            try stdout.writeStreamingAll(replIo(), timing_msg);
         }
         return;
     }
@@ -2688,12 +2710,12 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const resolved_path = if (filename.len > 0 and filename[0] == '~') blk: {
         if (comptime builtin.os.tag == .windows) break :blk filename;
         const home = posixGetenv("HOME") orelse {
-            try stderr.writeAll("Error [GEODE-E2005]: Cannot expand ~: HOME not set\r\n");
+            try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2005]: Cannot expand ~: HOME not set\r\n");
             return;
         };
         const rest = if (filename.len > 1) filename[1..] else "";
         const path = std.fmt.bufPrint(&path_buf, "{s}{s}", .{ home, rest }) catch {
-            try stderr.writeAll("Error [GEODE-E2005]: Path too long\r\n");
+            try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2005]: Path too long\r\n");
             return;
         };
         break :blk path;
@@ -2703,7 +2725,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), resolved_path, .{}) catch |err| {
         var buf: [512]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot open file '{s}': {s}\r\n", .{ resolved_path, @errorName(err) }) catch return;
-        try stderr.writeAll(msg);
+        try stderr.writeStreamingAll(replIo(), msg);
         return;
     };
     const repl_io = std.Io.Threaded.global_single_threaded.io();
@@ -2713,24 +2735,24 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const file_len = file.length(repl_io) catch |err| {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
-        try stderr.writeAll(msg);
+        try stderr.writeStreamingAll(replIo(), msg);
         return;
     };
     if (file_len > 1 << 24) { // 16MB max
-        try stderr.writeAll("Error [GEODE-E2005]: File too large (>16MB)\r\n");
+        try stderr.writeStreamingAll(replIo(), "Error [GEODE-E2005]: File too large (>16MB)\r\n");
         return;
     }
     const contents = state.allocator.alloc(u8, @intCast(file_len)) catch |err| {
         var buf: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
-        try stderr.writeAll(msg);
+        try stderr.writeStreamingAll(replIo(), msg);
         return;
     };
     defer state.allocator.free(contents);
     _ = file.readPositionalAll(repl_io, contents, 0) catch |err| {
         var buf2: [256]u8 = undefined;
         const msg = std.fmt.bufPrint(&buf2, "Error [GEODE-E2005]: Cannot read file: {s}\r\n", .{@errorName(err)}) catch return;
-        try stderr.writeAll(msg);
+        try stderr.writeStreamingAll(replIo(), msg);
         return;
     };
 
@@ -2739,10 +2761,10 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     const file_cache = getSourcedFileCache(state.allocator);
     if (file_cache.get(resolved_path)) |prev_hash| {
         if (prev_hash == content_hash) {
-            try stderr.writeAll("Warning [GEODE-W3001]: File was already sourced with identical content.\r\n");
-            try stderr.writeAll("  Tip: Use MERGE instead of CREATE for idempotent operations.\r\n");
+            try stderr.writeStreamingAll(replIo(), "Warning [GEODE-W3001]: File was already sourced with identical content.\r\n");
+            try stderr.writeStreamingAll(replIo(), "  Tip: Use MERGE instead of CREATE for idempotent operations.\r\n");
         } else {
-            try stderr.writeAll("Note: File was previously sourced but content has changed.\r\n");
+            try stderr.writeStreamingAll(replIo(), "Note: File was previously sourced but content has changed.\r\n");
         }
     }
     // Store/update the hash for this file path
@@ -2752,7 +2774,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Display source file info
     var info_buf: [512]u8 = undefined;
     const info_msg = std.fmt.bufPrint(&info_buf, "Sourcing: {s}\r\n", .{resolved_path}) catch return;
-    try stdout.writeAll(info_msg);
+    try stdout.writeStreamingAll(replIo(), info_msg);
 
     // CANARY: REQ=REQ-SHELL-SPINNER-003; FEATURE="ShellProcessingIndicator"; ASPECT=SourceFileSpinner; STATUS=TESTED; TEST=tests/test_spinner.zig; OWNER=cli; UPDATED=2026-01-30
     // Initialize spinner with background thread for visual feedback during long-running source operations
@@ -2778,7 +2800,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Check for interrupt before starting
     if (checkForInterrupt()) {
         interrupted = true;
-        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        try stderr.writeStreamingAll(replIo(), "\r\nOperation cancelled by user (Ctrl+C)\r\n");
         return;
     }
 
@@ -2823,13 +2845,13 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
             if (checkForInterrupt()) {
                 interrupted = true;
                 progress_spinner.stop(null);
-                try stderr.writeAll("\r\n^C Interrupt received\r\n");
+                try stderr.writeStreamingAll(replIo(), "\r\n^C Interrupt received\r\n");
                 return;
             }
         }
 
         // Handle \r\n line endings
-        const line = std.mem.trimRight(u8, raw_line, "\r");
+        const line = std.mem.trimEnd(u8, raw_line, "\r");
         const trimmed = std.mem.trim(u8, line, " \t");
 
         // Skip empty lines and comments
@@ -2844,7 +2866,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
             // Skip nested source commands
             if (std.mem.eql(u8, cmd_name, "source")) {
-                stderr.writeAll("Warning: Nested \\source commands not supported, skipping\r\n") catch {};
+                stderr.writeStreamingAll(replIo(), "Warning: Nested \\source commands not supported, skipping\r\n") catch {};
                 continue;
             }
 
@@ -2912,7 +2934,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     if (current_statement.items.len > 0) {
         const remaining = std.mem.trim(u8, current_statement.items, " \t");
         if (remaining.len > 0) {
-            try stderr.writeAll("Warning: Incomplete statement at end of file (missing ';')\r\n");
+            try stderr.writeStreamingAll(replIo(), "Warning: Incomplete statement at end of file (missing ';')\r\n");
         }
     }
 
@@ -2925,7 +2947,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         }
         var summary_buf: [256]u8 = undefined;
         const summary = std.fmt.bufPrint(&summary_buf, "Executed {d} command(s) successfully\r\n", .{meta_commands.items.len}) catch return;
-        try stdout.writeAll(summary);
+        try stdout.writeStreamingAll(replIo(), summary);
         return;
     }
 
@@ -2938,7 +2960,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // Check for interrupt before execution
     if (checkForInterrupt()) {
         interrupted = true;
-        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        try stderr.writeStreamingAll(replIo(), "\r\nOperation cancelled by user (Ctrl+C)\r\n");
         return;
     }
 
@@ -2961,7 +2983,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
         const preview = batch_statements.items[0..preview_len];
         const ellipsis: []const u8 = if (batch_statements.items.len > 80) "..." else "";
         const stmt_msg = std.fmt.bufPrint(&stmt_buf, ">> Batch ({d} statements, {d} bytes{s}): {s}{s}\r\n", .{ statement_count, batch_statements.items.len, if (use_chunked) ", chunked" else "", preview, ellipsis }) catch "";
-        stdout.writeAll(stmt_msg) catch {};
+        stdout.writeStreamingAll(replIo(), stmt_msg) catch {};
     }
 
     var error_count: usize = 0;
@@ -3052,7 +3074,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     // If interrupted during execution, handle immediately
     if (was_interrupted) {
         progress_spinner.stop(null);
-        try stderr.writeAll("\r\n^C Interrupt received\r\n");
+        try stderr.writeStreamingAll(replIo(), "\r\n^C Interrupt received\r\n");
         return;
     }
 
@@ -3071,10 +3093,10 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
 
     // Display batch execution error with details
     if (error_count > 0 and batch_error_msg != null) {
-        try stderr.writeAll("\r\nError in source file:\r\n");
-        try stderr.writeAll("  ");
-        try stderr.writeAll(batch_error_msg.?);
-        try stderr.writeAll("\r\n");
+        try stderr.writeStreamingAll(replIo(), "\r\nError in source file:\r\n");
+        try stderr.writeStreamingAll(replIo(), "  ");
+        try stderr.writeStreamingAll(replIo(), batch_error_msg.?);
+        try stderr.writeStreamingAll(replIo(), "\r\n");
         state.allocator.free(batch_error_msg.?);
         batch_error_msg = null;
     }
@@ -3083,7 +3105,7 @@ pub fn executeSourceFile(state: anytype, filename: []const u8) !void {
     if (checkForInterrupt()) {
         interrupted = true;
         progress_spinner.stop(null);
-        try stderr.writeAll("\r\nOperation cancelled by user (Ctrl+C)\r\n");
+        try stderr.writeStreamingAll(replIo(), "\r\nOperation cancelled by user (Ctrl+C)\r\n");
         return;
     }
 
@@ -3180,8 +3202,8 @@ fn executeMetaCommand(state: anytype, mc: MetaCommand, stdout: anytype) void {
     switch (mc.cmd) {
         .echo => {
             if (mc.args) |args| {
-                stdout.writeAll(args) catch {};
-                stdout.writeAll("\r\n") catch {};
+                stdout.writeStreamingAll(replIo(), args) catch {};
+                stdout.writeStreamingAll(replIo(), "\r\n") catch {};
             }
         },
         .timing => {
@@ -3250,8 +3272,8 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
     // Parse the JSON response
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
         // If parsing fails, output as-is
-        try stdout.writeAll(response);
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), response);
+        try stdout.writeStreamingAll(replIo(), "\r\n");
         return false;
     };
     defer parsed.deinit();
@@ -3259,8 +3281,8 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
     const root = parsed.value.object;
 
     if (format == .json) {
-        try stdout.writeAll(response);
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), response);
+        try stdout.writeStreamingAll(replIo(), "\r\n");
         if (root.get("status_class")) |status_value| {
             if (status_value == .string) {
                 const status = status_value.string;
@@ -3277,9 +3299,9 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
 
     if (extractServerErrorMessage(allocator, response)) |err_msg| {
         defer allocator.free(err_msg);
-        try stderr.writeAll("Error: ");
-        try stderr.writeAll(err_msg);
-        try stderr.writeAll("\r\n");
+        try stderr.writeStreamingAll(replIo(), "Error: ");
+        try stderr.writeStreamingAll(replIo(), err_msg);
+        try stderr.writeStreamingAll(replIo(), "\r\n");
         return true;
     }
 
@@ -3287,9 +3309,9 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
         if (status_value == .string) {
             const status = status_value.string;
             if (status.len >= 2 and !std.mem.startsWith(u8, status, "00")) {
-                try stderr.writeAll("Error (");
-                try stderr.writeAll(status);
-                try stderr.writeAll(")\r\n");
+                try stderr.writeStreamingAll(replIo(), "Error (");
+                try stderr.writeStreamingAll(replIo(), status);
+                try stderr.writeStreamingAll(replIo(), ")\r\n");
                 return true;
             }
         }
@@ -3297,12 +3319,12 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
 
     if (root.get("explain")) |explain_val| {
         try prettyPrintJson(allocator, explain_val, stdout, 0);
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
         return false;
     }
     if (root.get("profile")) |profile_val| {
         try prettyPrintJson(allocator, profile_val, stdout, 0);
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
         return false;
     }
 
@@ -3320,7 +3342,7 @@ fn extractAndDisplayResult(allocator: std.mem.Allocator, response: []const u8, s
     }
 
     try prettyPrintJson(allocator, parsed.value, stdout, 0);
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
     return false;
 }
 
@@ -3330,7 +3352,7 @@ fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout:
 
     const rows = rows_value.array;
     if (rows.items.len == 0) {
-        try stdout.writeAll("(0 rows)\r\n");
+        try stdout.writeStreamingAll(replIo(), "(0 rows)\r\n");
         return;
     }
 
@@ -3340,14 +3362,14 @@ fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout:
         .json => {
             // Pretty print the rows array
             try prettyPrintJson(allocator, rows_value, stdout, 0);
-            try stdout.writeAll("\r\n");
+            try stdout.writeStreamingAll(replIo(), "\r\n");
         },
     }
 
     // Show row count
     var buf: [64]u8 = undefined;
     const count_msg = std.fmt.bufPrint(&buf, "({d} row{s})\r\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" }) catch return;
-    try stdout.writeAll(count_msg);
+    try stdout.writeStreamingAll(replIo(), count_msg);
 }
 
 /// CANARY: REQ=REQ-SHELL-PLAIN-011; FEATURE="ShellPlainMode"; ASPECT=ColumnRowsDisplay; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-03
@@ -3355,7 +3377,7 @@ fn displayRows(allocator: std.mem.Allocator, rows_value: std.json.Value, stdout:
 /// columns: [{name,type}], rows: [{col1: val1, col2: val2}, ...]
 fn displayRowsWithColumns(allocator: std.mem.Allocator, columns: std.json.Array, rows: std.json.Array, stdout: anytype, format: anytype) !void {
     if (rows.items.len == 0) {
-        try stdout.writeAll("(0 rows)\r\n");
+        try stdout.writeStreamingAll(replIo(), "(0 rows)\r\n");
         return;
     }
 
@@ -3379,14 +3401,14 @@ fn displayRowsWithColumns(allocator: std.mem.Allocator, columns: std.json.Array,
         .csv => try displayRowsWithColumnsAsCsv(col_names, rows, stdout),
         .json => {
             try prettyPrintJson(allocator, std.json.Value{ .array = rows }, stdout, 0);
-            try stdout.writeAll("\r\n");
+            try stdout.writeStreamingAll(replIo(), "\r\n");
         },
     }
 
     // Show row count
     var buf: [64]u8 = undefined;
     const count_msg = std.fmt.bufPrint(&buf, "({d} row{s})\r\n", .{ rows.items.len, if (rows.items.len == 1) "" else "s" }) catch return;
-    try stdout.writeAll(count_msg);
+    try stdout.writeStreamingAll(replIo(), count_msg);
 }
 
 /// Display rows with columns as table format
@@ -3410,41 +3432,41 @@ fn displayRowsWithColumnsAsTable(allocator: std.mem.Allocator, col_names: []cons
     }
 
     // Print header
-    try stdout.writeAll("| ");
+    try stdout.writeStreamingAll(replIo(), "| ");
     for (col_names, 0..) |name, i| {
-        try stdout.writeAll(name);
+        try stdout.writeStreamingAll(replIo(), name);
         const padding = col_widths[i] -| name.len;
-        for (0..padding) |_| try stdout.writeAll(" ");
-        try stdout.writeAll(" | ");
+        for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+        try stdout.writeStreamingAll(replIo(), " | ");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print separator
-    try stdout.writeAll("|");
+    try stdout.writeStreamingAll(replIo(), "|");
     for (col_widths) |width| {
-        try stdout.writeAll("-");
-        for (0..width) |_| try stdout.writeAll("-");
-        try stdout.writeAll("-|");
+        try stdout.writeStreamingAll(replIo(), "-");
+        for (0..width) |_| try stdout.writeStreamingAll(replIo(), "-");
+        try stdout.writeStreamingAll(replIo(), "-|");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print data rows
     for (rows.items) |row| {
         if (row != .object) continue;
-        try stdout.writeAll("| ");
+        try stdout.writeStreamingAll(replIo(), "| ");
         for (col_names, 0..) |_, i| {
             var val_buf: [256]u8 = undefined;
             var printed_len: usize = 0;
             const val = row.object.get(col_names[i]) orelse std.json.Value.null;
             const str = formatValueCompact(&val_buf, val);
             const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
-            try stdout.writeAll(display_str);
+            try stdout.writeStreamingAll(replIo(), display_str);
             printed_len = display_str.len;
             const padding = col_widths[i] -| printed_len;
-            for (0..padding) |_| try stdout.writeAll(" ");
-            try stdout.writeAll(" | ");
+            for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+            try stdout.writeStreamingAll(replIo(), " | ");
         }
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
     }
 }
 
@@ -3452,22 +3474,22 @@ fn displayRowsWithColumnsAsTable(allocator: std.mem.Allocator, col_names: []cons
 fn displayRowsWithColumnsAsCsv(col_names: []const []const u8, rows: std.json.Array, stdout: anytype) !void {
     // Print header
     for (col_names, 0..) |name, i| {
-        if (i > 0) try stdout.writeAll(",");
-        try stdout.writeAll(name);
+        if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
+        try stdout.writeStreamingAll(replIo(), name);
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print data rows
     for (rows.items) |row| {
         if (row != .object) continue;
         for (col_names, 0..) |col_name, i| {
-            if (i > 0) try stdout.writeAll(",");
+            if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
             var val_buf: [256]u8 = undefined;
             const val = row.object.get(col_name) orelse std.json.Value.null;
             const str = formatValueCompact(&val_buf, val);
-            try stdout.writeAll(str);
+            try stdout.writeStreamingAll(replIo(), str);
         }
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
     }
 }
 
@@ -3511,42 +3533,42 @@ fn displayRowsAsTable(allocator: std.mem.Allocator, rows: std.json.Array, stdout
     }
 
     // Print header
-    try stdout.writeAll("| ");
+    try stdout.writeStreamingAll(replIo(), "| ");
     for (keys, 0..) |key, i| {
-        try stdout.writeAll(key);
+        try stdout.writeStreamingAll(replIo(), key);
         const padding = col_widths[i] -| key.len;
-        for (0..padding) |_| try stdout.writeAll(" ");
-        try stdout.writeAll(" | ");
+        for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+        try stdout.writeStreamingAll(replIo(), " | ");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print separator
-    try stdout.writeAll("|");
+    try stdout.writeStreamingAll(replIo(), "|");
     for (col_widths) |width| {
-        try stdout.writeAll("-");
-        for (0..width) |_| try stdout.writeAll("-");
-        try stdout.writeAll("-|");
+        try stdout.writeStreamingAll(replIo(), "-");
+        for (0..width) |_| try stdout.writeStreamingAll(replIo(), "-");
+        try stdout.writeStreamingAll(replIo(), "-|");
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print data rows
     for (rows.items) |row| {
         if (row != .object) continue;
-        try stdout.writeAll("| ");
+        try stdout.writeStreamingAll(replIo(), "| ");
         for (keys, 0..) |key, i| {
             var val_buf: [256]u8 = undefined;
             var printed_len: usize = 0;
             if (row.object.get(key)) |val| {
                 const str = formatValueCompact(&val_buf, val);
                 const display_str = if (str.len > col_widths[i]) str[0..col_widths[i]] else str;
-                try stdout.writeAll(display_str);
+                try stdout.writeStreamingAll(replIo(), display_str);
                 printed_len = display_str.len;
             }
             const padding = col_widths[i] -| printed_len;
-            for (0..padding) |_| try stdout.writeAll(" ");
-            try stdout.writeAll(" | ");
+            for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+            try stdout.writeStreamingAll(replIo(), " | ");
         }
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
     }
 }
 
@@ -3563,36 +3585,36 @@ fn displayRowsAsCsv(allocator: std.mem.Allocator, rows: std.json.Array, stdout: 
 
     // Print header
     for (keys, 0..) |key, i| {
-        if (i > 0) try stdout.writeAll(",");
-        try stdout.writeAll(key);
+        if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
+        try stdout.writeStreamingAll(replIo(), key);
     }
-    try stdout.writeAll("\r\n");
+    try stdout.writeStreamingAll(replIo(), "\r\n");
 
     // Print data rows
     for (rows.items) |row| {
         if (row != .object) continue;
         for (keys, 0..) |key, i| {
-            if (i > 0) try stdout.writeAll(",");
+            if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
             var val_buf: [256]u8 = undefined;
             if (row.object.get(key)) |val| {
                 const str = formatValueCompact(&val_buf, val);
                 // Escape quotes in CSV
                 if (std.mem.indexOf(u8, str, "\"") != null or std.mem.indexOf(u8, str, ",") != null) {
-                    try stdout.writeAll("\"");
+                    try stdout.writeStreamingAll(replIo(), "\"");
                     for (str) |c| {
                         if (c == '"') {
-                            try stdout.writeAll("\"\"");
+                            try stdout.writeStreamingAll(replIo(), "\"\"");
                         } else {
-                            try stdout.writeAll(&[_]u8{c});
+                            try stdout.writeStreamingAll(replIo(), &[_]u8{c});
                         }
                     }
-                    try stdout.writeAll("\"");
+                    try stdout.writeStreamingAll(replIo(), "\"");
                 } else {
-                    try stdout.writeAll(str);
+                    try stdout.writeStreamingAll(replIo(), str);
                 }
             }
         }
-        try stdout.writeAll("\r\n");
+        try stdout.writeStreamingAll(replIo(), "\r\n");
     }
 }
 
@@ -3740,7 +3762,7 @@ fn formatQueryResult(stdout: anytype, allocator: std.mem.Allocator, response: []
     switch (format) {
         .json => {
             // JSON format - output as-is
-            try stdout.writeAll(response);
+            try stdout.writeStreamingAll(replIo(), response);
         },
         .csv => {
             // CSV format - simple implementation
@@ -3757,7 +3779,7 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
     // Parse JSON and convert to simple CSV
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
         // If parsing fails, output as-is
-        try stdout.writeAll(response);
+        try stdout.writeStreamingAll(replIo(), response);
         return;
     };
     defer parsed.deinit();
@@ -3772,43 +3794,43 @@ fn formatResultAsCsv(stdout: anytype, allocator: std.mem.Allocator, response: []
 
             // Header
             for (column_names, 0..) |col, i| {
-                if (i > 0) try stdout.writeAll(",");
-                try stdout.writeAll("\"");
-                try stdout.writeAll(col);
-                try stdout.writeAll("\"");
+                if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
+                try stdout.writeStreamingAll(replIo(), "\"");
+                try stdout.writeStreamingAll(replIo(), col);
+                try stdout.writeStreamingAll(replIo(), "\"");
             }
-            try stdout.writeAll("\r\n");
+            try stdout.writeStreamingAll(replIo(), "\r\n");
 
             // Data rows
             for (rows.items) |row| {
                 for (column_names, 0..) |col_name, i| {
-                    if (i > 0) try stdout.writeAll(",");
+                    if (i > 0) try stdout.writeStreamingAll(replIo(), ",");
                     const cell = getRowValue(row, col_name);
                     const rendered = try renderCell(allocator, cell);
                     defer allocator.free(rendered);
                     if (cell == .string) {
-                        try stdout.writeAll("\"");
-                        try stdout.writeAll(rendered);
-                        try stdout.writeAll("\"");
+                        try stdout.writeStreamingAll(replIo(), "\"");
+                        try stdout.writeStreamingAll(replIo(), rendered);
+                        try stdout.writeStreamingAll(replIo(), "\"");
                     } else {
-                        try stdout.writeAll(rendered);
+                        try stdout.writeStreamingAll(replIo(), rendered);
                     }
                 }
-                try stdout.writeAll("\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n");
             }
             return;
         }
     }
 
     // Fallback: output as-is
-    try stdout.writeAll(response);
+    try stdout.writeStreamingAll(replIo(), response);
 }
 
 fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: []const u8) !void {
     // Parse JSON and convert to simple table
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, response, .{}) catch {
         // If parsing fails, output as-is
-        try stdout.writeAll(response);
+        try stdout.writeStreamingAll(replIo(), response);
         return;
     };
     defer parsed.deinit();
@@ -3840,46 +3862,46 @@ fn formatResultAsTable(stdout: anytype, allocator: std.mem.Allocator, response: 
             }
 
             // Print header
-            try stdout.writeAll("| ");
+            try stdout.writeStreamingAll(replIo(), "| ");
             for (column_names, 0..) |col, i| {
-                try stdout.writeAll(col);
+                try stdout.writeStreamingAll(replIo(), col);
                 const padding = col_widths[i] - col.len;
-                for (0..padding) |_| try stdout.writeAll(" ");
-                try stdout.writeAll(" | ");
+                for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+                try stdout.writeStreamingAll(replIo(), " | ");
             }
-            try stdout.writeAll("\r\n");
+            try stdout.writeStreamingAll(replIo(), "\r\n");
 
             // Print separator
-            try stdout.writeAll("|");
+            try stdout.writeStreamingAll(replIo(), "|");
             for (col_widths) |width| {
-                try stdout.writeAll("-");
-                for (0..width) |_| try stdout.writeAll("-");
-                try stdout.writeAll("-|");
+                try stdout.writeStreamingAll(replIo(), "-");
+                for (0..width) |_| try stdout.writeStreamingAll(replIo(), "-");
+                try stdout.writeStreamingAll(replIo(), "-|");
             }
-            try stdout.writeAll("\r\n");
+            try stdout.writeStreamingAll(replIo(), "\r\n");
 
             // Print data rows
             for (rows.items) |row| {
-                try stdout.writeAll("| ");
+                try stdout.writeStreamingAll(replIo(), "| ");
                 for (column_names, 0..) |col_name, i| {
                     if (i >= col_widths.len) continue;
                     const cell = getRowValue(row, col_name);
                     const rendered = try renderCell(allocator, cell);
                     defer allocator.free(rendered);
-                    try stdout.writeAll(rendered);
+                    try stdout.writeStreamingAll(replIo(), rendered);
                     const printed_len: usize = rendered.len;
                     const padding = col_widths[i] - printed_len;
-                    for (0..padding) |_| try stdout.writeAll(" ");
-                    try stdout.writeAll(" | ");
+                    for (0..padding) |_| try stdout.writeStreamingAll(replIo(), " ");
+                    try stdout.writeStreamingAll(replIo(), " | ");
                 }
-                try stdout.writeAll("\r\n");
+                try stdout.writeStreamingAll(replIo(), "\r\n");
             }
             return;
         }
     }
 
     // Fallback: output as-is
-    try stdout.writeAll(response);
+    try stdout.writeStreamingAll(replIo(), response);
 }
 
 fn extractColumnNames(allocator: std.mem.Allocator, columns: std.json.Array) ![]const []const u8 {
@@ -4388,7 +4410,7 @@ test "TestSourceBatch_WindowsLineEndings" {
     var stmt_count: usize = 0;
     var lines = std.mem.splitSequence(u8, content, "\n");
     while (lines.next()) |line| {
-        const trimmed = std.mem.trim(u8, std.mem.trimRight(u8, line, "\r"), " \t");
+        const trimmed = std.mem.trim(u8, std.mem.trimEnd(u8, line, "\r"), " \t");
         if (trimmed.len == 0) continue;
         if (std.mem.endsWith(u8, trimmed, ";")) {
             stmt_count += 1;

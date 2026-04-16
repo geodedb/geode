@@ -233,12 +233,13 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
 
     // Write configuration to disk for persistence
     const config_path = "audit_config.json";
-    const config_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{});
-    defer config_file.close();
+    const io_ac2 = std.Io.Threaded.global_single_threaded.io();
+    const config_file = try std.Io.Dir.cwd().createFile(io_ac2, config_path, .{});
+    defer config_file.close(io_ac2);
 
-    var json_buf = try std.ArrayList(u8).initCapacity(allocator, 512);
-    defer json_buf.deinit(allocator);
-    const writer = json_buf.writer(allocator);
+    var aw_ac: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 512);
+    defer aw_ac.deinit();
+    const writer = &aw_ac.writer;
 
     try writer.writeAll("{{");
     try writer.print("\"log_level\":\"{s}\",", .{log_level});
@@ -252,9 +253,10 @@ fn handleAuditConfigure(allocator: std.mem.Allocator, call_stmt: ast.CallProcedu
     try writer.print("\"timestamp\":{d}", .{compat_milliTimestamp()});
     try writer.writeAll("}}");
 
-    const config_json = try json_buf.toOwnedSlice(allocator);
+    var json_buf_ac = aw_ac.toArrayList();
+    const config_json = try json_buf_ac.toOwnedSlice(allocator);
     defer allocator.free(config_json);
-    try config_file.writeAll(config_json);
+    try config_file.writeStreamingAll(io_ac2, config_json);
 
     // Verify configuration is active
     const status = if (global_audit_logger != null) "active" else "inactive";
@@ -435,14 +437,24 @@ fn handleAuditVerifyHashChain(allocator: std.mem.Allocator, _: ast.CallProcedure
     var valid = true;
 
     // Read audit log file if it exists
-    if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), global_audit_file_path, .{})) |file| {
-        defer file.close();
+    const io_ad1 = std.Io.Threaded.global_single_threaded.io();
+    if (std.Io.Dir.cwd().openFile(io_ad1, global_audit_file_path, .{})) |file| {
+        defer file.close(io_ad1);
 
         var prev_hash: [32]u8 = [_]u8{0} ** 32; // Genesis hash
 
         // Read lines and verify hash chain
         // Use simpler approach - read entire file and split by lines
-        const file_content = file.readToEndAlloc(allocator, 1024 * 1024) catch &[_]u8{};
+        const file_content = blk: {
+            const stat1 = file.stat(io_ad1) catch break :blk @as([]const u8, &[_]u8{});
+            const sz: usize = @intCast(@min(stat1.size, 1024 * 1024));
+            const buf1 = allocator.alloc(u8, sz) catch break :blk @as([]const u8, &[_]u8{});
+            _ = file.readPositionalAll(io_ad1, buf1, 0) catch {
+                allocator.free(buf1);
+                break :blk @as([]const u8, &[_]u8{});
+            };
+            break :blk @as([]const u8, buf1);
+        };
         defer if (file_content.len > 0) allocator.free(file_content);
 
         var line_iter = std.mem.splitSequence(u8, file_content, "\n");
@@ -578,11 +590,15 @@ fn handleAuditGetMerkleDigests(allocator: std.mem.Allocator, _: ast.CallProcedur
     defer leaves.deinit(allocator);
 
     // Read audit events and create leaf hashes
-    if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), global_audit_file_path, .{})) |file| {
-        defer file.close();
+    const io_ad2 = std.Io.Threaded.global_single_threaded.io();
+    if (std.Io.Dir.cwd().openFile(io_ad2, global_audit_file_path, .{})) |file| {
+        defer file.close(io_ad2);
 
-        const content = try file.readToEndAlloc(allocator, 1024 * 1024); // Max 1MB
+        const stat_ad2 = try file.stat(io_ad2);
+        const size_ad2: usize = @intCast(@min(stat_ad2.size, 1024 * 1024));
+        const content = try allocator.alloc(u8, size_ad2);
         defer allocator.free(content);
+        _ = try file.readPositionalAll(io_ad2, content, 0);
 
         var lines_iter = std.mem.splitSequence(u8, content, "\n");
         while (lines_iter.next()) |line| {
@@ -701,8 +717,9 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
     var events_written: i64 = 0;
 
     // Write test audit events to file
-    if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), test_file_path, .{})) |file| {
-        defer file.close();
+    const io_ad3 = std.Io.Threaded.global_single_threaded.io();
+    if (std.Io.Dir.cwd().createFile(io_ad3, test_file_path, .{})) |file| {
+        defer file.close(io_ad3);
 
         // Write sample audit events in JSONL format
         const test_events = [_][]const u8{
@@ -711,9 +728,12 @@ fn handleAuditTestFileOutput(allocator: std.mem.Allocator, _: ast.CallProcedure)
             "{\"timestamp\":1729350002000,\"event_type\":\"authentication_failure\",\"resource\":\"login\",\"action\":\"authenticate\",\"user_id\":null}",
         };
 
+        var cur_offset: u64 = 0;
         for (test_events) |event| {
-            file.writeAll(event) catch continue;
-            file.writeAll("\n") catch continue;
+            file.writePositionalAll(io_ad3, event, cur_offset) catch continue;
+            cur_offset += event.len;
+            file.writePositionalAll(io_ad3, "\n", cur_offset) catch continue;
+            cur_offset += 1;
             events_written += 1;
         }
 
@@ -1690,7 +1710,7 @@ fn handleAuditCleanupTestArtifacts(allocator: std.mem.Allocator, _: ast.CallProc
     };
 
     for (test_audit_paths) |path| {
-        std.Io.Dir.cwd().deleteFile(path) catch {
+        std.Io.Dir.cwd().deleteFile(std.Io.Threaded.global_single_threaded.io(), path) catch {
             // Ignore errors if files don't exist
             continue;
         };

@@ -578,7 +578,7 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
         0x09 => { // TAG_Hash
             if (bytes.len < 1 + 1) return error.Underflow;
             const alg_code = bytes[1];
-            const alg = std.meta.intToEnum(HashAlg, alg_code) catch return error.InvalidHashAlg;
+            const alg = std.enums.fromInt(HashAlg, alg_code) orelse return error.InvalidHashAlg;
             const digest_len: usize = switch (alg) {
                 .SHA3_256 => 32,
                 .SHA3_512 => 64,
@@ -618,7 +618,7 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
             const lon_bits = std.mem.readInt(u64, bytes[9..17][0..8], .little);
             const alt_bits = std.mem.readInt(u64, bytes[17..25][0..8], .little);
             const ref_code = bytes[25];
-            const ref = std.meta.intToEnum(AltRef, ref_code) catch return error.InvalidAltRef;
+            const ref = std.enums.fromInt(AltRef, ref_code) orelse return error.InvalidAltRef;
             return .{ .LatLonAlt = .{ .lat = @bitCast(lat_bits), .lon = @bitCast(lon_bits), .alt = @bitCast(alt_bits), .ref = ref } };
         },
         0x0E => { // TAG_Geom
@@ -633,14 +633,14 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
             if (bytes.len < 1 + 8 + 1) return error.Underflow;
             const value_bits = std.mem.readInt(u64, bytes[1..9][0..8], .little);
             const unit_code = bytes[9];
-            const unit = std.meta.intToEnum(TempUnit, unit_code) catch return error.InvalidTempUnit;
+            const unit = std.enums.fromInt(TempUnit, unit_code) orelse return error.InvalidTempUnit;
             return .{ .Temperature = .{ .value_K = @bitCast(value_bits), .unit_in = unit } };
         },
         0x10 => { // TAG_Press
             if (bytes.len < 1 + 8 + 1) return error.Underflow;
             const value_bits = std.mem.readInt(u64, bytes[1..9][0..8], .little);
             const unit_code = bytes[9];
-            const unit = std.meta.intToEnum(PressureUnit, unit_code) catch return error.InvalidPressureUnit;
+            const unit = std.enums.fromInt(PressureUnit, unit_code) orelse return error.InvalidPressureUnit;
             return .{ .Pressure = .{ .value_Pa = @bitCast(value_bits), .unit_in = unit } };
         },
         0x11 => { // TAG_VecF32
@@ -810,7 +810,7 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
         0x36 => { // Array
             if (bytes.len < 7) return error.Underflow;
             const elem_type_code = std.mem.readInt(u16, bytes[1..3][0..2], .little);
-            const elem_type = std.meta.intToEnum(arrays.DynamicArray.ElemType, elem_type_code) catch return error.InvalidArrayType;
+            const elem_type = std.enums.fromInt(arrays.DynamicArray.ElemType, elem_type_code) orelse return error.InvalidArrayType;
             const count = std.mem.readInt(u32, bytes[3..7][0..4], .little);
             _ = count;
             const data_start = 7;
@@ -837,7 +837,7 @@ pub fn decodeValue(allocator: std.mem.Allocator, bytes: []const u8) !Value {
         0x39 => { // IntRange
             if (bytes.len < 4) return error.Underflow;
             const bounds_code = bytes[1];
-            const bounds = std.meta.intToEnum(range.IntRange.Bounds, bounds_code) catch return error.InvalidRangeBounds;
+            const bounds = std.enums.fromInt(range.IntRange.Bounds, bounds_code) orelse return error.InvalidRangeBounds;
             const has_lower = bytes[2] != 0;
             const has_upper = bytes[3] != 0;
 

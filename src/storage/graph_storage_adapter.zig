@@ -200,30 +200,33 @@ const NodePropertyExactIndex = struct {
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
         @memcpy(idx_path[graph_dir_path.len..], "/prop_exact.idx");
 
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), idx_path, .{}) catch return false;
-        defer file.close();
+        const gsa_io = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(gsa_io, idx_path, .{}) catch return false;
+        defer file.close(gsa_io);
 
-        const reader = file.deprecatedReader();
+        var reader_buffer: [4096]u8 = undefined;
+        var file_reader = file.reader(gsa_io, &reader_buffer);
+        const reader = &file_reader.interface;
 
         // Validate magic header
         var magic: [8]u8 = undefined;
-        reader.readNoEof(&magic) catch return false;
+        reader.readSliceAll(&magic) catch return false;
         if (!std.mem.eql(u8, &magic, "GENPIDX1")) return false;
 
-        const entry_count = reader.readInt(u64, .little) catch return false;
+        const entry_count = reader.takeInt(u64, .little) catch return false;
 
         self.clear();
 
         var i: u64 = 0;
         while (i < entry_count) : (i += 1) {
-            const key_len = reader.readInt(u32, .little) catch return false;
+            const key_len = reader.takeInt(u32, .little) catch return false;
             const key = self.allocator.alloc(u8, key_len) catch return false;
-            reader.readNoEof(key) catch {
+            reader.readSliceAll(key) catch {
                 self.allocator.free(key);
                 return false;
             };
 
-            const posting_count = reader.readInt(u64, .little) catch {
+            const posting_count = reader.takeInt(u64, .little) catch {
                 self.allocator.free(key);
                 return false;
             };
@@ -233,7 +236,7 @@ const NodePropertyExactIndex = struct {
             };
             var j: u64 = 0;
             while (j < posting_count) : (j += 1) {
-                const nid = reader.readInt(u64, .little) catch {
+                const nid = reader.takeInt(u64, .little) catch {
                     posting.deinit(self.allocator);
                     self.allocator.free(key);
                     return false;
@@ -916,7 +919,7 @@ pub const StorageAdapter = struct {
         const label_ids = try mg.engine.label_store.getLabels(rec.label_head, allocator);
         defer allocator.free(label_ids);
 
-        var result: std.ArrayList([]const u8) = .{};
+        var result: std.ArrayList([]const u8) = .empty;
         errdefer {
             for (result.items) |s| allocator.free(s);
             result.deinit(allocator);
@@ -1342,7 +1345,7 @@ pub const StorageAdapter = struct {
             }
         };
 
-        var ctx = Ctx{ .entries = .{}, .alloc = allocator };
+        var ctx = Ctx{ .entries = .empty, .alloc = allocator };
         try mg.engine.node_store.scanNodes(
             mg.engine.manifest.next_node_id,
             &ctx,

@@ -401,12 +401,13 @@ fn generateFilePathCandidates(state: anytype, prefix: []const u8) !void {
     // else: search in current directory with prefix as file prefix
 
     // Open directory
-    var dir = std.Io.Dir.cwd().openDir(search_dir, .{ .iterate = true }) catch return;
-    defer dir.close();
+    const rc_io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(rc_io, search_dir, .{ .iterate = true }) catch return;
+    defer dir.close(rc_io);
 
     // Iterate directory entries
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(rc_io) catch null) |entry| {
         // Skip hidden files unless prefix starts with .
         if (entry.name[0] == '.' and (file_prefix.len == 0 or file_prefix[0] != '.')) {
             continue;

@@ -13,6 +13,13 @@
 
 const std = @import("std");
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed.
+fn compat_nanoTimestamp() i128 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+}
+
 /// Per-IP authentication rate limiter.
 ///
 /// Enforces a configurable maximum number of failed authentication attempts
@@ -81,7 +88,7 @@ pub const AuthRateLimiter = struct {
     fn isLockedUnlocked(self: *Self, ip: []const u8) bool {
         const entry = self.entries.get(ip) orelse return false;
         if (entry.lockout_until_ns == 0) return false;
-        const now = std.time.nanoTimestamp();
+        const now = compat_nanoTimestamp();
         return now < entry.lockout_until_ns;
     }
 
@@ -98,7 +105,7 @@ pub const AuthRateLimiter = struct {
             self.evictExpiredLocked();
         }
 
-        const now = std.time.nanoTimestamp();
+        const now = compat_nanoTimestamp();
 
         if (self.entries.getPtr(ip)) |entry| {
             // If an existing lockout has expired, reset before counting.
@@ -143,7 +150,7 @@ pub const AuthRateLimiter = struct {
 
     /// Internal: evict expired entries while already holding the mutex.
     fn evictExpiredLocked(self: *Self) void {
-        const now = std.time.nanoTimestamp();
+        const now = compat_nanoTimestamp();
         // Collect keys to remove (cannot mutate while iterating).
         var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 0) catch return;
         defer to_remove.deinit(self.allocator);

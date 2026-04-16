@@ -532,9 +532,9 @@ fn executeReturnClauseWithContext(allocator: std.mem.Allocator, ret: ast.ReturnC
 
 pub fn executeReturnClauseWithParams(allocator: std.mem.Allocator, ret: ast.ReturnClause, context: ExecutionContext, param_names: []const []const u8, param_values: []const Value) !ExecutionResult {
     // Build environment with authentication context
-    var names_list = std.ArrayList([]const u8){};
+    var names_list = std.ArrayList([]const u8).empty;
     defer names_list.deinit(allocator);
-    var values_list = std.ArrayList(Value){};
+    var values_list = std.ArrayList(Value).empty;
     defer values_list.deinit(allocator);
 
     // Add token user to environment if authenticated

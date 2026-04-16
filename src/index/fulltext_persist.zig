@@ -157,17 +157,16 @@ pub fn load(allocator: std.mem.Allocator, dir_path: []const u8) !FullTextIndex {
     };
     defer allocator.free(data);
 
-    var stream = std.io.fixedBufferStream(data);
-    const reader = stream.reader();
+    var reader: std.Io.Reader = .fixed(data);
 
     // Verify magic
     var magic: [4]u8 = undefined;
-    _ = try reader.readAll(&magic);
+    try reader.readSliceAll(&magic);
     if (!std.mem.eql(u8, &magic, MAGIC)) return error.InvalidMagic;
 
     // Verify version
     var version: u16 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&version));
+    try reader.readSliceAll(std.mem.asBytes(&version));
     if (version != VERSION) return error.InvalidVersion;
 
     // Create index (initializes stopwords)
@@ -176,46 +175,46 @@ pub fn load(allocator: std.mem.Allocator, dir_path: []const u8) !FullTextIndex {
 
     // Read documents
     var doc_count: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&doc_count));
+    try reader.readSliceAll(std.mem.asBytes(&doc_count));
     if (doc_count > MAX_DOCS) return error.CorruptedIndex;
 
     var i: u64 = 0;
     while (i < doc_count) : (i += 1) {
-        const doc = try readDocument(allocator, reader);
+        const doc = try readDocument(allocator, &reader);
         try index.documents.put(doc.id, doc);
     }
 
     // Read inverted index
     var term_count: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&term_count));
+    try reader.readSliceAll(std.mem.asBytes(&term_count));
     if (term_count > MAX_TERMS) return error.CorruptedIndex;
 
     i = 0;
     while (i < term_count) : (i += 1) {
-        const pl = try readPostingList(allocator, reader);
+        const pl = try readPostingList(allocator, &reader);
         try index.inverted_index.put(pl.term, pl);
     }
 
     return index;
 }
 
-fn readDocument(allocator: std.mem.Allocator, reader: anytype) !Document {
+fn readDocument(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Document {
     // doc_id
     var doc_id: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&doc_id));
+    try reader.readSliceAll(std.mem.asBytes(&doc_id));
 
     // content
     var content_len: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&content_len));
+    try reader.readSliceAll(std.mem.asBytes(&content_len));
     if (content_len > MAX_CONTENT_LEN) return error.CorruptedIndex;
     const content = try allocator.alloc(u8, content_len);
     errdefer allocator.free(content);
-    _ = try reader.readAll(content);
+    try reader.readSliceAll(content);
 
     // tokens — read serialized text but reconstruct slices pointing into content
     // to match the original memory layout (deinit frees content, not individual token.text)
     var token_count: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&token_count));
+    try reader.readSliceAll(std.mem.asBytes(&token_count));
     if (token_count > MAX_TOKENS_PER_DOC) return error.CorruptedIndex;
     const tokens = try allocator.alloc(Token, token_count);
     errdefer allocator.free(tokens);
@@ -225,14 +224,14 @@ fn readDocument(allocator: std.mem.Allocator, reader: anytype) !Document {
 
     // vector
     var has_vec: u8 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&has_vec));
+    try reader.readSliceAll(std.mem.asBytes(&has_vec));
     const vector: ?[]f32 = if (has_vec == 1) blk: {
         var vec_len: u64 = undefined;
-        _ = try reader.readAll(std.mem.asBytes(&vec_len));
+        try reader.readSliceAll(std.mem.asBytes(&vec_len));
         if (vec_len > MAX_VEC_LEN) return error.CorruptedIndex;
         const vec = try allocator.alloc(f32, vec_len);
         errdefer allocator.free(vec);
-        _ = try reader.readAll(std.mem.sliceAsBytes(vec));
+        try reader.readSliceAll(std.mem.sliceAsBytes(vec));
         break :blk vec;
     } else null;
 
@@ -244,21 +243,21 @@ fn readDocument(allocator: std.mem.Allocator, reader: anytype) !Document {
     };
 }
 
-fn readToken(allocator: std.mem.Allocator, reader: anytype, content: []const u8) !Token {
+fn readToken(allocator: std.mem.Allocator, reader: *std.Io.Reader, content: []const u8) !Token {
     _ = allocator;
 
     // text — skip the serialized text bytes (we reconstruct from content + offset/length)
     var text_len: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&text_len));
-    try reader.skipBytes(text_len, .{});
+    try reader.readSliceAll(std.mem.asBytes(&text_len));
+    try reader.discardAll64(text_len);
 
     // position, offset, length
     var position: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&position));
+    try reader.readSliceAll(std.mem.asBytes(&position));
     var offset: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&offset));
+    try reader.readSliceAll(std.mem.asBytes(&offset));
     var length: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&length));
+    try reader.readSliceAll(std.mem.asBytes(&length));
 
     // Reconstruct text as a slice into content (matches original memory layout)
     const end = @min(offset + length, content.len);
@@ -272,22 +271,22 @@ fn readToken(allocator: std.mem.Allocator, reader: anytype, content: []const u8)
     };
 }
 
-fn readPostingList(allocator: std.mem.Allocator, reader: anytype) !PostingList {
+fn readPostingList(allocator: std.mem.Allocator, reader: *std.Io.Reader) !PostingList {
     // term
     var term_len: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&term_len));
+    try reader.readSliceAll(std.mem.asBytes(&term_len));
     if (term_len > MAX_CONTENT_LEN) return error.CorruptedIndex;
     const term = try allocator.alloc(u8, term_len);
     errdefer allocator.free(term);
-    _ = try reader.readAll(term);
+    try reader.readSliceAll(term);
 
     // idf
     var idf: f32 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&idf));
+    try reader.readSliceAll(std.mem.asBytes(&idf));
 
     // posting entries
     var entry_count: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&entry_count));
+    try reader.readSliceAll(std.mem.asBytes(&entry_count));
     if (entry_count > MAX_DOCS) return error.CorruptedIndex;
     const entries = try allocator.alloc(PostingEntry, entry_count);
     errdefer allocator.free(entries);
@@ -302,26 +301,26 @@ fn readPostingList(allocator: std.mem.Allocator, reader: anytype) !PostingList {
     };
 }
 
-fn readPostingEntry(allocator: std.mem.Allocator, reader: anytype) !PostingEntry {
+fn readPostingEntry(allocator: std.mem.Allocator, reader: *std.Io.Reader) !PostingEntry {
     // doc_id
     var doc_id: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&doc_id));
+    try reader.readSliceAll(std.mem.asBytes(&doc_id));
 
     // tf, tf_idf
     var tf: f32 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&tf));
+    try reader.readSliceAll(std.mem.asBytes(&tf));
     var tf_idf: f32 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&tf_idf));
+    try reader.readSliceAll(std.mem.asBytes(&tf_idf));
 
     // positions
     var pos_count: u64 = undefined;
-    _ = try reader.readAll(std.mem.asBytes(&pos_count));
+    try reader.readSliceAll(std.mem.asBytes(&pos_count));
     if (pos_count > MAX_POSITIONS_PER_ENTRY) return error.CorruptedIndex;
     const positions = try allocator.alloc(usize, pos_count);
     errdefer allocator.free(positions);
     for (positions) |*pos| {
         var p: u64 = undefined;
-        _ = try reader.readAll(std.mem.asBytes(&p));
+        try reader.readSliceAll(std.mem.asBytes(&p));
         pos.* = p;
     }
 

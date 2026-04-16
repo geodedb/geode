@@ -282,14 +282,14 @@ pub const RemoteKmsServer = struct {
         const envelope = self.server.wrap(plaintext);
 
         // Build response
-        var fbs = std.io.fixedBufferStream(response_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(response_buf);
+        const writer = &fbs_writer;
 
         try writer.writeAll("{\"status\":\"OK\",\"envelope\":");
         try envelopeToJson(envelope, writer);
         try writer.writeAll("}\n");
 
-        return fbs.getWritten();
+        return fbs_writer.buffered();
     }
 
     fn handleUnwrap(self: *RemoteKmsServer, request: []const u8, response_buf: []u8) ![]const u8 {
@@ -303,14 +303,14 @@ pub const RemoteKmsServer = struct {
         const plaintext = try self.server.unwrap(envelope);
 
         // Build response with hex-encoded plaintext
-        var fbs = std.io.fixedBufferStream(response_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(response_buf);
+        const writer = &fbs_writer;
 
         try writer.writeAll("{\"status\":\"OK\",\"plaintext\":\"");
         for (plaintext) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\"}\n");
 
-        return fbs.getWritten();
+        return fbs_writer.buffered();
     }
 
     fn handlePrivUnwrap(self: *RemoteKmsServer, request: []const u8, response_buf: []u8) ![]const u8 {
@@ -332,8 +332,8 @@ pub const RemoteKmsServer = struct {
         const sig_bytes = sig.toBytes();
 
         // Build response
-        var fbs = std.io.fixedBufferStream(response_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(response_buf);
+        const writer = &fbs_writer;
 
         try writer.writeAll("{\"status\":\"OK\",\"hash\":\"");
         for (self.server.attestation_hash) |b| try writer.print("{x:0>2}", .{b});
@@ -343,7 +343,7 @@ pub const RemoteKmsServer = struct {
         for (sig_bytes) |b| try writer.print("{x:0>2}", .{b});
         try writer.writeAll("\"}\n");
 
-        return fbs.getWritten();
+        return fbs_writer.buffered();
     }
 
     pub fn serveLoop(self: *RemoteKmsServer, iterations: usize) !void {
@@ -412,7 +412,9 @@ pub const RemoteKmsClient = struct {
             try self.quic_client.?.poll(50);
             const response = stream.readLine(8192) catch |err| {
                 if (err == error.WouldBlock) {
-                    std.Thread.sleep(10 * std.time.ns_per_ms);
+                    const req = std.os.linux.timespec{ .sec = 0, .nsec = 10 * std.time.ns_per_ms };
+                    var rem: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.nanosleep(&req, &rem);
                     continue;
                 }
                 return err;
@@ -425,8 +427,8 @@ pub const RemoteKmsClient = struct {
     pub fn generate(self: *RemoteKmsClient) !Envelope {
         // Build JSON request
         var request_buf: [256]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&request_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(&request_buf);
+        const writer = &fbs_writer;
 
         if (self.auth_token) |tok| {
             try writer.print("{{\"op\":\"Generate\",\"auth\":\"{s}\"}}\n", .{tok});
@@ -434,7 +436,7 @@ pub const RemoteKmsClient = struct {
             try writer.writeAll("{\"op\":\"Generate\"}\n");
         }
 
-        const request = fbs.getWritten();
+        const request = fbs_writer.buffered();
 
         // If not connected, fall back to local generation
         if (!self.connected) {
@@ -463,8 +465,8 @@ pub const RemoteKmsClient = struct {
     pub fn unwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
         // Build JSON request with envelope
         var request_buf: [1024]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&request_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(&request_buf);
+        const writer = &fbs_writer;
 
         try writer.writeAll("{\"op\":\"Unwrap\"");
         if (self.auth_token) |tok| {
@@ -474,7 +476,7 @@ pub const RemoteKmsClient = struct {
         try envelopeToJson(env, writer);
         try writer.writeAll("}\n");
 
-        const request = fbs.getWritten();
+        const request = fbs_writer.buffered();
 
         // If not connected, fall back to local unwrapping
         if (!self.connected) {
@@ -501,8 +503,8 @@ pub const RemoteKmsClient = struct {
     pub fn privUnwrap(self: *RemoteKmsClient, env: Envelope) ![32]u8 {
         // Build JSON request with PrivUnwrap operation
         var request_buf: [1024]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&request_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(&request_buf);
+        const writer = &fbs_writer;
 
         try writer.writeAll("{\"op\":\"PrivUnwrap\"");
         if (self.auth_token) |tok| {
@@ -512,7 +514,7 @@ pub const RemoteKmsClient = struct {
         try envelopeToJson(env, writer);
         try writer.writeAll("}\n");
 
-        const request = fbs.getWritten();
+        const request = fbs_writer.buffered();
 
         // If not connected, fall back to local unwrapping
         if (!self.connected) {
@@ -529,8 +531,8 @@ pub const RemoteKmsClient = struct {
     pub fn attest(self: *RemoteKmsClient) ![32]u8 {
         // Build JSON request
         var request_buf: [256]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&request_buf);
-        const writer = fbs.writer();
+        var fbs_writer: std.Io.Writer = .fixed(&request_buf);
+        const writer = &fbs_writer;
 
         if (self.auth_token) |tok| {
             try writer.print("{{\"op\":\"Attest\",\"auth\":\"{s}\"}}\n", .{tok});
@@ -538,7 +540,7 @@ pub const RemoteKmsClient = struct {
             try writer.writeAll("{\"op\":\"Attest\"}\n");
         }
 
-        const request = fbs.getWritten();
+        const request = fbs_writer.buffered();
 
         // If not connected, fall back to local attestation hash
         if (!self.connected) {

@@ -159,15 +159,15 @@ pub const UndoLog = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(UndoEntry),
     active: bool,
-    savepoints: std.ArrayListUnmanaged(Savepoint) = .{},
+    savepoints: std.ArrayListUnmanaged(Savepoint) = .empty,
     pending_advanced_index_rebuilds: std.StringHashMapUnmanaged(void) = .{},
 
     pub fn init(allocator: std.mem.Allocator) UndoLog {
         return .{
             .allocator = allocator,
-            .entries = .{},
+            .entries = .empty,
             .active = false,
-            .savepoints = .{},
+            .savepoints = .empty,
             .pending_advanced_index_rebuilds = .{},
         };
     }

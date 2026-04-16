@@ -109,11 +109,12 @@ pub const HistoryStore = struct {
                 if (err == error.FileNotFound) return;
                 return err;
             };
-            defer file.close(std.Io.Threaded.global_single_threaded.io());
+            const rh_io = std.Io.Threaded.global_single_threaded.io();
+            defer file.close(rh_io);
 
-            try file.seekFromEnd(0);
-            try file.writeAll(line);
-            try file.writeAll("\n");
+            const rh_stat = try file.stat(rh_io);
+            try file.writePositionalAll(rh_io, line, rh_stat.size);
+            try file.writePositionalAll(rh_io, "\n", rh_stat.size + line.len);
         }
     }
 

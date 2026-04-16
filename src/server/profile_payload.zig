@@ -444,9 +444,9 @@ pub fn buildProfileJson(
 }
 
 pub fn profilePayloadToJson(allocator: std.mem.Allocator, payload: schema.ProfilePayload) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    var w = buf.writer(allocator);
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 1024) catch return error.OutOfMemory;
+    errdefer aw.deinit();
+    const w = &aw.writer;
 
     const compact = payload.compact;
     try w.writeAll("{\"profile_version\":");
@@ -638,6 +638,7 @@ pub fn profilePayloadToJson(allocator: std.mem.Allocator, payload: schema.Profil
     }
     try w.writeAll("]}");
 
+    var buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
 }
 

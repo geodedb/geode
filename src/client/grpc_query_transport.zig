@@ -41,24 +41,23 @@ fn notifyProgress(hooks: ProgressHooks) void {
     if (hooks.on_progress) |callback| callback();
 }
 
-fn writeAll(stream: std.net.Stream, bytes: []const u8) !void {
-    var written: usize = 0;
-    while (written < bytes.len) {
-        const n = try stream.write(bytes[written..]);
-        if (n == 0) return error.ConnectionClosed;
-        written += n;
-    }
+fn writeAll(stream: std.Io.net.Stream, bytes: []const u8) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var write_buf: [8192]u8 = undefined;
+    var sw = stream.writer(io, &write_buf);
+    try sw.interface.writeAll(bytes);
+    try sw.interface.flush();
 }
 
-pub fn setSocketTimeouts(stream: std.net.Stream, timeout_secs: u32) void {
+pub fn setSocketTimeouts(stream: std.Io.net.Stream, timeout_secs: u32) void {
     if (builtin.os.tag == .windows) return;
     const tv = std.posix.timeval{
         .sec = @intCast(timeout_secs),
         .usec = 0,
     };
     const tv_bytes = std.mem.asBytes(&tv);
-    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv_bytes) catch {};
-    std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, tv_bytes) catch {};
+    std.posix.setsockopt(stream.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, tv_bytes) catch {};
+    std.posix.setsockopt(stream.socket.handle, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, tv_bytes) catch {};
 }
 
 pub fn connectPlaintext(
@@ -67,9 +66,13 @@ pub fn connectPlaintext(
     port: u16,
     timeout_secs: u32,
     hooks: ProgressHooks,
-) !std.net.Stream {
-    const stream = try std.net.tcpConnectToHost(allocator, host, port);
-    errdefer stream.close();
+) !std.Io.net.Stream {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var addr = std.Io.net.IpAddress.parse(host, port) catch
+        std.Io.net.IpAddress.parseIp4(host, port) catch
+        try std.Io.net.IpAddress.parseIp6(host, port);
+    const stream = try std.Io.net.IpAddress.connect(&addr, io, .{ .mode = .stream });
+    errdefer stream.close(io);
 
     setSocketTimeouts(stream, timeout_secs);
     try writeAll(stream, "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n");
@@ -80,7 +83,7 @@ pub fn connectPlaintext(
 
 pub fn drainInitialSettings(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !void {
     var got_settings_ack = false;
@@ -99,7 +102,7 @@ pub fn drainInitialSettings(
 }
 
 pub fn writeFrame(
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     frame_type: u8,
     flags: u8,
     stream_id: u31,
@@ -125,13 +128,18 @@ pub fn writeFrame(
 
 pub fn readFrame(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !H2Frame {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var rbuf: [8192]u8 = undefined;
+    var sr = stream.reader(io, &rbuf);
+    const reader = &sr.interface;
+
     var header: [9]u8 = undefined;
     var total: usize = 0;
     while (total < header.len) {
-        const n = try stream.read(header[total..]);
+        const n = try reader.readSliceShort(header[total..]);
         if (n == 0) return error.ConnectionClosed;
         notifyProgress(hooks);
         total += n;
@@ -143,7 +151,7 @@ pub fn readFrame(
 
     var payload_total: usize = 0;
     while (payload_total < payload.len) {
-        const n = try stream.read(payload[payload_total..]);
+        const n = try reader.readSliceShort(payload[payload_total..]);
         if (n == 0) return error.ConnectionClosed;
         notifyProgress(hooks);
         payload_total += n;
@@ -164,7 +172,7 @@ pub fn readFrame(
 
 pub fn sendRequest(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     method_path: []const u8,
     message: []const u8,
     stream_id: u31,
@@ -198,7 +206,7 @@ pub fn sendRequest(
 
 pub fn readResponse(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) !?[]u8 {
     while (true) {
@@ -270,7 +278,7 @@ pub fn readResponse(
 
 pub fn drainUnaryStream(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     hooks: ProgressHooks,
 ) void {
     while (true) {
@@ -292,7 +300,7 @@ pub fn encodeMessage(allocator: std.mem.Allocator, msg: anytype) ![]u8 {
 
 pub fn hello(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     options: HelloOptions,
     hooks: ProgressHooks,
 ) !schema.HelloResponse {
@@ -314,7 +322,7 @@ pub fn hello(
 }
 
 pub const StreamingQueryAdapter = struct {
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     hooks: ProgressHooks = .{},
 
     pub fn asTransport(self: *@This()) query_runner.QueryTransport {

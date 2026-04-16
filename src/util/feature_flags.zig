@@ -23,7 +23,8 @@ pub const Flag = struct {
         if (!flags_gpa_init) {
             flags_gpa_init = true;
         }
-        return std.process.hasEnvVar(flags_gpa.allocator(), self.env_var) catch false;
+        const name_z = std.posix.toPosixPath(self.env_var) catch return false;
+        return std.c.getenv(&name_z) != null;
     }
 
     pub fn enableForTests(self: *Flag) void {

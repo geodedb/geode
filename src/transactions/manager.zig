@@ -90,7 +90,7 @@ pub const Manager = struct {
     // Predicated range reads tracked per txn (simple prefix-based predicates for demo)
     predicates: std.AutoHashMap(TxnId, std.ArrayList([]u8)) = undefined,
     // Global committed & uncommitted writes (key + owning txn + commit ts (0 while active))
-    writes: std.ArrayListUnmanaged(struct { key: []u8, txn_id: TxnId, commit_ts: Timestamp }) = .{},
+    writes: std.ArrayListUnmanaged(struct { key: []u8, txn_id: TxnId, commit_ts: Timestamp }) = .empty,
     // Explicit range tracker (optional until phantom prevention enabled)
     rtracker: ?range_tracker.RangeTracker = null,
 
@@ -105,7 +105,7 @@ pub const Manager = struct {
             .allocator = allocator,
             .phantom_enabled = false,
             .predicates = std.AutoHashMap(TxnId, std.ArrayList([]u8)).init(allocator),
-            .writes = .{},
+            .writes = .empty,
             .rtracker = null,
         };
     }

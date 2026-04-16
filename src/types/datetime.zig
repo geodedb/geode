@@ -304,7 +304,7 @@ pub const Interval = struct {
             return allocator.dupe(u8, "PT0S");
         }
 
-        var result: std.ArrayList(u8) = .{};
+        var result: std.ArrayList(u8) = .empty;
         defer result.deinit(allocator);
 
         try result.append(allocator, 'P');
@@ -312,12 +312,12 @@ pub const Interval = struct {
         if (self.months != 0) {
             const years = @divFloor(self.months, 12);
             const months = @rem(self.months, 12);
-            if (years != 0) try std.fmt.format(result.writer(allocator), "{d}Y", .{years});
-            if (months != 0) try std.fmt.format(result.writer(allocator), "{d}M", .{months});
+            if (years != 0) try result.print(allocator, "{d}Y", .{years});
+            if (months != 0) try result.print(allocator, "{d}M", .{months});
         }
 
         if (self.days != 0) {
-            try std.fmt.format(result.writer(allocator), "{d}D", .{self.days});
+            try result.print(allocator, "{d}D", .{self.days});
         }
 
         if (self.micros != 0) {
@@ -326,9 +326,9 @@ pub const Interval = struct {
             const minutes = @divFloor(@rem(self.micros, 3600 * 1_000_000), 60 * 1_000_000);
             const seconds = @divFloor(@rem(self.micros, 60 * 1_000_000), 1_000_000);
 
-            if (hours != 0) try std.fmt.format(result.writer(allocator), "{d}H", .{hours});
-            if (minutes != 0) try std.fmt.format(result.writer(allocator), "{d}M", .{minutes});
-            if (seconds != 0) try std.fmt.format(result.writer(allocator), "{d}S", .{seconds});
+            if (hours != 0) try result.print(allocator, "{d}H", .{hours});
+            if (minutes != 0) try result.print(allocator, "{d}M", .{minutes});
+            if (seconds != 0) try result.print(allocator, "{d}S", .{seconds});
         }
 
         return result.toOwnedSlice(allocator);

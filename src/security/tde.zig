@@ -1168,7 +1168,7 @@ pub fn testKmsAttestation(allocator: std.mem.Allocator) !struct {
 
     // Generate a test keypair (in real usage, public key would come from KMS)
     // Using generate() for random keypair generation (Zig 0.15.2 API)
-    const keypair = Ed25519.KeyPair.generate();
+    const keypair = Ed25519.KeyPair.generate(std.Io.Threaded.global_single_threaded.io());
 
     // Create attestation message (nonce + timestamp + KMS identifier)
     var attestation_data: [64]u8 = undefined;

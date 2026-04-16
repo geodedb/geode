@@ -310,7 +310,7 @@ pub fn executeProfiledIfSupported(
 
         const with_stage = stripWithExecutionModifiers(with_clause);
         const input_rows = result.rows.len;
-        const start_ns = std.time.nanoTimestamp();
+        const start_ns = nowNs();
         var with_result = try transformResultRowsWithParams(allocator, result, with_stage, q.group_by, q.having, param_names, param_values);
         transferOwnedGraphEntities(&result, &with_result);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
@@ -372,7 +372,7 @@ pub fn executeProfiledIfSupported(
             .items = q.ret.items,
         };
         const input_rows = result.rows.len;
-        const start_ns = std.time.nanoTimestamp();
+        const start_ns = nowNs();
         var projected = try transformResultRowsWithParams(allocator, result, return_stage, return_group_by, return_having, param_names, param_values);
         transferOwnedGraphEntities(&result, &projected);
         deinitResultKeepingOwnedGraphEntities(allocator, &result);
@@ -430,7 +430,7 @@ fn executeLegacyProfiled(
         trace.ops[idx] = .{ .kind = op.kind };
     }
 
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
     var result = try execution.executeLegacyQueryWithResolvedParams(allocator, q.*, context, param_names, param_values);
     errdefer result.deinit(allocator);
 
@@ -502,7 +502,7 @@ fn executePatternQuery(
 
     const start_pattern = if (chain.head) |head| head else chain.hops[0].left;
     const scan_op_index = 0;
-    const scan_start_ns = std.time.nanoTimestamp();
+    const scan_start_ns = nowNs();
     const start_slots = try collectStartSlots(
         allocator,
         adapter,
@@ -572,7 +572,7 @@ fn exploreHops(
     const hop = chain.hops[hop_index];
     const op_index = 1 + hop_index;
     trace.ops[op_index].input_rows += 1;
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
 
     const candidates = try collectHopEdges(allocator, adapter, graph_name, current_nodes[hop_index], hop.rel.dir);
     defer allocator.free(candidates);
@@ -1133,7 +1133,7 @@ fn applyResultFilters(
     param_values: []const Value,
     trace_op: *RuntimeOp,
 ) !void {
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
     trace_op.input_rows = @intCast(result.rows.len);
 
     var filtered_rows = try std.ArrayList([]Value).initCapacity(allocator, result.rows.len);
@@ -1178,7 +1178,7 @@ fn applyResultFilters(
 }
 
 fn applyDistinctStage(allocator: std.mem.Allocator, result: *ExecutionResult, trace_op: *RuntimeOp) !void {
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
     trace_op.input_rows = @intCast(result.rows.len);
     try result_utils.applyDistinct(allocator, result);
     trace_op.rows = @intCast(result.rows.len);
@@ -1192,7 +1192,7 @@ fn applySortStage(
     return_items: []const ast.ReturnItem,
     trace_op: *RuntimeOp,
 ) !void {
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
     trace_op.input_rows = @intCast(result.rows.len);
     try execution.sortRowsEx(allocator, result, order, return_items);
     trace_op.rows = @intCast(result.rows.len);
@@ -1210,7 +1210,7 @@ fn applyWindowStage(
     param_values: []const Value,
     trace_op: *RuntimeOp,
 ) !void {
-    const start_ns = std.time.nanoTimestamp();
+    const start_ns = nowNs();
     trace_op.input_rows = @intCast(result.rows.len);
 
     const offset = offset_literal orelse resolveWindowValue(null, offset_param, param_names, param_values) orelse 0;
@@ -1502,8 +1502,15 @@ fn nextOpIndex(ops: []const RuntimeOp, kind: OpKind, occurrence: *usize) ?usize 
     return null;
 }
 
+fn nowNs() i128 {
+    var ts_tmp: std.os.linux.timespec = undefined;
+    const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
+    if (rc != 0) return 0;
+    return @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+}
+
 fn elapsedSince(start_ns: i128) u64 {
-    const now = std.time.nanoTimestamp();
+    const now = nowNs();
     return if (now > start_ns) @intCast(now - start_ns) else 0;
 }
 

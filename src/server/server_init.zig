@@ -144,77 +144,83 @@ pub const InitContext = struct {
     }
 };
 
+// Zig 0.16 compat: std.process.getEnvMap was removed. Use direct getenv via libc.
+fn getenvSlice(name: []const u8) ?[]const u8 {
+    var buf: [256]u8 = undefined;
+    if (name.len >= buf.len) return null;
+    @memcpy(buf[0..name.len], name);
+    buf[name.len] = 0;
+    const p = std.c.getenv(@ptrCast(&buf)) orelse return null;
+    return std.mem.span(p);
+}
+
 /// Process environment variables and return configuration
 pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profile_ref: *bool) !EnvironmentConfig {
+    _ = allocator;
     var config = EnvironmentConfig{};
 
-    if (std.process.getEnvMap(allocator)) |*env_ptr| {
-        var env = env_ptr.*;
-        defer env.deinit();
+    if (getenvSlice("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
+        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
+    } else if (getenvSlice("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
+        config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
+    }
 
-        if (env.get("GEODE_QUERY_MEM_LIMIT_BYTES")) |th| {
-            config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-        } else if (env.get("GEODE_SPILL_THRESHOLD_BYTES")) |th| {
-            config.spill_threshold = std.fmt.parseInt(usize, th, 10) catch config.spill_threshold;
-        }
+    if (getenvSlice("GEODE_NULLS_LAST")) |_| {
+        server_flags.setNullsLast(true);
+    }
 
-        if (env.get("GEODE_NULLS_LAST")) |_| {
-            server_flags.setNullsLast(true);
-        }
+    if (getenvSlice("GEODE_PROFILE_MEMCURVE")) |_| {
+        config.memcurve_profile = true;
+        memcurve_profile_ref.* = true;
+    }
 
-        if (env.get("GEODE_PROFILE_MEMCURVE")) |_| {
-            config.memcurve_profile = true;
-            memcurve_profile_ref.* = true;
-        }
+    if (getenvSlice("GEODE_PROFILE_COMPACT")) |_| {
+        config.compact_profile = true;
+    }
 
-        if (env.get("GEODE_PROFILE_COMPACT")) |_| {
-            config.compact_profile = true;
-        }
+    if (getenvSlice("GEODE_DISABLE_ESTIMATES")) |_| {
+        config.disable_estimates = true;
+    }
 
-        if (env.get("GEODE_DISABLE_ESTIMATES")) |_| {
-            config.disable_estimates = true;
-        }
+    if (getenvSlice("GEODE_ADAPT_ESTIMATES")) |_| {
+        server_flags.setAdaptEstimates(true);
+    }
 
-        if (env.get("GEODE_ADAPT_ESTIMATES")) |_| {
-            server_flags.setAdaptEstimates(true);
-        }
+    if (getenvSlice("GEODE_DISABLE_INDEX_CATALOG")) |_| {
+        index_catalog.setDisableCatalog(true);
+    }
 
-        if (env.get("GEODE_DISABLE_INDEX_CATALOG")) |_| {
-            index_catalog.setDisableCatalog(true);
+    if (getenvSlice("GEODE_ORDER_KEYS_EXPR")) |val| {
+        if (val.len == 0) {
+            config.order_keys_expr = true;
+        } else if (std.ascii.eqlIgnoreCase(val, "1") or std.ascii.eqlIgnoreCase(val, "true") or std.ascii.eqlIgnoreCase(val, "on")) {
+            config.order_keys_expr = true;
+        } else {
+            config.order_keys_expr = false;
         }
+    }
 
-        if (env.get("GEODE_ORDER_KEYS_EXPR")) |val| {
-            if (val.len == 0) {
-                config.order_keys_expr = true;
-            } else if (std.ascii.eqlIgnoreCase(val, "1") or std.ascii.eqlIgnoreCase(val, "true") or std.ascii.eqlIgnoreCase(val, "on")) {
-                config.order_keys_expr = true;
-            } else {
-                config.order_keys_expr = false;
-            }
-        }
+    // #683: Read per-connection env vars once at startup instead of per-connection.
+    if (getenvSlice("GEODE_ENABLE_QUERY_OPTIMIZER")) |val| {
+        config.query_optimizer_enabled = val.len > 0 and val[0] != '0' and
+            !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off");
+    }
+    if (getenvSlice("GEODE_INLINE_RESULTS")) |val| {
+        config.inline_results_enabled = val.len == 0 or (val[0] != '0' and
+            !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off"));
+    }
+    if (getenvSlice("GEODE_INLINE_RESULTS_MAX_ROWS")) |val| {
+        config.inline_results_max_rows = std.fmt.parseInt(usize, val, 10) catch config.inline_results_max_rows;
+    }
+    if (getenvSlice("GEODE_TELEMETRY_PAGING")) |_| {
+        config.telemetry_paging = true;
+    }
 
-        // #683: Read per-connection env vars once at startup instead of per-connection.
-        if (env.get("GEODE_ENABLE_QUERY_OPTIMIZER")) |val| {
-            config.query_optimizer_enabled = val.len > 0 and val[0] != '0' and
-                !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off");
-        }
-        if (env.get("GEODE_INLINE_RESULTS")) |val| {
-            config.inline_results_enabled = val.len == 0 or (val[0] != '0' and
-                !std.ascii.eqlIgnoreCase(val, "false") and !std.ascii.eqlIgnoreCase(val, "off"));
-        }
-        if (env.get("GEODE_INLINE_RESULTS_MAX_ROWS")) |val| {
-            config.inline_results_max_rows = std.fmt.parseInt(usize, val, 10) catch config.inline_results_max_rows;
-        }
-        if (env.get("GEODE_TELEMETRY_PAGING")) |_| {
-            config.telemetry_paging = true;
-        }
-
-        // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
-        // GAP-0165: Check for GEODE_ENABLE_ABAC environment variable to enable ABAC enforcement
-        if (env.get("GEODE_ENABLE_ABAC")) |val| {
-            config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
-        }
-    } else |_| {}
+    // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
+    // GAP-0165: Check for GEODE_ENABLE_ABAC environment variable to enable ABAC enforcement
+    if (getenvSlice("GEODE_ENABLE_ABAC")) |val| {
+        config.abac_enabled = val.len > 0 and (val[0] == '1' or std.ascii.eqlIgnoreCase(val, "true"));
+    }
 
     return config;
 }

@@ -346,7 +346,7 @@ pub const VectorI32 = struct {
 
         // Split by comma and parse each element
         var parts = std.mem.splitSequence(u8, cleaned_str, ",");
-        var elements = std.ArrayList(i32){};
+        var elements = std.ArrayList(i32).empty;
         defer elements.deinit(allocator);
 
         while (parts.next()) |part| {

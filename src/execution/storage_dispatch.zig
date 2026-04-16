@@ -773,12 +773,13 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
 
     // Store mock KMS configuration for later use
     const config_path = "mock_kms_config.json";
-    const config_file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), config_path, .{});
-    defer config_file.close();
+    const io_sd = std.Io.Threaded.global_single_threaded.io();
+    const config_file = try std.Io.Dir.cwd().createFile(io_sd, config_path, .{});
+    defer config_file.close(io_sd);
 
-    var json_buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer json_buf.deinit(allocator);
-    const writer = json_buf.writer(allocator);
+    var aw_sd: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 256);
+    defer aw_sd.deinit();
+    const writer = &aw_sd.writer;
 
     try writer.writeAll("{{");
     try writer.print("\"endpoint\":\"mock://localhost:{d}\",", .{port});
@@ -790,9 +791,10 @@ fn handleTdeConfigureMockKms(allocator: std.mem.Allocator, call_stmt: ast.CallPr
     try writer.print("\"wrap_unwrap_test\":{}", .{success});
     try writer.writeAll("}}");
 
-    const config_json = try json_buf.toOwnedSlice(allocator);
+    var json_buf_sd = aw_sd.toArrayList();
+    const config_json = try json_buf_sd.toOwnedSlice(allocator);
     defer allocator.free(config_json);
-    try config_file.writeAll(config_json);
+    try config_file.writeStreamingAll(io_sd, config_json);
 
     // Return comprehensive mock KMS status
     const columns = try allocator.alloc([]const u8, 5);

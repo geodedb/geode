@@ -35,6 +35,18 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 
+// Zig 0.16 compat: std.Thread.sleep removed. Use raw linux nanosleep.
+fn compat_sleepNs(ns: i64) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    }
+}
+
 // Zig 0.16 compat: Helper to read an entire stream into an allocated buffer (replaces readToEndAlloc).
 fn readStreamToEnd(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -717,14 +729,26 @@ const QueryDeadlineState = struct {
     done: std.atomic.Value(bool),
 
     fn init() QueryDeadlineState {
+        const now_ns: i128 = blk: {
+            var ts_tmp: std.os.linux.timespec = undefined;
+            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
+            if (rc != 0) break :blk @as(i128, 0);
+            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+        };
         return .{
-            .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(std.time.nanoTimestamp()))),
+            .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(now_ns))),
             .done = std.atomic.Value(bool).init(false),
         };
     }
 
     fn touch(self: *QueryDeadlineState) void {
-        self.last_progress_ns.store(@as(i64, @intCast(std.time.nanoTimestamp())), .release);
+        const now_ns: i128 = blk: {
+            var ts_tmp: std.os.linux.timespec = undefined;
+            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
+            if (rc != 0) break :blk @as(i128, 0);
+            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+        };
+        self.last_progress_ns.store(@as(i64, @intCast(now_ns)), .release);
     }
 
     fn finish(self: *QueryDeadlineState) void {
@@ -788,15 +812,26 @@ fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
     const timeout_ns = @as(i64, @intCast(timeout_secs)) * std.time.ns_per_s;
 
     while (!state.done.load(.acquire)) {
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        {
+            const ns: i64 = 100 * std.time.ns_per_ms;
+            const req = std.os.linux.timespec{ .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)), .nsec = @intCast(@mod(ns, std.time.ns_per_s)) };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        }
         if (state.done.load(.acquire)) return;
 
+        const now_ns: i128 = blk: {
+            var ts_tmp: std.os.linux.timespec = undefined;
+            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
+            if (rc != 0) break :blk @as(i128, 0);
+            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
+        };
         const last_progress_ns = state.last_progress_ns.load(.acquire);
-        if (@as(i64, @intCast(std.time.nanoTimestamp())) - last_progress_ns < timeout_ns) continue;
+        if (@as(i64, @intCast(now_ns)) - last_progress_ns < timeout_ns) continue;
 
         const stderr = std.Io.File{ .handle = getStderrHandle() catch {
             std.process.exit(@intFromEnum(ExitCode.general_error));
-        } };
+        }, .flags = .{ .nonblocking = false } };
         const io_wd = std.Io.Threaded.global_single_threaded.io();
         stderr.writeStreamingAll(io_wd, "Error: query timed out after ") catch {};
         var buf: [20]u8 = undefined;
@@ -1741,11 +1776,11 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
         ) catch |err| {
             last_error = @errorName(err);
             if (attempts + 1 < max_attempts) {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                compat_sleepNs(50 * std.time.ns_per_ms);
             }
             continue;
         };
-        defer tcp_stream.close();
+        defer tcp_stream.close(std.Io.Threaded.global_single_threaded.io());
 
         // Execute query on the gRPC connection
         params_transferred = true;
@@ -1753,7 +1788,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
             last_error = @errorName(err);
             params_transferred = false;
             if (attempts + 1 < max_attempts) {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                compat_sleepNs(50 * std.time.ns_per_ms);
             }
             continue;
         };
@@ -1770,7 +1805,7 @@ fn executeGrpcQuery(allocator: std.mem.Allocator, opts: GrpcQueryOptions) !void 
 /// Execute a query on a gRPC transport connection, producing identical output to executeQueryOnConnection.
 fn executeQueryOnGrpc(
     allocator: std.mem.Allocator,
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
     query_text: []const u8,
     format: []const u8,
     username: ?[]const u8,
@@ -2276,7 +2311,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
                 break;
             }
             if (attempts + 1 < max_attempts) {
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                compat_sleepNs(50 * std.time.ns_per_ms);
             }
             continue;
         };
@@ -2293,7 +2328,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
                 // server finish processing the previous connection's cleanup.
                 // Increased from 10ms to 50ms to reduce failures during
                 // rapid sequential bulk operations (e.g., stdin batches).
-                std.Thread.sleep(50 * std.time.ns_per_ms);
+                compat_sleepNs(50 * std.time.ns_per_ms);
                 params_transferred = false;
                 continue;
             }
@@ -3177,15 +3212,16 @@ fn ensureCredentialsDir(allocator: std.mem.Allocator) !void {
     const geode_dir = try std.fs.path.join(allocator, &.{ home_dir, ".geode" });
     defer allocator.free(geode_dir);
 
-    std.fs.makeDirAbsolute(geode_dir) catch |err| switch (err) {
+    const io_md = std.Io.Threaded.global_single_threaded.io();
+    std.Io.Dir.createDirAbsolute(io_md, geode_dir, std.Io.File.Permissions.fromMode(0o700)) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
     // S-9: Restrict credentials directory to owner-only access
     if (comptime @import("builtin").os.tag != .windows) {
-        var dir = std.fs.openDirAbsolute(geode_dir, .{}) catch return;
-        defer dir.close();
-        std.posix.fchmod(dir.fd, 0o700) catch {};
+        var dir = std.Io.Dir.openDirAbsolute(io_md, geode_dir, .{}) catch return;
+        defer dir.close(io_md);
+        dir.setPermissions(io_md, std.Io.File.Permissions.fromMode(0o700)) catch {};
     }
 }
 
@@ -3212,7 +3248,7 @@ fn clearCredentials(allocator: std.mem.Allocator) !void {
     const creds_path = getCredentialsPath(allocator) catch return;
     defer allocator.free(creds_path);
 
-    std.fs.deleteFileAbsolute(creds_path) catch {};
+    std.Io.Dir.deleteFileAbsolute(std.Io.Threaded.global_single_threaded.io(), creds_path) catch {};
 }
 
 fn promptPassword(allocator: std.mem.Allocator, prompt_text: []const u8) ![]const u8 {

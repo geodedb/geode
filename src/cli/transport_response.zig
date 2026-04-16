@@ -71,50 +71,50 @@ pub fn renderTransportResponseWithStreams(
             fn apply(alloc: std.mem.Allocator, cols: []const ColumnInfo) !std.json.Array {
                 var arr = std.json.Array.init(alloc);
                 for (cols) |col| {
-                    var obj = std.json.ObjectMap.init(alloc);
-                    try obj.put("name", .{ .string = try alloc.dupe(u8, col.name) });
-                    try obj.put("type", .{ .string = try alloc.dupe(u8, col.type) });
+                    var obj = @as(std.json.ObjectMap, .empty);
+                    try obj.put(alloc, "name", .{ .string = try alloc.dupe(u8, col.name) });
+                    try obj.put(alloc, "type", .{ .string = try alloc.dupe(u8, col.type) });
                     try arr.append(.{ .object = obj });
                 }
                 return arr;
             }
         }.apply;
 
-        var root = std.json.ObjectMap.init(jalloc);
+        var root = @as(std.json.ObjectMap, .empty);
         if (view.has_error) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, view.error_status) });
+            try root.put(jalloc, "status_class", .{ .string = try jalloc.dupe(u8, view.error_status) });
             if (view.error_status.len > 0) {
-                try root.put("error_code", .{ .string = try jalloc.dupe(u8, view.error_status) });
+                try root.put(jalloc, "error_code", .{ .string = try jalloc.dupe(u8, view.error_status) });
             }
-            try root.put("error", .{ .string = try jalloc.dupe(u8, view.error_message) });
+            try root.put(jalloc, "error", .{ .string = try jalloc.dupe(u8, view.error_message) });
         } else if (view.result_kind != .rows) {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, view.status_class) });
+            try root.put(jalloc, "status_class", .{ .string = try jalloc.dupe(u8, view.status_class) });
             if (view.status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, view.status_subclass) });
+                try root.put(jalloc, "status_subclass", .{ .string = try jalloc.dupe(u8, view.status_subclass) });
             }
             if (view.result_payload) |payload| {
                 if (std.json.parseFromSlice(std.json.Value, jalloc, payload, .{})) |parsed| {
                     if (view.result_kind == .explain) {
-                        try root.put("explain", parsed.value);
+                        try root.put(jalloc, "explain", parsed.value);
                     } else {
-                        try root.put("profile", parsed.value);
+                        try root.put(jalloc, "profile", parsed.value);
                     }
                 } else |_| {
                     if (view.result_kind == .explain) {
-                        try root.put("explain", .{ .string = try jalloc.dupe(u8, payload) });
+                        try root.put(jalloc, "explain", .{ .string = try jalloc.dupe(u8, payload) });
                     } else {
-                        try root.put("profile", .{ .string = try jalloc.dupe(u8, payload) });
+                        try root.put(jalloc, "profile", .{ .string = try jalloc.dupe(u8, payload) });
                     }
                 }
             }
         } else {
-            try root.put("status_class", .{ .string = try jalloc.dupe(u8, view.status_class) });
+            try root.put(jalloc, "status_class", .{ .string = try jalloc.dupe(u8, view.status_class) });
             if (view.status_subclass.len > 0) {
-                try root.put("status_subclass", .{ .string = try jalloc.dupe(u8, view.status_subclass) });
+                try root.put(jalloc, "status_subclass", .{ .string = try jalloc.dupe(u8, view.status_subclass) });
             }
-            try root.put("ordered", .{ .bool = view.ordered });
-            try root.put("order_keys", .{ .array = try buildStringArray(jalloc, view.order_keys) });
-            try root.put("columns", .{ .array = try buildColumnsArray(jalloc, view.columns) });
+            try root.put(jalloc, "ordered", .{ .bool = view.ordered });
+            try root.put(jalloc, "order_keys", .{ .array = try buildStringArray(jalloc, view.order_keys) });
+            try root.put(jalloc, "columns", .{ .array = try buildColumnsArray(jalloc, view.columns) });
 
             // Check for duplicate column names (e.g. RETURN a.name, b.name both produce "name")
             var has_dupes = false;
@@ -149,55 +149,55 @@ pub fn renderTransportResponseWithStreams(
             var rows_arr = std.json.Array.init(jalloc);
             if (rows_json) |rows| {
                 for (rows.items) |row| {
-                    var row_obj = std.json.ObjectMap.init(jalloc);
+                    var row_obj = @as(std.json.ObjectMap, .empty);
                     for (row.items, 0..) |val, col_idx| {
                         const col_key = if (unique_col_keys) |keys|
                             (if (col_idx < keys.len) keys[col_idx] else "?")
                         else
                             (if (col_idx < view.columns.len) view.columns[col_idx].name else "?");
-                        try row_obj.put(try jalloc.dupe(u8, col_key), val);
+                        try row_obj.put(jalloc, try jalloc.dupe(u8, col_key), val);
                     }
                     try rows_arr.append(.{ .object = row_obj });
                 }
             }
-            try root.put("rows", .{ .array = rows_arr });
+            try root.put(jalloc, "rows", .{ .array = rows_arr });
         }
 
-        try root.put("additional_statuses", .{ .array = try buildStringArray(jalloc, view.additional_statuses) });
-        try root.put("flagger_findings", .{ .array = try buildStringArray(jalloc, view.flagger_findings) });
+        try root.put(jalloc, "additional_statuses", .{ .array = try buildStringArray(jalloc, view.additional_statuses) });
+        try root.put(jalloc, "flagger_findings", .{ .array = try buildStringArray(jalloc, view.flagger_findings) });
 
         const root_value = std.json.Value{ .object = root };
         const json_out = try std.json.Stringify.valueAlloc(jalloc, root_value, .{});
-        try out.writeAll(json_out);
-        try out.writeAll("\n");
+        try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), json_out);
+        try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n");
         return view.has_error or (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00"));
     }
 
     if (view.has_error) {
         if (view.error_message.len > 0) {
-            try err_out.writeAll("Error: ");
-            try err_out.writeAll(view.error_message);
-            try err_out.writeAll("\r\n");
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error: ");
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.error_message);
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n");
         } else if (view.error_status.len > 0) {
-            try err_out.writeAll("Error (");
-            try err_out.writeAll(view.error_status);
-            try err_out.writeAll(")\r\n");
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error (");
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.error_status);
+            try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ")\r\n");
         }
         return true;
     }
 
     if (view.status_class.len >= 2 and !std.mem.startsWith(u8, view.status_class, "00")) {
-        try err_out.writeAll("Error (");
-        try err_out.writeAll(view.status_class);
-        try err_out.writeAll(")\r\n");
+        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "Error (");
+        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), view.status_class);
+        try err_out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ")\r\n");
         return true;
     }
 
     if (view.result_kind != .rows) {
         if (view.result_payload) |payload| {
-            try out.writeAll(payload);
+            try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), payload);
             if (payload.len == 0 or payload[payload.len - 1] != '\n') {
-                try out.writeAll("\r\n");
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n");
             }
         }
         return false;
@@ -207,30 +207,30 @@ pub fn renderTransportResponseWithStreams(
         if (rows_text) |rows| {
             // CSV header
             for (view.columns, 0..) |col, i| {
-                if (i > 0) _ = out.writeAll(",") catch {};
-                _ = out.writeAll(col.name) catch {};
+                if (i > 0) _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ",") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), col.name) catch {};
             }
-            _ = out.writeAll("\n") catch {};
+            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
             // CSV rows
             for (rows.items) |row| {
                 for (row.items, 0..) |cell, i| {
-                    if (i > 0) _ = out.writeAll(",") catch {};
+                    if (i > 0) _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), ",") catch {};
                     // Quote fields containing comma, newline, or quote
                     if (std.mem.indexOf(u8, cell, ",") != null or std.mem.indexOf(u8, cell, "\n") != null or std.mem.indexOf(u8, cell, "\"") != null) {
-                        _ = out.writeAll("\"") catch {};
+                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"") catch {};
                         for (cell) |c| {
                             if (c == '"') {
-                                _ = out.writeAll("\"\"") catch {};
+                                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"\"") catch {};
                             } else {
-                                _ = out.write(&[_]u8{c}) catch {};
+                                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), &[_]u8{c}) catch {};
                             }
                         }
-                        _ = out.writeAll("\"") catch {};
+                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"") catch {};
                     } else {
-                        _ = out.writeAll(cell) catch {};
+                        _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), cell) catch {};
                     }
                 }
-                _ = out.writeAll("\n") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\n") catch {};
             }
         }
         return false;
@@ -263,50 +263,51 @@ pub fn renderTransportResponseWithStreams(
             const printSeparator = struct {
                 fn f(writer: anytype, widths: []const usize) void {
                     var out_writer = writer;
-                    _ = out_writer.writeAll("+") catch {};
+                    const io_ps = std.Io.Threaded.global_single_threaded.io();
+                    _ = out_writer.writeStreamingAll(io_ps, "+") catch {};
                     for (widths) |w| {
-                        for (0..w + 2) |_| _ = out_writer.writeAll("-") catch {};
-                        _ = out_writer.writeAll("+") catch {};
+                        for (0..w + 2) |_| _ = out_writer.writeStreamingAll(io_ps, "-") catch {};
+                        _ = out_writer.writeStreamingAll(io_ps, "+") catch {};
                     }
-                    _ = out_writer.writeAll("\r\n") catch {};
+                    _ = out_writer.writeStreamingAll(io_ps, "\r\n") catch {};
                 }
             }.f;
 
             printSeparator(out, col_widths.items);
 
-            _ = out.writeAll("|") catch {};
+            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "|") catch {};
             for (view.columns, 0..) |col, i| {
-                _ = out.writeAll(" ") catch {};
-                _ = out.writeAll(col.name) catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), col.name) catch {};
                 const width = if (i < col_widths.items.len) col_widths.items[i] else col.name.len;
-                for (col.name.len..width) |_| _ = out.writeAll(" ") catch {};
-                _ = out.writeAll(" |") catch {};
+                for (col.name.len..width) |_| _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " |") catch {};
             }
-            _ = out.writeAll("\r\n") catch {};
+            _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
 
             printSeparator(out, col_widths.items);
 
             for (rows.items) |row| {
-                _ = out.writeAll("|") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "|") catch {};
                 for (row.items, 0..) |cell, i| {
-                    _ = out.writeAll(" ") catch {};
-                    _ = out.writeAll(cell) catch {};
+                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
+                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), cell) catch {};
                     const width = if (i < col_widths.items.len) col_widths.items[i] else cell.len;
-                    for (cell.len..width) |_| _ = out.writeAll(" ") catch {};
-                    _ = out.writeAll(" |") catch {};
+                    for (cell.len..width) |_| _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
+                    _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " |") catch {};
                 }
-                _ = out.writeAll("\r\n") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
             }
 
             printSeparator(out, col_widths.items);
 
             const row_count = rows.items.len;
             if (row_count == 1) {
-                _ = out.writeAll("(1 row)\r\n") catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "(1 row)\r\n") catch {};
             } else {
                 const count_str = std.fmt.allocPrint(allocator, "({d} rows)\r\n", .{row_count}) catch "(? rows)\r\n";
                 defer if (count_str.len > 0 and count_str[0] == '(') allocator.free(count_str);
-                _ = out.writeAll(count_str) catch {};
+                _ = out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), count_str) catch {};
             }
         }
     }

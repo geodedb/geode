@@ -3926,8 +3926,9 @@ pub const GraphStore = struct {
         const graph_dir_path = self.resolveGraphStorageDirPath(graph_name) catch return orelse return;
         defer self.allocator.free(graph_dir_path);
 
-        var dir = std.Io.Dir.cwd().openDir(graph_dir_path, .{}) catch return;
-        defer dir.close();
+        const gs_io = std.Io.Threaded.global_single_threaded.io();
+        var dir = std.Io.Dir.cwd().openDir(gs_io, graph_dir_path, .{}) catch return;
+        defer dir.close(gs_io);
 
         const stale_files = [_][]const u8{
             "adapter_labels.dat",
@@ -3936,7 +3937,7 @@ pub const GraphStore = struct {
             "id_map.dat.tmp",
         };
         for (stale_files) |name| {
-            dir.deleteFile(name) catch |err| switch (err) {
+            dir.deleteFile(gs_io, name) catch |err| switch (err) {
                 error.FileNotFound => {},
                 else => log.warn("failed to remove legacy graph sidecar", &.{
                     Attr.string("graph", graph_name),
@@ -5173,7 +5174,15 @@ fn persistenceLoop() void {
     // Use a short poll interval (1s) for responsive cross-process visibility
     const poll_ms: u64 = @min(g_persist_interval_ms, 1000);
     while (!g_persist_shutdown.load(.acquire)) {
-        std.Thread.sleep(poll_ms * std.time.ns_per_ms);
+        {
+            const ns: u64 = poll_ms * std.time.ns_per_ms;
+            const req = std.os.linux.timespec{
+                .sec = @intCast(ns / std.time.ns_per_s),
+                .nsec = @intCast(ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        }
         if (g_persist_shutdown.load(.acquire)) break;
         if (global_store != null) {
             const store_ptr: *GraphStore = &(global_store.?);

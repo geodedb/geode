@@ -285,7 +285,7 @@ const graph_store = geode.graph_store;
 /// exits and deferred cleanup (persistence flush, thread pool drain) runs.
 var g_shutdown_requested = std.atomic.Value(bool).init(false);
 
-fn handleShutdownSignal(_: c_int) callconv(.c) void {
+fn handleShutdownSignal(_: std.os.linux.SIG) callconv(.c) void {
     g_shutdown_requested.store(true, .release);
 }
 
@@ -847,7 +847,11 @@ pub fn main() !void {
 
             // #49: Admission control — skip accept when at capacity.
             if (transport.getConnectionCount() >= transport.config.max_connections) {
-                std.Thread.sleep(5 * std.time.ns_per_ms);
+                {
+                    const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+                    var rem: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.nanosleep(&req, &rem);
+                }
                 continue;
             }
 

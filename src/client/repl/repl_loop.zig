@@ -244,7 +244,7 @@ pub const ReplLoop = struct {
             var pos: usize = 0;
             while (pos < line_buf.len - 1) {
                 var byte: [1]u8 = undefined;
-                const n = stdin_file.read(&byte) catch break;
+                const n = stdin_file.readStreaming(replIo(), &.{&byte}) catch break;
                 if (n == 0) {
                     state.quit_requested = true;
                     break;
@@ -1393,7 +1393,7 @@ fn handleSearch(state: *ReplState) !void {
             if ((fds[0].revents & std.posix.POLL.IN) == 0) continue;
         }
 
-        const n = stdin.read(&search_buf) catch |err| {
+        const n = stdin.readStreaming(replIo(), &.{&search_buf}) catch |err| {
             if (err == error.Interrupted) {
                 if (platform.checkAndClearSigint()) {
                     state.searching = false;

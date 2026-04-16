@@ -86,17 +86,27 @@ fn loadSessionState(allocator: std.mem.Allocator) !std.StringHashMap(StoredSessi
     const state_path = try sessionStatePath(allocator);
     defer allocator.free(state_path);
 
-    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+    const io_ss = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_ss, state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return sessions,
         else => return err,
     };
-    defer file.close();
+    defer file.close(io_ss);
 
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
+    const stat = file.stat(io_ss) catch |err| {
+        std.debug.print("Warning: Could not stat session state: {}\n", .{err});
+        return sessions;
+    };
+    const size: usize = @intCast(stat.size);
+    const content = allocator.alloc(u8, size) catch |err| {
         std.debug.print("Warning: Could not read session state: {}\n", .{err});
         return sessions;
     };
     defer allocator.free(content);
+    _ = file.readPositionalAll(io_ss, content, 0) catch |err| {
+        std.debug.print("Warning: Could not read session state: {}\n", .{err});
+        return sessions;
+    };
 
     // Parse line-based format: username|token|created_at|expires_at|last_activity|is_active
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -167,11 +177,15 @@ fn getCurrentToken(allocator: std.mem.Allocator) ?[]const u8 {
     const creds_path = std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home}) catch return null;
     defer allocator.free(creds_path);
 
-    const file = std.fs.openFileAbsolute(creds_path, .{}) catch return null;
-    defer file.close();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io, creds_path, .{}) catch return null;
+    defer file.close(io);
 
-    const content = file.readToEndAlloc(allocator, 64 * 1024) catch return null;
+    const file_len = file.length(io) catch return null;
+    if (file_len > 64 * 1024) return null;
+    const content = allocator.alloc(u8, @intCast(file_len)) catch return null;
     defer allocator.free(content);
+    _ = file.readPositionalAll(io, content, 0) catch return null;
 
     // Simple JSON parsing for session_token field
     if (std.mem.indexOf(u8, content, "\"session_token\"")) |start| {
@@ -308,10 +322,20 @@ fn cmdSessionValidate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: u
             const creds_path = std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{h}) catch null;
             if (creds_path) |cp| {
                 defer allocator.free(cp);
-                const file = std.fs.openFileAbsolute(cp, .{}) catch null;
+                const io_cp = std.Io.Threaded.global_single_threaded.io();
+                const file = std.Io.Dir.openFileAbsolute(io_cp, cp, .{}) catch null;
                 if (file) |f| {
-                    defer f.close();
-                    const content = f.readToEndAlloc(allocator, 64 * 1024) catch null;
+                    defer f.close(io_cp);
+                    const stat_c = f.stat(io_cp) catch null;
+                    const content: ?[]u8 = if (stat_c) |st| blk: {
+                        const size: usize = @intCast(st.size);
+                        const buf = allocator.alloc(u8, size) catch break :blk null;
+                        _ = f.readPositionalAll(io_cp, buf, 0) catch {
+                            allocator.free(buf);
+                            break :blk null;
+                        };
+                        break :blk buf;
+                    } else null;
                     if (content) |c| {
                         defer allocator.free(c);
                         // Simple JSON parsing for username
@@ -374,14 +398,18 @@ fn cmdSessionInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
     defer allocator.free(creds_path);
 
-    const file = std.fs.openFileAbsolute(creds_path, .{}) catch {
+    const io_cp2 = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_cp2, creds_path, .{}) catch {
         std.debug.print("Error: No session found. Please login first.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    defer file.close();
+    defer file.close(io_cp2);
 
-    const content = try file.readToEndAlloc(allocator, 64 * 1024);
+    const stat_cp2 = try file.stat(io_cp2);
+    const size_cp2: usize = @intCast(stat_cp2.size);
+    const content = try allocator.alloc(u8, size_cp2);
     defer allocator.free(content);
+    _ = try file.readPositionalAll(io_cp2, content, 0);
 
     // Parse basic info from credentials
     var username: []const u8 = "unknown";
@@ -484,16 +512,29 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
     const creds_path = try std.fmt.allocPrint(allocator, "{s}/.geode/credentials.json", .{home});
     defer allocator.free(creds_path);
 
-    const file = std.fs.openFileAbsolute(creds_path, .{}) catch {
+    const io_cp3 = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_cp3, creds_path, .{}) catch {
         std.debug.print("Error: No session found. Please login first.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    const content = file.readToEndAlloc(allocator, 64 * 1024) catch {
-        file.close();
+    const stat_cp3 = file.stat(io_cp3) catch {
+        file.close(io_cp3);
         std.debug.print("Error: Cannot read credentials file.\n", .{});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
-    file.close();
+    const size_cp3: usize = @intCast(stat_cp3.size);
+    const content = allocator.alloc(u8, size_cp3) catch {
+        file.close(io_cp3);
+        std.debug.print("Error: Cannot read credentials file.\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    _ = file.readPositionalAll(io_cp3, content, 0) catch {
+        file.close(io_cp3);
+        allocator.free(content);
+        std.debug.print("Error: Cannot read credentials file.\n", .{});
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    file.close(io_cp3);
     defer allocator.free(content);
 
     // For simplicity, just regenerate the token part in the JSON
@@ -512,12 +553,12 @@ fn cmdSessionRotate(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usi
         new_content.appendSlice(allocator, remaining) catch {};
 
         // Write file with replacement
-        const out_file = std.fs.createFileAbsolute(creds_path, .{}) catch {
+        const out_file = std.Io.Dir.createFileAbsolute(io_cp3, creds_path, .{}) catch {
             std.debug.print("Error: Cannot write credentials file.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };
-        defer out_file.close();
-        out_file.writeAll(new_content.items) catch {
+        defer out_file.close(io_cp3);
+        out_file.writeStreamingAll(io_cp3, new_content.items) catch {
             std.debug.print("Error: Cannot write credentials file.\n", .{});
             std.process.exit(@intFromEnum(ExitCode.general_error));
         };

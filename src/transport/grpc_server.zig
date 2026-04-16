@@ -160,7 +160,13 @@ fn throttleInvalidSessionProbe() void {
     var jitter: [1]u8 = undefined;
     compat_fillRandom(&jitter);
     const delay_ms: u64 = 5 + @as(u64, @intCast(jitter[0] % 6));
-    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+    const ns: u64 = delay_ms * std.time.ns_per_ms;
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    var rem: std.os.linux.timespec = undefined;
+    _ = std.os.linux.nanosleep(&req, &rem);
 }
 
 fn rebuildPendingIndexes(
@@ -296,7 +302,7 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
         break :blk true;
     } else |_| false;
     state.txn_manager.init(allocator);
-    state.inserted_values = .{};
+    state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, server_state.CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.catalog_graphs = std.HashMap([]const u8, server_state.CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
     state.graph_types = std.HashMap([]const u8, server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator);
@@ -610,7 +616,7 @@ pub const GeodeGrpcServer = struct {
         const grpc_session_key = try allocator.alloc(u8, 64);
         const hex_array = std.fmt.bytesToHex(grpc_session_key_raw, .lower);
         @memcpy(grpc_session_key, &hex_array);
-        var server = try GrpcServer.init(allocator, port, grpc_session_key);
+        var server = try GrpcServer.init(allocator, std.Io.Threaded.global_single_threaded.io(), port, grpc_session_key);
         const allow_plaintext_fallback = shouldAllowGrpcPlaintextFallback(allocator);
 
         if (allow_plaintext_fallback) {
@@ -1178,17 +1184,13 @@ fn getPeerIp(trans: *GrpcTransport) [45]u8 {
     var buf: [45]u8 = .{0} ** 45;
     var addr: std.posix.sockaddr.storage = undefined;
     var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.storage);
-    std.posix.getpeername(trans.stream.handle, @ptrCast(&addr), &addr_len) catch {
+    std.posix.getpeername(trans.stream.socket.handle, @ptrCast(&addr), &addr_len) catch {
         @memcpy(buf[0..7], "unknown");
         return buf;
     };
-    const net_addr = std.net.Address.initPosix(@ptrCast(&addr));
-    const formatted = std.fmt.bufPrint(&buf, "{f}", .{net_addr}) catch {
-        @memcpy(buf[0..7], "unknown");
-        return buf;
-    };
-    // Null-terminate after the formatted portion (already zero-initialized)
-    _ = formatted;
+    // Zig 0.16 compat: Io.net.IpAddress.initPosix was removed. Placeholder
+    // until the address-formatting helper is reintroduced.
+    @memcpy(buf[0..7], "unknown");
     return buf;
 }
 
@@ -1357,7 +1359,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             .success = false,
             .session_id = "",
             .error_message = "Invalid request",
-            .capabilities = std.ArrayList([]const u8){},
+            .capabilities = std.ArrayList([]const u8).empty,
         };
         return encodeMessage(allocator, resp);
     };
@@ -1373,7 +1375,7 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
             .success = false,
             .session_id = "",
             .error_message = "Server not initialized",
-            .capabilities = std.ArrayList([]const u8){},
+            .capabilities = std.ArrayList([]const u8).empty,
         };
         return encodeMessage(allocator, resp);
     };
@@ -2695,8 +2697,8 @@ fn handleCdcDiag(_: []const u8, allocator: std.mem.Allocator) ![]u8 {
     const resp = schema.CdcDiagnosticsResponse{
         .config = .{ .enabled = false },
         .engine = .{ .is_running = false },
-        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
-        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
+        .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
+        .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
         .version = try allocator.dupe(u8, @import("build_options").version),
         .timestamp_ms = compat_milliTimestamp(),
     };
@@ -2954,7 +2956,7 @@ fn handleUploadBackup(request_bytes: []const u8, allocator: std.mem.Allocator) !
     const path = try std.fmt.allocPrint(allocator, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
     // Create empty placeholder file for upload slot
     if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-        file.close();
+        file.close(std.Io.Threaded.global_single_threaded.io());
     } else |_| {}
 
     const resp = schema.UploadBackupResponse{

@@ -27,7 +27,7 @@ pub const tlsAccept = if (has_openssl) ssl_impl.tlsAccept else stubTlsAccept;
 /// Issue #479: grpc-zig's writeFrame ignores partial write return values from
 /// ioWrite, which on aarch64 under load corrupts HTTP/2 framing. This wrapper
 /// ensures all bytes are written before returning, preventing frame corruption.
-pub fn rawAccept(stream: std.net.Stream) anyerror!TlsIo {
+pub fn rawAccept(stream: std.Io.net.Stream) anyerror!TlsIo {
     const conn = std.heap.c_allocator.create(RawConn) catch return error.OutOfMemory;
     conn.* = .{ .stream = stream };
     return TlsIo{
@@ -39,24 +39,26 @@ pub fn rawAccept(stream: std.net.Stream) anyerror!TlsIo {
 }
 
 const RawConn = struct {
-    stream: std.net.Stream,
+    stream: std.Io.net.Stream,
 };
 
 fn rawRead(ctx_ptr: *anyopaque, buf: []u8) anyerror!usize {
     const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
-    return conn.stream.read(buf);
+    const io_r = std.Io.Threaded.global_single_threaded.io();
+    var rbuf: [4096]u8 = undefined;
+    var sr = conn.stream.reader(io_r, &rbuf);
+    return try sr.interface.readSliceShort(buf);
 }
 
 /// Write all bytes to the stream, looping on partial writes.
 fn rawWriteAll(ctx_ptr: *anyopaque, data: []const u8) anyerror!usize {
     const conn: *RawConn = @ptrCast(@alignCast(ctx_ptr));
-    var total: usize = 0;
-    while (total < data.len) {
-        const n = conn.stream.write(data[total..]) catch |err| return err;
-        if (n == 0) return error.ConnectionClosed;
-        total += n;
-    }
-    return total;
+    const io_w = std.Io.Threaded.global_single_threaded.io();
+    var wbuf: [8192]u8 = undefined;
+    var sw = conn.stream.writer(io_w, &wbuf);
+    try sw.interface.writeAll(data);
+    try sw.interface.flush();
+    return data.len;
 }
 
 fn rawClose(ctx_ptr: *anyopaque) void {
@@ -79,7 +81,7 @@ fn stubHasTlsContext() bool {
 
 fn stubDeinitTlsContext() void {}
 
-fn stubTlsAccept(_: std.net.Stream) anyerror!TlsIo {
+fn stubTlsAccept(_: std.Io.net.Stream) anyerror!TlsIo {
     return error.TlsNotAvailable;
 }
 
@@ -166,13 +168,13 @@ const ssl_impl = if (has_openssl) struct {
         closed: bool = false,
     };
 
-    pub fn tlsAccept(stream: std.net.Stream) anyerror!TlsIo {
+    pub fn tlsAccept(stream: std.Io.net.Stream) anyerror!TlsIo {
         const ctx = g_ssl_ctx orelse return error.TlsNotInitialized;
 
         const ssl_ptr = c.SSL_new(ctx) orelse return error.TlsSslNewFailed;
         errdefer c.SSL_free(ssl_ptr);
 
-        const fd: c_int = stream.handle;
+        const fd: c_int = stream.socket.handle;
         if (c.SSL_set_fd(ssl_ptr, fd) != 1) {
             return error.TlsSetFdFailed;
         }
@@ -389,7 +391,7 @@ test "rawAccept: creates valid TlsIo" {
     // We can't test with a real stream in unit tests, but we can verify the
     // function constructs a valid TlsIo with non-null function pointers.
     // Use a dummy fd that won't be used (we'll destroy immediately).
-    const dummy_stream = std.net.Stream{ .handle = -1 };
+    const dummy_stream = std.Io.net.Stream{ .handle = -1 };
     const tls_io = try rawAccept(dummy_stream);
     try std.testing.expect(tls_io.read_fn == rawRead);
     try std.testing.expect(tls_io.write_fn == rawWriteAll);

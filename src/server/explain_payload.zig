@@ -123,9 +123,9 @@ pub fn buildExplainPayloadFromPlan(
 }
 
 pub fn explainPayloadToJson(allocator: std.mem.Allocator, payload: schema.ExplainPayload) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 1024) catch return error.OutOfMemory;
-    errdefer buf.deinit(allocator);
-    var w = buf.writer(allocator);
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 1024) catch return error.OutOfMemory;
+    errdefer aw.deinit();
+    const w = &aw.writer;
 
     try w.writeAll("{\"schema\":\"");
     try w.writeAll(payload.schema);
@@ -201,6 +201,7 @@ pub fn explainPayloadToJson(allocator: std.mem.Allocator, payload: schema.Explai
     }
     try w.writeAll("}}");
 
+    var buf = aw.toArrayList();
     return buf.toOwnedSlice(allocator);
 }
 

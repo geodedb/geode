@@ -624,7 +624,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.debug.print("  type:          full\n", .{});
 
         // Get timestamp from file modification time
-        const mtime_ns = stat.mtime;
+        const mtime_ns: i128 = stat.mtime.nanoseconds;
         const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
         std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
     } else if (is_zstd_magic or is_zst) {
@@ -634,7 +634,7 @@ fn cmdBackupInfo(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
 
         std.debug.print("  type:          full\n", .{});
 
-        const mtime_ns = stat.mtime;
+        const mtime_ns: i128 = stat.mtime.nanoseconds;
         const mtime_s = @divFloor(mtime_ns, 1_000_000_000);
         std.debug.print("  timestamp:     {d} (file mtime)\n", .{mtime_s});
     } else {
@@ -1148,7 +1148,7 @@ fn execMigrationScript(ctx_ptr: ?*anyopaque, script: []const u8) !void {
         .format = "json",
         .timeout_secs = 5,
         .page_size = query_runner.default_page_size,
-        .params = std.ArrayList(schema.Param){},
+        .params = std.ArrayList(schema.Param).empty,
     }, &consumer);
 }
 
@@ -1891,7 +1891,7 @@ fn executeLocalDirectoryBackup(allocator: std.mem.Allocator, dest: []const u8, m
     defer allocator.free(created_path);
 
     if (!std.mem.eql(u8, created_path, dest)) {
-        std.Io.Dir.cwd().copyFile(created_path, std.Io.Dir.cwd(), dest, .{}) catch |err| {
+        std.Io.Dir.cwd().copyFile(created_path, std.Io.Dir.cwd(), dest, std.Io.Threaded.global_single_threaded.io(), .{}) catch |err| {
             std.debug.print("Warning: Failed to copy backup to requested output ({s}): {}\n", .{ dest, err });
         };
     }

@@ -46,7 +46,7 @@ fn percentEncode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
             continue;
         }
 
-        try output.writer(allocator).print("%{X:0>2}", .{c});
+        try output.print(allocator, "%{X:0>2}", .{c});
     }
 
     return output.toOwnedSlice(allocator);

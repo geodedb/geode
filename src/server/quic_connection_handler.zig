@@ -269,7 +269,7 @@ const BufferedProtoReader = struct {
             .allocator = allocator,
             .transport = transport,
             .stream = stream,
-            .buffer = std.ArrayList(u8){},
+            .buffer = std.ArrayList(u8).empty,
         };
     }
 
@@ -329,7 +329,11 @@ const BufferedProtoReader = struct {
                     if (self.stream.poll_sync) |ps| {
                         ps.waitForPoll(2 * std.time.ns_per_ms);
                     } else {
-                        std.Thread.sleep(100 * std.time.ns_per_us);
+                        {
+                            const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                            var rem: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.nanosleep(&req, &rem);
+                        }
                     }
                     continue;
                 }
@@ -700,7 +704,7 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     var state = ServerState{ .allocator = gpa };
     state.exec_session = execution.SessionState.init(gpa);
     state.txn_manager.init(gpa);
-    state.inserted_values = .{};
+    state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
@@ -794,10 +798,13 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
         // Check the total per-connection stream limit, including the first
         // stream that bootstraps the session before the acceptor starts.
         if (conn_state.active_streams.load(.acquire) >= stream_registry.max_total_streams_per_connection) {
-            // GAP-0274: Wait for a stream to close instead of blind-sleeping
-            conn_state.streams_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            conn_state.streams_cv.timedWait(&conn_state.streams_mu, 5 * std.time.ns_per_ms) catch {};
-            conn_state.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+            // GAP-0274: Zig 0.16 compat — Io.Condition.timedWait removed; fall
+            // back to a raw nanosleep while we wait for streams to drain.
+            {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
             continue;
         }
 
@@ -877,7 +884,11 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
         } else {
             // No stream pending — poll and back off
             transport.poll(0) catch {};
-            std.Thread.sleep(1 * std.time.ns_per_ms);
+            {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
         }
     }
 }
@@ -911,7 +922,11 @@ fn runStreamQueryLoop(
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(2 * std.time.ns_per_ms);
                 } else {
-                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    {
+                        const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                        var rem: std.os.linux.timespec = undefined;
+                        _ = std.os.linux.nanosleep(&req, &rem);
+                    }
                 }
                 continue;
             }
@@ -978,7 +993,15 @@ pub fn handleQuicConnection(
     while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;
         // Dedicated poll thread handles packet delivery — no handler poll needed.
-        std.Thread.sleep(backoff_us * std.time.ns_per_us);
+        {
+            const ns: u64 = backoff_us * std.time.ns_per_us;
+            const req = std.os.linux.timespec{
+                .sec = @intCast(ns / std.time.ns_per_s),
+                .nsec = @intCast(ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        }
         total_waited_us += backoff_us;
         backoff_us = @min(backoff_us * 2, max_backoff_us);
         if (poll_attempts > 0 and poll_attempts % 10 == 0) {
@@ -1012,7 +1035,7 @@ pub fn handleQuicConnection(
     state.exec_session = execution.SessionState.init(gpa);
     state.telemetry_paging = env_config.telemetry_paging;
     state.txn_manager.init(gpa);
-    state.inserted_values = .{};
+    state.inserted_values = .empty;
     state.catalog_schemas = std.HashMap([]const u8, CatalogSchema, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.catalog_graphs = std.HashMap([]const u8, CatalogGraph, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
     state.graph_types = std.HashMap([]const u8, geode.server_state.GraphTypeDefinition, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(gpa);
@@ -1142,7 +1165,11 @@ pub fn handleQuicConnection(
                     if (stream.poll_sync) |ps| {
                         ps.waitForPoll(2 * std.time.ns_per_ms);
                     } else {
-                        std.Thread.sleep(100 * std.time.ns_per_us);
+                        {
+                            const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                            var rem: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.nanosleep(&req, &rem);
+                        }
                     }
                     continue;
                 }
@@ -1291,7 +1318,11 @@ pub fn handleQuicConnection(
                 if (stream.poll_sync) |ps| {
                     ps.waitForPoll(2 * std.time.ns_per_ms);
                 } else {
-                    std.Thread.sleep(100 * std.time.ns_per_us);
+                    {
+                        const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                        var rem: std.os.linux.timespec = undefined;
+                        _ = std.os.linux.nanosleep(&req, &rem);
+                    }
                 }
                 continue;
             }
@@ -2713,7 +2744,11 @@ fn handleClientMessage(
                         }
                         shared.streams_mu.unlock(std.Io.Threaded.global_single_threaded.io());
                         if (found_result or found_stream) break;
-                        std.Thread.sleep(1 * std.time.ns_per_ms);
+                        {
+                            const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+                            var rem: std.os.linux.timespec = undefined;
+                            _ = std.os.linux.nanosleep(&req, &rem);
+                        }
                     }
                 }
             }
@@ -2947,8 +2982,8 @@ fn handleClientMessage(
                 const payload = schema.CdcDiagnosticsResponse{
                     .config = .{ .enabled = false },
                     .engine = .{ .is_running = false },
-                    .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot){},
-                    .malformed_hashes = std.ArrayList(schema.CdcMalformedHash){},
+                    .malformed_snapshots = std.ArrayList(schema.CdcMalformedSnapshot).empty,
+                    .malformed_hashes = std.ArrayList(schema.CdcMalformedHash).empty,
                     .version = try gpa.dupe(u8, @import("build_options").version),
                     .timestamp_ms = compat_milliTimestamp(),
                 };
@@ -3041,13 +3076,15 @@ fn handleClientMessage(
                 const backup_path = try std.fmt.allocPrint(gpa, "{s}/full_{x}.backup", .{ backup_dir, metadata.backup_id });
                 defer gpa.free(backup_path);
 
-                if (std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{})) |file| {
-                    defer file.close();
+                const io_bs = std.Io.Threaded.global_single_threaded.io();
+                if (std.Io.Dir.cwd().openFile(io_bs, backup_path, .{})) |file| {
+                    defer file.close(io_bs);
                     var buf: [65536]u8 = undefined;
                     var remaining: u64 = metadata.size_bytes;
+                    var offset: u64 = 0;
                     while (remaining > 0) {
                         const chunk = @min(remaining, buf.len);
-                        const n = file.read(buf[0..chunk]) catch |err| {
+                        const n = file.readPositionalAll(io_bs, buf[0..chunk], offset) catch |err| {
                             log.err("Failed to read backup file", &.{
                                 Attr.string("path", backup_path),
                                 Attr.string("error", @errorName(err)),
@@ -3055,6 +3092,7 @@ fn handleClientMessage(
                             break;
                         };
                         if (n == 0) break;
+                        offset += n;
                         stream.writeAll(buf[0..n]) catch |err| {
                             log.err("Failed to stream backup bytes", &.{
                                 Attr.string("path", backup_path),
@@ -3176,7 +3214,7 @@ fn handleClientMessage(
             const path = try std.fmt.allocPrint(gpa, "./uploaded_backups/backup_{d}.bin", .{compat_milliTimestamp()});
             // Create empty placeholder file
             if (std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{})) |file| {
-                file.close();
+                file.close(std.Io.Threaded.global_single_threaded.io());
             } else |_| {}
 
             try sendQuicMessage(gpa, stream, .{ .upload_backup = .{ .success = true, .message = try gpa.dupe(u8, "Upload slot ready"), .upload_path = path } });

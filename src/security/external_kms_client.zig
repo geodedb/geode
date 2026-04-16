@@ -921,8 +921,9 @@ pub const Client = struct {
 
 // Serialization helpers
 pub fn envelopeToJson(env: Envelope, allocator: std.mem.Allocator) ![]u8 {
-    var buf = std.ArrayList(u8).initCapacity(allocator, 256) catch return error.OutOfMemory;
-    const w = buf.writer(allocator);
+    var aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch return error.OutOfMemory;
+    errdefer aw.deinit();
+    const w = &aw.writer;
     try w.print("{{\"version\":{d},\"alg\":\"{s}\",\"nonce\":\"", .{ env.version, env.alg });
     for (env.nonce) |b| try w.print("{x:0>2}", .{b});
     try w.print("\",\"tag\":\"", .{});
@@ -930,6 +931,7 @@ pub fn envelopeToJson(env: Envelope, allocator: std.mem.Allocator) ![]u8 {
     try w.print("\",\"ct\":\"", .{});
     for (env.ct) |b| try w.print("{x:0>2}", .{b});
     try w.print("\"}}", .{});
+    var buf = aw.toArrayList();
     return try buf.toOwnedSlice(allocator);
 }
 

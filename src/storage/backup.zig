@@ -203,7 +203,7 @@ pub const BackupManager = struct {
             .allocator = allocator,
             .config = config,
             .backup_dir = try allocator.dupe(u8, backup_dir),
-            .metadata_log = .{},
+            .metadata_log = .empty,
             .store = store,
             .enc_key = enc_key,
         };
@@ -254,8 +254,9 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{});
-        defer file.close();
+        const io_bf = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_bf, backup_path, .{});
+        defer file.close(io_bf);
 
         const header = BackupHeader{
             .magic = BACKUP_MAGIC,
@@ -268,8 +269,8 @@ pub const BackupManager = struct {
             .checksum = checksum,
         };
         const header_bytes = @as([*]const u8, @ptrCast(&header))[0..@sizeOf(BackupHeader)];
-        try file.writeAll(header_bytes);
-        try file.writeAll(final_payload);
+        try file.writePositionalAll(io_bf, header_bytes, 0);
+        try file.writePositionalAll(io_bf, final_payload, header_bytes.len);
 
         const metadata = BackupMetadata{
             .backup_id = backup_id,
@@ -299,11 +300,13 @@ pub const BackupManager = struct {
         const backup_path = try std.fmt.allocPrint(self.allocator, "{s}/full_{x}.backup", .{ self.backup_dir, backup_id });
         defer self.allocator.free(backup_path);
 
-        var file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), backup_path, .{ .mode = .read_only });
-        defer file.close();
+        const io_rb = std.Io.Threaded.global_single_threaded.io();
+        var file = try std.Io.Dir.cwd().openFile(io_rb, backup_path, .{ .mode = .read_only });
+        defer file.close(io_rb);
 
         var header_buf: [@sizeOf(BackupHeader)]u8 = undefined;
-        if ((try file.readAll(&header_buf)) != header_buf.len) return error.InvalidBackupFile;
+        const hdr_n = try file.readPositionalAll(io_rb, &header_buf, 0);
+        if (hdr_n != header_buf.len) return error.InvalidBackupFile;
         const header: BackupHeader = @bitCast(header_buf);
         if (header.magic != BACKUP_MAGIC or header.version != BACKUP_VERSION) return error.InvalidBackupFile;
         if (header.backup_type != .full) return error.InvalidBackupFile;
@@ -311,7 +314,8 @@ pub const BackupManager = struct {
         const payload_len: usize = @intCast(header.payload_len);
         const payload = try self.allocator.alloc(u8, payload_len);
         defer self.allocator.free(payload);
-        if ((try file.readAll(payload)) != payload_len) return error.InvalidBackupFile;
+        const pl_n = try file.readPositionalAll(io_rb, payload, header_buf.len);
+        if (pl_n != payload_len) return error.InvalidBackupFile;
 
         if (header.checksum != computeChecksum(payload)) return error.BackupChecksumMismatch;
 
@@ -393,20 +397,24 @@ pub const BackupManager = struct {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
 
-        const file = std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = .read_only }) catch |err| switch (err) {
+        const io_ml = std.Io.Threaded.global_single_threaded.io();
+        const file = std.Io.Dir.cwd().openFile(io_ml, path, .{ .mode = .read_only }) catch |err| switch (err) {
             error.FileNotFound => return self.metadata_log.items,
             else => return err,
         };
-        defer file.close();
+        defer file.close(io_ml);
 
-        const data = try file.readToEndAlloc(self.allocator, 2 * 1024 * 1024);
+        const stat_ml = try file.stat(io_ml);
+        const size_ml: usize = @intCast(@min(stat_ml.size, 2 * 1024 * 1024));
+        const data = try self.allocator.alloc(u8, size_ml);
         defer self.allocator.free(data);
+        _ = try file.readPositionalAll(io_ml, data, 0);
 
         const parsed = try std.json.parseFromSlice([]BackupMetadata, self.allocator, data, .{});
         defer parsed.deinit();
 
         self.metadata_log.deinit(self.allocator);
-        self.metadata_log = .{};
+        self.metadata_log = .empty;
         for (parsed.value) |entry| {
             try self.metadata_log.append(self.allocator, entry);
         }
@@ -416,11 +424,12 @@ pub const BackupManager = struct {
     fn writeMetadata(self: *BackupManager) !void {
         const path = try self.metadataPath();
         defer self.allocator.free(path);
-        const file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{});
-        defer file.close();
+        const io_wm = std.Io.Threaded.global_single_threaded.io();
+        const file = try std.Io.Dir.cwd().createFile(io_wm, path, .{});
+        defer file.close(io_wm);
         const json_str = try std.json.Stringify.valueAlloc(self.allocator, self.metadata_log.items, .{});
         defer self.allocator.free(json_str);
-        try file.writeAll(json_str);
+        try file.writeStreamingAll(io_wm, json_str);
     }
 
     fn metadataPath(self: *BackupManager) ![]u8 {
@@ -439,7 +448,7 @@ pub const BackupManager = struct {
         }
         if (chosen == null) return error.NoBackupFound;
 
-        var chain: std.ArrayList(u64) = .{};
+        var chain: std.ArrayList(u64) = .empty;
         try chain.append(self.allocator, chosen.?.backup_id);
         const chain_slice = try chain.toOwnedSlice(self.allocator);
         return .{
@@ -456,11 +465,14 @@ fn generateBackupId() u64 {
 
 /// Append a single file entry (name + data) into the archive buffer.
 fn appendFileEntry(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, file_path: []const u8, archive_name: []const u8) !void {
-    const file = try std.Io.Dir.cwd().openFile(std.Io.Threaded.global_single_threaded.io(), file_path, .{ .mode = .read_only });
-    defer file.close();
-    const stat = try file.stat();
-    const data = try file.readToEndAlloc(allocator, @intCast(stat.size));
+    const io_ae = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.cwd().openFile(io_ae, file_path, .{ .mode = .read_only });
+    defer file.close(io_ae);
+    const stat = try file.stat(io_ae);
+    const sz_ae: usize = @intCast(stat.size);
+    const data = try allocator.alloc(u8, sz_ae);
     defer allocator.free(data);
+    _ = try file.readPositionalAll(io_ae, data, 0);
 
     // name_len (u32) + name + data_len (u64) + data
     try buffer.appendSlice(allocator, &std.mem.toBytes(@as(u32, @intCast(archive_name.len))));
@@ -477,14 +489,15 @@ fn appendDirectoryTree(
 ) !u32 {
     var file_count: u32 = 0;
 
-    var dir = std.Io.Dir.cwd().openDir(root_path, .{ .iterate = true }) catch |err| {
+    const io_dt = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io_dt, root_path, .{ .iterate = true }) catch |err| {
         if (err == error.FileNotFound) return 0;
         return err;
     };
-    defer dir.close();
+    defer dir.close(io_dt);
 
     var iter = dir.iterate();
-    while (try iter.next()) |entry| {
+    while (try iter.next(io_dt)) |entry| {
         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ root_path, entry.name });
         defer allocator.free(full_path);
 
@@ -515,7 +528,7 @@ fn appendDirectoryTree(
 ///   (name_len u32 | name [name_len]u8 | data_len u64 | data [data_len]u8)*
 // CANARY: REQ=REQ-BACKUP-PER-GRAPH-001; FEATURE="PerGraphBackup"; ASPECT=Storage; STATUS=TESTED; OWNER=storage; UPDATED=2026-03-16
 fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8) ![]u8 {
-    var buffer: std.ArrayList(u8) = .{};
+    var buffer: std.ArrayList(u8) = .empty;
     errdefer buffer.deinit(allocator);
 
     // Archive header: magic + version placeholder + file_count placeholder.
@@ -532,7 +545,7 @@ fn readPerGraphStoragePayload(allocator: std.mem.Allocator, data_dir: []const u8
     // Include graph_registry.dat if it exists.
     const reg_path = try std.fmt.allocPrint(allocator, "{s}/graph_registry.dat", .{data_dir});
     defer allocator.free(reg_path);
-    const has_registry = if (std.Io.Dir.cwd().access(reg_path, .{})) |_| true else |_| false;
+    const has_registry = if (std.Io.Dir.cwd().access(std.Io.Threaded.global_single_threaded.io(), reg_path, .{})) |_| true else |_| false;
     if (has_registry) {
         try appendFileEntry(&buffer, allocator, reg_path, "graph_registry.dat");
         file_count += 1;
@@ -590,13 +603,14 @@ fn restorePerGraphPayload(allocator: std.mem.Allocator, restore_dir: []const u8,
         const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ restore_dir, name });
         defer allocator.free(full_path);
 
+        const io_ef = std.Io.Threaded.global_single_threaded.io();
         if (std.mem.lastIndexOfScalar(u8, full_path, '/')) |last_slash| {
-            std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), full_path[0..last_slash]) catch {};
+            std.Io.Dir.cwd().createDirPath(io_ef, full_path[0..last_slash]) catch {};
         }
 
-        const out = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), full_path, .{});
-        defer out.close();
-        try out.writeAll(data);
+        const out = try std.Io.Dir.cwd().createFile(io_ef, full_path, .{});
+        defer out.close(io_ef);
+        try out.writeStreamingAll(io_ef, data);
     }
 }
 

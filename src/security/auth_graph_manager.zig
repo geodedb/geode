@@ -182,7 +182,11 @@ pub const AuthGraphManager = struct {
             var elapsed: u64 = 0;
             const target_ns = @as(u64, self.verify_interval_minutes) * 60 * std.time.ns_per_s;
             while (elapsed < target_ns and !self.shutdown.load(.acquire)) {
-                std.Thread.sleep(1 * std.time.ns_per_s); // 1 second increments
+                {
+                    const req = std.os.linux.timespec{ .sec = 1, .nsec = 0 };
+                    var rem: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.nanosleep(&req, &rem);
+                }
                 elapsed += std.time.ns_per_s;
             }
             if (self.shutdown.load(.acquire)) break;
@@ -289,11 +293,12 @@ pub const AuthGraphManager = struct {
                     },
                 }
             };
-            defer file.close();
+            const io_hr = std.Io.Threaded.global_single_threaded.io();
+            defer file.close(io_hr);
 
             // Read hex-encoded key (64 hex chars = 32 bytes)
             var hex_buf: [64]u8 = undefined;
-            const bytes_read = file.readAll(&hex_buf) catch {
+            const bytes_read = file.readPositionalAll(io_hr, &hex_buf, 0) catch {
                 log.warn("Failed to read HMAC key file", &.{});
                 return error.NoHmacKeyAvailable;
             };
@@ -819,16 +824,17 @@ fn autoGenerateHmacKeyFile(path: []const u8) !HmacKeyResult {
     const hex = auth_hmac.hmacToHex(&key);
 
     // Write to file with restricted permissions
-    const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .mode = 0o600 }) catch |err| {
+    const file = std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), path, .{ .permissions = std.Io.File.Permissions.fromMode(0o600) }) catch |err| {
         log.warn("Failed to create HMAC key file", &.{
             Attr.string("path", path),
             Attr.string("error", @errorName(err)),
         });
         return error.NoHmacKeyAvailable;
     };
-    defer file.close();
+    const io_hk = std.Io.Threaded.global_single_threaded.io();
+    defer file.close(io_hk);
 
-    file.writeAll(&hex) catch |err| {
+    file.writeStreamingAll(io_hk, &hex) catch |err| {
         log.warn("Failed to write HMAC key file", &.{
             Attr.string("path", path),
             Attr.string("error", @errorName(err)),

@@ -84,17 +84,27 @@ fn loadAuthnConfig(allocator: std.mem.Allocator) !AuthnConfig {
     const state_path = try authnStatePath(allocator);
     defer allocator.free(state_path);
 
-    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+    const io_ac = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_ac, state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return config,
         else => return err,
     };
-    defer file.close();
+    defer file.close(io_ac);
 
-    const content = file.readToEndAlloc(allocator, 1024 * 1024) catch |err| {
+    const stat_ac = file.stat(io_ac) catch |err| {
+        std.debug.print("Warning: Could not read authn config: {}\n", .{err});
+        return config;
+    };
+    const size_ac: usize = @intCast(stat_ac.size);
+    const content = allocator.alloc(u8, size_ac) catch |err| {
         std.debug.print("Warning: Could not read authn config: {}\n", .{err});
         return config;
     };
     defer allocator.free(content);
+    _ = file.readPositionalAll(io_ac, content, 0) catch |err| {
+        std.debug.print("Warning: Could not read authn config: {}\n", .{err});
+        return config;
+    };
 
     // Parse line-based format: type|path
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -126,12 +136,13 @@ fn saveAuthnConfig(allocator: std.mem.Allocator, config: AuthnConfig) !void {
     const state_path = try authnStatePath(allocator);
     defer allocator.free(state_path);
 
-    const file = try std.fs.createFileAbsolute(state_path, .{
+    const io_sa = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.createFileAbsolute(io_sa, state_path, .{
         .truncate = true,
         .read = true,
-        .mode = 0o600,
+        .permissions = std.Io.File.Permissions.fromMode(0o600),
     });
-    defer file.close();
+    defer file.close(io_sa);
 
     var buffer: std.ArrayListUnmanaged(u8) = .empty;
     defer buffer.deinit(allocator);
@@ -148,7 +159,7 @@ fn saveAuthnConfig(allocator: std.mem.Allocator, config: AuthnConfig) !void {
         buffer.appendSlice(allocator, line) catch continue;
     }
 
-    try file.writeAll(buffer.items);
+    try file.writeStreamingAll(io_sa, buffer.items);
 }
 
 /// Authn command handler - routes to specific authn subcommands

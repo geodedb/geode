@@ -199,7 +199,7 @@ pub fn buildDataPage(
     const page_len = if (page_size == 0) 1000 else page_size;
     if (start >= result.rows.len) {
         return schema.DataPage{
-            .rows = std.ArrayList(schema.Row){},
+            .rows = std.ArrayList(schema.Row).empty,
             .final = true,
             .ordered = ordered,
             .order_keys = try dupOrderKeys(allocator, order_keys),

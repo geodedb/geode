@@ -75,14 +75,18 @@ fn loadMtlsState(allocator: std.mem.Allocator) !struct { mappings: std.StringHas
     const state_path = try mtlsStatePath(allocator);
     defer allocator.free(state_path);
 
-    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+    const io_mc = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_mc, state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return .{ .mappings = mappings, .config = config },
         else => return err,
     };
-    defer file.close();
+    defer file.close(io_mc);
 
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const stat_mc = try file.stat(io_mc);
+    const size_mc: usize = @intCast(stat_mc.size);
+    const content = try allocator.alloc(u8, size_mc);
     defer allocator.free(content);
+    _ = try file.readPositionalAll(io_mc, content, 0);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -135,25 +139,32 @@ fn saveMtlsState(mappings: *std.StringHashMap(StoredMapping), config: MtlsConfig
     const state_path = try mtlsStatePath(mappings.allocator);
     defer mappings.allocator.free(state_path);
 
-    const file = try std.fs.createFileAbsolute(state_path, .{
+    const io_sm = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.createFileAbsolute(io_sm, state_path, .{
         .truncate = true,
         .read = true,
-        .mode = 0o600,
+        .permissions = std.Io.File.Permissions.fromMode(0o600),
     });
-    defer file.close();
+    defer file.close(io_sm);
+
+    var cur_off: u64 = 0;
 
     // Write config lines first
     var config_buf: [256]u8 = undefined;
     const strict_line = std.fmt.bufPrint(&config_buf, "CONFIG|strict_mode|{s}\n", .{
         if (config.strict_mode) "true" else "false",
     }) catch return;
-    _ = file.writeAll(strict_line) catch {};
+    if (file.writePositionalAll(io_sm, strict_line, cur_off)) |_| {
+        cur_off += strict_line.len;
+    } else |_| {}
 
     var method_buf: [256]u8 = undefined;
     const method_line = std.fmt.bufPrint(&method_buf, "CONFIG|default_method|{s}\n", .{
         config.default_method,
     }) catch return;
-    _ = file.writeAll(method_line) catch {};
+    if (file.writePositionalAll(io_sm, method_line, cur_off)) |_| {
+        cur_off += method_line.len;
+    } else |_| {}
 
     // Write mapping lines
     var it = mappings.iterator();
@@ -168,7 +179,9 @@ fn saveMtlsState(mappings: *std.StringHashMap(StoredMapping), config: MtlsConfig
             if (v.enabled) "true" else "false",
             v.description,
         }) catch continue;
-        _ = file.writeAll(line) catch continue;
+        if (file.writePositionalAll(io_sm, line, cur_off)) |_| {
+            cur_off += line.len;
+        } else |_| continue;
     }
 }
 

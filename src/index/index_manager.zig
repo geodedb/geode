@@ -53,7 +53,7 @@ const url = @import("../types/url.zig");
 const cryptographic = @import("../types/cryptographic.zig");
 
 var global_index_manager: ?*IndexManager = null;
-var global_index_manager_mutex = std.Io.Mutex{};
+var global_index_manager_mutex: std.Io.Mutex = std.Io.Mutex.init;
 
 // Comprehensive index management for graph database
 // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="IndexRebuild"; ASPECT=DeferredRebuild; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-10

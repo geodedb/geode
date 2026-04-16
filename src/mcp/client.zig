@@ -172,9 +172,9 @@ pub const GeodeClient = struct {
 
         try column_names.append(allocator, owned_name);
 
-        var col_obj = std.json.ObjectMap.init(allocator);
-        try col_obj.put("name", .{ .string = owned_name });
-        try col_obj.put("type", .{ .string = owned_type });
+        var col_obj = @as(std.json.ObjectMap, .empty);
+        try col_obj.put(allocator, "name", .{ .string = owned_name });
+        try col_obj.put(allocator, "type", .{ .string = owned_type });
         try columns_json.append(.{ .object = col_obj });
     }
 
@@ -187,12 +187,12 @@ pub const GeodeClient = struct {
         error_obj: *?std.json.ObjectMap,
     ) !bool {
         if (exec.err) |err_info| {
-            var obj = std.json.ObjectMap.init(allocator);
-            try obj.put("code", .{ .string = try allocator.dupe(u8, err_info.code) });
-            try obj.put("message", .{ .string = try allocator.dupe(u8, err_info.message) });
-            try obj.put("type", .{ .string = try allocator.dupe(u8, err_info.error_type) });
+            var obj = @as(std.json.ObjectMap, .empty);
+            try obj.put(allocator, "code", .{ .string = try allocator.dupe(u8, err_info.code) });
+            try obj.put(allocator, "message", .{ .string = try allocator.dupe(u8, err_info.message) });
+            try obj.put(allocator, "type", .{ .string = try allocator.dupe(u8, err_info.error_type) });
             if (err_info.anchor.len > 0) {
-                try obj.put("anchor", .{ .string = try allocator.dupe(u8, err_info.anchor) });
+                try obj.put(allocator, "anchor", .{ .string = try allocator.dupe(u8, err_info.anchor) });
             }
             error_obj.* = obj;
             return false;
@@ -206,13 +206,13 @@ pub const GeodeClient = struct {
 
         if (exec.page) |page| {
             for (page.rows.items) |row| {
-                var row_obj = std.json.ObjectMap.init(allocator);
+                var row_obj = @as(std.json.ObjectMap, .empty);
                 for (row.values.items, 0..) |value, idx| {
                     if (idx >= column_names.items.len) {
                         const fallback = try std.fmt.allocPrint(allocator, "col_{d}", .{idx + 1});
                         try appendColumnInfo(allocator, column_names, columns_json, fallback, "UNKNOWN");
                     }
-                    try row_obj.put(column_names.items[idx], try protoValueToJson(allocator, value));
+                    try row_obj.put(allocator, column_names.items[idx], try protoValueToJson(allocator, value));
                 }
                 try rows_json.append(.{ .object = row_obj });
             }
@@ -227,7 +227,7 @@ pub const GeodeClient = struct {
         defer arena.deinit();
 
         const arena_allocator = arena.allocator();
-        var column_names = std.ArrayList([]const u8){};
+        var column_names = std.ArrayList([]const u8).empty;
         var columns_json = std.json.Array.init(arena_allocator);
         var rows_json = std.json.Array.init(arena_allocator);
         var error_obj: ?std.json.ObjectMap = null;
@@ -268,11 +268,11 @@ pub const GeodeClient = struct {
             timeout_ms = 5_000;
         }
 
-        var result_obj = std.json.ObjectMap.init(arena_allocator);
-        try result_obj.put("columns", .{ .array = columns_json });
-        try result_obj.put("rows", .{ .array = rows_json });
+        var result_obj = @as(std.json.ObjectMap, .empty);
+        try result_obj.put(arena_allocator, "columns", .{ .array = columns_json });
+        try result_obj.put(arena_allocator, "rows", .{ .array = rows_json });
         if (error_obj) |obj| {
-            try result_obj.put("error", .{ .object = obj });
+            try result_obj.put(arena_allocator, "error", .{ .object = obj });
         }
 
         const encoded = try std.json.Stringify.valueAlloc(arena_allocator, std.json.Value{ .object = result_obj }, .{});

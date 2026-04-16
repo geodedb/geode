@@ -123,7 +123,7 @@ pub const MemorySink = struct {
     pub fn init(allocator: std.mem.Allocator) MemorySink {
         return MemorySink{
             .allocator = allocator,
-            .events = std.ArrayList(ChangeEvent){},
+            .events = std.ArrayList(ChangeEvent).empty,
         };
     }
 
@@ -185,12 +185,12 @@ pub const FileSink = struct {
     }
 
     pub fn send(self: *FileSink, events: []const ChangeEvent) !void {
+        const io_fs = std.Io.Threaded.global_single_threaded.io();
         // Lazy initialization
         if (self.file == null) {
-            self.file = try std.Io.Dir.cwd().createFile(std.Io.Threaded.global_single_threaded.io(), self.path, .{
+            self.file = try std.Io.Dir.cwd().createFile(io_fs, self.path, .{
                 .truncate = false,
             });
-            try self.file.?.seekFromEnd(0);
         }
 
         for (events) |event| {
@@ -201,7 +201,8 @@ pub const FileSink = struct {
                 @tagName(event.entity_type),
                 event.entity_id,
             });
-            try self.file.?.writeAll(line);
+            const st = try self.file.?.stat(io_fs);
+            try self.file.?.writePositionalAll(io_fs, line, st.size);
         }
     }
 

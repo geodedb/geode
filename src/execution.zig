@@ -2445,8 +2445,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
             // Evaluate GROUP BY key(s) and serialize to string
             // GAP-0220 FIX: Use try for proper error propagation
-            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-            const key_writer = key_buf.writer(allocator);
+            var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+            errdefer key_aw.deinit();
+            const key_writer = &key_aw.writer;
             for (gb.keys, 0..) |key_expr, k| {
                 if (k > 0) try key_writer.writeAll("|");
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
@@ -2461,6 +2462,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                     else => try key_writer.writeAll("?"),
                 }
             }
+            var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
 
             // Add row to its group
@@ -2585,8 +2587,9 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
 
                     // Build group key from non-aggregated expressions
                     // GAP-0220 FIX: Use try for proper error propagation
-                    var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-                    const key_writer = key_buf.writer(allocator);
+                    var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+                    errdefer key_aw.deinit();
+                    const key_writer = &key_aw.writer;
                     var first_key = true;
                     for (with_items) |item| {
                         if (!return_and_sorting.isAggregationExpr(item.expr) and return_and_sorting.isNonConstantExpr(item.expr)) {
@@ -2604,6 +2607,7 @@ pub fn executeWithClauseWithGroupByAndParams(allocator: std.mem.Allocator, input
                             }
                         }
                     }
+                    var key_buf = key_aw.toArrayList();
                     const group_key = try key_buf.toOwnedSlice(allocator);
 
                     if (groups.getPtr(group_key)) |group_list| {

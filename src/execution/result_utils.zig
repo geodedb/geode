@@ -228,8 +228,8 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
 
     for (result.rows) |row| {
         // Create a hash key from row values
-        var key_buf = std.ArrayList(u8).initCapacity(allocator, 256) catch continue;
-        const writer = key_buf.writer(allocator);
+        var key_aw: std.Io.Writer.Allocating = std.Io.Writer.Allocating.initCapacity(allocator, 256) catch continue;
+        const writer = &key_aw.writer;
 
         for (row, 0..) |val, i| {
             if (i > 0) writer.writeAll("|") catch {};
@@ -275,6 +275,7 @@ pub fn applyDistinct(allocator: std.mem.Allocator, result: *ExecutionResult) !vo
             }
         }
 
+        var key_buf = key_aw.toArrayList();
         const key = key_buf.toOwnedSlice(allocator) catch {
             key_buf.deinit(allocator);
             continue;

@@ -109,7 +109,15 @@ const QuicTransportConnection = struct {
                 self.client_mu.unlock(std.Io.Threaded.global_single_threaded.io());
             }
             // GAP-0276: Reduced from 500ms to 100ms for faster keepalive response
-            std.Thread.sleep(100 * std.time.ns_per_ms);
+            {
+                const sleep_ns: i64 = 100 * std.time.ns_per_ms;
+                const req = std.os.linux.timespec{
+                    .sec = @intCast(@divTrunc(sleep_ns, std.time.ns_per_s)),
+                    .nsec = @intCast(@mod(sleep_ns, std.time.ns_per_s)),
+                };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
         }
     }
 

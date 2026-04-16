@@ -1210,8 +1210,9 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Compute group key
                         // GAP-0220 FIX: Use try for proper error propagation
-                        var key_buf = try std.ArrayList(u8).initCapacity(self.allocator, 128);
-                        const key_writer = key_buf.writer(self.allocator);
+                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 128);
+                        errdefer key_aw.deinit();
+                        const key_writer = &key_aw.writer;
                         for (self.group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(self.allocator, key_expr, env) catch Value{ .Null = {} };
@@ -1224,7 +1225,8 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 else => try key_writer.writeAll("?"),
                             }
                         }
-                        const group_key = try key_buf.toOwnedSlice(self.allocator);
+                        var key_list = key_aw.toArrayList();
+                        const group_key = try key_list.toOwnedSlice(self.allocator);
 
                         // Add to group
                         if (self.binding_groups.getPtr(group_key)) |group_list| {
@@ -3322,9 +3324,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
             for (intermediate_result.rows) |input_row| {
                 // Build group key from non-aggregation WITH items
                 // GAP-0220 FIX: Use try for proper error propagation
-                var key_parts = std.ArrayList(u8).empty;
-                defer key_parts.deinit(allocator);
-                const writer = key_parts.writer(allocator);
+                var key_aw: std.Io.Writer.Allocating = .init(allocator);
+                defer key_aw.deinit();
+                const writer = &key_aw.writer;
 
                 const env = Env{
                     .allocator = allocator,
@@ -3341,6 +3343,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     }
                 }
 
+                var key_parts = key_aw.toArrayList();
                 const key = try key_parts.toOwnedSlice(allocator);
                 // Note: Do NOT use defer to free key unconditionally.
                 // When getOrPut creates a new entry, the HashMap takes ownership of the key.
@@ -3465,8 +3468,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
 
             // Evaluate GROUP BY key(s) and serialize to string
             // GAP-0220 FIX: Use try for proper error propagation
-            var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-            const key_writer = key_buf.writer(allocator);
+            var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+            errdefer key_aw.deinit();
+            const key_writer = &key_aw.writer;
             for (group_by.keys, 0..) |key_expr, k| {
                 if (k > 0) try key_writer.writeAll("|");
                 const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
@@ -3481,6 +3485,7 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                     else => try key_writer.writeAll("?"),
                 }
             }
+            var key_buf = key_aw.toArrayList();
             const group_key = try key_buf.toOwnedSlice(allocator);
 
             // Add row to its group
@@ -4455,8 +4460,9 @@ fn executeMultiHopGroupBy(
         }
 
         // Compute group key from GROUP BY expressions
-        var key_buf = try std.ArrayList(u8).initCapacity(arena, 64);
-        const writer = key_buf.writer(arena);
+        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(arena, 64);
+        errdefer key_aw.deinit();
+        const writer = &key_aw.writer;
 
         for (group_by.keys, 0..) |key_expr, key_idx| {
             if (key_idx > 0) try writer.writeAll("|");
@@ -4470,6 +4476,7 @@ fn executeMultiHopGroupBy(
             }
         }
 
+        var key_buf = key_aw.toArrayList();
         const group_key = try key_buf.toOwnedSlice(arena);
 
         // No copy needed: env_names is a shared schema pointer and env_values
@@ -4814,8 +4821,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
 
                         // Evaluate GROUP BY key(s) and serialize to string
                         // GAP-0220 FIX: Use try for proper error propagation
-                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-                        const key_writer = key_buf.writer(allocator);
+                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+                        errdefer key_aw.deinit();
+                        const key_writer = &key_aw.writer;
                         for (group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
@@ -4829,6 +4837,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 else => try key_writer.writeAll("?"),
                             }
                         }
+                        var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);
 
                         // Add binding to its group
@@ -4957,8 +4966,9 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                         }
 
                         // Evaluate GROUP BY key(s) and serialize to string
-                        var key_buf = try std.ArrayList(u8).initCapacity(allocator, 128);
-                        const key_writer = key_buf.writer(allocator);
+                        var key_aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 128);
+                        errdefer key_aw.deinit();
+                        const key_writer = &key_aw.writer;
                         for (group_by.keys, 0..) |key_expr, k| {
                             if (k > 0) try key_writer.writeAll("|");
                             const key_val = eval.evalExpr(allocator, key_expr, env) catch Value{ .Null = {} };
@@ -4972,6 +4982,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 else => try key_writer.writeAll("?"),
                             }
                         }
+                        var key_buf = key_aw.toArrayList();
                         const group_key = try key_buf.toOwnedSlice(allocator);
 
                         // Add binding to its group

@@ -197,7 +197,7 @@ pub const Spinner = struct {
             .last_line_width = 0,
             .animation_pool = null,
             .stop_flag = std.atomic.Value(bool).init(false),
-            .message_mutex = .{},
+            .message_mutex = std.Io.Mutex.init,
             .message_buffer = undefined,
             .message_len = 0,
         };
@@ -221,7 +221,7 @@ pub const Spinner = struct {
             .last_line_width = 0,
             .animation_pool = null,
             .stop_flag = std.atomic.Value(bool).init(false),
-            .message_mutex = .{},
+            .message_mutex = std.Io.Mutex.init,
             .message_buffer = undefined,
             .message_len = 0,
         };
@@ -236,8 +236,8 @@ pub const Spinner = struct {
         if (self.terminal_type == .non_interactive) {
             // For non-interactive, just print message once
             const stdout = platform.getStdoutHandle();
-            stdout.writeAll(self.message) catch {};
-            stdout.writeAll(" ") catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), self.message) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), " ") catch {};
             self.started = true;
             return;
         }
@@ -280,7 +280,15 @@ pub const Spinner = struct {
     /// Animation loop for background thread
     fn animationLoop(self: *Spinner) void {
         while (!self.stop_flag.load(.seq_cst)) {
-            std.Thread.sleep(self.style.interval_ms * std.time.ns_per_ms);
+            {
+                const ns: i64 = @as(i64, self.style.interval_ms) * std.time.ns_per_ms;
+                const req = std.os.linux.timespec{
+                    .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
+                    .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+                };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
             if (self.stop_flag.load(.seq_cst)) break;
 
             self.frame_index = (self.frame_index + 1) % self.style.frames.len;
@@ -309,10 +317,10 @@ pub const Spinner = struct {
             var clear_buf: [512]u8 = undefined;
             const padding = self.last_line_width - line.len;
             @memset(clear_buf[0..padding], ' ');
-            stdout.writeAll(line) catch {};
-            stdout.writeAll(clear_buf[0..padding]) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), clear_buf[0..padding]) catch {};
         } else {
-            stdout.writeAll(line) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
         }
 
         self.last_line_width = line.len;
@@ -364,11 +372,11 @@ pub const Spinner = struct {
             const padding = self.last_line_width - line.len;
             const padded = std.fmt.bufPrint(&clear_buf, "{s}{s}", .{ line, " " ** 50 }) catch line;
             const actual_padded = padded[0..@min(line.len + padding, padded.len)];
-            stdout.writeAll(actual_padded) catch {};
-            stdout.writeAll("\r") catch {};
-            stdout.writeAll(line) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), actual_padded) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
         } else {
-            stdout.writeAll(line) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), line) catch {};
         }
 
         self.last_line_width = line.len;
@@ -389,25 +397,25 @@ pub const Spinner = struct {
 
         if (self.terminal_type == .non_interactive) {
             if (final_message) |msg| {
-                stdout.writeAll(msg) catch {};
+                stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
             }
-            stdout.writeAll("\r\n") catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
             self.started = false;
             return;
         }
 
         // Clear the spinner line by overwriting with spaces
-        stdout.writeAll("\r") catch {};
+        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
         var clear_buf: [256]u8 = undefined;
         @memset(&clear_buf, ' ');
         const clear_len = @min(self.last_line_width + 5, 250);
-        stdout.writeAll(clear_buf[0..clear_len]) catch {};
-        stdout.writeAll("\r") catch {};
+        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), clear_buf[0..clear_len]) catch {};
+        stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r") catch {};
 
         // Print final message if provided
         if (final_message) |msg| {
-            stdout.writeAll(msg) catch {};
-            stdout.writeAll("\r\n") catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), msg) catch {};
+            stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\r\n") catch {};
         }
 
         self.started = false;

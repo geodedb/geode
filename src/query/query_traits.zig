@@ -37,7 +37,7 @@ pub const NormalizedQuery = struct {
 };
 
 pub fn normalizeExplainCalibrated(allocator: std.mem.Allocator, query: []const u8) !NormalizedQuery {
-    const trimmed = std.mem.trimLeft(u8, query, " \t\r\n");
+    const trimmed = std.mem.trimStart(u8, query, " \t\r\n");
     if (!startsWithKeyword(trimmed, "EXPLAIN")) {
         return .{ .text = query, .owns_text = false, .explain_calibrated = false };
     }

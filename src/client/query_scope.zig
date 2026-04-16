@@ -14,7 +14,7 @@ fn isGraphIdentContinue(c: u8) bool {
 }
 
 pub fn startsWithUseGraph(query_text: []const u8) bool {
-    const trimmed = std.mem.trimLeft(u8, query_text, " \t\r\n");
+    const trimmed = std.mem.trimStart(u8, query_text, " \t\r\n");
     if (trimmed.len < 9) return false;
     return std.ascii.eqlIgnoreCase(trimmed[0..9], "USE GRAPH");
 }

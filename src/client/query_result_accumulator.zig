@@ -388,57 +388,57 @@ fn base64Encode(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
 }
 
 fn protoMapEntriesToJson(allocator: std.mem.Allocator, entries: []const schema.MapEntry) !std.json.ObjectMap {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj: std.json.ObjectMap = .empty;
     for (entries) |entry| {
-        try obj.put(try allocator.dupe(u8, entry.key), if (entry.value) |v| try protoValueToJson(allocator, v) else std.json.Value.null);
+        try obj.put(allocator, try allocator.dupe(u8, entry.key), if (entry.value) |v| try protoValueToJson(allocator, v) else std.json.Value.null);
     }
     return obj;
 }
 
 fn protoNodeToJson(allocator: std.mem.Allocator, node: schema.NodeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, node.id));
+    var obj = @as(std.json.ObjectMap, .empty);
+    try obj.put(allocator, try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, node.id));
 
     var labels = std.json.Array.init(allocator);
     for (node.labels.items) |label| {
         try labels.append(.{ .string = try allocator.dupe(u8, label) });
     }
-    try obj.put(try allocator.dupe(u8, "labels"), .{ .array = labels });
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = try protoMapEntriesToJson(allocator, node.properties.items) });
+    try obj.put(allocator, try allocator.dupe(u8, "labels"), .{ .array = labels });
+    try obj.put(allocator, try allocator.dupe(u8, "properties"), .{ .object = try protoMapEntriesToJson(allocator, node.properties.items) });
     return .{ .object = obj };
 }
 
 fn protoEdgeToJson(allocator: std.mem.Allocator, edge: schema.EdgeValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put(try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, edge.id));
-    try obj.put(try allocator.dupe(u8, "from"), try jsonNumberFromU64(allocator, edge.from_id));
-    try obj.put(try allocator.dupe(u8, "to"), try jsonNumberFromU64(allocator, edge.to_id));
-    try obj.put(try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, edge.label) });
-    try obj.put(try allocator.dupe(u8, "properties"), .{ .object = try protoMapEntriesToJson(allocator, edge.properties.items) });
+    var obj = @as(std.json.ObjectMap, .empty);
+    try obj.put(allocator, try allocator.dupe(u8, "id"), try jsonNumberFromU64(allocator, edge.id));
+    try obj.put(allocator, try allocator.dupe(u8, "from"), try jsonNumberFromU64(allocator, edge.from_id));
+    try obj.put(allocator, try allocator.dupe(u8, "to"), try jsonNumberFromU64(allocator, edge.to_id));
+    try obj.put(allocator, try allocator.dupe(u8, "label"), .{ .string = try allocator.dupe(u8, edge.label) });
+    try obj.put(allocator, try allocator.dupe(u8, "properties"), .{ .object = try protoMapEntriesToJson(allocator, edge.properties.items) });
     return .{ .object = obj };
 }
 
 fn protoPathToJson(allocator: std.mem.Allocator, path: schema.PathValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
 
     var nodes = std.json.Array.init(allocator);
     for (path.nodes.items) |node| {
         try nodes.append(try protoNodeToJson(allocator, node));
     }
-    try obj.put(try allocator.dupe(u8, "nodes"), .{ .array = nodes });
+    try obj.put(allocator, try allocator.dupe(u8, "nodes"), .{ .array = nodes });
 
     var edges = std.json.Array.init(allocator);
     for (path.edges.items) |edge| {
         try edges.append(try protoEdgeToJson(allocator, edge));
     }
-    try obj.put(try allocator.dupe(u8, "edges"), .{ .array = edges });
+    try obj.put(allocator, try allocator.dupe(u8, "edges"), .{ .array = edges });
     return .{ .object = obj };
 }
 
 fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj = @as(std.json.ObjectMap, .empty);
     if (ext.type_name.len > 0) {
-        try obj.put(try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, ext.type_name) });
+        try obj.put(allocator, try allocator.dupe(u8, "type"), .{ .string = try allocator.dupe(u8, ext.type_name) });
     }
     if (ext.data) |data| {
         const value: std.json.Value = switch (data) {
@@ -448,7 +448,7 @@ fn protoExtendedToJson(allocator: std.mem.Allocator, ext: schema.ExtendedValue) 
             .double_val => |v| .{ .float = v },
             .bool_val => |v| .{ .bool = v },
         };
-        try obj.put(try allocator.dupe(u8, "value"), value);
+        try obj.put(allocator, try allocator.dupe(u8, "value"), value);
     }
     return .{ .object = obj };
 }
@@ -511,7 +511,7 @@ fn freeJsonValueImpl(allocator: std.mem.Allocator, value: std.json.Value, free_k
                 freeJsonValueImpl(allocator, entry.value_ptr.*, true);
             }
             var mutable_obj = obj;
-            mutable_obj.deinit();
+            mutable_obj.deinit(allocator);
         },
         else => {},
     }
@@ -570,10 +570,10 @@ fn outputDotFormatFromRows(
 ) !void {
     var out = stdout;
 
-    try out.writeAll("digraph G {\n");
-    try out.writeAll("  rankdir=LR;\n");
-    try out.writeAll("  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
-    try out.writeAll("  edge [fontsize=10];\n\n");
+    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "digraph G {\n");
+    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  rankdir=LR;\n");
+    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  node [shape=ellipse, style=filled, fillcolor=lightblue];\n");
+    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  edge [fontsize=10];\n\n");
 
     var seen_nodes = std.StringHashMap(void).init(allocator);
     defer {
@@ -599,11 +599,11 @@ fn outputDotFormatFromRows(
                     const label = getDotNodeLabel(allocator, obj, labels_val) catch node_id;
                     defer if (!std.mem.eql(u8, label, node_id)) allocator.free(label);
 
-                    try out.writeAll("  \"");
-                    try out.writeAll(node_id);
-                    try out.writeAll("\" [label=\"");
-                    try out.writeAll(label);
-                    try out.writeAll("\"];\n");
+                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"");
+                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), node_id);
+                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"");
+                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), label);
+                    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n");
                 }
             } else if (obj.get("label") orelse obj.get("type")) |type_val| {
                 if (type_val != .string) continue;
@@ -616,16 +616,16 @@ fn outputDotFormatFromRows(
                     getDotIdString(allocator, obj.get("end_node")) orelse continue;
                 defer allocator.free(end_id);
 
-                try out.writeAll("  \"");
-                try out.writeAll(start_id);
-                try out.writeAll("\" -> \"");
-                try out.writeAll(end_id);
-                try out.writeAll("\" [label=\"");
-                try out.writeAll(type_val.string);
-                try out.writeAll("\"];\n");
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "  \"");
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), start_id);
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" -> \"");
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), end_id);
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\" [label=\"");
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), type_val.string);
+                try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "\"];\n");
             }
         }
     }
 
-    try out.writeAll("}\n");
+    try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n");
 }

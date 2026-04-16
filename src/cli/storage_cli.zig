@@ -9,7 +9,7 @@ fn getStdOut() error{StdioUnavailable}!std.Io.File {
 fn printTo(file: std.Io.File, comptime fmt: []const u8, args: anytype) !void {
     var buf: [4096]u8 = undefined;
     const slice = try std.fmt.bufPrint(&buf, fmt, args);
-    try file.writeAll(slice);
+    try file.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), slice);
 }
 
 const geode = @import("geode");

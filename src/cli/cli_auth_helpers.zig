@@ -38,16 +38,17 @@ const STATE_DIR_ENV = "GEODE_STATE_DIR";
 
 fn secureChmod(path: []const u8, mode: std.Io.File.Permissions) void {
     if (builtin.os.tag == .windows) return;
-    if (std.fs.openFileAbsolute(path, .{})) |file| {
-        defer file.close();
-        file.chmod(mode) catch {};
+    const io_sc = std.Io.Threaded.global_single_threaded.io();
+    if (std.Io.Dir.openFileAbsolute(io_sc, path, .{})) |file| {
+        defer file.close(io_sc);
+        file.setPermissions(io_sc, mode) catch {};
         return;
     } else |_| {}
 
-    if (std.fs.openDirAbsolute(path, .{ .iterate = true })) |opened_dir| {
+    if (std.Io.Dir.openDirAbsolute(io_sc, path, .{ .iterate = true })) |opened_dir| {
         var dir = opened_dir;
-        defer dir.close();
-        dir.chmod(mode) catch {};
+        defer dir.close(io_sc);
+        dir.setPermissions(io_sc, mode) catch {};
     } else |_| {}
 }
 
@@ -86,7 +87,7 @@ pub fn resolveStatePath(allocator: std.mem.Allocator, filename: []const u8) ![]u
     defer allocator.free(state_dir);
 
     try std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), state_dir);
-    secureChmod(state_dir, 0o700);
+    secureChmod(state_dir, std.Io.File.Permissions.fromMode(0o700));
 
     return std.fs.path.join(allocator, &.{ state_dir, filename });
 }

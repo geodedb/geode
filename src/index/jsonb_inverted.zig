@@ -83,7 +83,7 @@ pub const JsonbInvertedIndex = struct {
         const result = try self.paths.getOrPut(owned_path);
 
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(usize).initCapacity(self.allocator, 0) catch std.ArrayList(usize){};
+            result.value_ptr.* = std.ArrayList(usize).initCapacity(self.allocator, 0) catch std.ArrayList(usize).empty;
         } else {
             self.allocator.free(owned_path);
         }

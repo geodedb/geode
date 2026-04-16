@@ -98,15 +98,19 @@ fn loadApiKeyState(allocator: std.mem.Allocator) !std.StringHashMap(StoredApiKey
     const state_path = try apiKeyStatePath(allocator);
     defer allocator.free(state_path);
 
-    const file = std.fs.openFileAbsolute(state_path, .{}) catch |err| switch (err) {
+    const io_ak = std.Io.Threaded.global_single_threaded.io();
+    const file = std.Io.Dir.openFileAbsolute(io_ak, state_path, .{}) catch |err| switch (err) {
         error.FileNotFound => return keys,
         else => return err,
     };
-    defer file.close();
+    defer file.close(io_ak);
 
     // Read entire file (simpler for small state files)
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const stat = try file.stat(io_ak);
+    const size: usize = @intCast(stat.size);
+    const content = try allocator.alloc(u8, size);
     defer allocator.free(content);
+    _ = try file.readPositionalAll(io_ak, content, 0);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
     while (lines.next()) |line| {
@@ -151,12 +155,13 @@ fn saveApiKeyState(keys: *std.StringHashMap(StoredApiKey)) !void {
     const state_path = try apiKeyStatePath(keys.allocator);
     defer keys.allocator.free(state_path);
 
-    const file = try std.fs.createFileAbsolute(state_path, .{
+    const io_sk = std.Io.Threaded.global_single_threaded.io();
+    const file = try std.Io.Dir.createFileAbsolute(io_sk, state_path, .{
         .truncate = true,
         .read = true,
-        .mode = 0o600,
+        .permissions = std.Io.File.Permissions.fromMode(0o600),
     });
-    defer file.close();
+    defer file.close(io_sk);
 
     var it = keys.iterator();
     while (it.next()) |entry| {
@@ -177,7 +182,7 @@ fn saveApiKeyState(keys: *std.StringHashMap(StoredApiKey)) !void {
             if (v.is_active) "true" else "false",
             v.key_string,
         }) catch continue;
-        _ = file.writeAll(line) catch continue;
+        file.writeStreamingAll(io_sk, line) catch continue;
     }
 }
 

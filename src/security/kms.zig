@@ -311,10 +311,10 @@ pub const KMSProvider = struct {
         const envelope = try self.remote_client.?.generate();
 
         // Serialize envelope to JSON metadata
-        var json_buf = try std.ArrayList(u8).initCapacity(self.allocator, 256);
-        defer json_buf.deinit(self.allocator);
+        var aw_km: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(self.allocator, 256);
+        errdefer aw_km.deinit();
 
-        const writer = json_buf.writer(self.allocator);
+        const writer = &aw_km.writer;
         try writer.writeAll("{{\"version\":");
         try writer.print("{d},", .{envelope.version});
         try writer.print("\"alg\":\"{s}\",", .{envelope.alg});
@@ -332,6 +332,7 @@ pub const KMSProvider = struct {
         }
         try writer.writeAll("\"}}");
 
+        var json_buf = aw_km.toArrayList();
         const metadata = try json_buf.toOwnedSlice(self.allocator);
         const ciphertext = try self.allocator.dupe(u8, &envelope.ct);
 

@@ -110,10 +110,10 @@ fn encodeValueToStream(allocator: std.mem.Allocator, value: Value, encoder: anyt
 }
 
 fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) ![]const u8 {
-    var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = try .initCapacity(allocator, 256);
+    defer aw.deinit();
 
-    var encoder = json_lib.streamingEncoder(allocator, buf.writer(allocator), .{});
+    var encoder = json_lib.streamingEncoder(allocator, &aw.writer, .{});
     try encoder.beginObject();
 
     var iter = map.iterator();
@@ -123,7 +123,7 @@ fn valueMapToJson(allocator: std.mem.Allocator, map: std.StringHashMap(Value)) !
     }
 
     try encoder.endObject();
-    return try allocator.dupe(u8, buf.items);
+    return try allocator.dupe(u8, aw.written());
 }
 
 /// Update advanced indexes for a single property mutation.
