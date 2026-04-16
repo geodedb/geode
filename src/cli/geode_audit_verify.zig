@@ -24,6 +24,9 @@ pub const VerifyError = error{
     InvalidSignature,
     MissingSignature,
     DigestIntervalExceeded,
+    // GAP-0727 / SEC-AUD-01 (2026-04-16): seq_no must be monotonic +1
+    // across the whole file.  Any gap, duplicate, or reorder fails here.
+    SequenceMonotonicityViolation,
 };
 
 pub fn hex32(buf: []const u8) VerifyError![32]u8 {
@@ -126,6 +129,42 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
             std.process.exit(3);
         }
         last_hash = try hex32(ev_hex);
+
+        // GAP-0727 / SEC-AUD-01 (2026-04-16): verify the record's self-declared
+        // seq_no matches the expected monotonic +1 progression.  Without this,
+        // an attacker could delete a middle record and recompute prev_hash
+        // chains on subsequent records — the old verifier would miss that
+        // because it never parsed seq_no at all.
+        //
+        // The JSON field is a bare integer (not a quoted string), so parse
+        // until the next `,` after `"seq_no":`.
+        var patt_seq_buf: [64]u8 = undefined;
+        const patt_seq = std.fmt.bufPrint(&patt_seq_buf, "\"{s}\":", .{"seq_no"}) catch return error.Invalid;
+        const parsed_seq: u64 = blk_seq: {
+            if (std.mem.indexOf(u8, line, patt_seq)) |idx| {
+                var p = idx + patt_seq.len;
+                // Skip any whitespace before the number.
+                while (p < line.len and (line[p] == ' ' or line[p] == '\t')) : (p += 1) {}
+                const num_start = p;
+                while (p < line.len and std.ascii.isDigit(line[p])) : (p += 1) {}
+                if (p > num_start) {
+                    break :blk_seq std.fmt.parseInt(u64, line[num_start..p], 10) catch {
+                        std.debug.print("SCHEMA_ERROR ❌  at_seq={} field=seq_no detail=non_numeric\n", .{seq + 1});
+                        return error.Invalid;
+                    };
+                }
+            }
+            std.debug.print("SCHEMA_ERROR ❌  at_seq={} field=seq_no detail=missing\n", .{seq + 1});
+            return error.Invalid;
+        };
+        const expected_seq = seq + 1;
+        if (parsed_seq != expected_seq) {
+            std.debug.print(
+                "TAMPER sequence ❌  at_record={} reason=SEQ_NO_MONOTONICITY expected={} got={}\n",
+                .{ seq + 1, expected_seq, parsed_seq },
+            );
+            return error.SequenceMonotonicityViolation;
+        }
 
         // Handle DIGEST events
         if (std.mem.eql(u8, typ, "DIGEST")) {

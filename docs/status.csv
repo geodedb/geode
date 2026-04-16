@@ -1022,6 +1022,7 @@ REQ-GAP-0513-DIST-SHARD-003,ShardManager,MergeError,TESTED,,,distributed,2026-04
 REQ-GAP-0513-DIST-SHARD-004,ShardManager,TransportCallback,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
 REQ-GAP-0513-DIST-SHARD-005,ShardManager,GetShardForKey,TESTED,,,distributed,2026-04-06,src/distributed/sharding.zig
 REQ-GAP-0723-RLS-VM-BOUNDS,RLSBytecodeVMBounds,MemorySafety,TESTED,,,security,2026-04-16,tests/test_rls_vm_bounds.zig
+REQ-GAP-0727-AUDIT-SEQ-NO,AuditVerifySeqNo,TamperDetection,TESTED,,,security,2026-04-16,tests/test_audit_verify_seq_no.zig
 REQ-GAP-0732-RLS-FAIL-CLOSED,RLSRawStringFailClosed,Security,TESTED,,,security,2026-04-16,src/security/rls_core.zig
 REQ-GAP-ANALYSIS-JANUARY-2026,Gap Analysis Verification Tests,UnitTests,TESTED,,,compliance,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-GAP-ANALYSIS-TESTS-001,GapAnalysisFixes,UnitTests,EXEMPT,,,testing,2026-01-09,tests/test_gap_analysis_fixes.zig

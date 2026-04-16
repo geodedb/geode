@@ -2603,6 +2603,13 @@ pub fn build(b: *std.Build) void {
     const run_rls_vm_bounds_tests = b.addRunArtifact(rls_vm_bounds_tests);
     test_step.dependOn(&run_rls_vm_bounds_tests.step);
 
+    // GAP-0727 / SEC-AUD-01 regression: audit verifier validates seq_no monotonicity.
+    const audit_verify_seq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_verify_seq_no.zig"), .target = target, .optimize = optimize });
+    audit_verify_seq_test_mod.addImport("audit_verify", audit_mod);
+    const audit_verify_seq_tests = b.addTest(.{ .root_module = audit_verify_seq_test_mod });
+    const run_audit_verify_seq_tests = b.addRunArtifact(audit_verify_seq_tests);
+    test_step.dependOn(&run_audit_verify_seq_tests.step);
+
     // GAP-0512 regression: graph isolation in edge iteration
     const graph_isolation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_isolation_edge_iteration.zig"), .target = target, .optimize = optimize });
     graph_isolation_test_mod.addImport("geode", root_mod);
