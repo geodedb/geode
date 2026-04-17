@@ -25,14 +25,14 @@
 
         // TOML v1.1.0 parser
         .toml = .{
-            .url = "git+https://gitlab.com/devnw/zig/toml.git#369d8e5339be30fd0e67af0f30cb9295f58972ff",
-            .hash = "toml-0.1.0-MHnSh9gsAgCmj0mWgpoeoxLkiDYDm1ZOGivUvegKnhNb",
+            .url = "git+https://gitlab.com/devnw/zig/toml.git#13d32e1cc96c7b3c32e4fa107b6811d12bb873fb",
+            .hash = "toml-0.1.0-MHnShxEvAgAJa1cG8LMs3FwEHZqy4DjazTdZ7-A6A1d6",
         },
 
         // Unicode string library with SIMD acceleration
         .strings = .{
-            .url = "git+https://gitlab.com/devnw/zig/strings.git#55f78ff2578e8d64b55d4a1d82483fcabac8bf8b",
-            .hash = "strings-0.1.0-adMOtaJuJgBp58Hh5q7grU0suf45ncE-k8U8OWpv3eqq",
+            .url = "git+https://gitlab.com/devnw/zig/strings.git#6d60769ce1a1e736d3c34e6636e8f3656c2b4303",
+            .hash = "strings-0.1.0-adMOtWtxJgBmixUJ-J2v3aegmy4iUIjxRTsJ4H73aVBA",
         },
 
         // REPL library with Emacs/Vi keybindings
@@ -71,8 +71,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#4781e6433a3243db043d4dd40ac7e2f34b7fad46",
-            .hash = "slog-0.1.0-SamEDwJFBgC97AnwMLmSwA8ECMSAK1EB3-x8Cy8jkTX_",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#35ffe3e93511fed269e1c93f3cf41dbb1c9086fa",
+            .hash = "slog-0.1.0-SamEDyVLBgDkwoIb2TUuoKUhpkzm_EbjHT_oauBj6ABK",
         },
 
         // Configuration management - XDG compliant, multi-format support
@@ -93,14 +93,14 @@
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#16d46e6dfb2f6832dc2b18f4b391abefcb9113c2",
-            .hash = "dns-0.1.0-x4U-zWrTEACPWb8pOxs1aVVNJjhc3-EpiS9w9ISCJTBM",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#6bcb06754659ee0376d501061c74ba9b9854f0ba",
+            .hash = "dns-0.1.0-x4U-zXfVEAAWKoQSTifznuPO_OdgE8Qp3CrZ4uvxe1tY",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#a572f2c255f6d1d7163bacdad266b3f199854822",
-            .hash = "thread_pool-0.2.0-11B1BnYIQwCpbLn6Mm8gNc8_0eN-z0BaN6B3yNU0Y1-q",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#56c109a355eb4316450a216a74cc619b7809183b",
+            .hash = "thread_pool-0.2.0-11B1Bsw4RACrT8yj1Moe2s1sdiDixZE3LPlbj3xLYXDG",
         },
 
         // =======================================================================
@@ -168,8 +168,8 @@
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git#efa6c8e6e0aaf5be0add3ee2571365b7a63e43c0",
-            .hash = "audit-0.1.0-J9TtCO1AAwDidOd7gOQUW9tGTAl2S135hccmCvCexEux",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git#dc0a0fc4d40e5d7843d8daaad9e01af19e3d06b4",
+            .hash = "audit-0.1.0-J9TtCKFCAwAu9gBRRoROo1Gsh0J5h4UQmga-cqNZVXvz",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics
