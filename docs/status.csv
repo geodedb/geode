@@ -495,7 +495,7 @@ REQ-CLI-CHUNKED-EXEC-006,ChunkedExecution,Execution,IMPL,,,cli,2026-02-13,src/cl
 REQ-CLI-CHUNKED-EXEC-007,ChunkedExecution,NullCheck,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-COMPLETE-001,REPL Tab Completion,Testing,TESTED,,,cli,2026-01-30,src/client/repl/repl_complete.zig
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,FalsePositiveRegression,TESTED,,,cli,2026-04-16,tests/test_deadline_watchdog_false_positive.sh
-REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,IMPL,,,cli,2026-04-16,src/cli/query_deadline.zig
+REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,TESTED,,,cli,2026-04-16,src/cli/query_deadline.zig
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegression,TESTED,,,cli,2026-04-16,tests/test_query_deadline_state_lifetime.zig
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegressionBuild,IMPL,,,cli,2026-04-16,build.zig
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookFollowup,IMPL,,,cli,2026-04-16,tests/test_deadline_watchdog_quic_progress_followup.sh

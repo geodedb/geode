@@ -6,28 +6,36 @@
 // against the real `QueryDeadlineState` + `startDeadlineWatchdogTask` entry points
 // without dragging in the full CLI module graph.
 //
-// CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=Lifetime; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-16
+// CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=Lifetime; STATUS=TESTED; TEST=tests/test_query_deadline_state_lifetime.zig; OWNER=cli; UPDATED=2026-04-16
 //
 // Issue #424: Process-level deadline watchdog for the `geode query` command.
-// Issue #746 (pending fix):
-//   `QueryDeadlineState.finish()` sets `done = true` but does not join the
-//   watchdog thread.  Callers in `cmdQuery` stack-allocate the state, so after
-//   the function returns the stack slot is reused and the watchdog reads
-//   garbage on its next ~100 ms tick — leading to spurious
-//   `Error: query timed out after N seconds` prints and exit(1) _after_
-//   stdout has already carried a correct JSON response.
+// Issue #746 (FIXED):
+//   `QueryDeadlineState.finish()` now joins the watchdog thread before
+//   returning.  Callers in `cmdQuery` may stack-allocate the state safely —
+//   once `finish()` returns, the watchdog is provably no longer running and
+//   any subsequent stack reuse cannot be observed.
 //
-//   Tests pinning the bug:
-//     - tests/test_deadline_watchdog_false_positive.sh (shell, visible symptom)
-//     - tests/test_query_deadline_state_lifetime.zig   (Zig unit, `finish` must join)
+//   Implementation:
+//     * `startDeadlineWatchdogTask` uses `std.Thread.spawn` (not the
+//       fire-and-forget CLI pool) so we get a joinable handle.
+//     * The handle is stored on the `QueryDeadlineState` itself
+//       (`watchdog_thread`).
+//     * `finish()` sets `done=true`, `join()`s the handle if present, and
+//       clears the field so the call is idempotent (cmdQuery has both an
+//       `errdefer`-style explicit `finish()` and the `defer { finish() }`
+//       chain — the second call is a safe no-op).
+//     * Worst-case shutdown latency is bounded by the watchdog's 100 ms
+//       nanosleep tick.  If the watchdog ever gains IO dependencies,
+//       revisit — for now the bounded tick is sufficient.
 //
-//   This module intentionally exposes the watchdog types publicly so the Zig
-//   unit test can construct a heap-backed `QueryDeadlineState`, spawn the real
-//   background task via `startDeadlineWatchdogTask`, and observe post-`finish`
-//   thread behaviour.  Keep the public surface minimal.
+//   Follow-up (NOT fixed here; see triage §8):
+//     QUIC `executeQueryOnConnection` + `QuicProtocolAdapter` in
+//     src/cli/main.zig do not wire `.on_progress = touchActiveQueryDeadlineWatchdog`
+//     the way the gRPC path does.  Pinned by the opt-in
+//     `tests/test_deadline_watchdog_quic_progress_followup.sh` (stays red
+//     until the hook is wired).  The lifetime fix here does not depend on it.
 
 const std = @import("std");
-const pooled = @import("transport/thread_pool");
 
 // Hard-coded stderr file descriptor for the timeout message.  We avoid
 // importing `src/utils/stdio.zig` to keep this module's import surface small
@@ -49,6 +57,12 @@ pub const QueryDeadlineState = struct {
     /// thread has exited.  Adding the hook here (rather than as a test-local
     /// wrapper) lets the test observe the real watchdog loop.
     tick_count: std.atomic.Value(u64),
+    /// #746 lifetime fix: joinable handle for the watchdog thread.
+    /// `startDeadlineWatchdogTask` sets this on success; `finish()` joins it
+    /// and clears it back to null.  Access is single-producer/single-consumer
+    /// (cmdQuery owns the state and makes both calls on its own thread), so
+    /// no extra synchronization is required beyond the done-flag acquire/release.
+    watchdog_thread: ?std.Thread,
 
     pub fn init() QueryDeadlineState {
         const now_ns: i128 = blk: {
@@ -61,6 +75,7 @@ pub const QueryDeadlineState = struct {
             .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(now_ns))),
             .done = std.atomic.Value(bool).init(false),
             .tick_count = std.atomic.Value(u64).init(0),
+            .watchdog_thread = null,
         };
     }
 
@@ -74,11 +89,29 @@ pub const QueryDeadlineState = struct {
         self.last_progress_ns.store(@as(i64, @intCast(now_ns)), .release);
     }
 
-    /// Marks the watchdog as done.  **Does NOT currently wait for the
-    /// watchdog thread to observe `done=true`** — this is the bug tracked by
-    /// #746.  After the fix lands, this comment and the test should flip.
+    /// Marks the watchdog as done AND joins its thread.  After this returns
+    /// the watchdog is provably no longer running, so the caller may safely
+    /// free/pop `self` (the original #746 defect: `finish()` only set
+    /// `done=true` and returned, letting the watchdog read stack-reused
+    /// memory on its next 100 ms tick).
+    ///
+    /// Idempotent: the handle is cleared after the first join, so a second
+    /// call is a no-op.  Two paths in cmdQuery end up invoking finish() on
+    /// success — the explicit `defer { state.finish() }` and the in-line
+    /// `finishActiveQueryDeadlineWatchdog()` at the end of the QUIC/gRPC
+    /// execute helpers.
     pub fn finish(self: *QueryDeadlineState) void {
         self.done.store(true, .release);
+        if (self.watchdog_thread) |thread| {
+            // Clear first so a re-entrant `finish()` (e.g. error path + defer)
+            // does not attempt a double-join.
+            self.watchdog_thread = null;
+            // Bounded wait: watchdog tick is 100 ms and the loop checks
+            // `done` immediately after each nanosleep.  `std.Thread.join`
+            // has no timeout and cannot fail on Linux pthread_join when
+            // passed a valid, unjoined handle.
+            thread.join();
+        }
     }
 };
 
@@ -96,42 +129,28 @@ pub fn finishActiveQueryDeadlineWatchdog() void {
     }
 }
 
-pub const DeadlineWatchdogCtx = struct {
-    allocator: std.mem.Allocator,
+const WatchdogThreadCtx = struct {
     timeout_secs: u32,
     state: *QueryDeadlineState,
 };
 
-var g_cli_background_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
-var g_cli_background_pool: ?*pooled.ThreadPool = null;
-
-fn getCliBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
-    g_cli_background_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_cli_background_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (g_cli_background_pool == null) {
-        g_cli_background_pool = try pooled.ThreadPool.init(allocator, .{
-            .num_threads = 2,
-            .queue_capacity = 8,
-        });
-    }
-    return g_cli_background_pool.?;
+pub fn startDeadlineWatchdogTask(allocator: std.mem.Allocator, timeout_secs: u32, state: *QueryDeadlineState) void {
+    _ = allocator; // no longer needed — std.Thread.spawn handles its own stack
+    // #746: spawn the watchdog as a real thread so `finish()` can `join()` it.
+    // The thread-pool-based path was fire-and-forget, which is precisely what
+    // allowed the UAF: the pool never exposed a join handle back to cmdQuery.
+    const thread = std.Thread.spawn(.{}, runDeadlineWatchdogThread, .{ timeout_secs, state }) catch {
+        // On spawn failure the watchdog simply doesn't run.  This is a
+        // graceful degradation — the query still executes, just without a
+        // client-side timeout.  Matches the previous pool.submit() failure
+        // behaviour, which also silently dropped the task.
+        return;
+    };
+    state.watchdog_thread = thread;
 }
 
-pub fn startDeadlineWatchdogTask(allocator: std.mem.Allocator, timeout_secs: u32, state: *QueryDeadlineState) void {
-    const pool = getCliBackgroundPool(allocator) catch return;
-    const ctx = allocator.create(DeadlineWatchdogCtx) catch return;
-    ctx.* = .{
-        .allocator = allocator,
-        .timeout_secs = timeout_secs,
-        .state = state,
-    };
-    if (!pool.submit(.{
-        .context = @ptrCast(ctx),
-        .callback = runDeadlineWatchdogTask,
-    })) {
-        allocator.destroy(ctx);
-    }
+fn runDeadlineWatchdogThread(timeout_secs: u32, state: *QueryDeadlineState) void {
+    deadlineWatchdog(timeout_secs, state);
 }
 
 /// Issue #424: Process-level deadline watchdog for the query command.
@@ -171,10 +190,4 @@ pub fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
         stderr.writeStreamingAll(io_wd, " seconds\n") catch {};
         std.process.exit(EXIT_GENERAL_ERROR);
     }
-}
-
-pub fn runDeadlineWatchdogTask(context: *anyopaque) void {
-    const ctx: *DeadlineWatchdogCtx = @ptrCast(@alignCast(context));
-    defer ctx.allocator.destroy(ctx);
-    deadlineWatchdog(ctx.timeout_secs, ctx.state);
 }

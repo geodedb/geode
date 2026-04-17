@@ -1694,11 +1694,13 @@ pub fn build(b: *std.Build) void {
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by
     // popping a stack frame) immediately after `finish()`.
     // CANARY: REQ=REQ-CLI-DEADLINE-WATCHDOG-001; FEATURE="QueryDeadlineWatchdog"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=cli; UPDATED=2026-04-16
+    // Issue #746: the fix switched the watchdog off the shared CLI thread
+    // pool and onto a direct `std.Thread.spawn`, so the module no longer
+    // needs the `transport/thread_pool` import.  The test binary only needs
+    // `query_deadline` itself.
     const query_deadline_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/cli/query_deadline.zig"), .target = target, .optimize = optimize });
-    query_deadline_mod_for_tests.addImport("transport/thread_pool", thread_pool_mod);
     const query_deadline_lifetime_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_query_deadline_state_lifetime.zig"), .target = target, .optimize = optimize }) });
     query_deadline_lifetime_tests.root_module.addImport("query_deadline", query_deadline_mod_for_tests);
-    query_deadline_lifetime_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     const run_query_deadline_lifetime_tests = b.addRunArtifact(query_deadline_lifetime_tests);
     const query_deadline_lifetime_test_step = b.step("test-deadline-watchdog", "Run QueryDeadlineState lifetime regression (issue #746)");
     query_deadline_lifetime_test_step.dependOn(&run_query_deadline_lifetime_tests.step);
