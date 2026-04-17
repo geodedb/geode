@@ -532,13 +532,13 @@ pub fn evalMathFunction(
     if (std.mem.eql(u8, function_name, "random")) {
         if (args.len != 0) return Value{ .Null = {} };
         var rand_bytes: [8]u8 = undefined;
-        // Zig 0.16: std.posix.getrandom removed. Use Linux syscall or libc.
+        // Zig 0.16: std.posix.getrandom removed; branch on OS.
         if (comptime builtin.os.tag == .linux) {
             const rc = std.os.linux.getrandom(&rand_bytes, rand_bytes.len, 0);
             if (@as(isize, @bitCast(rc)) < 0) return Value{ .Null = {} };
         } else {
-            const rc = std.c.getrandom(&rand_bytes, rand_bytes.len, 0);
-            if (rc < 0) return Value{ .Null = {} };
+            // macOS / BSD: arc4random_buf returns void and cannot fail.
+            std.c.arc4random_buf(&rand_bytes, rand_bytes.len);
         }
         const rand_u64 = std.mem.readInt(u64, &rand_bytes, .little);
         const value = @as(f64, @floatFromInt(rand_u64 >> 11)) / @as(f64, @floatFromInt(@as(u64, 1) << 53));

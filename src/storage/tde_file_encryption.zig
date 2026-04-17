@@ -20,7 +20,7 @@ fn compat_fillRandom(buf: []u8) void {
     if (comptime @import("builtin").os.tag == .linux) {
         _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
     } else {
-        _ = std.c.getrandom(buf.ptr, buf.len, 0);
+        std.c.arc4random_buf(buf.ptr, buf.len);
     }
 }
 

@@ -30,8 +30,8 @@ fn getRandomBytes(buf: []u8) void {
             filled += rc;
         }
     } else {
-        const rc = std.c.getrandom(buf.ptr, buf.len, 0);
-        if (rc < 0) @memset(buf, 0);
+        // macOS / BSD: arc4random_buf is always available and returns void.
+        std.c.arc4random_buf(buf.ptr, buf.len);
     }
 }
 
