@@ -85,7 +85,16 @@ def scan_repo(repo_path: pathlib.Path) -> tuple:
 
     for ext in [".zig", ".py", ".sh"]:
         for path in repo_path.rglob(f"*{ext}"):
-            if ".git" not in str(path) and "zig-cache" not in str(path):
+            path_str = str(path)
+            if (
+                ".git" not in path_str
+                and "zig-cache" not in path_str
+                and "/zig-packages" not in path_str
+                and "/zig-pkg" not in path_str
+                and "/zig-out" not in path_str
+                and "/.worktrees" not in path_str
+                and "/vendor" not in path_str
+            ):
                 try:
                     with open(path) as f:
                         for line_num, line in enumerate(f, 1):

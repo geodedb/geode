@@ -590,6 +590,7 @@ pub const Parser = struct {
         return self.parseQuery();
     }
 
+    // CANARY: REQ=REQ-GQL-VALUES-MATCH-001; FEATURE="ValuesMatchChaining"; ASPECT=Parser; STATUS=TESTED; TEST=TestValuesMatchBasic|TestValuesMatchWhere|TestValuesMatchMultiRow; OWNER=engine; UPDATED=2026-04-17
     fn parseStatement(self: *Parser) ParserError!ast.Statement {
         return switch (self.cur.kind) {
             .VALUES => self.parseValuesStatement(),
