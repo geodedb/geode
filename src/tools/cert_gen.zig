@@ -5,9 +5,19 @@ const builtin = @import("builtin");
 // In production, use proper CA-signed certificates
 
 pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8, cert_path: []const u8, key_path: []const u8) !void {
+    _ = allocator;
     // Extract directory from cert_path
     const cert_dir = std.fs.path.dirname(cert_path) orelse ".";
-    const io = std.Io.Threaded.global_single_threaded.io();
+
+    // Zig 0.16 note: the stdlib's `global_single_threaded` Threaded instance
+    // ships with `.allocator = .failing`, so any `std.process.run` through it
+    // OOMs immediately inside `spawnPosix`'s internal arena. Build a local
+    // Threaded backed by `page_allocator` so the fork/exec path can allocate
+    // argv/env buffers.
+    const spawn_gpa = std.heap.page_allocator;
+    var local_threaded = std.Io.Threaded.init(spawn_gpa, .{});
+    defer local_threaded.deinit();
+    const io = local_threaded.io();
 
     // Create certificate directory if it doesn't exist
     std.Io.Dir.cwd().createDirPath(io, cert_dir) catch |err| switch (err) {
@@ -15,20 +25,32 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
         else => return err,
     };
 
-    // Use OpenSSL to generate self-signed ECDSA P-256 certificate
-    // This is a development utility - production should use proper certificates
-    // Using ECDSA P-256 for compatibility with TLS 1.3 signature schemes
-    const result = try std.process.run(allocator, io, .{
+    // Use OpenSSL to generate self-signed ECDSA P-256 certificate.
+
+    const subj = try std.fmt.allocPrint(spawn_gpa, "/CN={s}", .{hostname});
+    defer spawn_gpa.free(subj);
+    const alt_names = try std.fmt.allocPrint(
+        spawn_gpa,
+        "subjectAltName=DNS:{s},DNS:localhost,IP:127.0.0.1,IP:::1",
+        .{hostname},
+    );
+    defer spawn_gpa.free(alt_names);
+
+    const result = try std.process.run(spawn_gpa, io, .{
         .argv = &[_][]const u8{
-            "openssl", "req",                                                                                                      "-x509",                        "-newkey",
-            "ec",      "-pkeyopt",                                                                                                 "ec_paramgen_curve:prime256v1", "-keyout",
-            key_path,  "-out",                                                                                                     cert_path,                      "-days",
-            "365",     "-nodes",                                                                                                   "-subj",                        try std.fmt.allocPrint(allocator, "/CN={s}", .{hostname}),
-            "-addext", try std.fmt.allocPrint(allocator, "subjectAltName=DNS:{s},DNS:localhost,IP:127.0.0.1,IP:::1", .{hostname}),
+            "openssl",                      "req",
+            "-x509",                        "-newkey",
+            "ec",                           "-pkeyopt",
+            "ec_paramgen_curve:prime256v1", "-keyout",
+            key_path,                       "-out",
+            cert_path,                      "-days",
+            "365",                          "-nodes",
+            "-subj",                        subj,
+            "-addext",                      alt_names,
         },
     });
-    defer allocator.free(result.stdout);
-    defer allocator.free(result.stderr);
+    defer spawn_gpa.free(result.stdout);
+    defer spawn_gpa.free(result.stderr);
 
     if (result.term != .exited or result.term.exited != 0) {
         std.debug.print("Failed to generate certificate: {s}\n", .{result.stderr});
