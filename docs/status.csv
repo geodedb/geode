@@ -214,6 +214,7 @@ REQ-AUDIT-TEST-001,Audit Unit Tests,UnitTests,TESTED,,,security,2026-01-13,src/s
 REQ-AUDIT-TEST-001,AuditTests,UnitTests,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-AUDIT-TLS-TEST-001,AuditTLS,SyslogTests,TESTED,,,audit,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,,security,2026-01-15,src/cli/geode_audit_verify.zig
+REQ-AUDIT-VERIFY-001,Audit Verification,EmptyFileSummaryPhrase,IMPL,,,security,2026-04-16,tests/test_audit_verify_empty_file_phrase.sh
 REQ-AUDIT-VERIFY-002,Audit Signature Verification,Ed25519Verify,TESTED,,,security,2026-01-15,src/cli/geode_audit_verify.zig
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,TESTED,,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-001,UserManagement,Authentication,TESTED,,,security,2026-01-15,src/security/user_management.zig
@@ -499,6 +500,7 @@ REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,Lifetime,TESTED,,,cli,2026-0
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegression,TESTED,,,cli,2026-04-16,tests/test_query_deadline_state_lifetime.zig
 REQ-CLI-DEADLINE-WATCHDOG-001,QueryDeadlineWatchdog,LifetimeRegressionBuild,IMPL,,,cli,2026-04-16,build.zig
 REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookFollowup,IMPL,,,cli,2026-04-16,tests/test_deadline_watchdog_quic_progress_followup.sh
+REQ-CLI-DEADLINE-WATCHDOG-002,QueryDeadlineWatchdog,QuicProgressHookIntegration,IMPL,,,cli,2026-04-16,tests/test_quic_long_query_no_false_timeout.sh
 REQ-CLI-DOT-003,DotFormat,RowBasedOutput,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-EXIT-001,CLI Exit Code Mapping,ErrorHandling,TESTED,,,cli,2025-10-04,tests/exit_code_mapping_regression_test.sh
 REQ-CLI-FILE-FLAG-001,QueryFileFlag,FileInput,IMPL,,,cli,2026-01-31,src/cli/main.zig
