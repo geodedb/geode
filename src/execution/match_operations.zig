@@ -256,6 +256,145 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
     return false;
 }
 
+// CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
+// COUNT_PUSHDOWN: fast-path for unlabeled `MATCH (n) RETURN count(n)` /
+// `count(*)`. Mirrors the labeled fast-path in
+// `executeMultiChainRelationshipMatch` at :1726-1735 which uses the label
+// index; this version applies when there is no label to pivot on. Rather
+// than iterating every node and building a MatchBinding per row (the old
+// unlabeled fallback at :1736-1754 / :5725-5860), we delegate directly to
+// `store.countNodesForGraph(filter_graph, filter_tenant)` and emit a
+// single-row result. Zero per-row allocations, zero iterator contention
+// with concurrent WAL/checkpoint writers — which is the root cause of the
+// 1-in-4 `shell_comprehensive_tests.yml::count-nodes` 30-second flake
+// triaged in docs/audit/bugfix-shell-count-nodes-triage.md.
+//
+// Returns null when the query is NOT a count-only pushdown candidate so
+// the caller falls back to the regular executor. Preconditions (all must
+// hold):
+//   - single MATCH chain with a single simple node pattern (n) — no labels,
+//     no properties, no relationships, no path variable;
+//   - RETURN has exactly one item which is `count(<single-var-expr>)` or
+//     `count(*)` (case-insensitive), no DISTINCT qualifier;
+//   - no WHERE, no FILTER, no WITH, no GROUP BY, no ORDER BY, no SET,
+//     no LIMIT / OFFSET that would constrain row cardinality (since the
+//     result is a single row regardless — LIMIT >=1 is fine, LIMIT 0 is
+//     bailed to the regular path for correctness);
+//   - no active RLS engine with an authenticated user (RLS can filter
+//     per-row; the fast-path can't honour that cleanly — fall back).
+// Tenant filtering IS honoured: `countNodesForGraph` applies the same
+// `filter_tenant` the regular path would.
+pub fn countNodesFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // Shape: single chain, single simple node pattern, no relationship.
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null; // path variable bound to chain
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 0) return null;
+    if (head.props != null) return null;
+
+    // Shape: single RETURN item that is `count(n)` or `count(*)`, no DISTINCT.
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    const item = q.ret.items[0];
+
+    // No clauses that could change cardinality or require per-row evaluation.
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    // LIMIT 0 would require an empty result (not a single-row count); any
+    // other LIMIT value yields the same single-row count regardless, so we
+    // accept it. LIMIT literal == 0 bails to the regular path.
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+
+    // Verify the expression is `count(var)` or `count(*)` (case-insensitive).
+    const call = switch (item.expr) {
+        .Call => |c| c,
+        else => return null,
+    };
+    if (call.callee.* != .Ident) return null;
+    const fname = call.callee.Ident.orig;
+    if (!std.ascii.eqlIgnoreCase(fname, "count")) return null;
+    if (call.args.len != 1) return null;
+    const arg = call.args[0].*;
+    const is_star = switch (arg) {
+        .Ident => |id| std.mem.eql(u8, id.orig, "*"),
+        else => false,
+    };
+    // `count(n)` where n is the match variable is equivalent to `count(*)`
+    // for a simple MATCH (n) — both count every matching binding, and `n`
+    // is never null in that shape. Reject `count(expr)` over anything that
+    // could be null-valued per row.
+    const is_var = switch (arg) {
+        .Ident => |id| blk: {
+            if (head.name) |v| {
+                break :blk std.mem.eql(u8, id.orig, v);
+            }
+            break :blk false;
+        },
+        else => false,
+    };
+    if (!is_star and !is_var) return null;
+
+    // RLS check: if an RLS engine is registered AND a user is authenticated,
+    // per-row policies could change the answer. Bail to the regular path so
+    // `passesRLSFilter` runs for every node.
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.user != null) {
+            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
+            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+        }
+    }
+
+    // All preconditions met — delegate to the store counter. Mirror
+    // `executeMatchQueryImpl` and use a `ReadView` so concurrent writers
+    // don't serialize the count behind them (epoch-based snapshot; zero
+    // overhead when no concurrent mutations, deep-clone fallback when
+    // there are).
+    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
+    const store = read_view.getReadStore();
+    const n = store.countNodesForGraph(filter_graph, filter_tenant);
+
+    // Build single-row `{<alias>: n}` result. Match the column-naming
+    // conventions of `generateUniqueColumnNames`: prefer explicit alias,
+    // fall back to a synthesized name derived from the expression shape.
+    const col_name: []const u8 = if (item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try allocator.dupe(u8, "count(n)");
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var row = try allocator.alloc(Value, 1);
+    row[0] = Value{ .Int = @intCast(n) };
+
+    var rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
@@ -4587,6 +4726,14 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
         .multi_chain_relationship_match => return executeMultiChainRelationshipMatch(allocator, q, param_names, param_values, current_graph),
         .match_with_optional_patterns => return executeMatchWithOptionalPatterns(allocator, q, param_names, param_values, inline_let_bindings, current_graph),
         .continue_processing => {},
+    }
+
+    // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
+    // `count(*)` to `store.countNodesForGraph` before entering the
+    // iterator-heavy aggregation path below. See `countNodesFastPath` for
+    // the full list of preconditions and the triage that motivated this.
+    if (try countNodesFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
     }
 
     const items = q.ret.items;

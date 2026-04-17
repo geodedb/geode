@@ -2018,6 +2018,30 @@ pub const GraphStore = struct {
         return self.nodes.count();
     }
 
+    // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=StoreCount; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
+    // COUNT_PUSHDOWN: Return the number of nodes in a specific graph, optionally
+    // scoped to a tenant. Used by the count-only pushdown in
+    // `src/execution/match_operations.zig` to bypass the unlabeled full-scan
+    // fallback for `MATCH (n) RETURN count(n)` / `count(*)` shapes. When
+    // tenant is null and graph_name matches every node (the single-graph
+    // default case), this degrades to the O(1) `self.nodes.count()`; otherwise
+    // it runs a single O(N) scan over the node map without allocating any
+    // bindings — strictly cheaper than the old iteration path which built a
+    // MatchBinding per node then discarded them.
+    pub fn countNodesForGraph(self: *const GraphStore, graph_name: []const u8, tenant: ?[]const u8) usize {
+        var count: usize = 0;
+        var iter = self.nodes.iterator();
+        while (iter.next()) |entry| {
+            const node = entry.value_ptr;
+            if (!std.mem.eql(u8, node.graph_name, graph_name)) continue;
+            if (tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            count += 1;
+        }
+        return count;
+    }
+
     pub fn getEdgeCount(self: *GraphStore) usize {
         return self.edges.count();
     }

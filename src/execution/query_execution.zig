@@ -1594,6 +1594,23 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         try validateGroupBy(q.ret, q.group_by);
     }
 
+    // COUNT_PUSHDOWN: short-circuit unlabeled `MATCH (n) RETURN count(n)` /
+    // `count(*)` before the planned-read runtime materializes one binding
+    // row per node. The fast-path delegates to `store.countNodesForGraph`
+    // and returns a single-row result. See
+    // `match_operations.countNodesFastPath` and
+    // docs/audit/bugfix-shell-count-nodes-triage.md for the full rationale.
+    const count_pushdown_graph = if (context.session_state) |session| session.graph orelse "default" else "default";
+    const count_pushdown_tenant = blk: {
+        if (context.tenant_id) |tid| {
+            if (!std.mem.eql(u8, tid, graph_store.DEFAULT_TENANT_ID)) break :blk tid;
+        }
+        break :blk null;
+    };
+    if (try match_operations.countNodesFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+        return fast_result;
+    }
+
     if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
         return planned_result;
     }
