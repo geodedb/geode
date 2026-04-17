@@ -3134,6 +3134,9 @@ REQ-PERF-COLLECTION-001,CollectionOptimization,Integration,TESTED,,,performance,
 REQ-PERF-COLLECTION-001,CollectionPerformanceValidation,Testing,TESTED,,,performance,2025-10-04,tests/collection_perf_validation.zig
 REQ-PERF-COLLECTION-001,OptimizedCollections,Performance,TESTED,,,performance,2025-10-04,src/performance/collection_optimized.zig
 REQ-PERF-CONN-REMOVE-001,ConnectionRemovalOptimization,O1Removal,TESTED,,,transport,2026-01-30,src/transport/quic.zig
+REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,FlakePin,TESTED,,,execution,2026-04-16,tests/test_count_nodes_no_flake.sh
+REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,Regression,TESTED,,,execution,2026-04-16,tests/test_count_nodes_pushdown_perf.zig
+REQ-PERF-COUNT-NODES-PUSHDOWN,UnlabeledMatchCountPushdown,SourceAudit,TESTED,,,execution,2026-04-16,tests/test_count_nodes_pushdown_audit.sh
 REQ-PERF-DELETE-005,Execution,AdapterDeleteSnapshotElision,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-PERF-DELETE-006,Execution,RelationshipDeleteEndpointLookup,TESTED,,,engine,2026-04-10,tests/test_gap_0511_regression.zig
 REQ-PERF-DRR-BUILD-001,DRRScheduler,BuildIntegration,IMPL,,,build,2026-01-26,build.zig

@@ -2686,6 +2686,17 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // Unlabeled MATCH(n) count-pushdown regression:
+    // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
+    // Triage: docs/audit/bugfix-shell-count-nodes-triage.md
+    const count_pushdown_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_count_nodes_pushdown_perf.zig"), .target = target, .optimize = optimize });
+    count_pushdown_test_mod.addImport("geode", root_mod);
+    const count_pushdown_tests = b.addTest(.{ .root_module = count_pushdown_test_mod });
+    const run_count_pushdown_tests = b.addRunArtifact(count_pushdown_tests);
+    test_step.dependOn(&run_count_pushdown_tests.step);
+    const count_pushdown_step = b.step("test-count-pushdown", "Run unlabeled MATCH(n) count-pushdown regression tests");
+    count_pushdown_step.dependOn(&run_count_pushdown_tests.step);
+
     // GAP-0514 partial: flip 4 BFS PERF-P1-001 CANARY markers (execution.zig)
     // from IMPL → TESTED by exercising PathIterator via variable-length MATCH.
     const gap0514_bfs_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_path_iterator_bfs_dequeue.zig"), .target = target, .optimize = optimize });
