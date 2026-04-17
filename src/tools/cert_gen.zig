@@ -12,9 +12,9 @@ pub fn generateSelfSignedCert(allocator: std.mem.Allocator, hostname: []const u8
     // Zig 0.16 note: the stdlib's `global_single_threaded` Threaded instance
     // ships with `.allocator = .failing`, so any `std.process.run` through it
     // OOMs immediately inside `spawnPosix`'s internal arena. Build a local
-    // Threaded backed by `page_allocator` so the fork/exec path can allocate
-    // argv/env buffers.
-    const spawn_gpa = std.heap.page_allocator;
+    // Threaded backed by `smp_allocator` (allowed by the governance-
+    // no-page-allocator gate; `page_allocator` is forbidden in src/).
+    const spawn_gpa = std.heap.smp_allocator;
     var local_threaded = std.Io.Threaded.init(spawn_gpa, .{});
     defer local_threaded.deinit();
     const io = local_threaded.io();
