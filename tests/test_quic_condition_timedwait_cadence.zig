@@ -28,10 +28,14 @@ const testing = std.testing;
 const linux = std.os.linux;
 
 /// File paths relative to the repo root that must not contain sub-ms waits.
-const audited_paths = [_][]const u8{
-    // Vendored QUIC dep (mirror of upstream /home/benji/src/devnw/zig/quic)
-    "zig-pkg/quic-0.1.11-gBIqUbJHNgD3-ySQkll1QgLs8rIDloK08d8TDFJqWrQc/src/quic/transport.zig",
-    "zig-pkg/quic-0.1.11-gBIqUbJHNgD3-ySQkll1QgLs8rIDloK08d8TDFJqWrQc/src/quic/endpoint.zig",
+/// The vendored quic dep lives at `zig-pkg/quic-<version>-<hash>/…`; the
+/// hash changes every time the dep is bumped. Resolve the dir at runtime so
+/// the test survives hash bumps (e.g. after `./scripts/update_dep_hashes.sh quic`).
+const relative_quic_paths = [_][]const u8{
+    "src/quic/transport.zig",
+    "src/quic/endpoint.zig",
+};
+const geode_audited_paths = [_][]const u8{
     // Geode's local transport wrapper
     "src/transport/quic.zig",
 };
@@ -88,13 +92,55 @@ fn fileContains(allocator: std.mem.Allocator, path: []const u8, needle: []const 
     return false; // missing file is not a violation
 }
 
+/// Locate the vendored quic dep directory under `zig-pkg/`. zig's package
+/// manager names it `quic-<version>-<base64hash>` where the hash rotates on
+/// every bump, so resolve it by prefix. Returns null if not present (e.g.
+/// deps haven't been fetched yet — the test treats that as "nothing to audit").
+fn findVendoredQuicDir(allocator: std.mem.Allocator) !?[]u8 {
+    const zig_pkg = "zig-pkg";
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var dir = std.Io.Dir.cwd().openDir(io, zig_pkg, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    defer dir.close(io);
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.startsWith(u8, entry.name, "quic-")) {
+            return try std.fmt.allocPrint(allocator, "{s}/{s}", .{ zig_pkg, entry.name });
+        }
+    }
+    return null;
+}
+
 test "quic condition timedWait ports use >=1ms cadence" {
     const allocator = testing.allocator;
 
     var violations: std.ArrayList(u8) = .empty;
     defer violations.deinit(allocator);
 
-    for (audited_paths) |path| {
+    // Build the full audit set: vendored quic dep paths (resolved by prefix)
+    // plus geode's local transport wrapper.
+    var paths: std.ArrayList([]const u8) = .empty;
+    defer paths.deinit(allocator);
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |p| allocator.free(p);
+        owned.deinit(allocator);
+    }
+
+    if (try findVendoredQuicDir(allocator)) |quic_dir| {
+        try owned.append(allocator, quic_dir);
+        for (relative_quic_paths) |rel| {
+            const full = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ quic_dir, rel });
+            try owned.append(allocator, full);
+            try paths.append(allocator, full);
+        }
+    }
+    for (geode_audited_paths) |p| try paths.append(allocator, p);
+
+    for (paths.items) |path| {
         for (forbidden_patterns) |pat| {
             const hit = fileContains(allocator, path, pat) catch |err| {
                 const line = std.fmt.allocPrint(
@@ -137,8 +183,19 @@ test "quic converted timedWait sites keep their nanosleep+re-check shape" {
     // sites should still be present so we don't silently regress either.
     const allocator = testing.allocator;
 
-    const waitForAccepted_path =
-        "zig-pkg/quic-0.1.11-gBIqUbJHNgD3-ySQkll1QgLs8rIDloK08d8TDFJqWrQc/src/quic/endpoint.zig";
+    const quic_dir = try findVendoredQuicDir(allocator) orelse {
+        // If the dep isn't fetched yet, skip — CI will run `zig build` first
+        // which populates zig-pkg/.
+        return error.SkipZigTest;
+    };
+    defer allocator.free(quic_dir);
+
+    const waitForAccepted_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/src/quic/endpoint.zig",
+        .{quic_dir},
+    );
+    defer allocator.free(waitForAccepted_path);
     const poll_sync_path = "src/transport/quic.zig";
 
     try std.testing.expect(try fileContains(
