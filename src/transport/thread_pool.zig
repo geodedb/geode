@@ -167,7 +167,13 @@ pub const ThreadPool = struct {
 
     /// Initialize the thread pool.
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
-        const num = effectiveThreadCount(config);
+        // Upstream thread_pool 0.2.0 enforces: if allow_blocking_lane = true
+        // then blocking_workers > 0 and strictly less than max_threads. Our
+        // API uses `submitBlocking(.lane = .blocking)` throughout, so the
+        // blocking lane must always be enabled — meaning we need at least
+        // 2 threads even when the caller requested 1.
+        const requested = effectiveThreadCount(config);
+        const num: usize = @max(requested, 2);
         const workers = try allocator.alloc(WorkerStub, num);
         errdefer allocator.free(workers);
         var inner = try ext_pool.ThreadPool.init(allocator, .{
@@ -180,6 +186,7 @@ pub const ThreadPool = struct {
             // (e.g. main pool worker → per-connection acceptor_pool).
             .scheduler_variant = .global_queue,
             .allow_blocking_lane = true,
+            .blocking_workers = 1,
         });
         errdefer inner.deinit();
         const self = try allocator.create(Self);
@@ -267,10 +274,7 @@ pub const ThreadPool = struct {
             .item = item,
         };
 
-        return self.inner.submit(runSubmittedTask, @ptrCast(submitted), options) catch |err| {
-            self.allocator.destroy(submitted);
-            return err;
-        };
+        return try self.inner.submit(runSubmittedTask, @ptrCast(submitted), options);
     }
 
     fn runSubmittedTask(ctx: *anyopaque, runtime: *TaskContext) void {
