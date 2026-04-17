@@ -257,7 +257,10 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
         std.debug.print(" digest_interval_max={}", .{digest_interval_events});
     }
 
-    std.debug.print("\n", .{});
+    // #748: mirror the FileNotFound branch phrase so harness specs that
+    // assert `stderr_contains: "records verified"` pass uniformly whether
+    // or not the default audit log exists (empty or populated).
+    std.debug.print(" ({} records verified)\n", .{records});
 }
 
 // Unit tests for audit verification
