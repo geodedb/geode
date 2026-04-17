@@ -12,17 +12,31 @@ const Allocator = std.mem.Allocator;
 const prometheus = @import("prometheus.zig");
 const pooled = @import("transport/thread_pool");
 
-// CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
-// GAP-0166: Wire Prometheus metrics exporter to runtime endpoint
-// Simple HTTP server for serving Prometheus metrics at /metrics endpoint
+// CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=HTTPServer; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-04-16
+// GAP-0166 / GitLab #749: Wire Prometheus metrics exporter to a real HTTP
+// listener at /metrics, with a /health probe and a catch-all 404. This file
+// intentionally implements the minimum viable HTTP/1.0-style responder — no
+// keep-alive, no body parsing, no chunked encoding. Prometheus scrapers only
+// need GET /metrics with a plain-text body every ~15s.
 
-/// MetricsServer provides an HTTP endpoint for Prometheus metrics scraping
+/// MetricsServer provides an HTTP endpoint for Prometheus metrics scraping.
 pub const MetricsServer = struct {
     allocator: Allocator,
     collector: *prometheus.MetricsCollector,
     port: u16,
+    /// Io backend used for all socket operations. Owned by this struct and
+    /// torn down in `stop()`. Pattern mirrors `src/tools/cert_gen.zig:17-18`
+    /// — we must NOT use `std.Io.Threaded.global_single_threaded` because
+    /// that ships with `.allocator = .failing` in 0.16 and OOMs inside the
+    /// net vtable.
+    threaded: ?std.Io.Threaded,
     server: ?std.Io.net.Server,
-    running: bool,
+    running: std.atomic.Value(bool),
+    /// Accept-loop thread handle. `start()` spawns, `stop()` joins.
+    accept_thread: ?std.Thread,
+    /// Legacy field kept for ABI stability with callers constructing via
+    /// `init`; unused now that we spawn a bare `std.Thread` instead of
+    /// routing through the shared thread pool.
     accept_pool: ?*pooled.ThreadPool,
 
     pub fn init(allocator: Allocator, collector: *prometheus.MetricsCollector, port: u16) MetricsServer {
@@ -30,8 +44,10 @@ pub const MetricsServer = struct {
             .allocator = allocator,
             .collector = collector,
             .port = port,
+            .threaded = null,
             .server = null,
-            .running = false,
+            .running = std.atomic.Value(bool).init(false),
+            .accept_thread = null,
             .accept_pool = null,
         };
     }
@@ -42,57 +58,208 @@ pub const MetricsServer = struct {
 
     /// Start the metrics HTTP server.
     /// SECURITY (S10): Binds to 127.0.0.1 by default to prevent unauthenticated
-    /// metrics scraping from the network.  Override with GEODE_METRICS_BIND env var
-    /// (e.g. "0.0.0.0" to restore the old behavior behind a firewall).
+    /// metrics scraping from the network. Override with GEODE_METRICS_BIND env
+    /// var (e.g. "0.0.0.0" to restore the old behavior behind a firewall).
     pub fn start(self: *MetricsServer) !void {
-        // Zig 0.16 compat: the metrics HTTP server is temporarily disabled
-        // pending a full rewrite against std.Io.net.Server.
-        _ = resolveMetricsBindAddress();
-        self.running = false;
+        // Reset idempotent state — a prior stop() may have left stale handles.
+        if (self.accept_thread != null or self.server != null or self.threaded != null) {
+            self.stop();
+        }
+
+        const bytes = resolveMetricsBindAddress();
+        var ip_buf: [16]u8 = undefined;
+        const ip_str = try std.fmt.bufPrint(&ip_buf, "{d}.{d}.{d}.{d}", .{ bytes[0], bytes[1], bytes[2], bytes[3] });
+
+        const addr = try std.Io.net.IpAddress.parseIp4(ip_str, self.port);
+
+        // Local Threaded backend. `smp_allocator` is the governance-approved
+        // choice here (page_allocator is forbidden in src/).
+        self.threaded = std.Io.Threaded.init(std.heap.smp_allocator, .{});
+        errdefer {
+            if (self.threaded) |*t| t.deinit();
+            self.threaded = null;
+        }
+
+        const io = self.threaded.?.io();
+
+        self.server = std.Io.net.IpAddress.listen(&addr, io, .{ .reuse_address = true }) catch |err| {
+            return err;
+        };
+        errdefer {
+            if (self.server) |*s| s.deinit(io);
+            self.server = null;
+        }
+
+        self.running.store(true, .release);
+
+        self.accept_thread = std.Thread.spawn(.{}, runAcceptLoop, .{self}) catch |err| {
+            self.running.store(false, .release);
+            return err;
+        };
     }
 
-    /// Stop the metrics HTTP server
+    /// Stop the metrics HTTP server. Closes the listen fd so the accept loop
+    /// unblocks with `error.SocketNotListening`, then joins the thread.
     pub fn stop(self: *MetricsServer) void {
-        self.running = false;
-        self.server = null;
+        self.running.store(false, .release);
+
+        // Close the listener first so accept() returns with SocketNotListening
+        // on whatever thread is currently blocked inside it.
+        if (self.server) |*s| {
+            if (self.threaded) |*t| {
+                s.deinit(t.io());
+            }
+            self.server = null;
+        }
+
+        if (self.accept_thread) |thread| {
+            thread.join();
+            self.accept_thread = null;
+        }
+
+        if (self.threaded) |*t| {
+            t.deinit();
+            self.threaded = null;
+        }
+
+        // Legacy pool field is never populated anymore, but defensively drain
+        // it in case a future caller wires it up.
         if (self.accept_pool) |pool| {
             pool.deinit();
             self.accept_pool = null;
         }
     }
 
-    /// Handle a single incoming connection.
-    /// Zig 0.16 compat: stubbed until std.Io.net.Server.Connection wiring is reimplemented.
-    pub fn handleConnection(self: *MetricsServer, conn: std.Io.net.Server.Connection) !void {
-        _ = self;
-        _ = conn;
+    /// Handle a single incoming connection: parse the request line, dispatch
+    /// to the matching handler, close the stream. Errors are swallowed — one
+    /// bad client must not take down the accept loop.
+    fn handleConnection(self: *MetricsServer, stream: std.Io.net.Stream) !void {
+        const io = self.threaded.?.io();
+        defer stream.close(io);
+
+        var read_buf: [4096]u8 = undefined;
+        var reader = stream.reader(io, &read_buf);
+
+        // Request line: `METHOD SP PATH SP HTTP/VERSION\r\n`.
+        const req_line = reader.interface.takeDelimiterInclusive('\n') catch {
+            try self.serveBadRequest(stream);
+            return;
+        };
+        const line = std.mem.trimEnd(u8, req_line, "\r\n");
+
+        // Drain headers until empty line (\r\n\r\n). Cap at 64 header lines.
+        var header_count: usize = 0;
+        while (header_count < 64) : (header_count += 1) {
+            const hdr = reader.interface.takeDelimiterInclusive('\n') catch break;
+            const trimmed = std.mem.trimEnd(u8, hdr, "\r\n");
+            if (trimmed.len == 0) break;
+        }
+
+        // Parse METHOD SP PATH.
+        const sp1 = std.mem.indexOfScalar(u8, line, ' ') orelse {
+            try self.serveBadRequest(stream);
+            return;
+        };
+        const method = line[0..sp1];
+        const rest = line[sp1 + 1 ..];
+        const sp2 = std.mem.indexOfScalar(u8, rest, ' ') orelse {
+            try self.serveBadRequest(stream);
+            return;
+        };
+        const path = rest[0..sp2];
+
+        // Only GET is served; everything else → 404 per spec.
+        if (!std.mem.eql(u8, method, "GET")) {
+            try self.serve404(stream);
+            return;
+        }
+
+        // Strip any query string for path matching.
+        const path_only = if (std.mem.indexOfScalar(u8, path, '?')) |q| path[0..q] else path;
+
+        if (std.mem.eql(u8, path_only, "/metrics")) {
+            try self.serveMetrics(stream);
+        } else if (std.mem.eql(u8, path_only, "/health")) {
+            try self.serveHealth(stream);
+        } else {
+            try self.serve404(stream);
+        }
     }
 
-    /// Serve Prometheus metrics - stub.
+    /// Serve `GET /metrics` — Prometheus text exposition format 0.0.4.
     fn serveMetrics(self: *MetricsServer, stream: std.Io.net.Stream) !void {
-        _ = self;
-        _ = stream;
+        const io = self.threaded.?.io();
+
+        var body: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 2048);
+        defer body.deinit();
+        try self.collector.exportMetrics(&body.writer);
+        const body_bytes = body.written();
+
+        var header_buf: [256]u8 = undefined;
+        const headers = try std.fmt.bufPrint(
+            &header_buf,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n",
+            .{body_bytes.len},
+        );
+
+        var write_buf: [4096]u8 = undefined;
+        var w = stream.writer(io, &write_buf);
+        try w.interface.writeAll(headers);
+        try w.interface.writeAll(body_bytes);
+        try w.interface.flush();
     }
 
-    /// Serve health check response - stub.
+    /// Serve `GET /health` — fixed-size JSON body.
     fn serveHealth(self: *MetricsServer, stream: std.Io.net.Stream) !void {
-        _ = self;
-        _ = stream;
+        const io = self.threaded.?.io();
+        const response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 15\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}";
+        var write_buf: [512]u8 = undefined;
+        var w = stream.writer(io, &write_buf);
+        try w.interface.writeAll(response);
+        try w.interface.flush();
     }
 
-    /// Serve 404 response - stub.
+    /// Serve `* → 404` with a short plain-text body.
     fn serve404(self: *MetricsServer, stream: std.Io.net.Stream) !void {
-        _ = self;
-        _ = stream;
+        const io = self.threaded.?.io();
+        const response = "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 10\r\nConnection: close\r\n\r\nNot Found\n";
+        var write_buf: [256]u8 = undefined;
+        var w = stream.writer(io, &write_buf);
+        try w.interface.writeAll(response);
+        try w.interface.flush();
     }
 
-    /// Accept and handle connections - stub (disabled until net rewrite).
+    /// Serve `400 Bad Request` for malformed request lines.
+    fn serveBadRequest(self: *MetricsServer, stream: std.Io.net.Stream) !void {
+        const io = self.threaded.?.io();
+        const response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 12\r\nConnection: close\r\n\r\nBad Request\n";
+        var write_buf: [256]u8 = undefined;
+        var w = stream.writer(io, &write_buf);
+        try w.interface.writeAll(response);
+        try w.interface.flush();
+    }
+
+    /// Accept loop. One request at a time — Prometheus scrapes are infrequent
+    /// enough that serial handling is well below the budget (~15s cadence).
+    /// Exits when `stop()` closes the listen fd (accept returns
+    /// `error.SocketNotListening`) or when the global shutdown flag is set.
     pub fn acceptLoop(self: *MetricsServer) void {
-        _ = self;
+        const io = self.threaded.?.io();
+        while (self.running.load(.acquire)) {
+            if (self.server == null) break;
+            const stream = self.server.?.accept(io) catch |err| switch (err) {
+                error.SocketNotListening => return,
+                error.ConnectionAborted, error.WouldBlock => continue,
+                else => return,
+            };
+            self.handleConnection(stream) catch {
+                // Per-connection errors are non-fatal; stream was closed
+                // inside handleConnection via `defer stream.close(io)`.
+            };
+        }
     }
 
-    fn runAcceptLoop(ctx: *anyopaque) void {
-        const self: *MetricsServer = @ptrCast(@alignCast(ctx));
+    fn runAcceptLoop(self: *MetricsServer) void {
         self.acceptLoop();
     }
 };
@@ -184,5 +351,5 @@ test "MetricsServer initialization" {
 
     // Just test initialization, not actual network operations
     try std.testing.expect(server.port == 9091);
-    try std.testing.expect(server.running == false);
+    try std.testing.expect(server.running.load(.acquire) == false);
 }
