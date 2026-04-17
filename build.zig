@@ -1706,6 +1706,26 @@ pub fn build(b: *std.Build) void {
     query_deadline_lifetime_test_step.dependOn(&run_query_deadline_lifetime_tests.step);
     test_step.dependOn(&query_deadline_lifetime_tests.step);
 
+    // GitLab #749: MetricsServer HTTP listener lifecycle regression — pins
+    // the contract that `start()` actually binds a TCP listen socket (the
+    // Zig 0.16 migration stubbed it out), `stop()` closes it, and the pair
+    // is idempotent across a re-start.  Build-wired identically to the
+    // deadline-watchdog test above: its own module pair (no `geode` root),
+    // its own `test-metrics-server` step, fold into the main test step.
+    // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-04-16
+    const prometheus_mod_for_metrics_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/prometheus.zig"), .target = target, .optimize = optimize });
+    // metrics_server.zig calls std.c.getenv, which requires explicit libc link.
+    const metrics_server_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/metrics_server.zig"), .target = target, .optimize = optimize, .link_libc = true });
+    metrics_server_mod_for_tests.addImport("prometheus.zig", prometheus_mod_for_metrics_tests);
+    metrics_server_mod_for_tests.addImport("transport/thread_pool", thread_pool_mod);
+    const metrics_server_lifetime_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_metrics_server_lifecycle.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
+    metrics_server_lifetime_tests.root_module.addImport("prometheus", prometheus_mod_for_metrics_tests);
+    metrics_server_lifetime_tests.root_module.addImport("metrics_server", metrics_server_mod_for_tests);
+    const run_metrics_server_lifetime_tests = b.addRunArtifact(metrics_server_lifetime_tests);
+    const metrics_server_lifetime_test_step = b.step("test-metrics-server", "Run MetricsServer HTTP listener lifecycle regression (issue #749)");
+    metrics_server_lifetime_test_step.dependOn(&run_metrics_server_lifetime_tests.step);
+    test_step.dependOn(&metrics_server_lifetime_tests.step);
+
     // CANARY: REQ=REQ-PERF-SPICE-028; FEATURE="ParallelWrapperBenchBuild"; ASPECT=BuildIntegration; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-12
     // Thread-pool parallel wrapper benchmarks.
     const parallel_wrapper_bench = b.addExecutable(.{ .name = "bench_thread_pool_parallelism", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_thread_pool_parallelism.zig"), .target = target, .optimize = .ReleaseFast }) });
