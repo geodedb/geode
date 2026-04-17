@@ -50,7 +50,11 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[handshake-stall] starting geode serve on 127.0.0.1:${PORT}"
-"${GEODE_BIN}" serve \
+# Bootstrap admin with a known password so the client below can authenticate.
+# (DATA_DIR is fresh via mktemp, so `hasAuthRecords()` returns false on first
+# boot and the env-provided password is honored — see src/server/server_init.zig
+# bootstrapDefaultAdmin branch.)
+GEODE_ADMIN_PASSWORD="GeodeTestPassword123!" "${GEODE_BIN}" serve \
     --data-dir "${DATA_DIR}" \
     --listen "127.0.0.1:${PORT}" \
     --log-level error \

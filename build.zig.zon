@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#51c1a033b73e8f80305f8cccc7f792b42206931f",
-            .hash = "quic-0.1.11-gBIqUUxlNgAHRJSmpRgg2LU_nq6vHgNYufwDZXZ2ikCh",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#4ddabaad21e163b786002a4fe19dee361ef4835d",
+            .hash = "quic-0.1.11-gBIqUcqNNgCFFzncXjCzWbo-OZ1yDy1y4jkvaYU9iBFl",
         },
 
         // =======================================================================
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpIu9AQAPZxjgM1lW4gKwyNqI6fR49tTCN7uWm3Yl",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#c4d678cce8dff27aff637c703899150aeed94124",
-            .hash = "geode_client_zig-0.2.1-8ysbVw8QCQAQOzFcTrqi3pJVsnnNiNbxDFETThnPgaVo",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#487dc81cfcba69ef62a2a3cffaeda97be762ac45",
+            .hash = "geode_client_zig-0.2.1-8ysbVw8QCQBJRwuxTJyA94qYthMfo8iToQAMgKGtEFwK",
         },
 
         // =======================================================================
