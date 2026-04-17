@@ -2382,25 +2382,40 @@ fn executeQueryOnConnection(
     allocated_query = try query_scope.prependGraphContextIfNeeded(allocator, binding.query_text, graph);
     if (allocated_query) |scoped| final_query = scoped;
 
+    // #747: wire `on_progress = touchActiveQueryDeadlineWatchdog` into the
+    // QUIC send/recv path so long server-streamed queries don't false-timeout
+    // against the idle-timeout watchdog in src/cli/query_deadline.zig.
+    // Mirrors the gRPC sites at :1663/1723/1752/1771 which pass
+    // `.{ .on_progress = touchActiveQueryDeadlineWatchdog }` to the transport.
     const QuicProtocolAdapter = struct {
         raw_client: *zig_client.GeodeClient,
         timeout_secs: u32,
+        hooks: struct { on_progress: ?*const fn () void = null } = .{},
+
+        fn notifyProgress(self: *const @This()) void {
+            if (self.hooks.on_progress) |callback| callback();
+        }
 
         fn sendClientMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, msg: schema.QuicClientMessage) !void {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
+            self.notifyProgress();
             try writeProtoMessageViaZigClient(alloc, self.raw_client, msg);
+            self.notifyProgress();
         }
 
         fn readServerMessage(proto: *query_runner.ProtocolClient, alloc: std.mem.Allocator, timeout: u32) !schema.QuicServerMessage {
             const self: *@This() = @ptrCast(@alignCast(proto.context));
             const effective_timeout = if (timeout == 0) self.timeout_secs else timeout;
-            return try readProtoMessageViaZigClient(alloc, self.raw_client, effective_timeout);
+            const result = try readProtoMessageViaZigClient(alloc, self.raw_client, effective_timeout);
+            self.notifyProgress();
+            return result;
         }
     };
 
     var adapter = QuicProtocolAdapter{
         .raw_client = raw_client,
         .timeout_secs = timeout_secs,
+        .hooks = .{ .on_progress = touchActiveQueryDeadlineWatchdog },
     };
     var protocol_client = query_runner.ProtocolClient{
         .context = &adapter,
