@@ -105,14 +105,20 @@ const zig_quic_bridge = geode.zig_quic_bridge;
 const zig_client = zig_quic_bridge.zig_client;
 const pooled = @import("transport/thread_pool");
 const stdio_util = @import("../utils/stdio.zig");
+// Issue #746: query deadline watchdog extracted to its own submodule so the
+// UAF regression tests can link against the real `QueryDeadlineState` +
+// `startDeadlineWatchdogTask` without the full CLI module graph.
+const query_deadline = @import("query_deadline.zig");
+const QueryDeadlineState = query_deadline.QueryDeadlineState;
+const startDeadlineWatchdogTask = query_deadline.startDeadlineWatchdogTask;
 
 // GAP-0203: Gate hot-path debug logging to eliminate overhead in production
 // CANARY: REQ=REQ-PERF-LOG-GATE-001; FEATURE="HotPathLogGating"; ASPECT=DebugLogControl; STATUS=IMPL; OWNER=perf; UPDATED=2026-01-27
 // Set to true only when debugging protocol/query issues. In production, keep false.
 const HOT_PATH_LOGGING = false;
 const default_stream_page_size: u32 = query_runner.default_page_size;
-var g_cli_background_pool_mu: std.Io.Mutex = std.Io.Mutex.init;
-var g_cli_background_pool: ?*pooled.ThreadPool = null;
+// CLI background thread pool moved to `src/cli/query_deadline.zig` alongside
+// the watchdog entry points (#746 UAF fix prerequisite).
 
 // C library function for setting environment variables
 extern "c" fn setenv(name: [*:0]const u8, value: [*:0]const u8, overwrite: c_int) c_int;
@@ -723,129 +729,12 @@ fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     try server_main.main();
 }
 
-const QueryDeadlineState = struct {
-    last_progress_ns: std.atomic.Value(i64),
-    done: std.atomic.Value(bool),
-
-    fn init() QueryDeadlineState {
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
-        return .{
-            .last_progress_ns = std.atomic.Value(i64).init(@as(i64, @intCast(now_ns))),
-            .done = std.atomic.Value(bool).init(false),
-        };
-    }
-
-    fn touch(self: *QueryDeadlineState) void {
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
-        self.last_progress_ns.store(@as(i64, @intCast(now_ns)), .release);
-    }
-
-    fn finish(self: *QueryDeadlineState) void {
-        self.done.store(true, .release);
-    }
-};
-
-var active_query_deadline_state: ?*QueryDeadlineState = null;
-
-fn touchActiveQueryDeadlineWatchdog() void {
-    if (active_query_deadline_state) |state| {
-        state.touch();
-    }
-}
-
-fn finishActiveQueryDeadlineWatchdog() void {
-    if (active_query_deadline_state) |state| {
-        state.finish();
-    }
-}
-
-const DeadlineWatchdogCtx = struct {
-    allocator: std.mem.Allocator,
-    timeout_secs: u32,
-    state: *QueryDeadlineState,
-};
-
-fn getCliBackgroundPool(allocator: std.mem.Allocator) !*pooled.ThreadPool {
-    g_cli_background_pool_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_cli_background_pool_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-    if (g_cli_background_pool == null) {
-        g_cli_background_pool = try pooled.ThreadPool.init(allocator, .{
-            .num_threads = 2,
-            .queue_capacity = 8,
-        });
-    }
-    return g_cli_background_pool.?;
-}
-
-fn startDeadlineWatchdogTask(allocator: std.mem.Allocator, timeout_secs: u32, state: *QueryDeadlineState) void {
-    const pool = getCliBackgroundPool(allocator) catch return;
-    const ctx = allocator.create(DeadlineWatchdogCtx) catch return;
-    ctx.* = .{
-        .allocator = allocator,
-        .timeout_secs = timeout_secs,
-        .state = state,
-    };
-    if (!pool.submit(.{
-        .context = @ptrCast(ctx),
-        .callback = runDeadlineWatchdogTask,
-    })) {
-        allocator.destroy(ctx);
-    }
-}
-
-/// Issue #424: Process-level deadline watchdog for the query command.
-/// Fires only when no transport-level progress has been observed for
-/// `timeout_secs`, instead of enforcing a hard wall-clock deadline.
-fn deadlineWatchdog(timeout_secs: u32, state: *QueryDeadlineState) void {
-    const timeout_ns = @as(i64, @intCast(timeout_secs)) * std.time.ns_per_s;
-
-    while (!state.done.load(.acquire)) {
-        {
-            const ns: i64 = 100 * std.time.ns_per_ms;
-            const req = std.os.linux.timespec{ .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)), .nsec = @intCast(@mod(ns, std.time.ns_per_s)) };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-        }
-        if (state.done.load(.acquire)) return;
-
-        const now_ns: i128 = blk: {
-            var ts_tmp: std.os.linux.timespec = undefined;
-            const rc = std.os.linux.clock_gettime(.REALTIME, &ts_tmp);
-            if (rc != 0) break :blk @as(i128, 0);
-            break :blk @as(i128, ts_tmp.sec) * std.time.ns_per_s + @as(i128, ts_tmp.nsec);
-        };
-        const last_progress_ns = state.last_progress_ns.load(.acquire);
-        if (@as(i64, @intCast(now_ns)) - last_progress_ns < timeout_ns) continue;
-
-        const stderr = std.Io.File{ .handle = getStderrHandle() catch {
-            std.process.exit(@intFromEnum(ExitCode.general_error));
-        }, .flags = .{ .nonblocking = false } };
-        const io_wd = std.Io.Threaded.global_single_threaded.io();
-        stderr.writeStreamingAll(io_wd, "Error: query timed out after ") catch {};
-        var buf: [20]u8 = undefined;
-        const timeout_str = std.fmt.bufPrint(&buf, "{d}", .{timeout_secs}) catch "?";
-        stderr.writeStreamingAll(io_wd, timeout_str) catch {};
-        stderr.writeStreamingAll(io_wd, " seconds\n") catch {};
-        std.process.exit(@intFromEnum(ExitCode.general_error));
-    }
-}
-
-fn runDeadlineWatchdogTask(context: *anyopaque) void {
-    const ctx: *DeadlineWatchdogCtx = @ptrCast(@alignCast(context));
-    defer ctx.allocator.destroy(ctx);
-    deadlineWatchdog(ctx.timeout_secs, ctx.state);
-}
+// Query deadline watchdog types + entry points extracted to
+// `src/cli/query_deadline.zig` so the #746 UAF regression test can link
+// against the real implementations.  The aliases below preserve the existing
+// in-file call sites.
+const touchActiveQueryDeadlineWatchdog = query_deadline.touchActiveQueryDeadlineWatchdog;
+const finishActiveQueryDeadlineWatchdog = query_deadline.finishActiveQueryDeadlineWatchdog;
 
 // Issue #417: DSN (Data Source Name) parsing for --dsn flag
 // Supports: quic://host:port, grpc://host:port, host:port (defaults to QUIC)
@@ -1474,10 +1363,10 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         const estimated_chunks = @max(1, stmt_bytes / (8 * 1024)) + 1; // match executeChunkedQueries chunk size
         const chunked_deadline = @min(600, per_chunk_secs * @as(u32, @intCast(estimated_chunks)));
         var chunked_deadline_state = QueryDeadlineState.init();
-        active_query_deadline_state = &chunked_deadline_state;
+        query_deadline.active_query_deadline_state = &chunked_deadline_state;
         defer {
             chunked_deadline_state.finish();
-            active_query_deadline_state = null;
+            query_deadline.active_query_deadline_state = null;
         }
         startDeadlineWatchdogTask(allocator, chunked_deadline, &chunked_deadline_state);
         try executeChunkedQueries(allocator, .{
@@ -1524,10 +1413,10 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
 
     // Issue #424: Start a progress-based deadline watchdog for single queries.
     var query_deadline_state = QueryDeadlineState.init();
-    active_query_deadline_state = &query_deadline_state;
+    query_deadline.active_query_deadline_state = &query_deadline_state;
     defer {
         query_deadline_state.finish();
-        active_query_deadline_state = null;
+        query_deadline.active_query_deadline_state = null;
     }
     startDeadlineWatchdogTask(allocator, timeout_secs, &query_deadline_state);
 
