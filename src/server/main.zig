@@ -897,7 +897,12 @@ pub fn main() !void {
                 .callback = handleConnectionAsync,
             };
 
-            if (!pool.submit(work_item)) {
+            // GitLab #751: route connection admission through the *default*
+            // lane (15+ workers) rather than the 1-wide blocking lane. The
+            // blocking lane is reserved for genuinely blocking work (cert
+            // generation, audit writes); connection-handler dispatch is
+            // short and CPU-bound and must be parallel across connections.
+            if (!pool.submitDefault(work_item)) {
                 // #50: Reject instead of blocking main thread with sync handling.
                 // Inline handleConnectionAsync() would block the accept loop for
                 // the entire duration of the connection (seconds to minutes).

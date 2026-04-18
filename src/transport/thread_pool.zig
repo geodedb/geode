@@ -212,6 +212,21 @@ pub const ThreadPool = struct {
         return true;
     }
 
+    /// Submit a work item to the *default* lane (non-blocking).
+    /// Returns true if submitted, false if queue is full.
+    ///
+    /// Unlike `submit`/`submitBlocking`, which route to the 1-wide blocking
+    /// lane (reserved for genuinely blocking work such as cert generation
+    /// and audit writes — see GAP #751 triage), this helper dispatches to
+    /// the default lane serviced by all non-blocking worker threads.
+    /// Callers who need parallelism across N default-lane workers (e.g. the
+    /// QUIC accept loop dispatching connection admission) should use this
+    /// entry point.
+    pub fn submitDefault(self: *Self, item: WorkItem) bool {
+        _ = self.submitInternal(item, .{ .lane = .default }) catch return false;
+        return true;
+    }
+
     /// Submit a work item, blocking if queue is full.
     pub fn submitBlocking(self: *Self, item: WorkItem) !void {
         _ = try self.submitInternal(item, .{
