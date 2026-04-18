@@ -1085,13 +1085,20 @@ snapshot:
       python3 tools/release_target_manifest.py sync-goreleaser --manifest release/target_manifest.json --goreleaser .goreleaser.yaml
       python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .
 
-      # Run GoReleaser in snapshot mode (120m timeout for 8-target cross-compilation)
+      # Run GoReleaser in snapshot mode (120m timeout for 8-target cross-compilation).
+      # Snapshot mode's skip_upload: auto already avoids pushing to Homebrew,
+      # but we still want to keep the token unset (rather than falling back
+      # to $CI_JOB_TOKEN) to avoid any spurious 401s from the GitHub API probe.
+      GR_SKIP_FLAGS=""
+      if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+        GR_SKIP_FLAGS="--skip=homebrew"
+      fi
       echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
       GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
         SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
-        HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        goreleaser release --snapshot --clean --timeout 120m 2>&1 || {
+        HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-}" \
+        goreleaser release --snapshot --clean --timeout 120m ${GR_SKIP_FLAGS} 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           exit 1
@@ -1227,13 +1234,26 @@ build-release:
       cat /tmp/release-dockerfile-signoff.txt
 
       # Run GoReleaser to build artifacts (release publishing disabled in .goreleaser.yaml)
+      #
+      # HOMEBREW_TAP_TOKEN must be a GitHub PAT with write access to
+      # geodedb/homebrew-geode for the brews publishing step to work. When the
+      # project-level secret is not configured we skip the homebrew step
+      # entirely — falling back to $CI_JOB_TOKEN (a GitLab token) would still
+      # trip a 401 at api.github.com and fail the whole release build. Only
+      # the formula push is skipped; all binaries + deb/rpm/apk/darwin archives
+      # still build and get uploaded to the Package Registry below.
+      GR_SKIP_FLAGS=""
+      if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+        echo "HOMEBREW_TAP_TOKEN not set — skipping homebrew formula publish"
+        GR_SKIP_FLAGS="--skip=homebrew"
+      fi
       echo "Running GoReleaser build..."
       echo "SKIP_DOCKERHUB=${SKIP_DOCKERHUB}"
       GORELEASER_KEY="${GORELEASER_KEY:-}" \
         CI_REGISTRY_IMAGE="$CI_REGISTRY_IMAGE" \
         SKIP_DOCKERHUB="$SKIP_DOCKERHUB" \
-        HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-$CI_JOB_TOKEN}" \
-        goreleaser release --clean --timeout 120m 2>&1 || {
+        HOMEBREW_TAP_TOKEN="${HOMEBREW_TAP_TOKEN:-}" \
+        goreleaser release --clean --timeout 120m ${GR_SKIP_FLAGS} 2>&1 || {
           echo "GoReleaser failed, checking logs..."
           cat dist/*.log 2>/dev/null || true
           ls -la dist/ 2>/dev/null || true
