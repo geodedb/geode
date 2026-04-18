@@ -167,6 +167,7 @@ editors/vscode/*.vsix
 # Claude settings
 .claude/settings.local.json
 .claude/worktrees/
+.claude/scheduled_tasks.lock
 
 # Keep devcontainer configuration
 !.devcontainer/
