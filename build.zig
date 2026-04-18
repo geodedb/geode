@@ -2700,6 +2700,26 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // MATCH-by-property write-lock serialization regression:
+    // reproduction tests for the point_read QPS ceiling observed in
+    // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
+    // handlers (quic_connection_handler.zig, grpc_server.zig) compute
+    // `is_mutation` but unconditionally call acquireGraphWriteLock, so
+    // every MATCH-by-property serializes behind the exclusive writer
+    // lock.  The helper at tests/helpers/handler_lock_seam.zig is an
+    // intentional mirror of the inlined handler logic — the fix for the
+    // bug must update both the handler AND the mirror.
+    const handler_lock_seam_mod = b.createModule(.{ .root_source_file = b.path("tests/helpers/handler_lock_seam.zig"), .target = target, .optimize = optimize });
+    handler_lock_seam_mod.addImport("geode", root_mod);
+    const match_read_serial_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_match_property_read_serialization.zig"), .target = target, .optimize = optimize });
+    match_read_serial_test_mod.addImport("geode", root_mod);
+    match_read_serial_test_mod.addImport("handler_lock_seam", handler_lock_seam_mod);
+    const match_read_serial_tests = b.addTest(.{ .root_module = match_read_serial_test_mod });
+    const run_match_read_serial_tests = b.addRunArtifact(match_read_serial_tests);
+    test_step.dependOn(&run_match_read_serial_tests.step);
+    const match_read_serial_step = b.step("test-match-read-serial", "Run MATCH-by-property write-lock serialization reproduction tests");
+    match_read_serial_step.dependOn(&run_match_read_serial_tests.step);
+
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md
