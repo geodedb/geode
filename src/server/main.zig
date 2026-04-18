@@ -285,7 +285,7 @@ const graph_store = geode.graph_store;
 /// exits and deferred cleanup (persistence flush, thread pool drain) runs.
 var g_shutdown_requested = std.atomic.Value(bool).init(false);
 
-fn handleShutdownSignal(_: std.os.linux.SIG) callconv(.c) void {
+fn handleShutdownSignal(_: posix.SIG) callconv(.c) void {
     g_shutdown_requested.store(true, .release);
 }
 

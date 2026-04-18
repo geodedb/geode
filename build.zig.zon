@@ -61,8 +61,8 @@
         // Updated 2026-03-27: v0.1.11+ (a979f59) — split endpoint mutex,
         // ACK data race fix, bytes_in_flight leak fix, narrow handshake locks.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#b88e3a46776450a11998bfce2ae283d34455a29e",
-            .hash = "quic-0.1.11-gBIqUcqNNgAwvTY37dRYuK6iBYncB8YEHKmiTUX8eNRj",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#ede1b305a5e72921130c9addba7ac135cddc90f2",
+            .hash = "quic-0.1.11-gBIqUfKQNgCVumcHNPOO2E40sZJCgxZPvdvlu87JcrID",
         },
 
         // =======================================================================
@@ -93,8 +93,8 @@
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#e5aaca3ebc71472c054fcebe6e7a3bc064c2ee82",
-            .hash = "dns-0.1.0-x4U-zWXVEAAnOZ5ztklM3TtrW4-Sr5jklMM_mWdzWWQ9",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#3f4ff376433203021439eeb0785e2e0b1dc4c5cb",
+            .hash = "dns-0.1.0-x4U-zRbYEADpx1_cj2pe_dES9O_B0-MjW-jA_g3hWXez",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
@@ -127,8 +127,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpPS-AQAcOiKlDGx-6R8JkhFAx5S3p8MsyDyPznOY",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#d73e3fac2c8a7ddaed8d193860aba5d930f66a44",
-            .hash = "geode_client_zig-0.2.1-8ysbVw8QCQDKt4Hz0dW4rQTINnOif0FbFHVA5dq3Rw2O",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#170717d904cf8da068a0a949e7f21365efec4b93",
+            .hash = "geode_client_zig-0.2.1-8ysbVw8QCQCZsAQiDsmJF3pm3e57vQzdi6tYNJH0G2aj",
         },
 
         // =======================================================================
@@ -143,8 +143,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#3e7eceeebc12105af2f9fba26869d07abf00e0fc",
-            .hash = "wal-0.1.0-EqPqpoLbAwDrjPynZD6LJvElo7cSflDM5bfMNWUpTe5H",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#6e0a640692e6fc9d7e56e04a3854798f758ad133",
+            .hash = "wal-0.1.0-EqPqpnXcAwALKsyB25l-luqNQOgYfrI_avthpcSxQtDQ",
         },
 
         // Page-based graph storage engine
@@ -152,14 +152,14 @@
         // backup/recovery paths, bounded deserialization, persisted edge index,
         // and fail-closed integrity handling
         .graph_storage = .{
-            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#4e983ef3c1888269927b4903f4e225f2d1804ce5",
-            .hash = "graph_storage-0.1.0-9UyJS0y3CwA9EIMV3K2xezJNy_e7j8KVUqxkrj8uiMnJ",
+            .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#cc2d508765ee966aa4ed44cc83381adb08efc9eb",
+            .hash = "graph_storage-0.1.0-9UyJS0y3CwCZW-fxatyWmwMF6ECEhUWuEgBCAOE_X0Lk",
         },
 
         // Raft - Full Raft consensus with pre-vote, joint consensus, snapshotting
         .raft = .{
-            .url = "git+https://gitlab.com/devnw/zig/raft.git#ea8fbbd4e48001a03af5eca49f8268c610e314ec",
-            .hash = "raft-0.1.0-PqJyvkNCBACjoZFAj6zbFbS34oSK6-vWrefceScAmxxJ",
+            .url = "git+https://gitlab.com/devnw/zig/raft.git#320c9da917a481a87d49793e13aa647e3ee96c9b",
+            .hash = "raft-0.1.0-PqJyvuplBAAvTOTGEv5-m3LF9Y2Q-ieg4UmObVFQ7TFh",
         },
 
         // =======================================================================
@@ -168,8 +168,8 @@
 
         // Audit - Event modeling, filtering, CEF formatting, syslog/file sinks
         .audit = .{
-            .url = "git+https://gitlab.com/devnw/zig/audit.git#df70a860d603196ae984551f45945a3047bbd968",
-            .hash = "audit-0.1.0-J9TtCKFCAwAfz9avfYlwleJ25vI5Dugf9Tyz_ifmccQX",
+            .url = "git+https://gitlab.com/devnw/zig/audit.git#79cd1256b21a838757b4242d38557e77b01d8b93",
+            .hash = "audit-0.1.0-J9TtCKFCAwDpoiu7P8KZE9LR6_d4_7ko2HTIPcbBkcz6",
         },
 
         // HNSW - Approximate nearest-neighbor index with configurable distance metrics

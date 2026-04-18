@@ -541,18 +541,32 @@ test-macos-unit:
       zvm use "${ZIG_VERSION}"
       zig version
     # Debug build and tests only - ReleaseSafe is covered by test-cross-build jobs
-    # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout
-    # Pre-fetch the lazy protoc binary with our own retry to avoid the
-    # "invalid HTTP response: HttpConnectionClosing" that has hit 3 retries
-    # in a row on SaaS M1 runners (pipelines #883/#885/#886/#888).
+    # ReleaseSafe compilation on macOS M1 runners exceeds the 1h job timeout.
+    #
+    # Pre-fetch the lazy protoc binary via `zig fetch` so Zig's content-addressed
+    # cache (`${ZIG_GLOBAL_CACHE_DIR}/p/<hash>/`) is primed before `zig build`
+    # traverses protobuf's `.lazy = true` protoc dep. Writing the zip to a flat
+    # path under `p/` (as the old curl-based pre-fetch did) doesn't actually
+    # populate Zig's hash tree, so `zig build` would retry the network fetch
+    # and hit the same "HttpConnectionClosing" flakes on GitHub releases from
+    # SaaS M1 runners (pipelines #883/#885/#886/#888/#910/#911).
     - |
       PROTOC_URL="https://github.com/protocolbuffers/protobuf/releases/download/v32.1/protoc-32.1-osx-aarch_64.zip"
-      PROTOC_DEST="${ZIG_GLOBAL_CACHE_DIR}/p/protoc-32.1-osx-aarch_64.zip"
       mkdir -p "${ZIG_GLOBAL_CACHE_DIR}/p"
-      if [ ! -f "$PROTOC_DEST" ]; then
-        echo "Pre-fetching protoc-osx-aarch_64 with retries..."
-        curl -fsSL --retry 5 --retry-connrefused --retry-delay 10 --retry-max-time 300 \
-          -o "$PROTOC_DEST" "$PROTOC_URL" || echo "⚠ protoc pre-fetch failed, zig build will try network again"
+      echo "Pre-fetching protoc-osx-aarch_64 via zig fetch with retries..."
+      fetched=""
+      for i in 1 2 3 4 5; do
+        if zig fetch "$PROTOC_URL" >/tmp/zig-fetch-protoc.log 2>&1; then
+          echo "✓ protoc pre-fetch succeeded on attempt $i (hash=$(cat /tmp/zig-fetch-protoc.log))"
+          fetched=1
+          break
+        fi
+        echo "attempt $i failed:"
+        cat /tmp/zig-fetch-protoc.log || true
+        [ "$i" -lt 5 ] && { echo "retrying in 15s..."; sleep 15; }
+      done
+      if [ -z "$fetched" ]; then
+        echo "⚠ protoc pre-fetch failed after 5 attempts; zig build will retry on its own"
       fi
     - zig build --summary all
     - zig build test --summary all
