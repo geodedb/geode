@@ -983,7 +983,8 @@ snapshot:
       artifacts: false
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
-    - saas-linux-medium-amd64
+    - company
+    - dedicated
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -1116,7 +1117,8 @@ build-release:
       artifacts: false
   # Use GitLab hosted runners for Docker-in-Docker support
   tags:
-    - saas-linux-medium-amd64
+    - company
+    - dedicated
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -1267,7 +1269,7 @@ publish-release:
   interruptible: false
   # Use GitLab hosted runners
   tags:
-    - saas-linux-medium-amd64
+    - company
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
     - job: build-release
@@ -1372,7 +1374,7 @@ publish-packages:
   stage: publish
   interruptible: false
   tags:
-    - saas-linux-medium-amd64
+    - company
   image: curlimages/curl:latest
   needs:
     - build-release
