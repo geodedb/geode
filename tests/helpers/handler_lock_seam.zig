@@ -6,30 +6,24 @@
 //     const needs_store_lock = analysis.kind != .explain;
 //     const is_mutation = needs_store_lock and isMutatingProgram(&program);
 //     if (needs_store_lock) {
-//         graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+//         graph_lock_handle = if (is_mutation)
+//             graph_store.acquireGraphWriteLock(query_graph_name)
+//         else
+//             graph_store.acquireGraphReadLock(query_graph_name);
 //     }
 //
-// Notice that `is_mutation` is computed but never used to select the lock
-// kind — every non-EXPLAIN query takes the exclusive writer lock, which
-// serializes read-only MATCH traffic behind any other running query.
-// That's the bug this seam exists to catch.
+// Mutations (CREATE/MERGE/DELETE/SET/REMOVE and all DDL) take the
+// exclusive writer lock to prevent HashMap rehash races (GAP-0001,
+// CWE-362/CWE-416). Read-only queries take the shared reader lock so
+// concurrent MATCH-by-property traffic can run in parallel.
 //
 // This file is a *test-only* mirror — it exists so reproduction tests in
 // tests/test_match_property_read_serialization.zig can exercise the exact
 // same lock sequence the handler uses without spinning up a full QUIC
 // stack. DO NOT add production callers.
 //
-// When the fix for the MATCH-by-property write-lock regression lands, the
-// handler code in both transports AND the mirror below must be updated at
-// the same time. The intended fix is something like:
-//
-//     return if (is_mutation)
-//         .{ .choice = .write, .handle = graph_store.acquireGraphWriteLock(name) }
-//     else
-//         .{ .choice = .read,  .handle = graph_store.acquireGraphReadLock(name) };
-//
-// Once that's in place, every concurrent-read test below should flip from
-// FAIL to PASS without any further changes.
+// When the handler code in either transport changes its lock-acquisition
+// decision, this mirror must be updated at the same time.
 
 const std = @import("std");
 const geode = @import("geode");
@@ -56,14 +50,7 @@ pub fn decideLockChoice(
 ) LockChoice {
     if (!needs_store_lock) return .none;
     const is_mutation = query_traits.isMutatingProgram(program);
-    // BUG (as of commit 0704009b):
-    //   The handler *always* takes the write lock here regardless of
-    //   `is_mutation`.  After the fix, this must become:
-    //
-    //       return if (is_mutation) .write else .read;
-    //
-    _ = is_mutation; // classifier is computed but unused — that's the bug
-    return .write;
+    return if (is_mutation) .write else .read;
 }
 
 /// Acquire the same lock the transport handler would acquire for this

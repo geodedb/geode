@@ -2012,11 +2012,17 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
-                // Mixed read/write integration runs still deadlock or starve writers
-                // when live queries take shared GraphStore locks. Serialize query
-                // execution at the transport boundary until the read path is fully
-                // proven safe under concurrent access.
-                graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                // GAP-0752: Route non-mutating queries through the shared
+                // reader lock so concurrent MATCH-by-property traffic no
+                // longer serializes behind the exclusive writer lock. The
+                // GAP-0001 HashMap rehash race (CWE-362/CWE-416) was caused
+                // by mutations running under shared locks; mutations still
+                // acquire the exclusive writer lock below, so reads under
+                // the shared lock are safe.
+                graph_lock_handle = if (is_mutation)
+                    graph_store.acquireGraphWriteLock(query_graph_name)
+                else
+                    graph_store.acquireGraphReadLock(query_graph_name);
             }
             var lock_released = false;
             defer {

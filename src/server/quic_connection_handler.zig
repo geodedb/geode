@@ -2317,11 +2317,17 @@ fn handleClientMessage(
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             if (needs_store_lock) {
-                // Serialize GraphStore access for live QUIC queries. Shared
-                // read locks still permit starvation/corruption under mixed
-                // workloads, and correctness matters more than concurrency in
-                // the integration path.
-                graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                // GAP-0752: Route non-mutating queries through the shared
+                // reader lock so concurrent MATCH-by-property traffic no
+                // longer serializes behind the exclusive writer lock. The
+                // GAP-0001 HashMap rehash race (CWE-362/CWE-416) was caused
+                // by mutations running under shared locks; mutations still
+                // acquire the exclusive writer lock below, so reads under
+                // the shared lock are safe.
+                graph_lock_handle = if (is_mutation)
+                    graph_store.acquireGraphWriteLock(query_graph_name)
+                else
+                    graph_store.acquireGraphReadLock(query_graph_name);
             }
             // Safety net: release on any unexpected error path not explicitly handled.
             var lock_released = false;
