@@ -3241,6 +3241,10 @@ REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,performance,2026-01-16,
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-QUERY-OPT-001,Performance,QueryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PERF-QUIC-READLINE-001,BufferedProtoReader,TransportHotPath,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
+REQ-PERF-SESSION-ADMISSION-001,ConnectionAdmissionParallelism,RegressionRepro,IMPL,,,transport,2026-04-16,tests/test_session_admission_parallelism.sh
+REQ-PERF-SESSION-ADMISSION-002,ConnectionAdmissionLaneWiring,SourceAudit,IMPL,,,transport,2026-04-16,tests/test_thread_pool_admission_lane.sh
+REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,LaneParallelismBuild,IMPL,,,transport,2026-04-16,build.zig
+REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,UnitTest,IMPL,,,transport,2026-04-16,tests/test_thread_pool_lane_parallelism.zig
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,ConnectionWiring,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,CrossConnectionReuse,TESTED,,,engine,2026-02-17,src/server/query_plan_cache.zig
 REQ-PERF-SHARED-OPT-001,SharedQueryOptimizer,HintExtraction,TESTED,,,engine,2026-02-17,src/server/quic_connection_handler.zig

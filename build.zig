@@ -1706,6 +1706,20 @@ pub fn build(b: *std.Build) void {
     query_deadline_lifetime_test_step.dependOn(&run_query_deadline_lifetime_tests.step);
     test_step.dependOn(&query_deadline_lifetime_tests.step);
 
+    // GitLab #751: connection-admission thread-pool lane regression — pins
+    // the contract that the main accept-loop pool exposes a default-lane
+    // submit helper (`submitDefault`) and that tasks submitted via it run
+    // N-way parallel across the default-lane workers, rather than
+    // serialized behind the 1-wide blocking lane.  See
+    // docs/audit/bugfix-session-contention-triage.md for the root cause.
+    // CANARY: REQ=REQ-PERF-SESSION-ADMISSION-003; FEATURE="ConnectionAdmissionLaneAPI"; ASPECT=LaneParallelismBuild; STATUS=IMPL; OWNER=transport; UPDATED=2026-04-16
+    const thread_pool_lane_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_thread_pool_lane_parallelism.zig"), .target = target, .optimize = optimize }) });
+    thread_pool_lane_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_thread_pool_lane_tests = b.addRunArtifact(thread_pool_lane_tests);
+    const thread_pool_lane_test_step = b.step("test-thread-pool-lane-parallelism", "Run thread-pool admission-lane parallelism regression (issue #751)");
+    thread_pool_lane_test_step.dependOn(&run_thread_pool_lane_tests.step);
+    test_step.dependOn(&thread_pool_lane_tests.step);
+
     // GitLab #749: MetricsServer HTTP listener lifecycle regression — pins
     // the contract that `start()` actually binds a TCP listen socket (the
     // Zig 0.16 migration stubbed it out), `stop()` closes it, and the pair
