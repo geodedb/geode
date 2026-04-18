@@ -102,9 +102,20 @@ for dep in "${DEPS[@]}"; do
 
   url="${remote_base}#${commit}"
 
-  # Fetch zig package hash
+  # Skip deps not in build.zig.zon (REPO_MAP may list extras like entropy/capture
+  # that aren't geode deps).
+  if ! grep -q "^\s*\.$dep\s*=\s*\.{" "$ZON" 2>/dev/null; then
+    echo "SKIP $dep: not in build.zig.zon"
+    continue
+  fi
+
+  # Fetch zig package hash (guard set -e around `zig fetch` which fails for
+  # private/unavailable repos and would otherwise abort the whole run).
+  set +e
   pkg_hash=$(zig fetch "$url" 2>&1)
-  if [[ "$pkg_hash" == *error* ]] || [ -z "$pkg_hash" ]; then
+  fetch_rc=$?
+  set -e
+  if [ $fetch_rc -ne 0 ] || [[ "$pkg_hash" == *error* ]] || [ -z "$pkg_hash" ]; then
     echo "FAIL $dep: zig fetch failed — $pkg_hash"
     FAILED=$((FAILED + 1))
     continue
