@@ -74,4 +74,4 @@ Trivial `RETURN 1 AS x` timed out identically to the full count scan pre-fix, co
 
 ## F. Note on `.gitlab-ci.yml`
 
-Local working tree carried a pre-existing uncommitted `.gitlab-ci.yml` diff that swaps four `saas-linux-medium-amd64` runner tags to `company[, dedicated]`. This is infrastructure configuration unrelated to the #751 admission-lane fix and was explicitly flagged by the fixer as pre-existing. It has been left unstaged pending operator direction on whether the GitLab runner migration should land on `main` or in a separate CI-infrastructure change.
+The fixer's report flagged a pre-existing unstaged `.gitlab-ci.yml` diff that swapped four `saas-linux-medium-amd64` runner tags to `company[, dedicated]`. This infrastructure change is **unrelated to the #751 admission-lane fix**, but to keep the working tree clean it was committed as a standalone `ci:` commit (`1554dd18 ci: route Linux jobs to company-tagged runners`), separate from the #751 commit chain.
