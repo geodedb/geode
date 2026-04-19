@@ -2316,18 +2316,34 @@ fn handleClientMessage(
 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
+            // GAP-0753: Read path takes the shared graph lock only long
+            // enough to capture a QueryReadSession snapshot; downstream
+            // parse + plan + execute + row materialization runs against the
+            // snapshot without holding the graph lock. Mutations still take
+            // the exclusive writer lock for their full duration.
+            var read_session: ?graph_store.QueryReadSession = null;
+            var prev_active_read_store: ?*graph_store.GraphStore = null;
             if (needs_store_lock) {
-                // GAP-0752: Route non-mutating queries through the shared
-                // reader lock so concurrent MATCH-by-property traffic no
-                // longer serializes behind the exclusive writer lock. The
-                // GAP-0001 HashMap rehash race (CWE-362/CWE-416) was caused
-                // by mutations running under shared locks; mutations still
-                // acquire the exclusive writer lock below, so reads under
-                // the shared lock are safe.
-                graph_lock_handle = if (is_mutation)
-                    graph_store.acquireGraphWriteLock(query_graph_name)
-                else
-                    graph_store.acquireGraphReadLock(query_graph_name);
+                if (is_mutation) {
+                    // Mutations: exclusive writer lock held across execute to
+                    // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
+                    graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                } else {
+                    // Reads: snapshot under the shared reader lock, then
+                    // release immediately. Executor reads from the thread-
+                    // local active-snapshot store installed below.
+                    if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                        read_session = session;
+                        prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                            read_session.?.store(),
+                        );
+                    } else |_| {
+                        // Snapshot path unavailable (e.g. legacy no-adapter
+                        // test path): fall back to the wide-scope shared
+                        // reader lock, same semantics as GAP-0752.
+                        graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                    }
+                }
             }
             // Safety net: release on any unexpected error path not explicitly handled.
             var lock_released = false;
@@ -2341,6 +2357,15 @@ fn handleClientMessage(
                         graph_store.releaseGraphLock(h);
                         rebuildPendingIndexes(gpa, query_graph_name, &pending_index_rebuilds);
                     }
+                }
+                // The snapshot session is owned by this handler scope —
+                // always pop the active-store thread-local and deinit the
+                // session on every exit path (including early returns on
+                // error).  `pushActiveQueryReadStore` returned the previous
+                // value so nested read scopes restore correctly.
+                if (read_session) |*session| {
+                    graph_store.popActiveQueryReadStore(prev_active_read_store);
+                    session.deinit();
                 }
             }
 

@@ -2720,6 +2720,20 @@ pub fn build(b: *std.Build) void {
     const match_read_serial_step = b.step("test-match-read-serial", "Run MATCH-by-property write-lock serialization reproduction tests");
     match_read_serial_step.dependOn(&run_match_read_serial_tests.step);
 
+    // GAP-0753 handler lock-hold scope regression:
+    // after GAP-0752 the handler holds the shared graph read lock for the
+    // full parse + plan + execute + row-materialization window. This test
+    // pins the contract that `graph_store.snapshotUnderReadLock` takes the
+    // lock only long enough to capture a QueryReadSession snapshot (<10ms)
+    // and that concurrent readers do not serialize.
+    const handler_lock_hold_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_handler_lock_hold_scope.zig"), .target = target, .optimize = optimize });
+    handler_lock_hold_test_mod.addImport("geode", root_mod);
+    const handler_lock_hold_tests = b.addTest(.{ .root_module = handler_lock_hold_test_mod });
+    const run_handler_lock_hold_tests = b.addRunArtifact(handler_lock_hold_tests);
+    test_step.dependOn(&run_handler_lock_hold_tests.step);
+    const handler_lock_hold_step = b.step("test-handler-lock-hold-scope", "Run GAP-0753 handler lock-hold scope regression tests");
+    handler_lock_hold_step.dependOn(&run_handler_lock_hold_tests.step);
+
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md

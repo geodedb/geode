@@ -365,7 +365,12 @@ pub fn countNodesFastPath(
     // don't serialize the count behind them (epoch-based snapshot; zero
     // overhead when no concurrent mutations, deep-clone fallback when
     // there are).
-    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    //
+    // GAP-0753: Prefer the handler-installed `QueryReadSession` snapshot
+    // (via `getGlobalStore`) so we read from the pre-captured deep-clone
+    // instead of the live store. When no session is installed this falls
+    // back to the live store + ReadView as before.
+    const writable_store = graph_store.getGlobalStore(allocator);
     var read_view = graph_store.ReadView.init(allocator, writable_store);
     defer read_view.deinit();
     const store = read_view.getReadStore();
@@ -4680,7 +4685,13 @@ fn executeMultiHopGroupBy(
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
-    const writable_store = graph_store.getWritableGlobalStore(allocator);
+    // GAP-0753: Prefer the handler-installed `QueryReadSession` snapshot
+    // (via `getGlobalStore`) so we read from the pre-captured deep-clone
+    // instead of the live store. The handler takes the graph read lock only
+    // long enough to snapshot; by the time we get here the lock is dropped
+    // and we read from the session's arena-owned store. When no session is
+    // installed this falls back to the live store + ReadView as before.
+    const writable_store = graph_store.getGlobalStore(allocator);
 
     // Lightweight read view with epoch-based invalidation.
     // Zero overhead when no concurrent writes (common case).

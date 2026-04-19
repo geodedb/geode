@@ -4835,6 +4835,47 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
     };
 }
 
+/// Acquire the shared read lock for `graph_name`, capture a
+/// `QueryReadSession` snapshot of the current graph contents, release the
+/// lock, and return the session.  The returned session carries its own
+/// epoch reference and arena-allocated deep copy (see `QueryReadSession`
+/// at line 5320), so it is safe to read from after the lock is dropped.
+///
+/// This helper exists so transport handlers can avoid holding the shared
+/// reader lock across parse + plan + execute + row materialization (~30 ms
+/// per 500-node property lookup on small graphs).  The lock only needs to
+/// cover the snapshot-capture phase; every downstream read goes through the
+/// session's owned copy.
+///
+/// Caller owns the returned session and must call `session.deinit()` on
+/// every exit path.  Callers that want the executor to pick up the snapshot
+/// implicitly should pair this with `pushActiveQueryReadStore(session.store())`
+/// / `popActiveQueryReadStore(prev)` — see `src/execution/call_operations.zig`
+/// for the same pattern.
+///
+/// Mutations MUST still go through `acquireGraphWriteLock` + hold-through-
+/// execute — this helper is read-only by construction.
+///
+/// CANARY: REQ=REQ-PERF-HANDLER-LOCK-HOLD-001; FEATURE="HandlerLockHoldScope"; ASPECT=SnapshotCapture; STATUS=TESTED; TEST=tests/test_handler_lock_hold_scope.zig; OWNER=transport; UPDATED=2026-04-18
+pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u8) !QueryReadSession {
+    const handle = acquireGraphReadLock(graph_name);
+    defer releaseGraphLock(handle);
+
+    // `QueryReadSession.initIfAvailable` clones nodes/edges/id-maps from the
+    // primary global store into an arena-backed snapshot.  The primary store
+    // is the correct source: the per-graph lock held above serialises us
+    // against concurrent mutations on `graph_name` specifically, which is
+    // the only data this read will touch.
+    const source = getPrimaryGlobalStore(allocator);
+    if (try QueryReadSession.initIfAvailable(allocator, source)) |session| {
+        return session;
+    }
+    // initIfAvailable only returns null in paths that we do not expect on
+    // the handler read path; surface that as an explicit error so callers
+    // can fall back to the legacy wide-scope lock.
+    return error.SnapshotUnavailable;
+}
+
 /// Release a lock previously acquired via `acquireGraphReadLock` or
 /// `acquireGraphWriteLock`.
 pub fn releaseGraphLock(handle: GraphLockHandle) void {
