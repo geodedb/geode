@@ -80,9 +80,13 @@ fn runBulkMergeBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) 
                         return err;
                     };
 
-                    // Set the MERGE pattern property (this adds to merge_prop_index)
-                    const id_copy = try allocator.dupe(u8, id_str);
-                    store.setNodeProperty(node_id, prop_key, graph_store.PropertyValue{ .String = id_copy }) catch |err| {
+                    // Set the MERGE pattern property (this adds to merge_prop_index).
+                    // setNodeProperty calls copyPropertyValue internally (see
+                    // src/graph_store.zig:1621), so we pass the stack buffer
+                    // directly — pre-duping would leak one string per node
+                    // (surfaced as 4000 DebugAllocator leaks in the M0.3b
+                    // quarantine; see M0_3_CONCERNS.md).
+                    store.setNodeProperty(node_id, prop_key, graph_store.PropertyValue{ .String = id_str }) catch |err| {
                         std.debug.print("setNodeProperty failed: {s}\n", .{@errorName(err)});
                         return err;
                     };
@@ -126,14 +130,14 @@ fn runBulkMergeUpdateBenchmark(allocator: std.mem.Allocator, config: BenchmarkCo
     const labels: []const []const u8 = &.{label};
     const prop_key = "id";
 
-    // Insert all nodes first
+    // Insert all nodes first. setNodeProperty dupes internally, so we pass
+    // the stack buffer directly (no pre-dupe; would leak otherwise).
     for (0..config.node_count) |n| {
         var id_buf: [32]u8 = undefined;
         const id_str = std.fmt.bufPrint(&id_buf, "user-{d:0>8}", .{n}) catch unreachable;
 
         const node_id = try store.createNodeWithGraph(labels, graph_name);
-        const id_copy = try allocator.dupe(u8, id_str);
-        try store.setNodeProperty(node_id, prop_key, graph_store.PropertyValue{ .String = id_copy });
+        try store.setNodeProperty(node_id, prop_key, graph_store.PropertyValue{ .String = id_str });
     }
 
     // Now benchmark re-MERGE (lookup existing nodes)
@@ -203,6 +207,11 @@ fn printResult(result: BenchmarkResult) void {
 
 test "Benchmark: Bulk MERGE insert throughput (O(1) per op)" {
     const allocator = std.testing.allocator;
+    // Ensure the global store is torn down on scope exit — otherwise node
+    // properties (and the per-graph adapter state) leak across the 2000
+    // inserts. Second test's `deinitGlobalStore()` at its head would have
+    // masked it, but the last test in the binary needs the explicit defer.
+    defer graph_store.deinitGlobalStore();
     const config = BenchmarkConfig{};
 
     const result = try runBulkMergeBenchmark(allocator, config);
@@ -217,6 +226,7 @@ test "Benchmark: Bulk MERGE insert throughput (O(1) per op)" {
 
 test "Benchmark: Bulk MERGE update throughput (ON MATCH path)" {
     const allocator = std.testing.allocator;
+    defer graph_store.deinitGlobalStore();
     const config = BenchmarkConfig{};
 
     const result = try runBulkMergeUpdateBenchmark(allocator, config);

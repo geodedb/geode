@@ -1895,10 +1895,11 @@ pub fn build(b: *std.Build) void {
     const run_merge_throughput_bench = b.addRunArtifact(merge_throughput_bench);
     const merge_throughput_bench_step = b.step("bench-merge", "Run bulk MERGE throughput benchmarks");
     merge_throughput_bench_step.dependOn(&run_merge_throughput_bench.step);
-    // Quarantined from `bench` aggregate: 4000 DebugAllocator leaks in teardown
-    // (see docs/performance/2026-04-19-qps-closure/post-port/M0_3_CONCERNS.md).
-    // Individual `zig build bench-merge` remains available for on-demand runs.
-    // bench_step.dependOn(&run_merge_throughput_bench.step);
+    // Previously quarantined from `bench` aggregate (4000 DebugAllocator
+    // teardown leaks). Fixed by dropping the redundant id_str dupe
+    // (setNodeProperty copies via copyPropertyValue) and adding a
+    // deinitGlobalStore() defer per test.
+    bench_step.dependOn(&run_merge_throughput_bench.step);
 
     // Benchmarks (MFA latency + recovery contention) as executables for manual run / CI capture
     const mfa_stepup_latency_bench = b.addExecutable(.{ .name = "bench_mfa_stepup_latency", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_mfa_stepup_latency.zig"), .target = target, .optimize = optimize }) });
