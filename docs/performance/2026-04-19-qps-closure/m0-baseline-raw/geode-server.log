@@ -1,0 +1,501 @@
+[truncated — full log had 71856 lines of which 3422 were DebugAllocator leak reports; this file keeps the first 500 lines = startup + first ~20 leak stacks for forensic evidence]
+[startup] user store initialized (0ms)
+[startup] certificates ready (0ms)
+warning: Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.
+warning: Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.
+info(graph_storage_adapter): created graph '__geode_security'
+[startup] server initialized (504ms)
+[startup] auth cache configured (0ms)
+{"component":"transport","transport":"quic","tls":"true","port":3141,"library":"vendor/quic","api":"native-endpoint","status":"listening"}
+[startup] QUIC transport listening (0ms)
+[startup] thread pool initialized (3ms, 16 workers)
+[startup] server ready (511ms total)
+info(graph_storage_adapter): created graph 'default'
+[shutdown] signal received, flushing data and stopping...
+error(DebugAllocator): memory address 0x7fc228720000 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/schema/catalog.zig:740:42: 0x293f53c in ensureAutoIdIndex (lib.zig)
+        cols[0] = try self.allocator.dupe(u8, "id");
+                                         ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/crud_operations.zig:352:30: 0x293ffd0 in ensureAutoIndexes (lib.zig)
+        cat.ensureAutoIdIndex(label) catch |err| {
+                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/crud_operations.zig:1428:30: 0x23a970b in executeCreate (lib.zig)
+            ensureAutoIndexes(allocator, node_pattern.labels);
+                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution.zig:952:33: 0x23de4aa in executeStatementWithContext (lib.zig)
+            return executeCreate(allocator, c, create_graph, context);
+                                ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution.zig:824:50: 0x241c52e in executeProgramWithContext (lib.zig)
+        last_result = executeStatementWithContext(allocator, stmt, current_context) catch |err| {
+                                                 ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc22872008a leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/schema/catalog.zig:740:42: 0x293f53c in ensureAutoIdIndex (lib.zig)
+        cols[0] = try self.allocator.dupe(u8, "id");
+                                         ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/crud_operations.zig:352:30: 0x293ffd0 in ensureAutoIndexes (lib.zig)
+        cat.ensureAutoIdIndex(label) catch |err| {
+                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/crud_operations.zig:822:30: 0x2b90e9c in executeCreateForBatchWithTracking (lib.zig)
+            ensureAutoIndexes(allocator, &.{edge_label});
+                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/match_operations.zig:549:61: 0x2b935bb in executeMatchCreateQuery (lib.zig)
+        const result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+                                                            ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/query_execution.zig:1639:39: 0x2b647c4 in executeLegacyQueryWithResolvedParams (lib.zig)
+        return executeMatchCreateQuery(allocator, q, param_names.items, param_values.items, create_graph);
+                                      ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc0008 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc000c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc001c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc0020 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc0034 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc0038 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc0048 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc202bc004c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0008 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a000c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a001c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0020 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0034 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0038 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0048 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a004c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0060 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0064 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0074 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2030a0078 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:673:47: 0x236d267 in materializePathRow (lib.zig)
+        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+                                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2036c000c leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:962:39: 0x236875c in materializeNode (lib.zig)
+        const key = try allocator.dupe(u8, entry.key_ptr.*);
+                                      ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:663:46: 0x236cb34 in materializePathRow (lib.zig)
+        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+                                             ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:568:31: 0x2370e13 in exploreHops (lib.zig)
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+                              ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:591:24: 0x23719d2 in exploreHops (lib.zig)
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+                       ^
+/home/benji/src/devnw/codepros/geode/geode-qps-closure/src/execution/planned_read_runtime.zig:532:28: 0x2373686 in executePatternQuery (lib.zig)
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+                           ^
+(additional stack frames may have been skipped...)
+
+error(DebugAllocator): memory address 0x7fc2036c0018 leaked:
+/home/benji/.local/share/mise/installs/zig/0.16.0/lib/std/mem/Allocator.zig:454:40: 0x13d6b8e in dupe__anon_8374 (std.zig)
+    const new_buf = try allocator.alloc(T, m.len);
+                                       ^
