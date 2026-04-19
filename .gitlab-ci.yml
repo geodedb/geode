@@ -594,6 +594,12 @@ test-macos-unit:
 test-zig-release-safe:
   stage: test
   image: $ZIG_IMAGE
+  # ReleaseSafe build + full test suite straddles the project-default 1h budget
+  # on the shared runner — pipelines #910, #911, #916 all hit the 1h deadline
+  # while #913, #914 (same code) finished in 55-58 min. Give it 2h headroom
+  # consistent with the other long-running test jobs (test-macos-unit, snapshot,
+  # build-release) so transient runner slowness doesn't block releases.
+  timeout: 2h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
