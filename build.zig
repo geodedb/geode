@@ -1154,12 +1154,36 @@ pub fn build(b: *std.Build) void {
     ts_store_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     const run_ts_store_tests = b.addRunArtifact(ts_store_tests);
 
+    // M0.4: Stable JSON schema module for perf-bench result emission
+    // (shared by bench-timeseries and future bench exes that feed compare-bench).
+    const bench_schema_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/bench_schema.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // GAP-0279: bench_timeseries executable (ingestion + GQL eval benchmark)
     const bench_ts_exe = b.addExecutable(.{ .name = "bench_timeseries", .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_timeseries.zig"), .target = target, .optimize = optimize }) });
     bench_ts_exe.root_module.addImport("geode", root_mod);
+    bench_ts_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    // Forward argv (e.g. `-- --output benchmarks/results/ts.json`).
     const run_bench_ts = b.addRunArtifact(bench_ts_exe);
+    if (b.args) |args| run_bench_ts.addArgs(args);
     const bench_ts_step = b.step("bench-timeseries", "Run timeseries ingestion and query benchmarks");
     bench_ts_step.dependOn(&run_bench_ts.step);
+
+    // M0.4: bench schema unit test, exposed via `zig build test-perf` so the
+    // main `test` step stays lean. Plan M0.5/M0.6 will hang more tests off
+    // this step.
+    const bench_schema_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/perf/test_bench_schema.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    bench_schema_test.root_module.addImport("bench_schema", bench_schema_mod);
+    const run_bench_schema_test = b.addRunArtifact(bench_schema_test);
+    const test_perf_step = b.step("test-perf", "Run perf harness unit tests (bench schema, comparator)");
+    test_perf_step.dependOn(&run_bench_schema_test.step);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
