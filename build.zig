@@ -1440,26 +1440,33 @@ pub fn build(b: *std.Build) void {
 
     // Add Phase 1 performance benchmark step
     // CANARY: REQ=REQ-PERF-PHASE1-BENCH-001; FEATURE="PerformanceBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
-    const phase1_benchmarks = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmarks/phase1_benchmarks.zig"),
-            .target = target,
-            .optimize = .ReleaseFast, // Critical: benchmarks must run optimized
-        }),
+    //
+    // Phase 1 / Phase 2 are dual-mode: the existing `b.addTest` runs under
+    // `zig build test` to enforce the improvement-ratio thresholds via
+    // `testing.expect(improvement >= N)`. M0.5 adds a second exe wrapper
+    // (phase_benchmarks_main.zig) that calls the same `pub fn runAll`
+    // helpers and emits ResultDocument JSON. Both are attached to
+    // `benchmark_step` so the existing `zig build benchmark` still runs
+    // the assertions, and `zig build benchmark -- --output <path>` also
+    // writes the JSON rows for compare-bench (M0.6).
+    const phase1_bench_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/phase1_benchmarks.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
     });
+    const phase1_benchmarks = b.addTest(.{ .root_module = phase1_bench_mod });
     const run_phase1_benchmarks = b.addRunArtifact(phase1_benchmarks);
     const benchmark_step = b.step("benchmark", "Run performance benchmarks (all phases)");
     benchmark_step.dependOn(&run_phase1_benchmarks.step);
 
     // Add Phase 2 storage optimization benchmarks
     // CANARY: REQ=REQ-PERF-PHASE2-BENCH-001; FEATURE="StorageBenchmarking"; ASPECT=BUILD; STATUS=EXEMPT; OWNER=performance; UPDATED=2025-10-16
-    const phase2_benchmarks = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmarks/phase2_benchmarks.zig"),
-            .target = target,
-            .optimize = .ReleaseFast,
-        }),
+    const phase2_bench_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/phase2_benchmarks.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
     });
+    const phase2_benchmarks = b.addTest(.{ .root_module = phase2_bench_mod });
     const run_phase2_benchmarks = b.addRunArtifact(phase2_benchmarks);
     benchmark_step.dependOn(&run_phase2_benchmarks.step);
 
@@ -1474,6 +1481,26 @@ pub fn build(b: *std.Build) void {
     });
     const run_phase3_benchmarks = b.addRunArtifact(phase3_benchmarks);
     benchmark_step.dependOn(&run_phase3_benchmarks.step);
+
+    // M0.5: JSON-emitting wrapper exe that runs the same phase1 + phase2
+    // benches as the test blocks above but writes a ResultDocument
+    // (schema in benchmarks/bench_schema.zig). Enables compare-bench (M0.6)
+    // and perf-gate.sh (M0.7) to diff bench runs between branches.
+    const phase_bench_exe = b.addExecutable(.{
+        .name = "phase_benchmarks",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/phase_benchmarks_main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    phase_bench_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    phase_bench_exe.root_module.addImport("phase1_benchmarks", phase1_bench_mod);
+    phase_bench_exe.root_module.addImport("phase2_benchmarks", phase2_bench_mod);
+    const run_phase_bench_exe = b.addRunArtifact(phase_bench_exe);
+    if (b.args) |args| run_phase_bench_exe.addArgs(args);
+    benchmark_step.dependOn(&run_phase_bench_exe.step);
 
     // Add acceptance test target
     const cpa_accept_exe = b.addExecutable(.{

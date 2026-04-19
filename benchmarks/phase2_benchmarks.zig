@@ -266,9 +266,7 @@ fn deriveKey(master_key: []const u8, page_id: u32) [32]u8 {
 }
 
 /// Benchmark: HashMap lookup + conditional derive
-fn benchmarkKeyHashMap(iterations: usize, master_key: []const u8) !u64 {
-    const allocator = testing.allocator;
-
+fn benchmarkKeyHashMap(iterations: usize, master_key: []const u8, allocator: std.mem.Allocator) !u64 {
     var cache = std.AutoHashMap(u32, [32]u8).init(allocator);
     defer cache.deinit();
 
@@ -328,13 +326,14 @@ fn benchmarkKeyPrecomputed(iterations: usize, master_key: []const u8) !u64 {
 test "Benchmark: Pre-computed Keys vs HashMap" {
     const master_key = "test_master_key_32_bytes_long!" ++ &[_]u8{0};
     const iterations = 10000;
+    const allocator = testing.allocator;
 
     // Warmup
-    _ = try benchmarkKeyHashMap(100, master_key);
+    _ = try benchmarkKeyHashMap(100, master_key, allocator);
     _ = try benchmarkKeyPrecomputed(100, master_key);
 
     // Actual benchmark
-    const hashmap_time = try benchmarkKeyHashMap(iterations, master_key);
+    const hashmap_time = try benchmarkKeyHashMap(iterations, master_key, allocator);
     const precomputed_time = try benchmarkKeyPrecomputed(iterations, master_key);
 
     const hashmap_ns = hashmap_time / iterations;
@@ -402,4 +401,80 @@ test "Phase 2 Optimization Summary" {
 
     std.debug.print("Expected aggregate improvement: 4-10x storage throughput\n", .{});
     std.debug.print("Status: ✅ All benchmarks passed target thresholds\n\n", .{});
+}
+
+// =============================================================================
+// Public bench-runner API (M0.5) — same pattern as phase1_benchmarks.
+// Rationale documented in phase1_benchmarks.zig: one well-warmed sample per
+// deterministic micro-bench; the existing `test` blocks enforce thresholds.
+// =============================================================================
+
+pub const BenchResult = struct {
+    name: []const u8,
+    iterations: usize,
+    improvement_ratio: f64,
+    wall_time_ns: u64,
+};
+
+pub fn runAll(allocator: std.mem.Allocator, out: *std.ArrayList(BenchResult)) !void {
+    // --- chunked_adler32_4k ---
+    {
+        const page_size = 4096;
+        const data = try allocator.alloc(u8, page_size);
+        defer allocator.free(data);
+        for (data, 0..) |*byte, i| {
+            byte.* = @as(u8, @intCast((i * 17 + 123) % 256));
+        }
+
+        const iterations: usize = 10_000;
+        _ = try benchmarkAdler32Baseline(100, data);
+        _ = try benchmarkAdler32Optimized(100, data);
+        const baseline_ns = try benchmarkAdler32Baseline(iterations, data);
+        const optimized_ns = try benchmarkAdler32Optimized(iterations, data);
+        const improvement = @as(f64, @floatFromInt(baseline_ns)) / @as(f64, @floatFromInt(optimized_ns));
+        try out.append(allocator, .{
+            .name = "chunked_adler32_4k",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = baseline_ns + optimized_ns,
+        });
+    }
+
+    // --- dirty_page_tracking ---
+    {
+        const iterations: usize = 1_000;
+        _ = try benchmarkChecksumBaseline(allocator, 10);
+        _ = try benchmarkChecksumOptimized(allocator, 10);
+        const baseline_ns = try benchmarkChecksumBaseline(allocator, iterations);
+        const optimized_ns = try benchmarkChecksumOptimized(allocator, iterations);
+        const improvement = @as(f64, @floatFromInt(baseline_ns)) / @as(f64, @floatFromInt(optimized_ns));
+        try out.append(allocator, .{
+            .name = "dirty_page_tracking",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = baseline_ns + optimized_ns,
+        });
+    }
+
+    // --- precomputed_keys_vs_hashmap ---
+    {
+        const master_key = "test_master_key_32_bytes_long!" ++ &[_]u8{0};
+        const iterations: usize = 10_000;
+        _ = try benchmarkKeyHashMap(100, master_key, allocator);
+        _ = try benchmarkKeyPrecomputed(100, master_key);
+        const hashmap_ns = try benchmarkKeyHashMap(iterations, master_key, allocator);
+        const precomputed_ns = try benchmarkKeyPrecomputed(iterations, master_key);
+        const improvement = @as(f64, @floatFromInt(hashmap_ns)) / @as(f64, @floatFromInt(precomputed_ns));
+        try out.append(allocator, .{
+            .name = "precomputed_keys_vs_hashmap",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = hashmap_ns + precomputed_ns,
+        });
+    }
+
+    // NOTE: "batch_write_vs_immediate_sync" is intentionally skipped — the
+    // underlying fns are stubs pending Zig 0.16 std.Io.Dir migration
+    // (see benchmarkImmediateSync / benchmarkBatchSync comments). When the
+    // migration lands, add it here as `batch_write_vs_immediate_sync`.
 }

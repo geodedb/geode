@@ -510,3 +510,108 @@ test "Phase 1 Optimization Summary" {
     std.debug.print("Expected aggregate improvement: 2-3x query execution\n", .{});
     std.debug.print("Status: ✅ All benchmarks passed target thresholds\n\n", .{});
 }
+
+// =============================================================================
+// Public bench-runner API (M0.5) — invoked by the phase_benchmarks_main
+// wrapper to emit stable JSON (ResultDocument rows). Mirrors the per-test
+// measurements above but without std.debug.print / testing.expect noise.
+//
+// Rationale (M0.5): the `test` blocks already do warmup + measure +
+// assert-threshold. For the JSON emitter we only need one well-warmed
+// sample per bench — these are deterministic micro-benches and the
+// existing `test` step enforces the thresholds. No median-of-6 needed.
+// =============================================================================
+
+pub const BenchResult = struct {
+    /// Stable snake_case scenario name (without phase prefix). The caller
+    /// (phase_benchmarks_main) prepends "phase1_" / "phase2_".
+    name: []const u8,
+    iterations: usize,
+    /// Improvement ratio (baseline_ns / optimized_ns — higher is better).
+    improvement_ratio: f64,
+    /// Total wall-clock ns spent running baseline+optimized for the sampled run.
+    wall_time_ns: u64,
+};
+
+pub fn runAll(allocator: std.mem.Allocator, out: *std.ArrayList(BenchResult)) !void {
+    // --- stack_buffer_vs_allocprint ---
+    {
+        const iterations: usize = 10_000;
+        // Warmup
+        _ = try benchmarkStackBuffer(allocator, 100);
+        _ = try benchmarkAllocPrint(allocator, 100);
+        const stack_ns = try benchmarkStackBuffer(allocator, iterations);
+        const alloc_ns = try benchmarkAllocPrint(allocator, iterations);
+        const improvement = @as(f64, @floatFromInt(alloc_ns)) / @as(f64, @floatFromInt(stack_ns));
+        try out.append(allocator, .{
+            .name = "stack_buffer_vs_allocprint",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = stack_ns + alloc_ns,
+        });
+    }
+
+    // --- presized_vs_zero_arraylist ---
+    {
+        const iterations: usize = 1_000;
+        _ = try benchmarkPresizedArrayList(allocator, 10);
+        _ = try benchmarkZeroCapacityArrayList(allocator, 10);
+        const presized_ns = try benchmarkPresizedArrayList(allocator, iterations);
+        const zero_ns = try benchmarkZeroCapacityArrayList(allocator, iterations);
+        const improvement = @as(f64, @floatFromInt(zero_ns)) / @as(f64, @floatFromInt(presized_ns));
+        try out.append(allocator, .{
+            .name = "presized_vs_zero_arraylist",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = presized_ns + zero_ns,
+        });
+    }
+
+    // --- simd_vs_scalar_cosine ---
+    {
+        const iterations: usize = 100_000;
+        _ = try benchmarkSimdCosine(1_000);
+        _ = try benchmarkScalarCosine(1_000);
+        const simd_ns = try benchmarkSimdCosine(iterations);
+        const scalar_ns = try benchmarkScalarCosine(iterations);
+        const improvement = @as(f64, @floatFromInt(scalar_ns)) / @as(f64, @floatFromInt(simd_ns));
+        try out.append(allocator, .{
+            .name = "simd_vs_scalar_cosine",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = simd_ns + scalar_ns,
+        });
+    }
+
+    // --- simd_vs_scalar_dot ---
+    {
+        const iterations: usize = 100_000;
+        _ = try benchmarkSimdDot(1_000);
+        _ = try benchmarkScalarDot(1_000);
+        const simd_ns = try benchmarkSimdDot(iterations);
+        const scalar_ns = try benchmarkScalarDot(iterations);
+        const improvement = @as(f64, @floatFromInt(scalar_ns)) / @as(f64, @floatFromInt(simd_ns));
+        try out.append(allocator, .{
+            .name = "simd_vs_scalar_dot",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = simd_ns + scalar_ns,
+        });
+    }
+
+    // --- cached_vs_uncached_index ---
+    {
+        const iterations: usize = 10_000;
+        _ = try benchmarkCachedIndexLookup(allocator, 100);
+        _ = try benchmarkUncachedIndexEvaluation(allocator, 100);
+        const cached_ns = try benchmarkCachedIndexLookup(allocator, iterations);
+        const uncached_ns = try benchmarkUncachedIndexEvaluation(allocator, iterations);
+        const improvement = @as(f64, @floatFromInt(uncached_ns)) / @as(f64, @floatFromInt(cached_ns));
+        try out.append(allocator, .{
+            .name = "cached_vs_uncached_index",
+            .iterations = iterations,
+            .improvement_ratio = improvement,
+            .wall_time_ns = cached_ns + uncached_ns,
+        });
+    }
+}
