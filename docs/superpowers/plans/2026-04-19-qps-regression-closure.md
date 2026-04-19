@@ -1856,9 +1856,124 @@ git commit -m "perf(ci): hard floor for point_read c=4 QPS (GAP-0805 regression 
 
 ---
 
+### Task 1.5: Fix `materializeNode` leak in `src/execution/planned_read_runtime.zig` (M2 prerequisite)
+
+**Status:** 📌 PENDING — surfaced during M0.10 baseline capture (commit `7a2eadb3`). Blocks any M2 work that runs sustained MATCH traffic (one_hop / two_hop / fan_out) under DebugAllocator, and causes real (unreported) memory growth under `smp_allocator`. PointReadView (M1.2/M1.3) bypasses this path entirely, so M1 is not blocked.
+
+**Why it exists:** `materializeNode` (at `src/execution/planned_read_runtime.zig:962`) calls `allocator.dupe(u8, entry.key_ptr.*)` for every property key on every returned row, and `:950` duplicates the graph name. Neither dupe is tracked in `owned_entities` for cleanup, nor backed by the per-query arena. Under DebugAllocator, a 90 min loadtest run accumulated 3,422 leak stacks (captured in `docs/performance/2026-04-19-qps-closure/m0-baseline-raw/geode-server.log`, first 500 lines). The accumulated live-block count pegged the server at 8 cores (DebugAllocator bookkeeping cost) and had to be SIGKILL'd. Under `smp_allocator` the leaks don't emit diagnostics but memory still grows unbounded.
+
+**Scope guardrail:** this task is a real correctness fix, not a perf optimization. Keep it small and targeted — don't refactor the row materialization path beyond what the leak requires. Behavior must remain identical aside from deallocation.
+
+**Files:**
+- Modify: `src/execution/planned_read_runtime.zig:950` (`graph_name` dupe) and `:962` (property-key dupe inside `materializeNode`), plus any sibling dupe in the path-row helper at `:663`.
+- Modify: `src/execution/execution_context.zig` if the per-query arena allocator isn't already exposed in a way `materializeNode` can consume it. (Check first — GAP-0755 already added a query_arena_pool on ExecutionContext; surface a `context.scratchAllocator()` method if one doesn't exist.)
+- Test: `tests/test_match_row_no_leak.zig` (new) — runs `MATCH (n:Person) RETURN n` under DebugAllocator, asserts zero leaks at teardown.
+- Optional test: `tests/test_match_path_no_leak.zig` — same for `MATCH (a:Person)-[:KNOWS]->(b) RETURN a, b`.
+
+**Recommended fix approach:**
+
+Plumb the caller's per-query arena into `materializeNode` so property-key and graph-name dupes are released when the query completes:
+
+1. Change `materializeNode`'s signature (and its callers' call sites) from `(allocator: std.mem.Allocator, ...)` to accept the query's scratch allocator. The scratch allocator should come from `ExecutionContext.query_arena_pool` (GAP-0755 hot-site pattern — see `src/execution/match_operations.zig` for the canonical consumer of `context.query_arena.allocator()`).
+2. Every `allocator.dupe(...)` call inside `materializeNode` now uses that arena. No explicit `free` is needed — the arena is reset / released when the query finishes.
+3. If the `Node` struct currently stores the dupes and expects the CALLER to own the lifetime, audit for any path that outlives the query (e.g. cursor-style result streams). None should exist for the MATCH row path but verify via `grep -n 'materializeNode\|materializeNodeOnlyRow\|materializePathRow' src/`.
+
+**TDD steps:**
+
+- [ ] **Step 1: Write the failing leak test**
+
+Create `tests/test_match_row_no_leak.zig`. Mirror the pattern in existing tests that use `std.testing.allocator` with DebugAllocator — the testing allocator reports leaks on teardown. Run a small MATCH that returns a node with properties, deinit all result structures, then rely on the test framework's implicit leak check.
+
+```zig
+const std = @import("std");
+const testing = std.testing;
+const graph_store = @import("graph_store");
+const execution = @import("execution");
+
+test "MATCH (n:Person) RETURN n does not leak property-key dupes" {
+    const allocator = testing.allocator;
+
+    var store = try graph_store.GraphStore.init(allocator, "leak-test-graph");
+    defer store.deinit();
+
+    _ = try store.createNode(&.{"Person"}, &.{
+        .{ .key = "name", .value = .{ .string = "Alice" } },
+        .{ .key = "age",  .value = .{ .integer = 30 } },
+    }, null);
+
+    // Execute MATCH through the runtime. Use the same entry point the handler
+    // uses — likely executePatternQuery or the higher-level executor. Copy
+    // the call shape from an existing test in tests/test_handler_*.zig.
+    var result = try execution.runMatchForTest(allocator, &store,
+        "MATCH (n:Person) RETURN n", .{});
+    defer result.deinit();
+
+    try testing.expectEqual(@as(usize, 1), result.rows.len);
+    // Implicit leak check fires here when the test scope exits.
+}
+```
+
+If `execution.runMatchForTest` doesn't exist, look at `tests/test_handler_lock_hold_scope.zig` (referenced in the prior plan close-out) for how the handler is exercised in-process and adapt — or create a tiny helper in `execution.zig` that does the minimum setup. Keep scope tight.
+
+- [ ] **Step 2: Run test, expect FAIL**
+
+```bash
+zig build test --summary all 2>&1 | grep -E "test_match_row_no_leak|leaked"
+```
+
+Expected: test runs, DebugAllocator reports leaked allocations from `materializeNode:962` and/or `:950`.
+
+- [ ] **Step 3: Implement the arena fix**
+
+Thread `context.query_arena.allocator()` (or the equivalent scratch-allocator accessor) into `materializeNode` and `materializePathRow`. Replace every `allocator.dupe(u8, ...)` site inside those functions with the arena. Do NOT change their return types — the `Node` / `Row` structs still own their references, but now the owning memory is the arena, which the query cleanup frees as a unit.
+
+- [ ] **Step 4: Run test, expect PASS**
+
+Expected: zero leaks, test passes. Also run the full unit suite — must still be green:
+
+```bash
+zig build test --summary all 2>&1 | tail -10
+```
+
+Floor: 1036+ tests pass (current baseline per CLAUDE.md).
+
+- [ ] **Step 5: Sustained-load sanity check (optional, requires live server)**
+
+Start a server under `zig-out/bin/geode serve`, run the Go loadtest for `one_hop` at `-levels 1,2,4,8 -duration 10s` (four times the previous spiral-inducing workload), then SIGKILL the server. Inspect `/tmp/geode-server.log` — should contain 0 `DebugAllocator: memory address ... leaked` lines.
+
+Note: server is built in ReleaseFast so DebugAllocator isn't active for normal traffic. The relevance is that the arena fix prevents the unbounded heap growth `smp_allocator` was silently accumulating. Reuse `scripts/perf-gate.sh` with `LOADTEST_SCENARIOS="one_hop"` for a faster repro.
+
+- [ ] **Step 6: Commit**
+
+```bash
+pre-commit run --all-files || true
+git add src/execution/planned_read_runtime.zig tests/test_match_row_no_leak.zig [other-touched-files]
+git commit -m "fix(execution): arena-back materializeNode dupes (Task 1.5)
+
+planned_read_runtime.zig:950,962 and materializePathRow:663 duplicated
+the graph name and every property key into a caller-provided allocator
+without any tracking for release. 90-min loadtest under DebugAllocator
+accumulated 3,422 leak stacks; server spiralled into an 8-core peg.
+
+Thread the per-query arena (ExecutionContext.query_arena — GAP-0755)
+into materializeNode / materializePathRow so dupes drop with the
+query. Zero behavioral change aside from deallocation.
+
+Regression test: tests/test_match_row_no_leak.zig asserts
+MATCH (n:Person) RETURN n is leak-free under std.testing.allocator.
+
+Refs: docs/performance/2026-04-19-qps-closure/m0-baseline-raw/M0_10_CONCERNS.md"
+```
+
+**Exit criterion:** `tests/test_match_row_no_leak.zig` passes under the default testing allocator (implicit leak detection), and a 10 s `one_hop` loadtest at c=1..8 terminates with an empty leak report in the server log.
+
+---
+
 ## Milestone 2 — Close one_hop and fan_out gaps
 
 Both currently saturate <10 QPS with 1:1 latency scaling — classic serialization. We don't yet know where.
+
+> **Prerequisite:** Task 1.5 (`materializeNode` leak fix) must land before any Milestone 2 perf-gate runs — M2 scenarios hammer the materialization path and will spiral the server otherwise.
 
 ### Task 2.1: Profile one_hop under c=1
 
