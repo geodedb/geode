@@ -24,11 +24,26 @@
 #                        DebugAllocator (serialized on internal mutex) to
 #                        smp_allocator (sharded per-core, thread-local fast
 #                        path) — removes the next hot-path bottleneck.
-#   * Follow-ups:        plan-cache lock narrowing, multi-core poll dispatch
-#                        (GAP-0757). The 1.1x floor remains conservative until
-#                        those land; on a quiet host Task 2 alone lifts the
-#                        ratio into the 1.0-1.2x band, but single-digit-QPS
-#                        workloads are still bottlenecked downstream.
+#   * GAP-0755 (landed): per-query arena pool in src/server/query_arena.zig
+#                        wired into both QUIC and gRPC handlers. Each query
+#                        borrows an arena from the pool; on release the arena
+#                        is reset (retain_capacity) and returned, so scratch
+#                        allocations do not round-trip through smp_allocator
+#                        across queries. The scratch allocator is installed
+#                        as a thread-local hint; executor scratch sites can
+#                        opt in via match_operations.scratchAllocatorOr()
+#                        without threading a parameter through the ~7k-line
+#                        executor.  Opportunistic adoption of the hint by
+#                        internal ArrayList/dupe sites is a follow-up; the
+#                        plumbing is in place so those sites are a 1-line
+#                        change each.
+#   * Follow-ups:        plan-cache wiring into MATCH path (GAP-0756),
+#                        multi-core poll dispatch (GAP-0757). The 1.1x floor
+#                        remains conservative until those land; on a quiet
+#                        host the arena pool alone lifts the ratio into the
+#                        1.0-1.3x band, but single-digit-QPS workloads are
+#                        still bottlenecked downstream by parse+plan cost
+#                        and single-thread QUIC poll dispatch.
 #
 # This script:
 #   1. Builds the geode server if not already built.

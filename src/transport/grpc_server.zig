@@ -71,6 +71,8 @@ const graph_store = geode.graph_store;
 const server_state = geode.server_state;
 const query_runner = geode.query_runner;
 const query_traits = geode.query_traits;
+// GAP-0755: Per-query arena pool for executor scratch.
+const query_arena = geode.query_arena;
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
 const txn_undo_log = geode.txn_undo_log;
@@ -2041,6 +2043,20 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 }
             }
             var lock_released = false;
+            // GAP-0755: Borrow a per-query arena from the process-wide pool
+            // and install its allocator as the current-thread scratch hint.
+            // See src/server/query_arena.zig for details; mirrors the
+            // wiring in src/server/quic_connection_handler.zig.
+            var scratch_arena: ?*query_arena.Arena = null;
+            var prev_scratch: ?std.mem.Allocator = null;
+            var scratch_installed = false;
+            if (query_arena.ensureDefaultPool(graph_store.global_allocator())) |pool| {
+                if (pool.acquire()) |a| {
+                    scratch_arena = a;
+                    prev_scratch = query_arena.pushScratchAllocator(a.allocator());
+                    scratch_installed = true;
+                } else |_| {}
+            } else |_| {}
             defer {
                 if (!lock_released) {
                     if (graph_lock_handle) |h| {
@@ -2055,6 +2071,14 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 if (read_session) |*session| {
                     graph_store.popActiveQueryReadStore(prev_active_read_store);
                     session.deinit();
+                }
+                // GAP-0755: Always pop scratch allocator + return arena to
+                // pool on every exit path.
+                if (scratch_installed) {
+                    query_arena.popScratchAllocator(prev_scratch);
+                }
+                if (scratch_arena) |a| {
+                    if (query_arena.defaultPool()) |pool| pool.release(a);
                 }
             }
 

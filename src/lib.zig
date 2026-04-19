@@ -211,6 +211,8 @@ pub const server_mvcc = @import("server/txn/mvcc.zig");
 // (it needs ParseOptions/ParseResult which are defined in this file)
 // Re-export query_plan_cache for unified binary
 pub const query_plan_cache = @import("server/query_plan_cache.zig");
+// GAP-0755: Per-query arena pool for executor scratch.
+pub const query_arena = @import("server/query_arena.zig");
 // Re-export server_flags for unified binary
 pub const server_flags = @import("server/server_flags.zig");
 // Re-export backup_manager for unified binary

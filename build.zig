@@ -2746,6 +2746,18 @@ pub fn build(b: *std.Build) void {
     const smp_alloc_step = b.step("test-smp-allocator-no-regression", "Run GAP-0754 graph_store smp_allocator regression tests");
     smp_alloc_step.dependOn(&run_smp_alloc_tests.step);
 
+    // GAP-0755 per-query arena pool regression:
+    // pins the contract that `src/server/query_arena.zig` Pool reuses
+    // arenas across acquire/release cycles (capacity-bound free list) and
+    // tears down over-capacity arenas cleanly on release.
+    const query_arena_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_query_arena_reuse.zig"), .target = target, .optimize = optimize });
+    query_arena_test_mod.addImport("geode", root_mod);
+    const query_arena_tests = b.addTest(.{ .root_module = query_arena_test_mod });
+    const run_query_arena_tests = b.addRunArtifact(query_arena_tests);
+    test_step.dependOn(&run_query_arena_tests.step);
+    const query_arena_step = b.step("test-query-arena-reuse", "Run GAP-0755 per-query arena pool reuse tests");
+    query_arena_step.dependOn(&run_query_arena_tests.step);
+
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md

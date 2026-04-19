@@ -60,6 +60,8 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
 const query_plan_cache = geode.query_plan_cache;
+// GAP-0755: Per-query arena pool for executor scratch.
+const query_arena = geode.query_arena;
 const query_traits = geode.query_traits;
 const explain_payload = geode.explain_payload;
 const profile_payload = geode.profile_payload;
@@ -2347,6 +2349,27 @@ fn handleClientMessage(
             }
             // Safety net: release on any unexpected error path not explicitly handled.
             var lock_released = false;
+            // GAP-0755: Borrow a per-query arena from the process-wide pool
+            // and install its allocator as the current-thread scratch hint.
+            // Executor code that opts in via `query_arena.currentScratchAllocator()`
+            // gets arena-backed scratch memory that is reset between
+            // queries; sites that still use the graph_store global
+            // allocator remain correct (the fall-back is unchanged).
+            var scratch_arena: ?*query_arena.Arena = null;
+            var prev_scratch: ?std.mem.Allocator = null;
+            var scratch_installed = false;
+            if (query_arena.ensureDefaultPool(graph_store.global_allocator())) |pool| {
+                if (pool.acquire()) |a| {
+                    scratch_arena = a;
+                    prev_scratch = query_arena.pushScratchAllocator(a.allocator());
+                    scratch_installed = true;
+                } else |_| {
+                    // Acquisition failure is non-fatal — the executor falls
+                    // back to the graph_store global allocator.
+                }
+            } else |_| {
+                // Pool init failure is non-fatal for the same reason.
+            }
             defer {
                 if (!lock_released) {
                     if (graph_lock_handle) |h| {
@@ -2366,6 +2389,16 @@ fn handleClientMessage(
                 if (read_session) |*session| {
                     graph_store.popActiveQueryReadStore(prev_active_read_store);
                     session.deinit();
+                }
+                // GAP-0755: Always pop the scratch allocator and return the
+                // arena to the pool on every exit path (including early
+                // error returns).  Release resets the arena so the next
+                // borrower starts at the top of the retained buffer.
+                if (scratch_installed) {
+                    query_arena.popScratchAllocator(prev_scratch);
+                }
+                if (scratch_arena) |a| {
+                    if (query_arena.defaultPool()) |pool| pool.release(a);
                 }
             }
 

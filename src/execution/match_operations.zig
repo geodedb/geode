@@ -2,6 +2,22 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const graph_store = @import("../graph_store.zig");
+// GAP-0755: Per-query arena pool — executor scratch sites can opt in via
+// `query_arena.currentScratchAllocator()` when one is installed by the
+// transport handler. When unset (legacy / test paths), the fallback
+// allocator is used and behaviour is unchanged.
+const query_arena = @import("../server/query_arena.zig");
+
+/// Returns the handler-installed per-query scratch allocator if one is
+/// bound on the current thread, otherwise `fallback`.  Scratch sites that
+/// do not need to return memory to the caller (e.g. intermediate
+/// ArrayList buffers, start-slot lists) should prefer this over `fallback`
+/// to take advantage of the arena reset between queries.
+///
+/// GAP-0755 — see src/server/query_arena.zig for the pool wiring.
+pub inline fn scratchAllocatorOr(fallback: std.mem.Allocator) std.mem.Allocator {
+    return query_arena.currentScratchAllocator() orelse fallback;
+}
 
 // GAP-0522: Diagnostic counter for full-scan MATCH queries (no indexable labels).
 // Observable via getFullScanCount() for monitoring/alerting.
@@ -923,6 +939,33 @@ pub fn executeMatchQueryWithParams(allocator: std.mem.Allocator, q: ast.Query, p
 
 pub fn executeMatchQuery(allocator: std.mem.Allocator, q: ast.Query) !ExecutionResult {
     return executeMatchQueryImpl(allocator, q, &.{}, &.{}, &.{}, null);
+}
+
+// GAP-0755: Per-query arena pool wired entry point. Accepts an explicit
+// `scratch_allocator` that the transport handler has borrowed from the
+// process-wide `query_arena.Pool`. The scratch allocator is installed on
+// the current thread for the duration of the call so that opportunistic
+// scratch sites (via `scratchAllocatorOr`) pick it up; `allocator` remains
+// the caller-owned allocator that `ExecutionResult.rows`/`columns` must
+// live on (they outlive the arena reset).
+//
+// The handler today already installs the scratch allocator on the thread-
+// local via `query_arena.pushScratchAllocator`, so in steady state this
+// wrapper's push/pop is a no-op — it exists so direct callers (future
+// planner-driven execution paths, tests) can bind a scratch allocator
+// without going through the transport layer.
+pub fn executeMatchQueryImplWithScratch(
+    allocator: std.mem.Allocator,
+    scratch_allocator: std.mem.Allocator,
+    q: ast.Query,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    inline_let_bindings: []ast.LetBinding,
+    current_graph: ?[]const u8,
+) !ExecutionResult {
+    const prev = query_arena.pushScratchAllocator(scratch_allocator);
+    defer query_arena.popScratchAllocator(prev);
+    return executeMatchQueryImpl(allocator, q, param_names, param_values, inline_let_bindings, current_graph);
 }
 
 // CANARY: REQ=REQ-GQL-COMMA-MATCH; FEATURE="CommaSeparatedMatches"; ASPECT=CartesianProduct; STATUS=TESTED; OWNER=engine; UPDATED=2025-10-12
