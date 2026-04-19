@@ -1185,6 +1185,36 @@ pub fn build(b: *std.Build) void {
     const test_perf_step = b.step("test-perf", "Run perf harness unit tests (bench schema, comparator)");
     test_perf_step.dependOn(&run_bench_schema_test.step);
 
+    // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
+    // if any matched row regressed beyond max(15%, 3σ). Invoked from
+    // scripts/perf-gate.sh (M0.7) and CI.
+    const compare_bench_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/compare_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    compare_bench_mod.addImport("bench_schema", bench_schema_mod);
+
+    const compare_bench_exe = b.addExecutable(.{
+        .name = "geode-compare-bench",
+        .root_module = compare_bench_mod,
+    });
+    const run_compare_bench = b.addRunArtifact(compare_bench_exe);
+    if (b.args) |args| run_compare_bench.addArgs(args);
+    const compare_bench_step = b.step("compare-bench", "Compare two benchmark result files");
+    compare_bench_step.dependOn(&run_compare_bench.step);
+
+    // M0.6: compare-bench unit test
+    const compare_bench_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/perf/test_compare_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    compare_bench_test.root_module.addImport("bench_schema", bench_schema_mod);
+    compare_bench_test.root_module.addImport("compare_bench", compare_bench_mod);
+    const run_compare_bench_test = b.addRunArtifact(compare_bench_test);
+    test_perf_step.dependOn(&run_compare_bench_test.step);
+
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_ext_builtins_tests.step);
