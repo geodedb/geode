@@ -1,0 +1,200 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 417K of event 'cycles:P'
+# Event count (approx.): 319118681077
+#
+# Children      Self  Command  Shared Object      Symbol
+# ........  ........  .......  .................  ...........................................................................................................................................................................................................................................................................................................................................................
+#
+    72.98%     0.27%  geode    [kernel.kallsyms]  [k] entry_SYSCALL_64_after_hwframe
+            |
+             --72.77%--entry_SYSCALL_64_after_hwframe
+                       |
+                        --72.70%--do_syscall_64
+                                  |
+                                  |--43.98%--__x64_sys_futex
+                                  |          |
+                                  |           --41.94%--do_futex
+                                  |                     |
+                                  |                      --41.61%--futex_wait
+                                  |                                |
+                                  |                                 --40.39%--__futex_wait
+                                  |                                           |
+                                  |                                           |--37.24%--futex_wait_queue
+                                  |                                           |          |
+                                  |                                           |          |--34.20%--schedule
+                                  |                                           |          |          |
+                                  |                                           |          |           --33.98%--__schedule
+                                  |                                           |          |                     |
+                                  |                                           |          |                     |--12.69%--dequeue_task_fair
+                                  |                                           |          |                     |          |
+                                  |                                           |          |                     |           --12.39%--dequeue_entities
+                                  |                                           |          |                     |                     |
+                                  |                                           |          |                     |                     |--8.21%--dequeue_entity
+                                  |                                           |          |                     |                     |          |
+                                  |                                           |          |                     |                     |          |--3.16%--update_curr
+                                  |                                           |          |                     |                     |          |
+                                  |                                           |          |                     |                     |          |--1.99%--update_load_avg
+                                  |                                           |          |                     |                     |          |
+                                  |                                           |          |                     |                     |           --1.21%--update_entity_lag
+                                  |                                           |          |                     |                     |
+                                  |                                           |          |                     |                      --3.40%--dl_server_stop
+                                  |                                           |          |                     |                                |
+                                  |                                           |          |                     |                                |--1.48%--hrtimer_start_range_ns
+                                  |                                           |          |                     |                                |
+                                  |                                           |          |                     |                                 --1.29%--hrtimer_try_to_cancel.part.0
+                                  |                                           |          |                     |
+                                  |                                           |          |                     |--8.13%--finish_task_switch.isra.0
+                                  |                                           |          |                     |          |
+                                  |                                           |          |                     |          |--4.84%--asm_sysvec_call_function
+                                  |                                           |          |                     |          |          |
+                                  |                                           |          |                     |          |           --4.65%--sysvec_call_function
+                                  |                                           |          |                     |          |                     |
+                                  |                                           |          |                     |          |                      --4.61%--__sysvec_call_function
+                                  |                                           |          |                     |          |                                |
+                                  |                                           |          |                     |          |                                 --4.56%--__flush_smp_call_function_queue
+                                  |                                           |          |                     |          |                                           |
+                                  |                                           |          |                     |          |                                            --4.47%--flush_tlb_func
+                                  |                                           |          |                     |          |                                                      |
+                                  |                                           |          |                     |          |                                                       --4.31%--native_flush_tlb_one_user
+                                  |                                           |          |                     |          |
+                                  |                                           |          |                     |          |--1.32%--__perf_event_task_sched_in
+                                  |                                           |          |                     |          |
+                                  |                                           |          |                     |           --1.05%--asm_sysvec_apic_timer_interrupt
+                                  |                                           |          |                     |
+                                  |                                           |          |                     |--7.02%--pick_next_task_fair
+                                  |                                           |          |                     |          |
+                                  |                                           |          |                     |           --6.03%--sched_balance_newidle
+                                  |                                           |          |                     |                     |
+                                  |                                           |          |                     |                      --4.49%--sched_balance_update_blocked_averages
+                                  |                                           |          |                     |                                |
+                                  |                                           |          |                     |                                 --1.30%--update_load_avg
+                                  |                                           |          |                     |
+                                  |                                           |          |                      --2.58%--psi_task_switch
+                                  |                                           |          |                                |
+                                  |                                           |          |                                 --1.72%--psi_group_change
+                                  |                                           |          |
+                                  |                                           |           --1.62%--hrtimer_start_range_ns
+                                  |                                           |
+                                  |                                           |--1.35%--futex_wait_setup
+                                  |                                           |
+                                  |                                            --1.17%--futex_unqueue
+                                  |
+                                  |--19.17%--__x64_sys_munmap
+                                  |          |
+                                  |           --19.16%--__vm_munmap
+                                  |                     |
+                                  |                      --19.01%--do_vmi_munmap
+                                  |                                |
+                                  |                                 --18.94%--do_vmi_align_munmap
+                                  |                                           |
+                                  |                                           |--16.82%--vms_complete_munmap_vmas
+                                  |                                           |          |
+                                  |                                           |           --16.42%--vms_clear_ptes
+                                  |                                           |                     |
+                                  |                                           |                      --15.55%--tlb_finish_mmu
+                                  |                                           |                                |
+                                  |                                           |                                 --15.15%--flush_tlb_mm_range
+                                  |                                           |                                           |
+                                  |                                           |                                            --15.01%--on_each_cpu_cond_mask
+                                  |                                           |                                                      |
+                                  |                                           |                                                       --15.01%--smp_call_function_many_cond
+                                  |                                           |                                                                 |
+                                  |                                           |                                                                  --3.95%--flush_tlb_func
+                                  |                                           |                                                                            |
+                                  |                                           |                                                                             --3.77%--native_flush_tlb_one_user
+                                  |                                           |
+                                  |                                            --1.53%--vms_gather_munmap_vmas
+                                  |                                                      |
+                                  |                                                       --1.27%--__split_vma
+                                  |
+                                  |--4.69%--syscall_exit_to_user_mode
+                                  |          |
+                                  |          |--2.01%--__rseq_handle_notify_resume
+                                  |          |
+                                  |           --1.57%--arch_exit_to_user_mode_prepare.isra.0
+                                  |                     |
+                                  |                      --1.36%--switch_fpu_return
+                                  |                                |
+                                  |                                 --1.05%--restore_fpregs_from_fpstate
+                                  |
+                                   --2.91%--vm_mmap_pgoff
+                                             |
+                                              --2.69%--do_mmap
+                                                        |
+                                                         --2.41%--__mmap_region
+                                                                   |
+                                                                    --1.78%--perf_event_mmap
+                                                                              |
+                                                                               --1.70%--perf_iterate_sb.constprop.0
+                                                                                         |
+                                                                                          --1.69%--perf_iterate_ctx
+
+    72.71%     0.62%  geode    [kernel.kallsyms]  [k] do_syscall_64
+            |
+             --72.10%--do_syscall_64
+                       |
+                       |--43.98%--__x64_sys_futex
+                       |          |
+                       |           --41.94%--do_futex
+                       |                     |
+                       |                      --41.61%--futex_wait
+                       |                                |
+                       |                                 --40.39%--__futex_wait
+                       |                                           |
+                       |                                           |--37.24%--futex_wait_queue
+                       |                                           |          |
+                       |                                           |          |--34.20%--schedule
+                       |                                           |          |          |
+                       |                                           |          |           --33.98%--__schedule
+                       |                                           |          |                     |
+                       |                                           |          |                     |--12.69%--dequeue_task_fair
+                       |                                           |          |                     |          |
+                       |                                           |          |                     |           --12.39%--dequeue_entities
+                       |                                           |          |                     |                     |
+                       |                                           |          |                     |                     |--8.21%--dequeue_entity
+                       |                                           |          |                     |                     |          |
+                       |                                           |          |                     |                     |          |--3.16%--update_curr
+                       |                                           |          |                     |                     |          |
+                       |                                           |          |                     |                     |          |--1.99%--update_load_avg
+                       |                                           |          |                     |                     |          |
+                       |                                           |          |                     |                     |           --1.21%--update_entity_lag
+                       |                                           |          |                     |                     |
+                       |                                           |          |                     |                      --3.40%--dl_server_stop
+                       |                                           |          |                     |                                |
+                       |                                           |          |                     |                                |--1.48%--hrtimer_start_range_ns
+                       |                                           |          |                     |                                |
+                       |                                           |          |                     |                                 --1.29%--hrtimer_try_to_cancel.part.0
+                       |                                           |          |                     |
+                       |                                           |          |                     |--8.13%--finish_task_switch.isra.0
+                       |                                           |          |                     |          |
+                       |                                           |          |                     |          |--4.84%--asm_sysvec_call_function
+                       |                                           |          |                     |          |          |
+                       |                                           |          |                     |          |           --4.65%--sysvec_call_function
+                       |                                           |          |                     |          |                     |
+                       |                                           |          |                     |          |                      --4.61%--__sysvec_call_function
+                       |                                           |          |                     |          |                                |
+                       |                                           |          |                     |          |                                 --4.56%--__flush_smp_call_function_queue
+                       |                                           |          |                     |          |                                           |
+                       |                                           |          |                     |          |                                            --4.47%--flush_tlb_func
+                       |                                           |          |                     |          |                                                      |
+                       |                                           |          |                     |          |                                                       --4.31%--native_flush_tlb_one_user
+                       |                                           |          |                     |          |
+                       |                                           |          |                     |          |--1.32%--__perf_event_task_sched_in
+                       |                                           |          |                     |          |
+                       |                                           |          |                     |           --1.05%--asm_sysvec_apic_timer_interrupt
+                       |                                           |          |                     |
+                       |                                           |          |                     |--7.02%--pick_next_task_fair
+                       |                                           |          |                     |          |
+                       |                                           |          |                     |           --6.03%--sched_balance_newidle
+                       |                                           |          |                     |                     |
+                       |                                           |          |                     |                      --4.49%--sched_balance_update_blocked_averages
+                       |                                           |          |                     |                                |
+                       |                                           |          |                     |                                 --1.30%--update_load_avg
+                       |                                           |          |                     |
+                       |                                           |          |                      --2.58%--psi_task_switch
+                       |                                           |          |                                |
+                       |                                           |          |                                 --1.72%--psi_group_change
