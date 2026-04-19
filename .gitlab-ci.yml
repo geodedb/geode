@@ -1242,15 +1242,19 @@ build-release:
       # Run GoReleaser to build artifacts (release publishing disabled in .goreleaser.yaml)
       #
       # HOMEBREW_TAP_TOKEN must be a GitHub PAT with write access to
-      # geodedb/homebrew-geode for the brews publishing step to work. When the
-      # project-level secret is not configured we skip the homebrew step
-      # entirely — falling back to $CI_JOB_TOKEN (a GitLab token) would still
-      # trip a 401 at api.github.com and fail the whole release build. Only
-      # the formula push is skipped; all binaries + deb/rpm/apk/darwin archives
-      # still build and get uploaded to the Package Registry below.
+      # geodedb/homebrew-geode for the brews publishing step to work. We skip
+      # the homebrew step by default — a plain "is the env var non-empty" check
+      # turned out not to be enough on pipelines #916 / #922, where
+      # HOMEBREW_TAP_TOKEN was defined in CI/CD variables but held a stale /
+      # placeholder value that GitHub rejected with 401 Bad credentials, failing
+      # the whole build-release job. Require an explicit opt-in via
+      # HOMEBREW_PUBLISH=1 before attempting the formula push.
+      #
+      # All binaries + deb/rpm/apk/darwin archives still build and upload to
+      # the Package Registry regardless of the homebrew step.
       GR_SKIP_FLAGS=""
-      if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
-        echo "HOMEBREW_TAP_TOKEN not set — skipping homebrew formula publish"
+      if [ "${HOMEBREW_PUBLISH:-0}" != "1" ] || [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+        echo "homebrew formula publish skipped (HOMEBREW_PUBLISH=${HOMEBREW_PUBLISH:-0}, token_set=$([ -n "${HOMEBREW_TAP_TOKEN:-}" ] && echo yes || echo no))"
         GR_SKIP_FLAGS="--skip=homebrew"
       fi
       echo "Running GoReleaser build..."
