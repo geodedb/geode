@@ -16,6 +16,20 @@
 #                   response poll loop at src/server/main.zig:815 is
 #                   parallelized.  Tracked as a follow-up to GAP-0752.
 #
+# Progression history:
+#   * GAP-0752 (landed): handler takes SHARED read lock on non-mutating queries.
+#   * GAP-0753 (landed): handler releases the lock before execute — lock hold
+#                        scope bounded by snapshot capture (<10 ms).
+#   * GAP-0754 (landed): graph_store global allocator swapped from
+#                        DebugAllocator (serialized on internal mutex) to
+#                        smp_allocator (sharded per-core, thread-local fast
+#                        path) — removes the next hot-path bottleneck.
+#   * Follow-ups:        plan-cache lock narrowing, multi-core poll dispatch
+#                        (GAP-0757). The 1.1x floor remains conservative until
+#                        those land; on a quiet host Task 2 alone lifts the
+#                        ratio into the 1.0-1.2x band, but single-digit-QPS
+#                        workloads are still bottlenecked downstream.
+#
 # This script:
 #   1. Builds the geode server if not already built.
 #   2. Spawns a throwaway server on an ephemeral port with a fresh data-dir.

@@ -5004,7 +5004,7 @@ pub fn deinitGlobalAdapter() void {
 
 fn syncGlobalAdapterForDataDir(data_dir: ?[]const u8) void {
     if (data_dir) |dir| {
-        _ = initGlobalAdapter(global_gpa.allocator(), dir) catch |err| {
+        _ = initGlobalAdapter(global_allocator(), dir) catch |err| {
             log.warn("Failed to initialize engine-backed adapter", &.{
                 Attr.string("error", @errorName(err)),
                 Attr.string("data_dir", dir),
@@ -5190,9 +5190,22 @@ pub fn releaseStoreWriteLock() void {
     g_store_rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
 }
 
-/// P2-3: Global allocator for persistent graph store data (better than page_allocator)
-var global_gpa: std.heap.DebugAllocator(.{}) = .{};
-var global_allocator_init = false;
+/// GAP-0754: Global allocator for persistent graph store data.
+///
+/// Historical context: this was `std.heap.DebugAllocator(.{})`. That
+/// allocator is thread-safe via an internal mutex that serializes every
+/// alloc/free; after GAP-0753 narrowed the handler lock-hold window,
+/// DebugAllocator's mutex became the next hot-path bottleneck on the
+/// MATCH read path.
+///
+/// `std.heap.smp_allocator` is a sharded per-core allocator with
+/// thread-local fast paths — the same allocator `src/server/allocator_config.zig`
+/// already selects by default for the top-level server allocator. It has no
+/// init state, so callers can use `global_allocator()` directly without a
+/// prior initialization step.
+pub fn global_allocator() std.mem.Allocator {
+    return std.heap.smp_allocator;
+}
 
 /// Start a background thread that periodically flushes dirty data to disk.
 /// Needed for cross-process visibility (CLI user commands → server).
@@ -5203,7 +5216,7 @@ var g_persist_interval_ms: u64 = 5000;
 pub fn startPersistenceThread(interval_ms: u64) void {
     g_persist_interval_ms = interval_ms;
     g_persist_shutdown.store(false, .release);
-    const pool = pooled.ThreadPool.init(global_gpa.allocator(), .{
+    const pool = pooled.ThreadPool.init(global_allocator(), .{
         .num_threads = 1,
         .queue_capacity = 4,
     }) catch return;
@@ -5467,10 +5480,8 @@ pub const ReadView = struct {
 /// CANARY: REQ=REQ-PERF-WAL-004; FEATURE="WriteAheadLog"; ASPECT=PersistenceLoop; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 /// Issue #445: When WAL is enabled, the persistence loop syncs the WAL (fsync) on every
 fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
-    // P2-3: Initialize global allocator on first use
-    if (!global_allocator_init) {
-        global_allocator_init = true;
-    }
+    // GAP-0754: `global_allocator()` (smp_allocator) has no init step, so the
+    // former `global_allocator_init` latch is no longer needed.
 
     // Fast path: already initialized — atomic acquire ensures we see all
     // writes (global_store, last_data_dir) that preceded the release store.
@@ -5552,17 +5563,17 @@ fn getPrimaryGlobalStore(allocator: std.mem.Allocator) *GraphStore {
 
     // Update last_data_dir
     if (last_data_dir) |dir| {
-        global_gpa.allocator().free(dir);
+        global_allocator().free(dir);
     }
     if (current_data_dir) |curr_dir| {
-        last_data_dir = global_gpa.allocator().dupe(u8, curr_dir) catch null;
+        last_data_dir = global_allocator().dupe(u8, curr_dir) catch null;
     } else {
         last_data_dir = null;
     }
 
     syncGlobalAdapterForDataDir(last_data_dir);
 
-    global_store_allocator = global_gpa.allocator();
+    global_store_allocator = global_allocator();
     global_store = GraphStore.init(global_store_allocator.?) catch @panic("OOM: failed to initialize global graph store");
     // Set data_dir for per-graph storage
     if (last_data_dir) |dir| {

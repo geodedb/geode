@@ -2734,6 +2734,18 @@ pub fn build(b: *std.Build) void {
     const handler_lock_hold_step = b.step("test-handler-lock-hold-scope", "Run GAP-0753 handler lock-hold scope regression tests");
     handler_lock_hold_step.dependOn(&run_handler_lock_hold_tests.step);
 
+    // GAP-0754 graph_store global allocator regression:
+    // pins the contract that `graph_store.global_allocator()` returns
+    // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression
+    // to `DebugAllocator` would push a 100k alloc/free loop over the 50ms budget.
+    const smp_alloc_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_smp_allocator_no_regression.zig"), .target = target, .optimize = optimize });
+    smp_alloc_test_mod.addImport("geode", root_mod);
+    const smp_alloc_tests = b.addTest(.{ .root_module = smp_alloc_test_mod });
+    const run_smp_alloc_tests = b.addRunArtifact(smp_alloc_tests);
+    test_step.dependOn(&run_smp_alloc_tests.step);
+    const smp_alloc_step = b.step("test-smp-allocator-no-regression", "Run GAP-0754 graph_store smp_allocator regression tests");
+    smp_alloc_step.dependOn(&run_smp_alloc_tests.step);
+
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md
