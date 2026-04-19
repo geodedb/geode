@@ -2758,6 +2758,21 @@ pub fn build(b: *std.Build) void {
     const query_arena_step = b.step("test-query-arena-reuse", "Run GAP-0755 per-query arena pool reuse tests");
     query_arena_step.dependOn(&run_query_arena_tests.step);
 
+    // GAP-0756 SharedQueryOptimizer handler-wire regression:
+    // pins the contract that `SharedQueryOptimizer.optimizeQuery` caches plans
+    // across calls — two identical MATCH queries produce hit_count=1, miss_count=1.
+    // If a future refactor drops the handler's `state.query_optimizer.?.optimizeQuery`
+    // call the direct cache still works; this test is the floor.  The integration
+    // script `tests/integration/scripts/match_property_read_scaling.sh` covers the
+    // observable end-to-end QPS uplift.
+    const plan_cache_hit_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_plan_cache_hit.zig"), .target = target, .optimize = optimize });
+    plan_cache_hit_test_mod.addImport("geode", root_mod);
+    const plan_cache_hit_tests = b.addTest(.{ .root_module = plan_cache_hit_test_mod });
+    const run_plan_cache_hit_tests = b.addRunArtifact(plan_cache_hit_tests);
+    test_step.dependOn(&run_plan_cache_hit_tests.step);
+    const plan_cache_hit_step = b.step("test-plan-cache-hit", "Run GAP-0756 SharedQueryOptimizer handler-wire regression tests");
+    plan_cache_hit_step.dependOn(&run_plan_cache_hit_tests.step);
+
     // Unlabeled MATCH(n) count-pushdown regression:
     // reproduction tests for the 30s flake in shell_comprehensive_tests.yml::count-nodes.
     // Triage: docs/audit/bugfix-shell-count-nodes-triage.md

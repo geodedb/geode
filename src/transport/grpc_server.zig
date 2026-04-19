@@ -82,6 +82,8 @@ const gql_ast = geode.gql.ast;
 const gql_print = geode.printer;
 const planned_read_runtime = geode.planned_read_runtime;
 const node_scan_stream = geode.node_scan_stream;
+// GAP-0756: SharedQueryOptimizer cross-connection plan cache (parity with QUIC handler).
+const query_plan_cache = geode.query_plan_cache;
 const geode_auth = @import("geode_auth");
 const grpc_tls = @import("grpc_tls.zig");
 // Issue #515: Backup types for new gRPC handlers
@@ -112,6 +114,9 @@ pub const GrpcConfig = struct {
     compact_profile: bool = false,
     memcurve_profile: bool = false,
     security_manager: ?*geode_auth.SecurityManager = null,
+    // GAP-0756: Shared query optimizer — plan cache reused across connections.
+    // Populated from `server_init.InitContext.shared_optimizer` by `main.zig`.
+    shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
 };
 
 const SessionEntry = struct {
@@ -310,6 +315,9 @@ fn initServerState(allocator: std.mem.Allocator, config: GrpcConfig) !*server_st
     state.query_mem_limit_bytes = config.spill_threshold;
     state.storage_checksum_error = config.storage_checksum_error;
     state.security_manager = config.security_manager;
+    // GAP-0756: Wire the shared query optimizer so the gRPC handler hits the
+    // cross-connection plan cache the same way the QUIC handler does.
+    state.query_optimizer = config.shared_optimizer;
     state.query_optimizer_enabled = if (getEnvVarOwned(allocator, "GEODE_ENABLE_QUERY_OPTIMIZER")) |v| blk: {
         defer allocator.free(v);
         // Use consistent boolean parsing across transports (matches QUIC handler)
@@ -1928,6 +1936,26 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     }
                 }
             }
+            // GAP-0756: Consult the shared query optimizer before building the
+            // execution context so repeat parameterised queries hit the
+            // cross-connection plan cache instead of re-planning every time.
+            // CANARY: REQ=REQ-PERF-SHARED-OPT-001; FEATURE="SharedQueryOptimizer"; ASPECT=GrpcHandlerWire; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-18
+            var plan_handle: ?query_plan_cache.SharedPlanHandle = null;
+            var optimizer_hints_storage: query_plan_cache.OptimizerHints = .{};
+            defer if (plan_handle) |*h| h.release();
+
+            if (state.query_optimizer) |shared_opt| {
+                const store_for_stats = graph_store.getGlobalStore(allocator);
+                const store_stats = query_plan_cache.StoreStats{
+                    .node_count = @intCast(store_for_stats.getNodeCount()),
+                    .edge_count = @intCast(store_for_stats.getEdgeCount()),
+                };
+                plan_handle = shared_opt.optimizeQuery(query_text, &parse_result.program, store_stats) catch null;
+                if (plan_handle) |*h| {
+                    optimizer_hints_storage = h.toHints();
+                }
+            }
+
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
                 .user = state.authenticated_user,
@@ -1938,6 +1966,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .transaction_state = if (state.in_txn) .Active else .None,
                 .query_param_names = bindings.names,
                 .query_param_values = bindings.values,
+                .optimizer_hints = if (plan_handle != null) &optimizer_hints_storage else null,
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,

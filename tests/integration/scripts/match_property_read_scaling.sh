@@ -37,13 +37,25 @@
 #                        internal ArrayList/dupe sites is a follow-up; the
 #                        plumbing is in place so those sites are a 1-line
 #                        change each.
-#   * Follow-ups:        plan-cache wiring into MATCH path (GAP-0756),
-#                        multi-core poll dispatch (GAP-0757). The 1.1x floor
-#                        remains conservative until those land; on a quiet
-#                        host the arena pool alone lifts the ratio into the
-#                        1.0-1.3x band, but single-digit-QPS workloads are
-#                        still bottlenecked downstream by parse+plan cost
-#                        and single-thread QUIC poll dispatch.
+#   * GAP-0756 (landed): gRPC handler parity for SharedQueryOptimizer — the
+#                        QUIC handler already consulted the cache before this
+#                        landed (see quic_connection_handler.zig:2217), so
+#                        the loadtest (QUIC) ratio was essentially unchanged
+#                        (1.16–1.20x observed across three runs on the dev
+#                        host, same band as the pre-GAP-0756 post-GAP-0755
+#                        band).  The direct-cache unit tests live in
+#                        tests/test_plan_cache_hit.zig; spec reviewers
+#                        verifying plan-cache efficacy in production should
+#                        probe state.query_optimizer.?.getStats() after a
+#                        sustained loadtest — the HARD_FLOOR here is still
+#                        1.1x because the next-up bottleneck (single-thread
+#                        QUIC poll dispatch, GAP-0757) gates further uplift.
+#   * Follow-ups:        multi-core QUIC poll dispatch (GAP-0757). The 1.1x
+#                        floor remains conservative until that lands; on a
+#                        quiet host the arena pool + plan cache lift the
+#                        ratio into the 1.1-1.3x band, but single-digit-QPS
+#                        workloads are still bottlenecked downstream by
+#                        single-thread QUIC poll dispatch.
 #
 # This script:
 #   1. Builds the geode server if not already built.
@@ -182,9 +194,13 @@ log "point_read  qps@c=1=${QPS_C1}  qps@c=4=${QPS_C4}  ratio=${RATIO}x"
 
 # Contract: with the fix, c=4 should deliver at least 1.1x the throughput
 # of c=1 on the point_read scenario.  This is the floor — the aspirational
-# target is 1.5x, unlocked by narrowing the plan-cache lock
-# (src/server/query_plan_cache.zig:451) and parallelizing the response
-# poll loop (src/server/main.zig:815).  See the header comment for detail.
+# target is 1.5x, unlocked by parallelizing the response poll loop
+# (src/server/main.zig:815, GAP-0757).  The SharedQueryOptimizer plan
+# cache (GAP-0756) is wired end-to-end (QUIC since Issue #460, gRPC added
+# by GAP-0756), but on the dev host it does not measurably move the QUIC
+# loadtest ratio because parse+plan is not the dominant cost at this
+# concurrency level; the floor therefore stays at 1.1x until poll-loop
+# parallelization lands.  See the header comment for detail.
 HARD_FLOOR=1.1
 WARN_CEILING=1.5
 

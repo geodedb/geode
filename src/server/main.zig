@@ -576,6 +576,9 @@ pub fn main() !void {
             .compact_profile = compact_profile,
             .memcurve_profile = memcurve_profile,
             .security_manager = init_ctx.security_manager,
+            // GAP-0756: Parity with QUIC — gRPC handlers hit the same
+            // cross-connection SharedQueryOptimizer plan cache.
+            .shared_optimizer = init_ctx.shared_optimizer,
         };
 
         const grpc_server = try gpa.create(grpc_transport.GeodeGrpcServer);
