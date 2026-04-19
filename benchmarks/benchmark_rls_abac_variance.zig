@@ -12,6 +12,13 @@ const rls_tests = @import("tests/canary_rls_abac.zig");
 // CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=VarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacVarianceEnvelope; OWNER=security; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-080; FEATURE="RlsAbac"; ASPECT=TailLatencyP999Envelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_080_RlsAbacTailP999; OWNER=security; UPDATED=2025-09-26
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 const Policy = rls_tests.Policy;
 
 fn buildPolicies(allocator: std.mem.Allocator) ![]Policy {
@@ -36,10 +43,10 @@ fn sample(allocator: std.mem.Allocator, policies: []const Policy, iterations: us
     while (i < iterations) : (i += 1) {
         const label = if (i % 2 == 0) "Person" else "Account";
         const attr = if (i % 4 == 0) "region:eu" else if (i % 4 == 1) "region:us" else if (i % 4 == 2) "tier:gold" else "tier:silver";
-        const start = std.time.nanoTimestamp();
+        const start = nowNs();
         _ = enforce(policies, label, attr);
-        const end = std.time.nanoTimestamp();
-        times[i] = @intCast(end - start);
+        const end = nowNs();
+        times[i] = end - start;
     }
     return times;
 }
@@ -95,9 +102,13 @@ fn computeMetrics(samples: []u64) Metrics {
 }
 
 pub fn runRlsAbacVariance() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer std.debug.assert(gpa.deinit() == .ok);
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
     const policies = try buildPolicies(allocator);
     defer allocator.free(policies);
     const iterations: usize = 4000;

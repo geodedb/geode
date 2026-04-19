@@ -10,6 +10,13 @@ const ParallelPool = parallel_wrapper.ParallelPool;
 const Task = parallel_wrapper.Task;
 const Thresholds = parallel_wrapper.Thresholds;
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // =============================================================================
 // Benchmark Configuration
 // =============================================================================
@@ -41,10 +48,10 @@ fn runBenchmark(
 
     // Benchmark
     for (0..actual_iterations) |i| {
-        const start = std.time.nanoTimestamp();
+        const start = nowNs();
         _ = func(size);
-        const end = std.time.nanoTimestamp();
-        times[i] = @intCast(end - start);
+        const end = nowNs();
+        times[i] = end - start;
     }
 
     // Calculate stats
@@ -118,10 +125,10 @@ fn initGlobalMapBenchmark(allocator: std.mem.Allocator, size: usize) !void {
 }
 
 fn benchmarkSequentialMap(size: usize) u64 {
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
     sequentialMapSquare(global_items[0..size], global_results[0..size]);
-    const end = std.time.nanoTimestamp();
-    return @intCast(end - start);
+    const end = nowNs();
+    return end - start;
 }
 
 fn benchmarkParallelMap(size: usize) u64 {
@@ -131,12 +138,12 @@ fn benchmarkParallelMap(size: usize) u64 {
         }
     }.map;
 
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
     const results = parallel_wrapper.parallelMap(u32, u64, &global_pool.?, global_items[0..size], mapSquare, Thresholds.map) catch return 0;
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
 
     global_pool.?.allocator.free(results);
-    return @intCast(end - start);
+    return end - start;
 }
 
 // =============================================================================
@@ -163,10 +170,10 @@ fn initGlobalReduceBenchmark(allocator: std.mem.Allocator, size: usize) !void {
 }
 
 fn benchmarkSequentialReduce(size: usize) u64 {
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
     _ = sequentialSum(global_sum_items[0..size]);
-    const end = std.time.nanoTimestamp();
-    return @intCast(end - start);
+    const end = nowNs();
+    return end - start;
 }
 
 fn benchmarkParallelReduce(size: usize) u64 {
@@ -176,10 +183,10 @@ fn benchmarkParallelReduce(size: usize) u64 {
         }
     }.reduce;
 
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
     _ = parallel_wrapper.parallelReduce(u64, &global_pool.?, global_sum_items[0..size], 0, add, Thresholds.reduce);
-    const end = std.time.nanoTimestamp();
-    return @intCast(end - start);
+    const end = nowNs();
+    return end - start;
 }
 
 // =============================================================================
@@ -218,7 +225,7 @@ fn initGlobalVectorBenchmark(allocator: std.mem.Allocator, num_vectors: usize) !
 }
 
 fn benchmarkSequentialVectorDots(num_vectors: usize) u64 {
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
     var total: f32 = 0.0;
     for (0..num_vectors) |i| {
         const a = global_vectors_a[i * VECTOR_DIM .. (i + 1) * VECTOR_DIM];
@@ -227,8 +234,8 @@ fn benchmarkSequentialVectorDots(num_vectors: usize) u64 {
     }
     // Prevent optimizer from eliminating the loop
     std.mem.doNotOptimizeAway(&total);
-    const end = std.time.nanoTimestamp();
-    return @intCast(end - start);
+    const end = nowNs();
+    return end - start;
 }
 
 // =============================================================================
@@ -236,9 +243,13 @@ fn benchmarkSequentialVectorDots(num_vectors: usize) u64 {
 // =============================================================================
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     std.debug.print("\n=== Thread-Pool Parallel Wrapper Benchmarks ===\n\n", .{});
 

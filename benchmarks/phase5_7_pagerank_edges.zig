@@ -7,6 +7,13 @@ const testing = std.testing;
 // Benchmark Phase PHASE5_7 - Performance validation for Phase 5.2.1 (P1-1) optimization
 // CANARY: REQ=REQ-PERF-PHASE5-P1-001; FEATURE="PageRankOptimization"; ASPECT=TESTING; STATUS=TESTED; TEST=geodetestlab/specs/geode_graph_algorithms.yml; OWNER=performance; UPDATED=2025-11-16
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // =============================================================================
 // Test Structures - Simulating PageRank edge processing
 // =============================================================================
@@ -26,8 +33,7 @@ fn processEdgesWithHashMapLookups(allocator: std.mem.Allocator, edges: []const E
         try id_to_index.put(@intCast(i), @intCast(i));
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     // Outdegree computation with HashMap lookups
     var outdeg = try allocator.alloc(u32, num_nodes);
@@ -59,7 +65,7 @@ fn processEdgesWithHashMapLookups(allocator: std.mem.Allocator, edges: []const E
         }
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Verify work was done
     var total_outdeg: u32 = 0;
@@ -79,8 +85,7 @@ fn processEdgesWithPrecomputed(allocator: std.mem.Allocator, edges: []const Edge
         try id_to_index.put(@intCast(i), @intCast(i));
     }
 
-    var timer = try std.time.Timer.start();
-    const start = timer.read();
+    const start = nowNs();
 
     // Pre-compute edge indices (one-time HashMap lookup per edge)
     const EdgeIndices = struct {
@@ -128,7 +133,7 @@ fn processEdgesWithPrecomputed(allocator: std.mem.Allocator, edges: []const Edge
         try inbound[edge_idx.dst_idx].append(allocator, edge_idx.src_idx);
     }
 
-    const end = timer.read();
+    const end = nowNs();
 
     // Verify work was done
     var total_outdeg: u32 = 0;

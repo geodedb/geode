@@ -8,10 +8,21 @@ const tde = @import("tde_file_encryption");
 // Measures mean per-page encryption latency and approximate throughput.
 // CANARY: REQ=REQ-GQL-SEC-TDE-OVERHEAD-001; FEATURE="TDEEncryptBenchmark"; ASPECT=PERFORMANCE; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001; OWNER=security; UPDATED=2025-09-26
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const alloc = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const alloc: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     // Configuration (keep CI friendly); can be raised locally via env override later
     const page_count: usize = 10_000;
@@ -33,10 +44,10 @@ pub fn main() !void {
     while (i < page_count) : (i += 1) {
         // Light mutation based on loop counter
         plaintext[0] = @as(u8, @intCast(i & 0xFF));
-        const start = std.time.nanoTimestamp();
+        const start = nowNs();
         const encrypted = try tde.encryptWithKey(alloc, plaintext, key_bytes);
         defer alloc.free(encrypted);
-        const end = std.time.nanoTimestamp();
+        const end = nowNs();
         total_encrypt_ns += @as(u128, @intCast(end - start));
     }
 
@@ -50,9 +61,7 @@ pub fn main() !void {
         \\
     , .{ page_count, page_size, mean_encrypt_ns, throughput_mb_s });
     defer alloc.free(out);
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    stdout.writeAll(out) catch {};
+    const stdout = std.Io.File.stdout();
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), out) catch {};
+    _ = builtin;
 }

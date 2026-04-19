@@ -3,6 +3,13 @@ const graph_store = @import("graph_store");
 
 // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="MergeThroughput"; ASPECT=BulkInsert; STATUS=BENCHED; BENCH=benchmark_merge_throughput; OWNER=perf; UPDATED=2026-04-09
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 /// Benchmark configuration
 const BenchmarkConfig = struct {
     /// Number of nodes to MERGE (insert via index lookup + create)
@@ -41,12 +48,11 @@ fn runBulkMergeBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) 
     const num_windows = config.node_count / config.window_size;
     var window_times = try allocator.alloc(u64, num_windows);
 
-    var timer = try std.time.Timer.start();
-    const total_start = timer.read();
+    const total_start = nowNs();
 
     var window: usize = 0;
     while (window < num_windows) : (window += 1) {
-        const window_start = timer.read();
+        const window_start = nowNs();
 
         var i: usize = 0;
         while (i < config.window_size) : (i += 1) {
@@ -89,11 +95,11 @@ fn runBulkMergeBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig) 
             }
         }
 
-        const window_end = timer.read();
+        const window_end = nowNs();
         window_times[window] = window_end - window_start;
     }
 
-    const total_end = timer.read();
+    const total_end = nowNs();
 
     // Calculate degradation ratio: last window time / first window time
     const first_window = @as(f64, @floatFromInt(window_times[0]));
@@ -134,12 +140,11 @@ fn runBulkMergeUpdateBenchmark(allocator: std.mem.Allocator, config: BenchmarkCo
     const num_windows = config.node_count / config.window_size;
     var window_times = try allocator.alloc(u64, num_windows);
 
-    var timer = try std.time.Timer.start();
-    const total_start = timer.read();
+    const total_start = nowNs();
 
     var window: usize = 0;
     while (window < num_windows) : (window += 1) {
-        const window_start = timer.read();
+        const window_start = nowNs();
 
         var i: usize = 0;
         while (i < config.window_size) : (i += 1) {
@@ -165,11 +170,11 @@ fn runBulkMergeUpdateBenchmark(allocator: std.mem.Allocator, config: BenchmarkCo
             }
         }
 
-        const window_end = timer.read();
+        const window_end = nowNs();
         window_times[window] = window_end - window_start;
     }
 
-    const total_end = timer.read();
+    const total_end = nowNs();
 
     const first_window = @as(f64, @floatFromInt(window_times[0]));
     const last_window = @as(f64, @floatFromInt(window_times[num_windows - 1]));

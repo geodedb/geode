@@ -1,19 +1,28 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const page_manager = @import("storage_page_manager");
 
 // BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead
 // Measures approximate relative overhead of encrypted vs unencrypted page write/read cycles.
 // CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE performance benchmark"; ASPECT=PERFORMANCE; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_TDE_001_TDEOverhead; OWNER=security; UPDATED=2025-09-26
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    _ = gpa.allocator(); // allocator placeholder (future: actual page manager allocation path)
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const alloc: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     const iters: usize = 1000; // lightweight baseline; CI safe
 
-    var timer = try std.time.Timer.start();
     var plain_total: u64 = 0;
     var enc_total: u64 = 0;
 
@@ -21,7 +30,7 @@ pub fn main() !void {
     {
         var i: usize = 0;
         while (i < iters) : (i += 1) {
-            timer.reset();
+            const start_ns = nowNs();
             // Placeholder: simulate page write + read cost
             var buf: [4096]u8 = undefined;
             @memset(&buf, @as(u8, @intCast(i & 0xFF)));
@@ -29,7 +38,7 @@ pub fn main() !void {
             var h = std.hash.Wyhash.init(0);
             h.update(&buf);
             _ = h.final();
-            plain_total += timer.read();
+            plain_total += nowNs() - start_ns;
         }
     }
 
@@ -37,7 +46,7 @@ pub fn main() !void {
     {
         var i: usize = 0;
         while (i < iters) : (i += 1) {
-            timer.reset();
+            const start_ns = nowNs();
             var buf: [4096]u8 = undefined;
             @memset(&buf, @as(u8, @intCast((i * 31) & 0xFF)));
             // simulate encrypt = two wyhash rounds + tag gen
@@ -47,7 +56,7 @@ pub fn main() !void {
             var tag: [16]u8 = undefined;
             std.mem.writeInt(u64, tag[0..8], r1, .little);
             std.mem.writeInt(u64, tag[8..16], r1 ^ 0xFFFF, .little);
-            enc_total += timer.read();
+            enc_total += nowNs() - start_ns;
         }
     }
 
@@ -56,11 +65,9 @@ pub fn main() !void {
         break :blk @as(f64, @floatFromInt(diff)) / @as(f64, @floatFromInt(plain_total)) * 100.0;
     };
 
-    const out = try std.fmt.allocPrint(gpa.allocator(), "TDE_SIM_OVERHEAD iters={} plain_ns={} enc_ns={} overhead_pct={d:.2}\n", .{ iters, plain_total, enc_total, overhead_pct });
-    defer gpa.allocator().free(out);
-    const stdout = if (builtin.os.tag == .windows)
-        std.fs.File{ .handle = std.os.windows.GetStdHandle(std.os.windows.STD_OUTPUT_HANDLE) catch unreachable }
-    else
-        std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    stdout.writeAll(out) catch {};
+    const out = try std.fmt.allocPrint(alloc, "TDE_SIM_OVERHEAD iters={} plain_ns={} enc_ns={} overhead_pct={d:.2}\n", .{ iters, plain_total, enc_total, overhead_pct });
+    defer alloc.free(out);
+    const stdout = std.Io.File.stdout();
+    stdout.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), out) catch {};
+    _ = builtin;
 }

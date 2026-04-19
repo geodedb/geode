@@ -7,6 +7,22 @@ const std = @import("std");
 const thread_pool = @import("transport/thread_pool");
 const stream_scheduler = @import("transport/stream_scheduler");
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(i128, @intCast(ts.sec)) * 1_000_000_000 + @as(i128, @intCast(ts.nsec));
+}
+
+// Zig 0.16 compat: std.Thread.sleep removed; use raw nanosleep syscall.
+fn sleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.os.linux.nanosleep(&req, null);
+}
+
 /// Benchmark configuration
 const BenchConfig = struct {
     warmup_iterations: usize = 1000,
@@ -71,29 +87,29 @@ fn benchThreadPoolThroughput(allocator: std.mem.Allocator, config: BenchConfig) 
             .context = @ptrCast(&ctx),
             .callback = callback,
         })) {
-            std.Thread.sleep(1 * std.time.ns_per_us);
+            sleepNs(1 * std.time.ns_per_us);
         }
     }
     while (counter.load(.acquire) < config.warmup_iterations) {
-        std.Thread.sleep(1 * std.time.ns_per_us);
+        sleepNs(1 * std.time.ns_per_us);
     }
     counter.store(0, .release);
 
     // Benchmark
     std.debug.print("Running benchmark ({} iterations)...\n", .{config.benchmark_iterations});
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
 
     for (0..target) |i| {
         while (!pool.submit(.{
             .context = @ptrCast(&ctx),
             .callback = callback,
         })) {
-            std.Thread.sleep(1 * std.time.ns_per_us);
+            sleepNs(1 * std.time.ns_per_us);
         }
 
         if (i > 0 and i % config.report_interval == 0) {
             const current = counter.load(.acquire);
-            const elapsed = std.time.nanoTimestamp() - start;
+            const elapsed = nowNs() - start;
             const rate = @as(u64, @intCast(current)) * std.time.ns_per_s / @as(u64, @intCast(elapsed));
             std.debug.print("  Progress: {}/{} ({} ops/sec)\n", .{ current, target, rate });
         }
@@ -101,10 +117,10 @@ fn benchThreadPoolThroughput(allocator: std.mem.Allocator, config: BenchConfig) 
 
     // Wait for completion
     while (counter.load(.acquire) < target) {
-        std.Thread.sleep(1 * std.time.ns_per_us);
+        sleepNs(1 * std.time.ns_per_us);
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
     const total_time = end - start;
     const avg_time = @divFloor(total_time, @as(i128, target));
     const throughput = @as(u64, @intCast(target)) * std.time.ns_per_s / @as(u64, @intCast(total_time));
@@ -139,19 +155,19 @@ fn benchSchedulerThroughput(allocator: std.mem.Allocator, config: BenchConfig) !
 
     // Benchmark
     std.debug.print("Running benchmark ({} iterations)...\n", .{config.benchmark_iterations});
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
 
     for (0..config.benchmark_iterations) |i| {
         _ = scheduler.getScheduledStreams(&order);
 
         if (i > 0 and i % config.report_interval == 0) {
-            const elapsed = std.time.nanoTimestamp() - start;
+            const elapsed = nowNs() - start;
             const rate = @as(u64, i) * std.time.ns_per_s / @as(u64, @intCast(elapsed));
             std.debug.print("  Progress: {}/{} ({} ops/sec)\n", .{ i, config.benchmark_iterations, rate });
         }
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
     const total_time = end - start;
     const avg_time = @divFloor(total_time, @as(i128, config.benchmark_iterations));
     const throughput = @as(u64, config.benchmark_iterations) * std.time.ns_per_s / @as(u64, @intCast(total_time));
@@ -179,20 +195,20 @@ fn benchBoundedQueueThroughput(config: BenchConfig) BenchResults {
 
     // Benchmark push/pop cycles
     std.debug.print("Running benchmark ({} iterations)...\n", .{config.benchmark_iterations});
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
 
     for (0..config.benchmark_iterations) |i| {
         _ = queue.tryPush(i);
         _ = queue.tryPop();
 
         if (i > 0 and i % config.report_interval == 0) {
-            const elapsed = std.time.nanoTimestamp() - start;
+            const elapsed = nowNs() - start;
             const rate = @as(u64, i * 2) * std.time.ns_per_s / @as(u64, @intCast(elapsed)); // 2 ops per iteration
             std.debug.print("  Progress: {}/{} ({} ops/sec)\n", .{ i, config.benchmark_iterations, rate });
         }
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
     const total_time = end - start;
     const total_ops = config.benchmark_iterations * 2; // push + pop
     const avg_time = @divFloor(total_time, @as(i128, total_ops));
@@ -239,7 +255,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     var consumer_contexts: [num_consumers]ConsumerContext = undefined;
 
     std.debug.print("Starting {} producers and {} consumers...\n", .{ num_producers, num_consumers });
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
 
     // Start producers
     for (0..num_producers) |i| {
@@ -254,7 +270,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
                 const context: *ProducerContext = @ptrCast(@alignCast(ctx));
                 for (0..context.count) |_| {
                     while (!context.q.tryPush(1)) {
-                        std.Thread.sleep(1 * std.time.ns_per_us);
+                        sleepNs(1 * std.time.ns_per_us);
                     }
                     _ = context.produced.fetchAdd(1, .release);
                 }
@@ -281,7 +297,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
                     if (context.q.tryPop()) |_| {
                         _ = context.consumed.fetchAdd(1, .release);
                     } else {
-                        std.Thread.sleep(1 * std.time.ns_per_us);
+                        sleepNs(1 * std.time.ns_per_us);
                     }
                 }
             }
@@ -296,7 +312,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
         try pool.wait(handle);
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
     const total_time = end - start;
     const total_ops = target * 2; // push + pop
     const avg_time = @divFloor(total_time, @as(i128, total_ops));
@@ -322,7 +338,7 @@ fn benchAdaptiveBackoff(config: BenchConfig) BenchResults {
 
     // Simulate the adaptive backoff pattern
     std.debug.print("Running benchmark ({} iterations)...\n", .{config.benchmark_iterations});
-    const start = std.time.nanoTimestamp();
+    const start = nowNs();
 
     for (0..config.benchmark_iterations) |i| {
         // Simulate alternating idle and active periods
@@ -341,7 +357,7 @@ fn benchAdaptiveBackoff(config: BenchConfig) BenchResults {
         }
     }
 
-    const end = std.time.nanoTimestamp();
+    const end = nowNs();
     const total_time = end - start;
     const avg_time = @divFloor(total_time, @as(i128, config.benchmark_iterations));
     const throughput = @as(u64, config.benchmark_iterations) * std.time.ns_per_s / @as(u64, @intCast(total_time));
@@ -358,9 +374,13 @@ fn benchAdaptiveBackoff(config: BenchConfig) BenchResults {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     std.debug.print("\n", .{});
     std.debug.print("╔══════════════════════════════════════════════════════════════╗\n", .{});
@@ -440,9 +460,12 @@ pub fn main() !void {
 
 test "benchmark_transport_throughput: smoke test" {
     // Quick smoke test to verify benchmarks run
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     const config = BenchConfig{
         .warmup_iterations = 10,

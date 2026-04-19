@@ -3,7 +3,6 @@
 
 const std = @import("std");
 const testing = std.testing;
-const Timer = std.time.Timer;
 
 const lib = @import("geode");
 const txn_coordinator = lib.distributed.txn_coordinator;
@@ -12,14 +11,36 @@ const fulltext = lib.index.fulltext;
 const leiden = lib.graph.leiden;
 const wcoj = lib.planner_wcoj;
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+// Minimal Timer replacement — matches old Timer.start()/read() shape so the file can be ported mechanically.
+const Timer = struct {
+    start_ns: u64,
+    pub fn start() !Timer {
+        return .{ .start_ns = nowNs() };
+    }
+    pub fn read(self: *Timer) u64 {
+        return nowNs() - self.start_ns;
+    }
+};
+
 fn benchmarkTimer() !Timer {
     return try Timer.start();
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     std.debug.print("\n=== Geode Distributed Features Benchmarks ===\n\n", .{});
 
@@ -56,7 +77,7 @@ fn benchmark2PC(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const ops_per_sec = @intToFloat(f64, iterations) * std.time.ns_per_s / @intToFloat(f64, elapsed);
+        const ops_per_sec = @as(f64, @floatFromInt(iterations)) * std.time.ns_per_s / @as(f64, @floatFromInt(elapsed));
         std.debug.print("  Single txn throughput: {d:.0} ops/sec\n", .{ops_per_sec});
     }
 
@@ -99,7 +120,7 @@ fn benchmark2PC(allocator: std.mem.Allocator) !void {
 
         const elapsed = timer.read();
         const total_txns = concurrent_txns * rounds;
-        const ops_per_sec = @intToFloat(f64, total_txns) * std.time.ns_per_s / @intToFloat(f64, elapsed);
+        const ops_per_sec = @as(f64, @floatFromInt(total_txns)) * std.time.ns_per_s / @as(f64, @floatFromInt(elapsed));
         std.debug.print("  Concurrent txn throughput: {d:.0} ops/sec\n", .{ops_per_sec});
     }
 
@@ -142,7 +163,7 @@ fn benchmark2PC(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const checks_per_sec = @intToFloat(f64, attempts) * std.time.ns_per_s / @intToFloat(f64, elapsed);
+        const checks_per_sec = @as(f64, @floatFromInt(attempts)) * std.time.ns_per_s / @as(f64, @floatFromInt(elapsed));
         std.debug.print("  Conflict checks: {d:.0} checks/sec ({} conflicts)\n", .{ checks_per_sec, conflicts });
     }
 
@@ -168,7 +189,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const docs_per_sec = @intToFloat(f64, num_docs) * std.time.ns_per_s / @intToFloat(f64, elapsed);
+        const docs_per_sec = @as(f64, @floatFromInt(num_docs)) * std.time.ns_per_s / @as(f64, @floatFromInt(elapsed));
         std.debug.print("  Indexing throughput: {d:.0} docs/sec\n", .{docs_per_sec});
     }
 
@@ -204,7 +225,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const searches_per_sec = @intToFloat(f64, searches) * std.time.ns_per_s / @intToFloat(f64, elapsed);
+        const searches_per_sec = @as(f64, @floatFromInt(searches)) * std.time.ns_per_s / @as(f64, @floatFromInt(elapsed));
         std.debug.print("  Search throughput: {d:.0} searches/sec\n", .{searches_per_sec});
     }
 
@@ -228,7 +249,7 @@ fn benchmarkBM25(allocator: std.mem.Allocator) !void {
         defer allocator.free(results);
 
         const elapsed = timer.read();
-        const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
+        const ms = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
         std.debug.print("  Large corpus search: {d:.1} ms for 10k docs\n", .{ms});
     }
 
@@ -281,7 +302,7 @@ fn benchmarkLeiden(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
+        const ms = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
         std.debug.print("  Small graph (100 nodes): {d:.1} ms, {} communities, modularity={d:.3}\n", .{ ms, result.communities.len, result.modularity });
     }
 
@@ -341,7 +362,7 @@ fn benchmarkLeiden(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
+        const ms = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
         std.debug.print("  Medium graph (1000 nodes): {d:.1} ms, {} communities\n", .{ ms, result.communities.len });
     }
 
@@ -434,7 +455,7 @@ fn benchmarkWCOJ(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
+        const ms = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
         std.debug.print("  Two-way join (1000x1000): {d:.1} ms, {} results, {} comparisons\n", .{ ms, result.tuples.len, executor.stats.comparisons });
     }
 
@@ -455,7 +476,7 @@ fn benchmarkWCOJ(allocator: std.mem.Allocator) !void {
         const edge_prob: f64 = 0.1;
 
         // Generate edges
-        var prng = std.rand.DefaultPrng.init(42);
+        var prng = std.Random.DefaultPrng.init(42);
         const random = prng.random();
 
         var i: i64 = 0;
@@ -513,7 +534,7 @@ fn benchmarkWCOJ(allocator: std.mem.Allocator) !void {
         }
 
         const elapsed = timer.read();
-        const ms = @intToFloat(f64, elapsed) / std.time.ns_per_ms;
+        const ms = @as(f64, @floatFromInt(elapsed)) / std.time.ns_per_ms;
         std.debug.print("  Triangle join: {d:.1} ms, {} triangles found\n", .{ ms, result.tuples.len });
     }
 

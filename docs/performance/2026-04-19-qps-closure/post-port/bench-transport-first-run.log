@@ -1,0 +1,67 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║     GEODE TRANSPORT LAYER THROUGHPUT BENCHMARKS              ║
+║     GAP-0201: Performance Optimizations Validation           ║
+╚══════════════════════════════════════════════════════════════╝
+
+Configuration:
+  Warmup iterations:    1000
+  Benchmark iterations: 100000
+  CPU count:            56
+
+--- Thread Pool Throughput ---
+Warming up (1000 iterations)...
+Running benchmark (100000 iterations)...
+  Progress: 24186/100000 (1846982 ops/sec)
+  Progress: 49018/100000 (1943322 ops/sec)
+  Progress: 74045/100000 (1967397 ops/sec)
+
+========================================
+Benchmark: ThreadPool Throughput
+========================================
+Iterations:     100000
+Total time:     50 ms
+Avg time:       501 ns
+Min time:       170141183460469231731687303715884105727 ns
+Max time:       0 ns
+Throughput:     1994439 ops/sec
+========================================
+
+--- Stream Scheduler Throughput ---
+Warming up (1000 iterations)...
+Running benchmark (100000 iterations)...
+  Progress: 25000/100000 (1002689 ops/sec)
+  Progress: 50000/100000 (1008432 ops/sec)
+  Progress: 75000/100000 (1011687 ops/sec)
+
+========================================
+Benchmark: Stream Scheduler Throughput
+========================================
+Iterations:     100000
+Total time:     98 ms
+Avg time:       986 ns
+Min time:       170141183460469231731687303715884105727 ns
+Max time:       0 ns
+Throughput:     1013797 ops/sec
+========================================
+
+--- Bounded Queue (Single-threaded) ---
+Warming up (1000 iterations)...
+Running benchmark (100000 iterations)...
+  Progress: 25000/100000 (114828492 ops/sec)
+  Progress: 50000/100000 (114643401 ops/sec)
+  Progress: 75000/100000 (114580349 ops/sec)
+
+========================================
+Benchmark: BoundedQueue Throughput (push+pop)
+========================================
+Iterations:     200000
+Total time:     1 ms
+Avg time:       8 ns
+Min time:       170141183460469231731687303715884105727 ns
+Max time:       0 ns
+Throughput:     114404760 ops/sec
+========================================
+
+--- Concurrent Queue (Multi-threaded) ---
+Starting 4 producers and 4 consumers...

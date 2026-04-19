@@ -14,6 +14,13 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const execution = geode.execution;
 const graph_store = geode.graph_store;
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 // CANARY: REQ=REQ-PERF-GAP-0525; FEATURE="PerfGapBenchmarks"; ASPECT=MicroBenchmarks; STATUS=BENCHED; BENCH=tests/benchmark_perf_gap_closure.zig; OWNER=engine; UPDATED=2026-04-10
 //
 // Targeted micro-benchmarks for the performance gaps closed in the 2026-04-09
@@ -65,9 +72,11 @@ const Harness = struct {
 };
 
 fn isEnabled(allocator: std.mem.Allocator) bool {
-    const maybe = std.process.getEnvVarOwned(allocator, "GEODE_PERF_GAP_BENCH_ENABLE") catch return false;
-    defer allocator.free(maybe);
-    return std.mem.eql(u8, maybe, "1");
+    _ = allocator;
+    // Zig 0.16 compat: std.process.getEnvVarOwned removed; use std.c.getenv (no allocation).
+    const ptr = std.c.getenv("GEODE_PERF_GAP_BENCH_ENABLE") orelse return false;
+    const v = std.mem.span(ptr);
+    return std.mem.eql(u8, v, "1");
 }
 
 // --- GAP-0519: Multi-label posting-list intersection benchmark ---
@@ -93,7 +102,7 @@ test "GAP-0519 bench: multi-label intersection on 1K node graph" {
         _ = try store.createNodeWithGraph(&labels, "default");
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
 
     const iterations: usize = 100;
     for (0..iterations) |_| {
@@ -103,7 +112,7 @@ test "GAP-0519 bench: multi-label intersection on 1K node graph" {
         try std.testing.expectEqual(@as(usize, 1000), result.items.len);
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - timer_start_ns;
     const avg_us = elapsed_ns / iterations / 1000;
     std.debug.print("\n[GAP-0519] 4-label intersection on 1200-node graph: {d}us avg ({d} iterations)\n", .{ avg_us, iterations });
 }
@@ -130,7 +139,7 @@ test "GAP-0520 bench: PathIterator streaming with LIMIT" {
         _ = try store.createEdge(node_ids[i], node_ids[i + 1], "NEXT");
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
 
     const iterations: usize = 50;
     for (0..iterations) |_| {
@@ -147,7 +156,7 @@ test "GAP-0520 bench: PathIterator streaming with LIMIT" {
         try std.testing.expect(path_count == 5);
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - timer_start_ns;
     const avg_us = elapsed_ns / iterations / 1000;
     std.debug.print("\n[GAP-0520] PathIterator LIMIT 5 on 100-node chain: {d}us avg ({d} iterations)\n", .{ avg_us, iterations });
 }
@@ -172,7 +181,7 @@ test "GAP-0523 bench: ReadView epoch-check fast path" {
     }
 
     // Benchmark: ReadView creation + getReadStore (no-mutation fast path)
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
 
     const iterations: usize = 10000;
     for (0..iterations) |_| {
@@ -182,14 +191,14 @@ test "GAP-0523 bench: ReadView epoch-check fast path" {
         try std.testing.expect(read_store == store); // Same epoch, should return base
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - timer_start_ns;
     const avg_ns = elapsed_ns / iterations;
     std.debug.print("\n[GAP-0523] ReadView fast path (no mutation): {d}ns avg ({d} iterations)\n", .{ avg_ns, iterations });
 
     // Benchmark: ReadView with epoch change (snapshot creation)
     graph_store.incrementMutationEpoch();
 
-    var timer2 = try std.time.Timer.start();
+    const timer2_start_ns = nowNs();
 
     const snapshot_iterations: usize = 10;
     for (0..snapshot_iterations) |_| {
@@ -199,7 +208,7 @@ test "GAP-0523 bench: ReadView epoch-check fast path" {
         try std.testing.expect(read_store != store); // Epoch changed, should create snapshot
     }
 
-    const elapsed_ns2 = timer2.read();
+    const elapsed_ns2 = nowNs() - timer2_start_ns;
     const avg_us2 = elapsed_ns2 / snapshot_iterations / 1000;
     std.debug.print("[GAP-0523] ReadView snapshot creation (100 nodes): {d}us avg ({d} iterations)\n", .{ avg_us2, snapshot_iterations });
 }
@@ -222,7 +231,7 @@ test "GAP-0522 bench: MATCH with LIMIT pushdown" {
         _ = try store.createNodeWithGraph(&labels, "default");
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
 
     const iterations: usize = 20;
     for (0..iterations) |_| {
@@ -232,7 +241,7 @@ test "GAP-0522 bench: MATCH with LIMIT pushdown" {
         try std.testing.expectEqual(@as(usize, 10), result.rows.len);
     }
 
-    const elapsed_ns = timer.read();
+    const elapsed_ns = nowNs() - timer_start_ns;
     const avg_us = elapsed_ns / iterations / 1000;
     std.debug.print("\n[GAP-0522] MATCH (n:Widget) LIMIT 10 on 10K nodes: {d}us avg ({d} iterations)\n", .{ avg_us, iterations });
 }

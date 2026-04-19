@@ -1,0 +1,21 @@
+
+=== Thread-Pool Parallel Wrapper Benchmarks ===
+
+--- Parallel Map (squaring integers) ---
+  Size     1000: seq=       574ns, par=     60929ns, speedup=0.01x
+  Size    10000: seq=      5945ns, par=    120698ns, speedup=0.05x
+  Size   100000: seq=     71817ns, par=    715252ns, speedup=0.10x
+  Size  1000000: seq=    569830ns, par=   6470934ns, speedup=0.09x
+
+--- Parallel Reduce (summing u64) ---
+  Size     1000: seq=        61ns, par=     42385ns, speedup=0.00x
+  Size    10000: seq=        53ns, par=     41005ns, speedup=0.00x
+  Size   100000: seq=        52ns, par=     76348ns, speedup=0.00x
+  Size  1000000: seq=        66ns, par=    407045ns, speedup=0.00x
+
+--- Vector Dot Products (128-dim, HNSW-like) ---
+  Vectors    100: seq=     12914ns (129.14 ns/vec)
+  Vectors   1000: seq=    120207ns (120.21 ns/vec)
+  Vectors  10000: seq=   1172138ns (117.21 ns/vec)
+
+=== Benchmark Complete ===

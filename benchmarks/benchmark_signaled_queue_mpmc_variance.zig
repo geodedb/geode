@@ -6,6 +6,23 @@ const queue_mod = @import("../src/containers/signaled_queue.zig");
 // Thresholds (General class): CV <= 0.22, p95/mean <= 2.55
 // CANARY: REQ=REQ-GQL-068; FEATURE="Containers"; ASPECT=SignaledQueueMpmcVarianceEnvelope; STATUS=BENCHED; BENCH=BenchmarkCANARY_REQ_GQL_068_SignaledQueueMpmcVarianceEnvelope; OWNER=graph; UPDATED=2025-09-23
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+// Zig 0.16 compat: std.Thread.sleep / std.time.sleep removed; use raw nanosleep syscall.
+fn sleepNs(ns: u64) void {
+    if (ns == 0) return;
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.os.linux.nanosleep(&req, null);
+}
+
 fn getJitterNs() u64 {
     if (std.process.getEnvVarOwned(std.heap.page_allocator, "GEODE_BENCH_JITTER_NS")) |val| {
         defer std.heap.page_allocator.free(val);
@@ -21,10 +38,10 @@ fn run_mpmc(allocator: std.mem.Allocator, producers: usize, consumers: usize, it
     const total_items: usize = producers * items_per_producer;
     var consumed = std.atomic.Value(usize).init(0);
 
-    var timer = std.time.Timer.start() catch unreachable;
+    const timer_start_ns = nowNs();
 
-    var threads = std.ArrayList(std.Thread).init(allocator);
-    defer threads.deinit();
+    var threads = std.ArrayList(std.Thread).empty;
+    defer threads.deinit(allocator);
 
     const jitter = getJitterNs();
 
@@ -34,13 +51,13 @@ fn run_mpmc(allocator: std.mem.Allocator, producers: usize, consumers: usize, it
         const th = std.Thread.spawn(.{}, struct {
             fn run(ctx: struct { q: *queue_mod.SignaledQueue(usize), consumed: *std.atomic.Value(usize), total: usize, jitter: u64 }) void {
                 while (true) {
-                    if (ctx.jitter > 0) std.time.sleep(ctx.jitter);
+                    if (ctx.jitter > 0) sleepNs(ctx.jitter);
                     const r = ctx.q.dequeue();
                     switch (r) {
                         error.Closed => return,
                         else => |opt| {
                             if (opt) |_| {
-                                const prev = ctx.consumed.fetchAdd(1, .SeqCst);
+                                const prev = ctx.consumed.fetchAdd(1, .seq_cst);
                                 if (prev + 1 >= ctx.total) {
                                     // signal completion by closing the queue
                                     ctx.q.close();
@@ -54,7 +71,7 @@ fn run_mpmc(allocator: std.mem.Allocator, producers: usize, consumers: usize, it
                 }
             }
         }.run, .{ .q = &q, .consumed = &consumed, .total = total_items, .jitter = jitter }) catch unreachable;
-        threads.append(th) catch unreachable;
+        threads.append(allocator, th) catch unreachable;
     }
 
     // Spawn producers
@@ -65,19 +82,19 @@ fn run_mpmc(allocator: std.mem.Allocator, producers: usize, consumers: usize, it
             fn run(ctx: struct { q: *queue_mod.SignaledQueue(usize), start: usize, count: usize, jitter: u64 }) void {
                 var i: usize = 0;
                 while (i < ctx.count) : (i += 1) {
-                    if (ctx.jitter > 0 and (i & 63) == 0) std.time.sleep(ctx.jitter);
+                    if (ctx.jitter > 0 and (i & 63) == 0) sleepNs(ctx.jitter);
                     _ = ctx.q.enqueue(ctx.start + i) catch return;
                 }
             }
         }.run, .{ .q = &q, .start = start_idx, .count = items_per_producer, .jitter = jitter }) catch unreachable;
-        threads.append(th) catch unreachable;
+        threads.append(allocator, th) catch unreachable;
     }
 
     // Join threads
     var idx: usize = 0;
     while (idx < threads.items.len) : (idx += 1) threads.items[idx].join();
 
-    return timer.read();
+    return nowNs() - timer_start_ns;
 }
 
 fn computeStats(samples: []const u64) struct { mean: f128, cv: f128, p95_ratio: f128 } {
@@ -99,7 +116,7 @@ fn computeStats(samples: []const u64) struct { mean: f128, cv: f128, p95_ratio: 
     var tmp: u64 = 0;
     var buf = std.heap.page_allocator.alloc(u64, samples.len) catch unreachable;
     defer std.heap.page_allocator.free(buf);
-    std.mem.copy(u64, buf, samples);
+    @memcpy(buf, samples);
     while (a < buf.len) : (a += 1) {
         var min_idx = a;
         var b = a + 1;
@@ -126,9 +143,13 @@ pub fn benchmarkSignaledQueueMpmcVarianceEnvelope() !void {
     const consumers = 4;
     const items_per_producer = 256;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     var samples = try allocator.alloc(u64, iterations);
     defer allocator.free(samples);

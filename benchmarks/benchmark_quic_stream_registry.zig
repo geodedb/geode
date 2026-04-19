@@ -4,6 +4,22 @@ const thread_pool = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-QUIC-MUX-007; FEATURE="ActiveStreamRegistryBenchmarks"; ASPECT=ParallelThroughput; STATUS=BENCHED; BENCH=benchmark_quic_stream_registry; OWNER=server; UPDATED=2026-04-08
 
+// Zig 0.16 compat: std.time.Timer removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
+// Zig 0.16 compat: std.Thread.sleep removed; use raw nanosleep syscall.
+fn sleepNs(ns: u64) void {
+    const req = std.os.linux.timespec{
+        .sec = @intCast(ns / std.time.ns_per_s),
+        .nsec = @intCast(ns % std.time.ns_per_s),
+    };
+    _ = std.os.linux.nanosleep(&req, null);
+}
+
 const BenchmarkConfig = struct {
     workers: usize = 8,
     duplicate_rounds_per_worker: usize = 20_000,
@@ -28,7 +44,7 @@ const BenchmarkResult = struct {
 
 fn waitForStart(start: *std.atomic.Value(bool)) void {
     while (!start.load(.acquire)) {
-        std.Thread.sleep(10 * std.time.ns_per_us);
+        sleepNs(10 * std.time.ns_per_us);
     }
 }
 
@@ -105,10 +121,10 @@ fn runDuplicateRequeueBenchmark(allocator: std.mem.Allocator, config: BenchmarkC
     }
 
     while (ready.load(.acquire) < config.workers) {
-        std.Thread.sleep(10 * std.time.ns_per_us);
+        sleepNs(10 * std.time.ns_per_us);
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
     start.store(true, .release);
 
     for (handles[0..config.workers]) |handle| {
@@ -123,7 +139,7 @@ fn runDuplicateRequeueBenchmark(allocator: std.mem.Allocator, config: BenchmarkC
     return .{
         .name = "duplicate_requeue_rejection",
         .total_ops = total_ops,
-        .total_time_ns = timer.read(),
+        .total_time_ns = nowNs() - timer_start_ns,
     };
 }
 
@@ -190,7 +206,7 @@ fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig
 
                     _ = context.completed_cycles.fetchAdd(1, .acq_rel);
                     if ((i & 255) == 0) {
-                        std.Thread.sleep(1 * std.time.ns_per_us);
+                        sleepNs(1 * std.time.ns_per_us);
                     }
                 }
             }
@@ -202,10 +218,10 @@ fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig
     }
 
     while (ready.load(.acquire) < config.workers) {
-        std.Thread.sleep(10 * std.time.ns_per_us);
+        sleepNs(10 * std.time.ns_per_us);
     }
 
-    var timer = try std.time.Timer.start();
+    const timer_start_ns = nowNs();
     start.store(true, .release);
 
     for (handles[0..config.workers]) |handle| {
@@ -221,7 +237,7 @@ fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig
     return .{
         .name = "unique_ownership_churn",
         .total_ops = expected_cycles * 2,
-        .total_time_ns = timer.read(),
+        .total_time_ns = nowNs() - timer_start_ns,
     };
 }
 
@@ -251,9 +267,13 @@ fn reportResult(config: BenchmarkConfig, result: BenchmarkResult) void {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const allocator: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
     const config = BenchmarkConfig{};
 
     std.debug.print(

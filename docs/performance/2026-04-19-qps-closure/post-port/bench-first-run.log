@@ -1,0 +1,3 @@
+TDE_SIM_OVERHEAD iters=1000 plain_ns=2604875 enc_ns=2322847 overhead_pct=0.00
+{"bench":"BenchmarkCANARY_REQ_GQL_SEC_TDE_OVERHEAD_001","pages":10000,"page_size":4096,"mean_encrypt_ns":4173.8944,"throughput_mb_s":935.8765760820398}
+QUIC stream registry benchmark config: workers=8, duplicate_rounds_per_worker=20000, unique_iterations_per_worker=100000

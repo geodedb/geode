@@ -1,0 +1,16 @@
+Build Summary: 11/11 steps succeeded; 4/4 tests passed
+test-perf-gap-bench success
++- run test 4 pass (4 total) 9ms MaxRSS:19M
+   +- compile test ReleaseSafe native cached 49ms MaxRSS:43M
+      +- options cached
+      +- WriteFile . cached
+      +- compile lib z ReleaseFast native cached 25ms MaxRSS:40M
+      +- compile lib z ReleaseFast native (reused)
+      +- WriteFile . (reused)
+      +- compile lib z ReleaseFast native (reused)
+      +- compile lib z ReleaseFast native (reused)
+      +- options cached
+      +- options cached
+      +- options cached
+      +- options cached
+      +- options cached

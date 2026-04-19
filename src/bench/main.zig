@@ -5,16 +5,27 @@ const geode = @import("geode");
 // Uses an equality predicate query expected to trigger NodeIndexScan naming when heuristic active.
 // Not a full perf benchmark; focuses on relative overhead (ns per run) and prints JSON lines.
 
+// Zig 0.16 compat: std.time.nanoTimestamp removed; use clock_gettime(MONOTONIC).
+fn nowNs() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+}
+
 const QueryCase = struct {
     name: []const u8,
     text: []const u8,
 };
 
 fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
-    // P2-3: Use GeneralPurposeAllocator for benchmark arena backing
-    var gpa_instance = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa_instance.deinit();
-    const gpa = gpa_instance.allocator();
+    // Zig 0.16 compat: GeneralPurposeAllocator renamed to DebugAllocator.
+    // ReleaseFast uses smp_allocator (no debug bookkeeping); Debug uses DebugAllocator.
+    var dbg_alloc: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = dbg_alloc.deinit();
+    const gpa: std.mem.Allocator = if (@import("builtin").mode == .Debug)
+        dbg_alloc.allocator()
+    else
+        std.heap.smp_allocator;
 
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
@@ -33,7 +44,7 @@ fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
             var spin: usize = 0;
             while (spin < 3) : (spin += 1) std.mem.doNotOptimizeAway(spin);
         }
-        const t0 = std.time.nanoTimestamp();
+        const t0 = nowNs();
         // Minimal evaluation: just eval RETURN expressions; mimic server fast path.
         if (parse_res.program.statements.len > 0) {
             // Access first query's RETURN items to force AST traversal similar to server profile path.
@@ -50,7 +61,7 @@ fn runLoop(iterations: usize, q: QueryCase, enable_heur: bool) !u128 {
                 else => {},
             }
         }
-        const t1 = std.time.nanoTimestamp();
+        const t1 = nowNs();
         total += @as(u128, @intCast(t1 - t0));
     }
     return total;
