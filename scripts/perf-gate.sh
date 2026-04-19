@@ -21,6 +21,7 @@
 #   LOADTEST_DSN        : Go loadtest DSN
 #   LOADTEST_LEVELS     : concurrency matrix (default: 1,2,4,8,16,32)
 #   LOADTEST_DURATION   : per-level duration (default: 5s)
+#   LOADTEST_SCENARIOS  : space-separated scenario list (default: ping point_read one_hop two_hop fan_out)
 #   ART_DIR             : artifact output dir
 #   GEODE_BENCH_GIT_SHA : forwarded into bench JSONs (default: git HEAD)
 #   GEODE_BENCH_CPU     : forwarded into bench JSONs (default: uname -m)
@@ -36,6 +37,7 @@ HARNESS_DIR="${HARNESS_DIR:-../geode-test-harness}"
 LOADTEST_DSN="${LOADTEST_DSN:-127.0.0.1:3141?insecure=true&user=geode&pass=GeodeTestPassword123!}"
 LOADTEST_LEVELS="${LOADTEST_LEVELS:-1,2,4,8,16,32}"
 LOADTEST_DURATION="${LOADTEST_DURATION:-5s}"
+LOADTEST_SCENARIOS="${LOADTEST_SCENARIOS:-ping point_read one_hop two_hop fan_out}"
 export GEODE_BENCH_GIT_SHA="${GEODE_BENCH_GIT_SHA:-$(git rev-parse HEAD)}"
 export GEODE_BENCH_CPU="${GEODE_BENCH_CPU:-$(uname -m)}"
 
@@ -91,7 +93,8 @@ if [[ ! -x "$LOADTEST_BIN" ]]; then
   echo '{"scenarios": []}' > "$LOADTEST"
 else
   SCENARIO_FILES=()
-  for s in ping point_read one_hop two_hop fan_out; do
+  # shellcheck disable=SC2086  # intentional word-split over $LOADTEST_SCENARIOS
+  for s in $LOADTEST_SCENARIOS; do
     OUT="$ART_DIR/${STEP}-${PHASE}-loadtest-${s}.json"
     echo "[perf-gate] loadtest scenario=$s -> $OUT"
     "$LOADTEST_BIN" \
@@ -123,7 +126,7 @@ if [[ "$PHASE" == "after" ]]; then
     echo "Commit: $(git rev-parse HEAD)"
     echo "CPU: $GEODE_BENCH_CPU"
     echo
-    echo "## Go loadtest (5 scenarios × levels $LOADTEST_LEVELS, $LOADTEST_DURATION each)"
+    echo "## Go loadtest (scenarios: $LOADTEST_SCENARIOS; levels $LOADTEST_LEVELS; $LOADTEST_DURATION each)"
     echo
     if [[ -f benchmarks/loadtest/compare_ab.py ]]; then
       echo "| scenario | c | QPS before | QPS after | ΔQPS % | p99 before | p99 after | Δp99 % | err before | err after | verdict |"
