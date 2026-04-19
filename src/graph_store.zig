@@ -5428,6 +5428,62 @@ pub const QueryReadSession = struct {
     }
 };
 
+/// Zero-copy read view for simple point reads (MATCH by single label +
+/// property, no traversal). Unlike `QueryReadSession`, this view does
+/// NOT deep-clone nodes/properties. It captures the mutation epoch at
+/// acquire time and relies on the caller holding the shared read lock
+/// for the target graph. Mutations block until the caller releases the
+/// lock, which is acceptable for short (<10 ms) point reads but NOT for
+/// long-running traversals — those must keep using `QueryReadSession`.
+///
+/// Invariant: `init` must only be called while the caller already holds
+/// the shared read lock for the target graph (see
+/// `graph_store.acquireGraphReadLock`). The caller is responsible for
+/// releasing the lock after `deinit`.
+///
+/// CANARY: REQ=REQ-PERF-QPS-0805; FEATURE="PointReadView"; ASPECT=IMPL; STATUS=TESTED; TEST=tests/test_point_read_view_zero_copy.zig; OWNER=performance; UPDATED=2026-04-19
+pub const PointReadView = struct {
+    store_ref: *GraphStore,
+    captured_epoch: u64,
+
+    pub fn init(store_ptr: *GraphStore) !PointReadView {
+        return .{
+            .store_ref = store_ptr,
+            .captured_epoch = getMutationEpoch(),
+        };
+    }
+
+    /// No-op — the shared read lock is released by the caller (the
+    /// handler that acquired it), not by the view.
+    pub fn deinit(self: *PointReadView) void {
+        _ = self;
+    }
+
+    /// Returns true if a mutation has occurred since this view was
+    /// acquired. Callers observing `true` must fall back to
+    /// `QueryReadSession` for correctness. Point reads that complete
+    /// inside the held shared lock won't observe drift in practice.
+    pub fn isStale(self: PointReadView) bool {
+        return getMutationEpoch() != self.captured_epoch;
+    }
+
+    pub fn store(self: *PointReadView) *GraphStore {
+        return self.store_ref;
+    }
+
+    /// Returns the set of node IDs currently in the store. This
+    /// allocates an `[]u64` of IDs (same as `GraphStore.getAllNodes`),
+    /// which is O(n) in node count but — critically — does NOT clone
+    /// any node properties or label slices. That's the distinction
+    /// from `QueryReadSession.initIfAvailable`, which deep-clones the
+    /// entire nodes+edges+properties arena on every point read.
+    ///
+    /// Caller owns the returned slice.
+    pub fn getAllNodes(self: *PointReadView, allocator: std.mem.Allocator) ![]u64 {
+        return self.store_ref.getAllNodes(allocator);
+    }
+};
+
 /// Lightweight read view with epoch-based invalidation.
 /// Captures a mutation epoch counter at creation time. If no concurrent mutations
 /// occur (epoch unchanged), reads go directly to the base store (zero overhead).

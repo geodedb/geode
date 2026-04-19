@@ -763,6 +763,19 @@ pub fn build(b: *std.Build) void {
     graph_algo_tests.root_module.link_libc = true;
     const run_graph_algo_tests = b.addRunArtifact(graph_algo_tests);
 
+    // GAP-0805 (M1.2 QPS closure): PointReadView zero-copy + stale-detection tests.
+    // Both reuse the existing graph_store_mod so they import the same PointReadView
+    // type that production callers see.
+    const point_read_view_zero_copy_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_point_read_view_zero_copy.zig"), .target = target, .optimize = optimize }) });
+    point_read_view_zero_copy_tests.root_module.addImport("graph_store", graph_store_mod);
+    point_read_view_zero_copy_tests.root_module.link_libc = true;
+    const run_point_read_view_zero_copy_tests = b.addRunArtifact(point_read_view_zero_copy_tests);
+
+    const point_read_view_mutation_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_point_read_view_mutation_invalidation.zig"), .target = target, .optimize = optimize }) });
+    point_read_view_mutation_tests.root_module.addImport("graph_store", graph_store_mod);
+    point_read_view_mutation_tests.root_module.link_libc = true;
+    const run_point_read_view_mutation_tests = b.addRunArtifact(point_read_view_mutation_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1227,6 +1240,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_string_func_tests.step);
     test_step.dependOn(&run_graph_algo_tests.step);
     test_step.dependOn(&run_graph_store_unit_tests.step);
+    test_step.dependOn(&run_point_read_view_zero_copy_tests.step);
+    test_step.dependOn(&run_point_read_view_mutation_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
