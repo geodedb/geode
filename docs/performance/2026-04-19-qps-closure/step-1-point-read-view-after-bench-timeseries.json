@@ -1,0 +1,65 @@
+{
+  "generated_at_unix_s": 1776638416,
+  "rows": [
+    {
+      "git_sha": "62536b9e983de7d2f3cb1e9130c92dfea6769892",
+      "run_timestamp_unix_s": 1776638415,
+      "zig_version": "0.16.0",
+      "os": "linux",
+      "arch": "x86_64",
+      "cpu": "x86_64",
+      "scenario_name": "timeseries_ingest_100k",
+      "variant": "default",
+      "measurement": "throughput_points_per_sec",
+      "value": 122063776.96207045,
+      "value_stddev": 5990256.629789256,
+      "sample_count": 6,
+      "wall_time_ns": 4945480
+    },
+    {
+      "git_sha": "62536b9e983de7d2f3cb1e9130c92dfea6769892",
+      "run_timestamp_unix_s": 1776638415,
+      "zig_version": "0.16.0",
+      "os": "linux",
+      "arch": "x86_64",
+      "cpu": "x86_64",
+      "scenario_name": "timeseries_query_100k",
+      "variant": "default",
+      "measurement": "throughput_queries_per_sec",
+      "value": 7403342.038116089,
+      "value_stddev": 61581.65995660371,
+      "sample_count": 6,
+      "wall_time_ns": 81359174
+    },
+    {
+      "git_sha": "62536b9e983de7d2f3cb1e9130c92dfea6769892",
+      "run_timestamp_unix_s": 1776638415,
+      "zig_version": "0.16.0",
+      "os": "linux",
+      "arch": "x86_64",
+      "cpu": "x86_64",
+      "scenario_name": "timeseries_ingest_1m",
+      "variant": "default",
+      "measurement": "throughput_points_per_sec",
+      "value": 112046857.54388122,
+      "value_stddev": 1439204.2221693154,
+      "sample_count": 6,
+      "wall_time_ns": 53690061
+    },
+    {
+      "git_sha": "62536b9e983de7d2f3cb1e9130c92dfea6769892",
+      "run_timestamp_unix_s": 1776638415,
+      "zig_version": "0.16.0",
+      "os": "linux",
+      "arch": "x86_64",
+      "cpu": "x86_64",
+      "scenario_name": "timeseries_query_1m",
+      "variant": "default",
+      "measurement": "throughput_queries_per_sec",
+      "value": 7170758.767527116,
+      "value_stddev": 31423.080242440712,
+      "sample_count": 6,
+      "wall_time_ns": 83732084
+    }
+  ]
+}
