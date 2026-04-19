@@ -2878,6 +2878,23 @@ pub fn build(b: *std.Build) void {
     const query_arena_step = b.step("test-query-arena-reuse", "Run GAP-0755 per-query arena pool reuse tests");
     query_arena_step.dependOn(&run_query_arena_tests.step);
 
+    // Task 1.5 / GAP-0806 materializeNode interior-dupe leak regression:
+    // pins the contract that `planned_read_runtime.materializeNode` routes
+    // interior bytes (graph_name dupe, labels, property keys, string property
+    // values) through `match_operations.scratchAllocatorOr` so they land in
+    // the per-query arena (GAP-0755) and drop on arena deinit, not on
+    // `OwnedGraphEntities.deinit` (which only destroys the Node struct itself).
+    // A regression would surface as `testing.allocator` leak reports at test
+    // scope exit — one per dupe per returned row — matching the 3,422 leak
+    // stacks observed in the M0.10 90-min loadtest under DebugAllocator.
+    const match_row_no_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_match_row_no_leak.zig"), .target = target, .optimize = optimize });
+    match_row_no_leak_test_mod.addImport("geode", root_mod);
+    const match_row_no_leak_tests = b.addTest(.{ .root_module = match_row_no_leak_test_mod });
+    const run_match_row_no_leak_tests = b.addRunArtifact(match_row_no_leak_tests);
+    test_step.dependOn(&run_match_row_no_leak_tests.step);
+    const match_row_no_leak_step = b.step("test-match-row-no-leak", "Run Task 1.5 materializeNode interior-dupe leak regression tests");
+    match_row_no_leak_step.dependOn(&run_match_row_no_leak_tests.step);
+
     // GAP-0756 SharedQueryOptimizer handler-wire regression:
     // pins the contract that `SharedQueryOptimizer.optimizeQuery` caches plans
     // across calls — two identical MATCH queries produce hit_count=1, miss_count=1.

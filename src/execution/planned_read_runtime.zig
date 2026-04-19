@@ -7,6 +7,18 @@ const result_utils = @import("result_utils.zig");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const value_types = @import("../value_types.zig");
+const query_arena = @import("../server/query_arena.zig");
+
+// Task 1.5 / GAP-0806: interior-dupe scratch allocator resolver. Mirrors
+// `match_operations.scratchAllocatorOr` — when a per-query arena is installed
+// on the current thread (GAP-0755), arena-back Node/Edge interior bytes so
+// they drop with the query. `OwnedGraphEntities.deinit` only destroys the
+// Node/Edge struct itself; interior `graph_name`/`labels`/property keys +
+// values would otherwise leak per row (observed: 3,422 leak stacks over a
+// 90-min loadtest, pegged the server at 8 cores — M0_10_CONCERNS.md).
+inline fn scratchOr(fallback: std.mem.Allocator) std.mem.Allocator {
+    return query_arena.currentScratchAllocator() orelse fallback;
+}
 
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionResult = execution.ExecutionResult;
@@ -930,15 +942,21 @@ fn propsMatch(
     return true;
 }
 
-fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
+    // Task 1.5 / GAP-0806: the Node struct itself stays on `allocator`
+    // (OwnedGraphEntities.deinit destroys it). All interior bytes go through
+    // `scratch` — the per-query arena when installed — so they drop with the
+    // query instead of leaking row-by-row.
+    const scratch = scratchOr(allocator);
+
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
     const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
 
-    const labels = try adapter.getNodeLabels(graph_name, slot_id, allocator);
+    const labels = try adapter.getNodeLabels(graph_name, slot_id, scratch);
     errdefer {
-        for (labels) |label| allocator.free(label);
-        allocator.free(labels);
+        for (labels) |label| scratch.free(label);
+        scratch.free(labels);
     }
 
     const node = try allocator.create(graph_store.Node);
@@ -946,21 +964,21 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
     node.* = .{
         .id = external_id,
         .labels = labels,
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .graph_name = try scratch.dupe(u8, graph_name),
     };
     errdefer {
         node.properties.deinit();
-        allocator.free(node.graph_name);
+        scratch.free(node.graph_name);
     }
 
-    var props = try adapter.getAllNodeProperties(graph_name, slot_id, allocator);
-    defer freeStoragePropertyMap(allocator, &props);
+    var props = try adapter.getAllNodeProperties(graph_name, slot_id, scratch);
+    defer freeStoragePropertyMap(scratch, &props);
 
     var iter = props.iterator();
     while (iter.next()) |entry| {
-        const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const value = try graph_storage_adapter.fromStorageProperty(allocator, entry.value_ptr.*);
+        const key = try scratch.dupe(u8, entry.key_ptr.*);
+        const value = try graph_storage_adapter.fromStorageProperty(scratch, entry.value_ptr.*);
         try node.properties.put(key, value);
     }
 
@@ -968,6 +986,10 @@ fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id
 }
 
 fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_step: PathEdge) !*graph_store.Edge {
+    // Task 1.5 / GAP-0806: mirror of `materializeNode` — Edge struct stays on
+    // `allocator`; interior bytes route through the per-query arena.
+    const scratch = scratchOr(allocator);
+
     const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
     const store = graph_store.getGlobalStore(allocator);
     const id_map = store.getIdMap(graph_name) orelse return error.IdMapNotLoaded;
@@ -981,23 +1003,23 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
         .id = edge_id,
         .from_id = from_id,
         .to_id = to_id,
-        .label = try edgeTypeName(allocator, graph_name, edge_step.rel_type),
-        .properties = std.StringHashMap(graph_store.PropertyValue).init(allocator),
-        .graph_name = try allocator.dupe(u8, graph_name),
+        .label = try edgeTypeName(scratch, graph_name, edge_step.rel_type),
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .graph_name = try scratch.dupe(u8, graph_name),
     };
     errdefer {
         edge.properties.deinit();
-        allocator.free(edge.label);
-        allocator.free(edge.graph_name);
+        scratch.free(edge.label);
+        scratch.free(edge.graph_name);
     }
 
-    var props = try adapter.getAllEdgeProperties(graph_name, edge_step.prop_head, allocator);
-    defer freeStoragePropertyMap(allocator, &props);
+    var props = try adapter.getAllEdgeProperties(graph_name, edge_step.prop_head, scratch);
+    defer freeStoragePropertyMap(scratch, &props);
 
     var iter = props.iterator();
     while (iter.next()) |entry| {
-        const key = try allocator.dupe(u8, entry.key_ptr.*);
-        const value = try graph_storage_adapter.fromStorageProperty(allocator, entry.value_ptr.*);
+        const key = try scratch.dupe(u8, entry.key_ptr.*);
+        const value = try graph_storage_adapter.fromStorageProperty(scratch, entry.value_ptr.*);
         try edge.properties.put(key, value);
     }
 
