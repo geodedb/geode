@@ -1,0 +1,30 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 330K of event 'cycles:P'
+# Event count (approx.): 251303945665
+#
+# Children      Self  Command  Shared Object      Symbol
+# ........  ........  .......  .................  ...........................................................................................................................................................................................................................................................................................................................................................
+#
+    72.66%     0.27%  geode    [kernel.kallsyms]  [k] entry_SYSCALL_64_after_hwframe
+            |
+             --72.44%--entry_SYSCALL_64_after_hwframe
+                       |
+                        --72.38%--do_syscall_64
+                                  |
+                                  |--43.77%--__x64_sys_futex
+                                  |          |
+                                  |           --41.78%--do_futex
+                                  |                     |
+                                  |                      --41.47%--futex_wait
+                                  |                                |
+                                  |                                 --40.32%--__futex_wait
+                                  |                                           |
+                                  |                                            --37.27%--futex_wait_queue
+                                  |                                                      |
+                                  |                                                       --34.39%--schedule
+                                  |                                                                 |
+                                  |                                                                  --34.16%--__schedule
