@@ -2842,6 +2842,18 @@ pub fn build(b: *std.Build) void {
     const handler_lock_hold_step = b.step("test-handler-lock-hold-scope", "Run GAP-0753 handler lock-hold scope regression tests");
     handler_lock_hold_step.dependOn(&run_handler_lock_hold_tests.step);
 
+    // GAP-0805 (M1.3) handler point-read zero-copy regression:
+    // pins the contract that simple point-read MATCH queries are routed
+    // through PointReadView (no deep clone) rather than
+    // QueryReadSession.snapshotUnderReadLock in the QUIC/gRPC handlers.
+    const handler_point_read_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_handler_point_read_zero_copy.zig"), .target = target, .optimize = optimize });
+    handler_point_read_test_mod.addImport("geode", root_mod);
+    const handler_point_read_tests = b.addTest(.{ .root_module = handler_point_read_test_mod });
+    const run_handler_point_read_tests = b.addRunArtifact(handler_point_read_tests);
+    test_step.dependOn(&run_handler_point_read_tests.step);
+    const handler_point_read_step = b.step("test-handler-point-read-zero-copy", "Run GAP-0805 handler point-read zero-copy regression tests");
+    handler_point_read_step.dependOn(&run_handler_point_read_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression

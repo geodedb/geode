@@ -2323,13 +2323,48 @@ fn handleClientMessage(
             // parse + plan + execute + row materialization runs against the
             // snapshot without holding the graph lock. Mutations still take
             // the exclusive writer lock for their full duration.
+            //
+            // GAP-0805 (M1.3): Simple point-reads (single-node MATCH with
+            // single-label + single-property equality, no traversal/
+            // aggregation/ordering) bypass the QueryReadSession deep-clone
+            // and use a zero-copy `PointReadView` while holding the shared
+            // read lock across the (short) execute window. Non-point reads
+            // and any failure to initialise the view fall back to the
+            // snapshot path.
             var read_session: ?graph_store.QueryReadSession = null;
+            var point_read_view: ?graph_store.PointReadView = null;
             var prev_active_read_store: ?*graph_store.GraphStore = null;
             if (needs_store_lock) {
                 if (is_mutation) {
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                } else if (analysis.is_point_read) {
+                    // GAP-0805: hold the shared read lock across the brief
+                    // point-read execute window, backed by a zero-copy view.
+                    // `graph_lock_handle` keeps the lock alive until the
+                    // defer block releases it.
+                    graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                    const store_ref = graph_store.getWritableGlobalStore(gpa);
+                    if (graph_store.PointReadView.init(store_ref)) |view| {
+                        point_read_view = view;
+                        prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                            point_read_view.?.store(),
+                        );
+                    } else |_| {
+                        // Fall back cleanly: release the read lock we just
+                        // took and use the snapshot path instead.
+                        if (graph_lock_handle) |h| graph_store.releaseGraphLock(h);
+                        graph_lock_handle = null;
+                        if (graph_store.snapshotUnderReadLock(gpa, query_graph_name)) |session| {
+                            read_session = session;
+                            prev_active_read_store = graph_store.pushActiveQueryReadStore(
+                                read_session.?.store(),
+                            );
+                        } else |_| {
+                            graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                        }
+                    }
                 } else {
                     // Reads: snapshot under the shared reader lock, then
                     // release immediately. Executor reads from the thread-
@@ -2389,6 +2424,14 @@ fn handleClientMessage(
                 if (read_session) |*session| {
                     graph_store.popActiveQueryReadStore(prev_active_read_store);
                     session.deinit();
+                }
+                // GAP-0805 (M1.3): mirror the cleanup for the zero-copy
+                // point-read view. The graph read lock that scopes the
+                // view is released by the `graph_lock_handle` branch
+                // above; `PointReadView.deinit` itself is a no-op.
+                if (point_read_view) |*view| {
+                    graph_store.popActiveQueryReadStore(prev_active_read_store);
+                    view.deinit();
                 }
                 // GAP-0755: Always pop the scratch allocator and return the
                 // arena to the pool on every exit path (including early

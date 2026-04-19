@@ -23,6 +23,14 @@ pub const ProgramAnalysis = struct {
     traits: QueryTraits = .{},
     target: ?*const ast.Statement = null,
     union_part_count: usize = 0,
+    /// GAP-0805 / M1.3: True iff this query is a simple point read —
+    /// a single-node MATCH with a single literal label and a single
+    /// property equality (value is a parameter or literal), no
+    /// traversal, no aggregation, no additional clauses. Eligible for
+    /// the zero-copy `PointReadView` path; any other shape MUST use
+    /// `QueryReadSession` for isolation. False positives are correctness
+    /// bugs, so this flag is deliberately conservative.
+    is_point_read: bool = false,
 };
 
 pub const NormalizedQuery = struct {
@@ -107,6 +115,7 @@ fn analyzeStatement(stmt: *const ast.Statement, analysis: *ProgramAnalysis) void
             analysis.traits.has_filter_eq = hasEqExpr(q.filter_clause);
             analysis.traits.has_union = false;
             analysis.union_part_count = 1;
+            analysis.is_point_read = isPointReadQuery(&q);
         },
         .Union => |u| {
             analysis.traits.has_union = true;
@@ -259,6 +268,98 @@ pub fn isQueryMutating(q: *const ast.Query) bool {
         q.delete_items.len > 0;
 }
 
+/// GAP-0805 / M1.3: Detect whether a Query is a simple point read that can
+/// use the zero-copy `PointReadView` path instead of the deep-clone
+/// `QueryReadSession` snapshot. Conservative: a false positive here would
+/// route a non-trivial query through a view that only holds the shared
+/// read lock for the short hot window, so anything that requires isolation
+/// across mutations MUST fall into the `false` branch.
+///
+/// Criteria (ALL required):
+///   - no traversal (single chain with a head node, no hops)
+///   - single literal label on the head node
+///   - exactly one property equality with a parameter-or-literal value
+///   - no WHERE / FILTER / WITH / CTE / GROUP BY / HAVING / ORDER BY /
+///     LIMIT / OFFSET / UNWIND / CALL / MERGE / FOR / chained query
+///   - no mutations (caller should also check `isQueryMutating`)
+///   - no OPTIONAL MATCH
+///   - RETURN not DISTINCT
+pub fn isPointReadQuery(q: *const ast.Query) bool {
+    // Any side-effect or follow-up clause disqualifies the query.
+    if (isQueryMutating(q)) return false;
+    if (q.optional_match) return false;
+    if (q.where_clause != null) return false;
+    if (q.filter_clause != null) return false;
+    if (q.with_clause != null) return false;
+    if (q.cte_list != null) return false;
+    if (q.group_by != null) return false;
+    if (q.having != null) return false;
+    if (q.order_by != null) return false;
+    if (q.limit != null) return false;
+    if (q.offset != null) return false;
+    if (q.unwind_clause != null) return false;
+    if (q.call_clause != null) return false;
+    if (q.initial_call_subquery != null) return false;
+    if (q.for_statement != null) return false;
+    if (q.next_query != null) return false;
+    if (q.merge_statement != null) return false;
+    if (q.let_bindings.len != 0) return false;
+    if (q.inline_let_bindings.len != 0) return false;
+    if (q.path_variable != null) return false;
+    if (q.ret.distinct) return false;
+
+    // Must be a single-chain, single-node pattern (no relationships).
+    if (q.match.chains.len != 1) return false;
+    const chain = &q.match.chains[0];
+    if (chain.is_optional) return false;
+    if (chain.is_shortest) return false;
+    if (chain.hops.len != 0) return false;
+    const head_opt = chain.head;
+    if (head_opt == null) return false;
+    const head = head_opt.?;
+
+    // Exactly one literal label.
+    if (head.labels.len != 1) return false;
+
+    // Exactly one property filter with a simple (param or literal) value.
+    const props = head.props orelse return false;
+    if (props.len != 1) return false;
+    const value_expr = props[0].value;
+    if (!isSimplePointReadValue(value_expr)) return false;
+
+    return true;
+}
+
+/// True for AST expression shapes that are safe as the right-hand side of
+/// a point-read property equality: scalar parameter reference or scalar
+/// literal. Anything that calls a function, dereferences another node, or
+/// references a prior binding is rejected (would require execution context
+/// we're not meant to evaluate during plan analysis).
+fn isSimplePointReadValue(expr: *const ast.Expr) bool {
+    return switch (expr.*) {
+        .Param,
+        .String,
+        .Int,
+        .Bool,
+        .Null,
+        .Decimal,
+        .SmallIntLit,
+        .BigIntLit,
+        .RealLit,
+        .DoubleLit,
+        .CharLit,
+        .VarcharLit,
+        .TextLit,
+        .UuidLit,
+        .Date,
+        .DateTime,
+        .Time,
+        .LocalDateTime,
+        => true,
+        else => false,
+    };
+}
+
 fn startsWithKeyword(hay: []const u8, needle: []const u8) bool {
     if (hay.len < needle.len) return false;
     return std.ascii.eqlIgnoreCase(hay[0..needle.len], needle);
@@ -338,4 +439,108 @@ test "isMutatingProgram: mutating CALL procedure is a mutation" {
     const prog, var arena = try parseProgram("CALL geode.auth.user_create('alice', 'p4ssw0rd1')");
     defer arena.deinit();
     try std.testing.expect(isMutatingProgram(&prog));
+}
+
+// --- GAP-0805 / M1.3: point-read detection ---
+
+test "isPointReadQuery: single-node MATCH with $param equality is a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(analysis.is_point_read);
+}
+
+test "isPointReadQuery: single-node MATCH with string literal equality is a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {name: 'alice'}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with traversal (hops) is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id})-[:KNOWS]->(m) RETURN m");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH without property filter is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with WHERE clause is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id}) WHERE n.age > 18 RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with ORDER BY is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id}) RETURN n ORDER BY n.name");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with LIMIT is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id}) RETURN n LIMIT 1");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with multiple labels is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person:User {id: $id}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH with multi-property filter is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id, name: $name}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: MATCH...CREATE is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $id}) CREATE (m:Person {name: 'new'})-[:KNOWS]->(n) RETURN m");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: standalone CREATE is NOT a point read" {
+    const prog, var arena = try parseProgram("CREATE (n:Person {name: 'alice'})");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: OPTIONAL MATCH is NOT a point read" {
+    const prog, var arena = try parseProgram("OPTIONAL MATCH (n:Person {id: $id}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: UNION is NOT a point read" {
+    const prog, var arena = try parseProgram("MATCH (n:Person {id: $a}) RETURN n UNION MATCH (n:Person {id: $b}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    try std.testing.expect(!analysis.is_point_read);
+}
+
+test "isPointReadQuery: EXPLAIN wraps a non-executed query (not a point read either way)" {
+    const prog, var arena = try parseProgram("EXPLAIN MATCH (n:Person {id: $id}) RETURN n");
+    defer arena.deinit();
+    const analysis = analyzeProgram(&prog);
+    // analysis.kind is .explain, so handler dispatch never enters the
+    // read branch. For defence-in-depth the detector still evaluates
+    // the inner query; the point is that the handler guard (`needs_store_lock`)
+    // skips the PointReadView branch entirely.
+    _ = analysis;
 }
