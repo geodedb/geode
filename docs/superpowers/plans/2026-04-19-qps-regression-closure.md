@@ -1413,8 +1413,7 @@ In `src/graph_store.zig`, add after the `QueryReadSession` struct:
 /// the shared read lock for the target graph (see
 /// `graph_store.acquireGraphReadLock`). `deinit` releases the lock.
 ///
-/// CANARY: REQ=REQ-PERF-QPS-0805; FEATURE="PointReadView"; ASPECT=IMPL;
-///   STATUS=TESTED; OWNER=performance; UPDATED=2026-04-19
+/// CANARY: REQ=REQ-PERF-QPS-0805; FEATURE="PointReadView"; ASPECT=IMPL; STATUS=TESTED; OWNER=performance; UPDATED=2026-04-19
 pub const PointReadView = struct {
     store_ref: *GraphStore,
     captured_epoch: u64,
