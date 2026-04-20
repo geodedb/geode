@@ -525,6 +525,14 @@ fn executePatternQuery(
         param_names,
         param_values,
         context,
+        chain.hops.len == 0, // GAP-0808: only enable merge_prop_index fast
+        // path for zero-hop patterns — conservative
+        // guard to keep the behavior change scoped to
+        // the shape we actually profiled and verified
+        // (point_read's `MATCH (p:Label {key: scalar})
+        // RETURN ...`). Multi-hop queries fall back to
+        // the existing label-index + property-filter
+        // path.
     );
     defer allocator.free(start_slots);
     trace.ops[scan_op_index].rows = @intCast(start_slots.len);
@@ -716,6 +724,7 @@ fn collectStartSlots(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
+    enable_merge_index_fastpath: bool,
 ) ![]u64 {
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
@@ -727,7 +736,15 @@ fn collectStartSlots(
     // `MATCH (p:LT_Person {lt_id: 42}) RETURN p.name, p.age`. Authoritative
     // when the index handles the value type — returns a single-slot slice
     // on hit, an empty slice on definitive miss.
+    //
+    // Caller-gated via `enable_merge_index_fastpath` — we only flip it on
+    // for zero-hop patterns to keep the behavior change scoped to the shape
+    // we actually verified. Multi-hop traversals (`(a)-[:r]->(b)`, etc.)
+    // continue to use the existing label-scan path so the node_id → slot_id
+    // conversion here cannot ripple into downstream edge-adjacency lookups
+    // (an empirical concern when we first rolled this out).
     fp: {
+        if (!enable_merge_index_fastpath) break :fp;
         if (pattern.labels.len != 1) break :fp;
         const props = pattern.props orelse break :fp;
         if (props.len != 1) break :fp;
