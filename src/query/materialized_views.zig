@@ -257,6 +257,13 @@ pub const MaterializedViewManager = struct {
     mvcc_manager: ?*MVCCManager,
     config: ViewManagerConfig,
     statistics: ManagerStatistics,
+    // GAP-0810: optional shared AST cache. When wired by the server via
+    // setAstCache(), parses on the view-refresh hot path route through
+    // `lib.parseGqlCached` so identical source queries amortize the parser
+    // cost across refresh cycles. Null means "no cache — fall back to
+    // parseGql", which preserves every existing standalone caller.
+    // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="SharedAstCache"; ASPECT=ViewRefreshWiring; STATUS=TESTED; TEST=tests/test_gap0810_cross_subsystem_cache.zig; OWNER=performance; UPDATED=2026-04-20
+    ast_cache: ?*lib.SharedAstCache = null,
 
     pub const ViewManagerConfig = struct {
         max_views: u32 = 1000,
@@ -290,7 +297,17 @@ pub const MaterializedViewManager = struct {
             .mvcc_manager = null,
             .config = config,
             .statistics = .{},
+            .ast_cache = null,
         };
+    }
+
+    /// GAP-0810: wire a process-wide shared AST cache into the view manager.
+    /// The server calls this at startup with `ServerState.shared_ast_cache`
+    /// so that view-refresh parses reuse handles across refresh cycles and
+    /// across subsystems (QUIC handler, distributed coordinator). Pass null
+    /// to disable; cache lifetime must outlive the manager.
+    pub fn setAstCache(self: *MaterializedViewManager, cache: ?*lib.SharedAstCache) void {
+        self.ast_cache = cache;
     }
 
     pub fn deinit(self: *MaterializedViewManager) void {
@@ -542,6 +559,26 @@ pub const MaterializedViewManager = struct {
     fn extractDependencies(self: *MaterializedViewManager, view_name: []const u8, query: []const u8) !void {
         // CANARY: REQ=REQ-MATERIALIZED-VIEWS-002; FEATURE="MV Dependency Extraction"; ASPECT=ASTDependencyParsing; STATUS=TESTED; TEST=test_materialized_views; OWNER=query; UPDATED=2025-12-30
         // Parse query AST and extract table/view dependencies (node labels and relationship types)
+        // GAP-0810: route through shared AST cache when the server has wired one.
+        // The handle holds a shared reference; .release() is required on the Ok branch.
+        if (self.ast_cache) |cache| {
+            const outcome = lib.parseGqlCached(cache, query, .{}) catch |err| {
+                std.debug.print("Failed to parse query for dependency extraction (cache path): {}\n", .{err});
+                return;
+            };
+            switch (outcome) {
+                .Err => return,
+                .Ok => |h_in| {
+                    var handle = h_in;
+                    defer handle.release();
+                    const program = handle.parse_result.program;
+                    if (program.statements.len == 0) return;
+                    try self.recordDependenciesFromProgram(view_name, program);
+                },
+            }
+            return;
+        }
+
         var parse_result = lib.parseGql(query, self.allocator) catch |err| {
             std.debug.print("Failed to parse query for dependency extraction: {}\n", .{err});
             return;
@@ -550,8 +587,12 @@ pub const MaterializedViewManager = struct {
 
         const program = parse_result.program;
         if (program.statements.len == 0) return;
+        try self.recordDependenciesFromProgram(view_name, program);
+    }
 
-        // Extract dependencies from each statement
+    // GAP-0810: shared helper so the cache and non-cache branches walk the
+    // same program. Stays private to avoid API churn.
+    fn recordDependenciesFromProgram(self: *MaterializedViewManager, view_name: []const u8, program: ast.Program) !void {
         for (program.statements) |stmt| {
             switch (stmt) {
                 .Query => |q| {
@@ -591,7 +632,36 @@ pub const MaterializedViewManager = struct {
 
         const start_time = compat_milliTimestamp();
 
-        // Parse the source query
+        // GAP-0810: when the server has wired a shared AST cache, parse
+        // through it so identical source queries across refresh cycles
+        // amortize the parser cost.
+        if (self.ast_cache) |cache| {
+            const outcome = lib.parseGqlCached(cache, query, .{}) catch |err| {
+                std.debug.print("Failed to parse materialized view source query (cache path): {}\n", .{err});
+                return QueryResult{
+                    .rows = try self.allocator.alloc(graph_storage.Binding, 0),
+                    .schema = try self.allocator.alloc(graph_storage.Column, 0),
+                    .execution_time_ms = 0,
+                    .row_count = 0,
+                };
+            };
+            switch (outcome) {
+                .Err => {
+                    return QueryResult{
+                        .rows = try self.allocator.alloc(graph_storage.Binding, 0),
+                        .schema = try self.allocator.alloc(graph_storage.Column, 0),
+                        .execution_time_ms = 0,
+                        .row_count = 0,
+                    };
+                },
+                .Ok => |h_in| {
+                    var handle = h_in;
+                    defer handle.release();
+                    return try self.executeParsedSourceQuery(handle.parse_result, start_time);
+                },
+            }
+        }
+
         var parse_result = lib.parseGql(query, self.allocator) catch |err| {
             std.debug.print("Failed to parse materialized view source query: {}\n", .{err});
             return QueryResult{
@@ -603,22 +673,26 @@ pub const MaterializedViewManager = struct {
         };
         defer parse_result.deinit();
 
-        // Execute the parsed program using the execution engine
+        return try self.executeParsedSourceQuery(&parse_result, start_time);
+    }
+
+    // GAP-0810: shared body for cached/uncached parse paths above. Takes a
+    // borrowed pointer to a `ParseResult` — the caller retains ownership
+    // (either via `.deinit()` in the uncached branch or via the cache handle
+    // in the cached branch) so this function must NOT deinit `pr`.
+    fn executeParsedSourceQuery(self: *MaterializedViewManager, pr: *const lib.ParseResult, start_time: i64) !QueryResult {
         const execution = @import("../execution.zig");
 
-        // Get or create an execution context
         var exec_ctx = execution.ExecutionContext.init(self.allocator);
         defer exec_ctx.deinit();
 
-        // Execute the program
         var result_rows = ArrayList(graph_storage.Binding).init(self.allocator);
         errdefer result_rows.deinit();
         var result_schema = ArrayList(graph_storage.Column).init(self.allocator);
         errdefer result_schema.deinit();
 
-        // Execute through the program executor
-        if (parse_result.program.statements.len > 0) {
-            for (parse_result.program.statements) |stmt| {
+        if (pr.program.statements.len > 0) {
+            for (pr.program.statements) |stmt| {
                 switch (stmt) {
                     .Query => |q| {
                         // Build schema from return clause
@@ -634,17 +708,15 @@ pub const MaterializedViewManager = struct {
                             });
                         }
 
-                        // Execute the query using lib.executeProgram if available
                         const exec_result = lib.executeProgramWithContext(
                             self.allocator,
-                            parse_result.program,
+                            pr.program,
                             &exec_ctx,
                         ) catch |err| {
                             std.debug.print("Materialized view query execution failed: {}\n", .{err});
                             continue;
                         };
 
-                        // Convert execution results to bindings
                         for (exec_result.rows) |row| {
                             var binding = graph_storage.Binding{
                                 .name = "",
@@ -652,7 +724,6 @@ pub const MaterializedViewManager = struct {
                                 .vars = std.StringHashMap(graph_storage.BindingValue).init(self.allocator),
                             };
 
-                            // Map row columns to binding vars
                             for (row.cols, 0..) |col_val, idx| {
                                 if (idx < result_schema.items.len) {
                                     const col_name = result_schema.items[idx].name;
@@ -918,20 +989,45 @@ pub const MaterializedViewManager = struct {
         // Fast path: exact match
         if (std.mem.eql(u8, query1, query2)) return true;
 
-        // Parse both queries
+        // GAP-0810: prefer the shared cache when wired — query-compat
+        // checks run on every incoming query in the worst case, so parser
+        // amortization is valuable here. Both parse paths must share the
+        // same comparison body to avoid drift.
+        if (self.ast_cache) |cache| {
+            const out1 = lib.parseGqlCached(cache, query1, .{}) catch return false;
+            var h1 = switch (out1) {
+                .Err => return false,
+                .Ok => |h| h,
+            };
+            defer h1.release();
+
+            const out2 = lib.parseGqlCached(cache, query2, .{}) catch return false;
+            var h2 = switch (out2) {
+                .Err => return false,
+                .Ok => |h| h,
+            };
+            defer h2.release();
+
+            return compareParsedQueries(h1.parse_result, h2.parse_result);
+        }
+
         var parse1 = lib.parseGql(query1, self.allocator) catch return false;
         defer parse1.deinit();
         var parse2 = lib.parseGql(query2, self.allocator) catch return false;
         defer parse2.deinit();
 
-        // Must have at least one statement each
-        if (parse1.program.statements.len == 0 or parse2.program.statements.len == 0) return false;
+        return compareParsedQueries(&parse1, &parse2);
+    }
 
-        // Check first statement of each
-        const stmt1 = parse1.program.statements[0];
-        const stmt2 = parse2.program.statements[0];
+    // GAP-0810: extracted comparison body shared by the cached and uncached
+    // `isQueryCompatible` parse paths. Pure function over borrowed
+    // ParseResult pointers; neither arena is touched for allocation.
+    fn compareParsedQueries(pr1: *const lib.ParseResult, pr2: *const lib.ParseResult) bool {
+        if (pr1.program.statements.len == 0 or pr2.program.statements.len == 0) return false;
 
-        // Both must be Query statements
+        const stmt1 = pr1.program.statements[0];
+        const stmt2 = pr2.program.statements[0];
+
         const q1 = switch (stmt1) {
             .Query => |q| q,
             else => return false,
@@ -941,10 +1037,7 @@ pub const MaterializedViewManager = struct {
             else => return false,
         };
 
-        // Check MATCH clause compatibility: query1's patterns must be a subset of query2's
         if (!matchPatternsCompatible(q1.match, q2.match)) return false;
-
-        // Check RETURN clause compatibility: query1's return items must be satisfiable by query2
         if (!returnClausesCompatible(q1.ret, q2.ret)) return false;
 
         return true;

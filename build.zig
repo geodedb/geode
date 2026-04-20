@@ -817,6 +817,18 @@ pub fn build(b: *std.Build) void {
     gap0810_parse_cache_tests.root_module.addImport("geode", root_mod);
     const run_gap0810_parse_cache_tests = b.addRunArtifact(gap0810_parse_cache_tests);
 
+    // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
+    // refresh + distributed coordinator now share the server's shared AST
+    // cache via optional `ast_cache` fields + `setAstCache()` methods.
+    const gap0810_cross_subsystem_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_cross_subsystem_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_cross_subsystem_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_cross_subsystem_tests = b.addRunArtifact(gap0810_cross_subsystem_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1469,6 +1481,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_point_read_view_mutation_tests.step);
     test_step.dependOn(&run_gap0809_where_fastpath_tests.step);
     test_step.dependOn(&run_gap0810_parse_cache_tests.step);
+    test_step.dependOn(&run_gap0810_cross_subsystem_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
