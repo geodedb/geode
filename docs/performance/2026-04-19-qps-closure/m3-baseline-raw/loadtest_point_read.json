@@ -1,0 +1,105 @@
+{
+  "timestamp": "2026-04-20T11:03:35Z",
+  "dsn": "127.0.0.1:3141?insecure=true\u0026user=geode\u0026pass=***",
+  "scenario": "point_read",
+  "query_type": "Property lookup: MATCH by lt_id (500 nodes)",
+  "data_size": {
+    "nodes": 500,
+    "edges": 0
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "total_queries": 994,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 198.8,
+      "latency_p50": "5.015808ms",
+      "latency_p95": "5.901165ms",
+      "latency_p99": "6.624865ms",
+      "latency_mean": "5.0304ms",
+      "latency_max": "11.256398ms"
+    },
+    {
+      "concurrency": 2,
+      "total_queries": 1337,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 267.4,
+      "latency_p50": "7.083704ms",
+      "latency_p95": "8.827483ms",
+      "latency_p99": "10.317189ms",
+      "latency_mean": "7.483397ms",
+      "latency_max": "707.867299ms"
+    },
+    {
+      "concurrency": 4,
+      "total_queries": 1179,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 235.8,
+      "latency_p50": "16.156032ms",
+      "latency_p95": "21.322688ms",
+      "latency_p99": "23.449592ms",
+      "latency_mean": "16.989086ms",
+      "latency_max": "1.14735815s"
+    },
+    {
+      "concurrency": 8,
+      "total_queries": 1191,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 238.2,
+      "latency_p50": "32.471559ms",
+      "latency_p95": "43.103566ms",
+      "latency_p99": "65.733036ms",
+      "latency_mean": "33.674878ms",
+      "latency_max": "1.608345085s"
+    },
+    {
+      "concurrency": 16,
+      "total_queries": 1194,
+      "errors": 8,
+      "error_rate": 0.006700167504187605,
+      "duration": "5s",
+      "qps": 237.2,
+      "latency_p50": "31.87216ms",
+      "latency_p95": "43.541417ms",
+      "latency_p99": "58.946782ms",
+      "latency_mean": "33.804653ms",
+      "latency_max": "1.626974326s",
+      "error_samples": [
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded"
+      ]
+    },
+    {
+      "concurrency": 32,
+      "total_queries": 1224,
+      "errors": 24,
+      "error_rate": 0.0196078431372549,
+      "duration": "5s",
+      "qps": 240,
+      "latency_p50": "31.310866ms",
+      "latency_p95": "45.175104ms",
+      "latency_p99": "59.929287ms",
+      "latency_mean": "33.41063ms",
+      "latency_max": "1.667370447s",
+      "error_samples": [
+        "failed to receive HELLO response: context deadline exceeded",
+        "driver: bad connection",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded",
+        "failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3141: deadline exceeded"
+      ]
+    }
+  ],
+  "summary": "Peak QPS: 267.4 at c=2. Max tested: c=32 (240.0 QPS, 2.0% errors)"
+}
