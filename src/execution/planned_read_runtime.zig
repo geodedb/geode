@@ -525,6 +525,7 @@ fn executePatternQuery(
         param_names,
         param_values,
         context,
+        q.where_clause,
     );
     defer allocator.free(start_slots);
     trace.ops[scan_op_index].rows = @intCast(start_slots.len);
@@ -707,6 +708,71 @@ fn materializePathRow(
     }
 }
 
+/// Simple equality predicate extracted from a WHERE clause, pointing
+/// into the caller's AST. Returned by `tryExtractPatternEqPredicate`.
+const PatternEqPredicate = struct {
+    key: []const u8,
+    value: *const ast.Expr,
+};
+
+/// If `where` is a simple `<pattern_name>.<key> = <literal-ish>` (or the
+/// mirror with the property on the right), return the property key + the
+/// literal-side expression. Returns null for anything else — AND-trees,
+/// OR-trees, ranges, cross-variable joins, etc. — to keep the fast path
+/// conservative.
+///
+/// The parser lowers `p.key` into `.Member{ .target = Ident("p"),
+/// .field = "key" }`; the legacy `.PropertyAccess` shape is also
+/// accepted for forward-compat.
+///
+/// This is the WHERE-side parity of the inline-prop fast path below:
+/// `MATCH (p:Label) WHERE p.key = 42` should hit the adapter-level
+/// property index just like `MATCH (p:Label {key: 42})` does (GAP-0808
+/// via GAP-0809).
+fn propertyAccessMatches(expr: ast.Expr, pattern_name: []const u8) ?[]const u8 {
+    return switch (expr) {
+        .Member => |m| blk: {
+            const target = m.target.*;
+            if (target != .Ident) break :blk null;
+            // Match on the original identifier text; patterns are
+            // case-sensitive at this layer (consistent with property-
+            // access evaluation elsewhere in the executor).
+            if (!std.mem.eql(u8, target.Ident.orig, pattern_name)) break :blk null;
+            break :blk m.field;
+        },
+        .PropertyAccess => |pa| blk: {
+            if (!std.mem.eql(u8, pa.object, pattern_name)) break :blk null;
+            break :blk pa.property;
+        },
+        else => null,
+    };
+}
+
+fn tryExtractPatternEqPredicate(
+    pattern_name: ?[]const u8,
+    where: ast.Expr,
+) ?PatternEqPredicate {
+    const name = pattern_name orelse return null;
+    const bin = switch (where) {
+        .Binary => |b| b,
+        else => return null,
+    };
+    if (bin.op != .Eq) return null;
+
+    // Two shapes: `name.key = literal` or `literal = name.key`.
+    if (propertyAccessMatches(bin.left.*, name)) |key| {
+        if (!pattern_helpers.containsVariableReference(bin.right.*)) {
+            return .{ .key = key, .value = bin.right };
+        }
+    }
+    if (propertyAccessMatches(bin.right.*, name)) |key| {
+        if (!pattern_helpers.containsVariableReference(bin.left.*)) {
+            return .{ .key = key, .value = bin.left };
+        }
+    }
+    return null;
+}
+
 fn collectStartSlots(
     allocator: std.mem.Allocator,
     adapter: *graph_storage_adapter.StorageAdapter,
@@ -716,6 +782,7 @@ fn collectStartSlots(
     param_names: []const []const u8,
     param_values: []const Value,
     context: ExecutionContext,
+    where_clause: ?ast.Expr,
 ) ![]u64 {
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
@@ -741,11 +808,34 @@ fn collectStartSlots(
     // For `(:Label {key: scalar})` this reduces `O(|label posting list|)`
     // to `O(|hash-bucket|)` — typically 1 on well-distributed keys. For
     // the loadtest's 500-2000-node scenarios this is the ~20x QPS win.
+    //
+    // GAP-0809: extended to also fire on `MATCH (p:Label) WHERE p.key =
+    // literal`. Before: WHERE-style queries fell back to a full label
+    // scan + post-filter (~900 ms on 5k nodes vs ~290 µs for the inline
+    // variant — a 3000× gap). The `fp_key` / `fp_value` prelude below
+    // reads from pattern.props when present, otherwise tries to extract
+    // a single simple equality from the WHERE clause. Subsequent WHERE
+    // evaluation is still performed by the normal filter stage, so even
+    // if the extracted predicate is a subset of WHERE, correctness is
+    // preserved.
     fp: {
         if (pattern.labels.len != 1) break :fp;
-        const props = pattern.props orelse break :fp;
-        if (props.len != 1) break :fp;
-        if (pattern_helpers.containsVariableReference(props[0].value.*)) break :fp;
+
+        var fp_key: []const u8 = undefined;
+        var fp_value_expr: *const ast.Expr = undefined;
+
+        if (pattern.props) |props| {
+            if (props.len != 1) break :fp;
+            if (pattern_helpers.containsVariableReference(props[0].value.*)) break :fp;
+            fp_key = props[0].key;
+            fp_value_expr = props[0].value;
+        } else if (where_clause) |wc| {
+            const extracted = tryExtractPatternEqPredicate(pattern.name, wc) orelse break :fp;
+            fp_key = extracted.key;
+            fp_value_expr = extracted.value;
+        } else {
+            break :fp;
+        }
 
         const prop_env = Env{
             .names = &.{},
@@ -754,7 +844,7 @@ fn collectStartSlots(
             .param_values = param_values,
             .allocator = allocator,
         };
-        const expected_val = eval.evalExpr(allocator, props[0].value.*, prop_env) catch break :fp;
+        const expected_val = eval.evalExpr(allocator, fp_value_expr.*, prop_env) catch break :fp;
         const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
             .Str => |s| graph_store.PropertyValue{ .String = s },
             .Int => |i| graph_store.PropertyValue{ .Int = i },
@@ -763,7 +853,7 @@ fn collectStartSlots(
         };
         const pv = pv_opt orelse break :fp;
 
-        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], props[0].key, pv, allocator) catch break :fp;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], fp_key, pv, allocator) catch break :fp;
         defer allocator.free(candidates);
 
         var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
