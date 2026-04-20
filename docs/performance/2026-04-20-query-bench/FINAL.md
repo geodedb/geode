@@ -91,12 +91,16 @@ CREATE is 2.5× slower than DELETE on the same graph — the per-property index 
 
 Evidence is the row at `variant/scenario_name/measurement` in `baseline/bench-query-all.json`.
 
-### 1. Label-scan with WHERE returns to O(N) despite indexes (`point_read_where`)
+### 1. Label-scan with WHERE returns to O(N) despite indexes (`point_read_where`) — **FIXED (GAP-0809, commit `d7b79be5`)**
 
-- **Signal:** `point_read_where/large` 900 ms vs `point_read_inline/large` 288 µs. **3,125× slowdown** for an equivalent query written with `WHERE p.lt_id = 42` instead of inline `{lt_id: 42}`.
-- **Why:** the GAP-0808 fast path in `src/execution/planned_read_runtime.zig:collectStartSlots` only triggers when the pattern has an inline property constraint. Equivalent `WHERE` predicates fall through to a full label scan + post-filter.
-- **Fix:** extend the fast-path detector to rewrite a leading `WHERE p.<prop> = <literal>` into the same `getCandidateNodesByLabelAndProperty` adapter-index lookup.
-- **Expected win:** matches the inline path — **~3000× faster** on large; this is the single biggest win in the list.
+- **Signal (before):** `point_read_where/large` 900 ms vs `point_read_inline/large` 288 µs. **3,125× slowdown** for an equivalent query written with `WHERE p.lt_id = 42` instead of inline `{lt_id: 42}`.
+- **Why:** the GAP-0808 fast path in `src/execution/planned_read_runtime.zig:collectStartSlots` only triggered when the pattern had an inline property constraint. Equivalent `WHERE` predicates fell through to a full label scan + post-filter.
+- **Fix:** `tryExtractPatternEqPredicate` pulls a single simple equality from `WHERE` when `pattern.props` is absent and feeds it into the same adapter-level `getCandidateNodesByLabelAndProperty` lookup. Handles `.Member` and `.PropertyAccess` AST shapes, tolerates mirrored `literal = p.key`, and declines non-equality / compound predicates.
+- **Measured after-win:**
+  - `point_read_where/small`:  183 ms →  383 µs (**480×**)
+  - `point_read_where/medium`: 1460 ms →  235 µs (**6,200×**)
+  - `point_read_where/large`:  900 ms →  344 µs (**2,600×**)
+- **Regression cover:** `tests/test_gap0809_where_fastpath.zig` (3 cases). 1092/1092 tests green.
 
 ### 2. Aggregation over a label = full scan (`agg_count_label`, `agg_avg_property`)
 
@@ -144,15 +148,15 @@ Evidence is the row at `variant/scenario_name/measurement` in `baseline/bench-qu
 
 Each bottleneck above maps to one `perf/` ticket. Suggested order (by impact × effort):
 
-| rank | gap        | bottleneck                                         | est. win   | est. effort |
-|-----:|-----------:|----------------------------------------------------|-----------:|------------:|
-| 1    | GAP-0809   | WHERE prop=const fast-path parity with inline-prop | 3000× (large) | 2d |
-| 2    | GAP-0810   | shared AST cache in executeProgramWithContext      | 2-5×       | 3d |
-| 3    | GAP-0811   | aggregation-aware planner (count/avg no materialize)| 10-50×    | 3d |
-| 4    | GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 5-20×      | 4d |
-| 5    | GAP-0813   | bulk materializePath for multi-hop traversals     | 2-5×       | 5d |
-| 6    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d |
-| 7    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d |
+| rank | gap        | bottleneck                                         | est. win   | est. effort | status |
+|-----:|-----------:|----------------------------------------------------|-----------:|------------:|:-------|
+| ~~1~~    | GAP-0809   | WHERE prop=const fast-path parity with inline-prop | 2,600× measured (large) | 2d | ✅ done (`d7b79be5`) |
+| 1    | GAP-0810   | shared AST cache in executeProgramWithContext      | 2-5×       | 3d | open |
+| 2    | GAP-0811   | aggregation-aware planner (count/avg no materialize)| 10-50×    | 3d | open |
+| 3    | GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 5-20×      | 4d | open |
+| 4    | GAP-0813   | bulk materializePath for multi-hop traversals     | 2-5×       | 5d | open |
+| 5    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d | open |
+| 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | open |
 
 Each can be attacked via `./scripts/query-perf-gate.sh <gap-id> before` → implement → `after` → inspect `diff.md`. The baseline in `baseline/bench-query-all.json` is the reference; replacing it requires A/B verification plus a committed update of the baseline JSON.
 
