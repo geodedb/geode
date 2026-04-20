@@ -1,0 +1,65 @@
+{
+  "timestamp": "2026-04-20T02:43:03Z",
+  "dsn": "127.0.0.1:3141?insecure=true\u0026user=geode\u0026pass=***",
+  "scenario": "point_read",
+  "query_type": "Property lookup: MATCH by lt_id (500 nodes)",
+  "data_size": {
+    "nodes": 500,
+    "edges": 0
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "total_queries": 1685,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 337,
+      "latency_p50": "2.937892ms",
+      "latency_p95": "3.392604ms",
+      "latency_p99": "3.683154ms",
+      "latency_mean": "2.966659ms",
+      "latency_max": "5.176933ms"
+    },
+    {
+      "concurrency": 2,
+      "total_queries": 2648,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 529.6,
+      "latency_p50": "3.546299ms",
+      "latency_p95": "5.460937ms",
+      "latency_p99": "6.216382ms",
+      "latency_mean": "3.777673ms",
+      "latency_max": "210.478974ms"
+    },
+    {
+      "concurrency": 4,
+      "total_queries": 4158,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 831.6,
+      "latency_p50": "4.507747ms",
+      "latency_p95": "6.626777ms",
+      "latency_p99": "7.423348ms",
+      "latency_mean": "4.811254ms",
+      "latency_max": "413.273231ms"
+    },
+    {
+      "concurrency": 8,
+      "total_queries": 5433,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 1086.6,
+      "latency_p50": "7.046498ms",
+      "latency_p95": "10.248987ms",
+      "latency_p99": "11.710035ms",
+      "latency_mean": "7.368168ms",
+      "latency_max": "487.837946ms"
+    }
+  ],
+  "summary": "Peak QPS: 1086.6 at c=8. Max tested: c=8 (1086.6 QPS, 0.0% errors)"
+}
