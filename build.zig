@@ -1334,6 +1334,40 @@ pub fn build(b: *std.Build) void {
     const run_bench_executor_match_test = b.addRunArtifact(bench_executor_match_test);
     test_perf_step.dependOn(&run_bench_executor_match_test.step);
 
+    // Task 3.2: bench_executor_mutation — mutation-path benchmarks (CREATE, SET,
+    // DELETE, MERGE, CREATE edge) across 6 scenarios with per-scenario store resets.
+    // dataset_size is flat "mutation" (no size sweep). Emits 6 QueryResultRow entries
+    // (48 expanded ResultRow entries).
+    const bench_executor_mutation_exe = b.addExecutable(.{
+        .name = "bench-query-executor-mutation",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_executor_mutation.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_executor_mutation_exe.root_module.addImport("common_query", common_query_mod);
+    bench_executor_mutation_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    bench_executor_mutation_exe.root_module.addImport("query_datasets", query_datasets_mod);
+    bench_executor_mutation_exe.root_module.addImport("geode", root_mod);
+    const run_bench_executor_mutation = b.addRunArtifact(bench_executor_mutation_exe);
+    if (b.args) |args| run_bench_executor_mutation.addArgs(args);
+    const bench_executor_mutation_step = b.step("bench-query-executor-mutation", "In-process mutation-path timings across 6 scenarios (CREATE/SET/DELETE/MERGE/edge)");
+    bench_executor_mutation_step.dependOn(&run_bench_executor_mutation.step);
+
+    // Task 3.2: bench_executor_mutation unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
+    const bench_executor_mutation_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_bench_executor_mutation.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for GEODE_RUN_SLOW_TESTS env check
+        }),
+    });
+    const run_bench_executor_mutation_test = b.addRunArtifact(bench_executor_mutation_test);
+    test_perf_step.dependOn(&run_bench_executor_mutation_test.step);
+
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
     // scripts/perf-gate.sh (M0.7) and CI.
