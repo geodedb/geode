@@ -1299,6 +1299,41 @@ pub fn build(b: *std.Build) void {
     const run_bench_planner_test = b.addRunArtifact(bench_planner_test);
     test_perf_step.dependOn(&run_bench_planner_test.step);
 
+    // Task 3.1: bench_executor_match — full parse→plan→execute in-process MATCH
+    // bench across 10 canonical query shapes × 3 dataset sizes. Seeds a real graph
+    // store per size via query_datasets.seedFanOut. Emits 30 QueryResultRow entries
+    // (240 expanded ResultRow entries). execute_ns_per_op_p50 includes plan cost
+    // (no top-level plan-only hook from executeProgramWithContext).
+    const bench_executor_match_exe = b.addExecutable(.{
+        .name = "bench-query-executor-match",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_executor_match.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_executor_match_exe.root_module.addImport("common_query", common_query_mod);
+    bench_executor_match_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    bench_executor_match_exe.root_module.addImport("query_datasets", query_datasets_mod);
+    bench_executor_match_exe.root_module.addImport("geode", root_mod);
+    const run_bench_executor_match = b.addRunArtifact(bench_executor_match_exe);
+    if (b.args) |args| run_bench_executor_match.addArgs(args);
+    const bench_executor_match_step = b.step("bench-query-executor-match", "In-process MATCH exec timings across 10 scenarios × 3 dataset sizes");
+    bench_executor_match_step.dependOn(&run_bench_executor_match.step);
+
+    // Task 3.1: bench_executor_match unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
+    const bench_executor_match_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_bench_executor_match.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for GEODE_RUN_SLOW_TESTS env check
+        }),
+    });
+    const run_bench_executor_match_test = b.addRunArtifact(bench_executor_match_test);
+    test_perf_step.dependOn(&run_bench_executor_match_test.step);
+
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
     // scripts/perf-gate.sh (M0.7) and CI.
