@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 521K of event 'cycles:P'
+# Event count (approx.): 339517520509
+#
+# Children      Self  Command  Shared Object      Symbol
+# ........  ........  .......  .................  ..................................................................................................................................................................................................................................................................................................................................................................
+#
+    72.75%     0.00%  geode    geode              [.] Thread.PosixThreadImpl.spawn__anon_52101.Instance.entryFn
+            |
+            ---Thread.PosixThreadImpl.spawn__anon_52101.Instance.entryFn
+               Thread.callFn__anon_52135
+               |
+                --72.50%--pool.Core.workerMain
+                          |
+                          |--68.25%--pool.Core.idle
+                          |          |
+                          |          |--59.90%--sync.Condition.timedWait
+                          |          |          |
+                          |          |           --58.82%--sync.Condition.waitInner
+                          |          |                     |
+                          |          |                     |--49.47%--Io.futexWaitTimeout__anon_12976
+                          |          |                     |          |
+                          |          |                     |           --48.77%--Io.Threaded.futexWait
+                          |          |                     |                     |
+                          |          |                     |                     |--45.33%--Io.Threaded.Thread.futexWait
+                          |          |                     |                     |          |
+                          |          |                     |                     |           --44.91%--Io.Threaded.Thread.futexWaitInner
+                          |          |                     |                     |                     |
+                          |          |                     |                     |                      --42.55%--os.linux.futex_4arg
+                          |          |                     |                     |                                |
+                          |          |                     |                     |                                 --42.39%--os.linux.x86_64.syscall4
+                          |          |                     |                     |                                           |
+                          |          |                     |                     |                                           |--36.19%--entry_SYSCALL_64_after_hwframe
+                          |          |                     |                     |                                           |          |
+                          |          |                     |                     |                                           |           --36.14%--do_syscall_64
+                          |          |                     |                     |                                           |                     |
+                          |          |                     |                     |                                           |                     |--32.08%--__x64_sys_futex
+                          |          |                     |                     |                                           |                     |          |
+                          |          |                     |                     |                                           |                     |           --30.69%--do_futex
+                          |          |                     |                     |                                           |                     |                     |
+                          |          |                     |                     |                                           |                     |                      --30.42%--futex_wait
+                          |          |                     |                     |                                           |                     |                                |
+                          |          |                     |                     |                                           |                     |                                 --29.55%--__futex_wait
+                          |          |                     |                     |                                           |                     |                                           |
+                          |          |                     |                     |                                           |                     |                                           |--27.28%--futex_wait_queue
+                          |          |                     |                     |                                           |                     |                                           |          |
+                          |          |                     |                     |                                           |                     |                                           |          |--25.29%--schedule
+                          |          |                     |                     |                                           |                     |                                           |          |          |
+                          |          |                     |                     |                                           |                     |                                           |          |           --25.12%--__schedule
+                          |          |                     |                     |                                           |                     |                                           |          |                     |
+                          |          |                     |                     |                                           |                     |                                           |          |                     |--11.67%--dequeue_task_fair
+                          |          |                     |                     |                                           |                     |                                           |          |                     |          |
+                          |          |                     |                     |                                           |                     |                                           |          |                     |           --11.37%--dequeue_entities
+                          |          |                     |                     |                                           |                     |                                           |          |                     |                     |
+                          |          |                     |                     |                                           |                     |                                           |          |                     |                     |--7.41%--dequeue_entity
+                          |          |                     |                     |                                           |                     |                                           |          |                     |                     |          |
