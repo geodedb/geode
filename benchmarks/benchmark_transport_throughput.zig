@@ -231,7 +231,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
     const num_producers = 4;
     const num_consumers = 4;
     const pool = try thread_pool.ThreadPool.init(allocator, .{
-        .num_threads = num_producers + num_consumers,
+        .num_threads = num_producers + num_consumers + 1, // +1 for the reserved blocking-lane worker
         .queue_capacity = num_producers + num_consumers,
     });
     defer pool.deinit();
@@ -276,7 +276,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
                 }
             }
         }.run, @ptrCast(&producer_contexts[i]), .{
-            .lane = .blocking,
+            .lane = .default, // the wrapper reserves only 1 worker for .blocking lane which deadlocks producer/consumer setups
             .backpressure = .block,
             .waitable = true,
         });
@@ -302,7 +302,7 @@ fn benchConcurrentQueueThroughput(allocator: std.mem.Allocator, config: BenchCon
                 }
             }
         }.run, @ptrCast(&consumer_contexts[i]), .{
-            .lane = .blocking,
+            .lane = .default, // the wrapper reserves only 1 worker for .blocking lane which deadlocks producer/consumer setups
             .backpressure = .block,
             .waitable = true,
         });

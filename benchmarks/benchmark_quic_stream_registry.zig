@@ -55,7 +55,7 @@ fn runDuplicateRequeueBenchmark(allocator: std.mem.Allocator, config: BenchmarkC
 
     var registry = active_stream_registry.ActiveStreamRegistry{};
     const pool = try thread_pool.ThreadPool.init(allocator, .{
-        .num_threads = config.workers,
+        .num_threads = config.workers + 1, // +1 for the reserved blocking-lane worker (wrapper sets blocking_workers=1)
         .queue_capacity = config.workers,
     });
     defer pool.deinit();
@@ -114,7 +114,7 @@ fn runDuplicateRequeueBenchmark(allocator: std.mem.Allocator, config: BenchmarkC
                 }
             }
         }.run, @ptrCast(&worker_contexts[idx]), .{
-            .lane = .blocking,
+            .lane = .default, // reverted from .blocking — the wrapper reserves only 1 worker for .blocking lane which deadlocks the N-way barrier pattern in this bench
             .backpressure = .block,
             .waitable = true,
         });
@@ -150,7 +150,7 @@ fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig
 
     var registry = active_stream_registry.ActiveStreamRegistry{};
     const pool = try thread_pool.ThreadPool.init(allocator, .{
-        .num_threads = config.workers,
+        .num_threads = config.workers + 1, // +1 for the reserved blocking-lane worker (wrapper sets blocking_workers=1)
         .queue_capacity = config.workers,
     });
     defer pool.deinit();
@@ -211,7 +211,7 @@ fn runUniqueChurnBenchmark(allocator: std.mem.Allocator, config: BenchmarkConfig
                 }
             }
         }.run, @ptrCast(&worker_contexts[worker_index]), .{
-            .lane = .blocking,
+            .lane = .default, // reverted from .blocking — the wrapper reserves only 1 worker for .blocking lane which deadlocks the N-way barrier pattern in this bench
             .backpressure = .block,
             .waitable = true,
         });

@@ -676,13 +676,14 @@ pub fn build(b: *std.Build) void {
     // TDE overhead simulation benchmark (placeholder until real encryption path integrated)
     const tde_bench_exe = b.addExecutable(.{ .name = "benchmark_tde_overhead", .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_tde_overhead.zig"), .target = target, .optimize = optimize }) });
     const run_tde_bench = b.addRunArtifact(tde_bench_exe);
-    // CI-safe bench aggregate. Quarantined (tracked in follow-up tickets):
-    //   - bench_quic_stream_registry : hangs in worker wait loop after
-    //     std.Thread.sleep removal (see docs/performance/2026-04-19-qps-closure/post-port/M0_3_CONCERNS.md).
-    //   - benchmark_merge_throughput : 4000 DebugAllocator leaks in
-    //     teardown surfaced by the 0.15 -> 0.16 port (see M0_3_CONCERNS.md).
-    // Once either is fixed, restore its dependOn() call below.
-    const bench_step = b.step("bench", "Run performance benchmarks (subset)");
+    // CI-safe bench aggregate. The two M0.3b quarantined members are
+    // now restored:
+    //   - benchmark_merge_throughput : fixed by dropping redundant
+    //     id_str dupe (89b41a2c).
+    //   - bench_quic_stream_registry : fixed by routing to .default lane
+    //     and adding a worker slot for the reserved blocking lane (this
+    //     commit).
+    const bench_step = b.step("bench", "Run the full CI-safe benchmark suite");
     bench_step.dependOn(&run_tde_bench.step);
 
     // File-level TDE encryption benchmark (GraphStore storage layer)
@@ -1867,10 +1868,15 @@ pub fn build(b: *std.Build) void {
     const run_quic_stream_registry_bench = b.addRunArtifact(quic_stream_registry_bench);
     const quic_stream_registry_bench_step = b.step("bench-quic-streams", "Run QUIC stream registry parallel contention benchmarks");
     quic_stream_registry_bench_step.dependOn(&run_quic_stream_registry_bench.step);
-    // Quarantined from `bench` aggregate: hangs after config print (see
-    // docs/performance/2026-04-19-qps-closure/post-port/M0_3_CONCERNS.md).
-    // Individual `zig build bench-quic-streams` remains available for on-demand runs.
-    // bench_step.dependOn(&run_quic_stream_registry_bench.step);
+    // Previously quarantined (hung after config print). Root cause was a
+    // lane-misrouting bug in the bench itself: `.lane = .blocking` with
+    // num_threads = workers deadlocked the N-way start barrier because
+    // the wrapper reserves `blocking_workers = 1`, leaving only 1
+    // blocking worker to serve 8 blocking tasks — 7 of which never got
+    // dispatched. Fixed by routing to `.lane = .default` and bumping
+    // `num_threads` by +1 to preserve the default-lane parallelism.
+    // Restored to the `bench` aggregate.
+    bench_step.dependOn(&run_quic_stream_registry_bench.step);
 
     // CANARY: REQ=REQ-PERF-MERGE-001; FEATURE="MergeThroughputBenchmarkBuild"; ASPECT=PerformanceValidation; STATUS=BENCHED; OWNER=build; UPDATED=2026-04-09
     const merge_bench_gs_mod = b.createModule(.{ .root_source_file = b.path("src/graph_store.zig"), .target = target, .optimize = .ReleaseFast });
