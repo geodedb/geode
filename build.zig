@@ -1368,6 +1368,21 @@ pub fn build(b: *std.Build) void {
     const run_bench_executor_mutation_test = b.addRunArtifact(bench_executor_mutation_test);
     test_perf_step.dependOn(&run_bench_executor_mutation_test.step);
 
+    // M4.1: bench-query-all aggregate — runs parser + planner + executor-match
+    // + executor-mutation in sequence. Argv is forwarded to every sub-step, so
+    // `-- --output <path>` would have all four benches overwrite the same file
+    // (last-writer wins). Prefer `scripts/query-perf-gate.sh` (M4.2) for A/B
+    // runs with per-layer outputs. This aggregate is intended for quick human-
+    // readable sanity checks where no argv is passed.
+    const bench_query_all_step = b.step(
+        "bench-query-all",
+        "Run parser + planner + executor-match + executor-mutation benches (use query-perf-gate.sh for per-layer JSON outputs)",
+    );
+    bench_query_all_step.dependOn(&run_bench_parser.step);
+    bench_query_all_step.dependOn(&run_bench_planner.step);
+    bench_query_all_step.dependOn(&run_bench_executor_match.step);
+    bench_query_all_step.dependOn(&run_bench_executor_mutation.step);
+
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
     // scripts/perf-gate.sh (M0.7) and CI.
