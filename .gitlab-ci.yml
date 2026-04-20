@@ -756,6 +756,49 @@ bench-timeseries:
     expire_in: 1 week
 
 # =============================================================================
+# Test Stage - Query-Path Benchmark Regression Check (M6.1)
+# Runs parser / planner / executor-match / executor-mutation benches and
+# compares against the committed baseline at docs/performance/2026-04-20-
+# query-bench/baseline/bench-query-all.json via `zig build compare-bench`.
+# Starts warning-only (allow_failure: true). Flip to blocking after ~4
+# weeks of quiet runs.
+# =============================================================================
+
+bench-query-path:
+  stage: test
+  image: $ZIG_IMAGE
+  variables:
+    GIT_SUBMODULE_STRATEGY: recursive
+  before_script:
+    - *zig-vendor-cache
+  script:
+    - |
+      echo "=== Running query-path benchmarks ==="
+      zig build bench-query-parser -Doptimize=ReleaseFast -- --output bench-parser.json
+      zig build bench-query-planner -Doptimize=ReleaseFast -- --output bench-planner.json
+      zig build bench-query-executor-match -Doptimize=ReleaseFast -- --output bench-exec-match.json
+      zig build bench-query-executor-mutation -Doptimize=ReleaseFast -- --output bench-exec-mut.json
+      jq -s '{generated_at_unix_s: .[0].generated_at_unix_s, rows: (map(.rows) | add)}' \
+        bench-parser.json bench-planner.json bench-exec-match.json bench-exec-mut.json \
+        > bench-query-all.json
+      BASELINE=docs/performance/2026-04-20-query-bench/baseline/bench-query-all.json
+      if [ -f "$BASELINE" ]; then
+        echo "=== Comparing against baseline ==="
+        zig build compare-bench -- --baseline "$BASELINE" --current bench-query-all.json
+      else
+        echo "SKIP: baseline $BASELINE not present; uploading current JSON only"
+      fi
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  artifacts:
+    when: always
+    paths:
+      - bench-query-all.json
+    expire_in: 4 weeks
+
+# =============================================================================
 # Test Stage - Code Coverage Collection (GAP-0251)
 # CANARY: REQ=REQ-CI-COVERAGE-001; FEATURE="CodeCoverageCI"; ASPECT=Core; STATUS=IMPL; OWNER=ci; UPDATED=2026-03-13
 # GAP-0251: Collect line/branch coverage via kcov + Zig DWARF debug info
