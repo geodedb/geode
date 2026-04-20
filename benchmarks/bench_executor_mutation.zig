@@ -82,6 +82,7 @@ fn seedLargePersons(allocator: std.mem.Allocator) anyerror!void {
 fn runCreateSingle(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -97,11 +98,15 @@ fn runCreateSingle(
     defer allocator.free(q);
 
     const parse_start = nowNs();
-    var pr = try geode.parse(allocator, q, .{});
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
     const parse_end = nowNs();
-    defer pr.deinit();
+    defer handle.release();
 
-    var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
     const exec_end = nowNs();
     defer r.deinit(allocator);
 
@@ -113,6 +118,7 @@ fn runCreateSingle(
 fn runCreateBatch100(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -136,11 +142,15 @@ fn runCreateBatch100(
         defer allocator.free(q);
 
         const parse_start = nowNs();
-        var pr = try geode.parse(allocator, q, .{});
+        const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+        var handle = switch (outcome) {
+            .Ok => |h| h,
+            .Err => return error.ParseFailed,
+        };
         const parse_end = nowNs();
-        defer pr.deinit();
+        defer handle.release();
 
-        var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+        var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
         const exec_end = nowNs();
         defer r.deinit(allocator);
 
@@ -158,6 +168,7 @@ fn runCreateBatch100(
 fn runSetProperty(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -175,11 +186,15 @@ fn runSetProperty(
     defer allocator.free(q);
 
     const parse_start = nowNs();
-    var pr = try geode.parse(allocator, q, .{});
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
     const parse_end = nowNs();
-    defer pr.deinit();
+    defer handle.release();
 
-    var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
     const exec_end = nowNs();
     defer r.deinit(allocator);
 
@@ -191,6 +206,7 @@ fn runSetProperty(
 fn runDeleteSingle(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -205,11 +221,15 @@ fn runDeleteSingle(
     defer allocator.free(q);
 
     const parse_start = nowNs();
-    var pr = try geode.parse(allocator, q, .{});
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
     const parse_end = nowNs();
-    defer pr.deinit();
+    defer handle.release();
 
-    var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
     const exec_end = nowNs();
     defer r.deinit(allocator);
 
@@ -221,6 +241,7 @@ fn runDeleteSingle(
 fn runMergeSingle(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -237,11 +258,15 @@ fn runMergeSingle(
     defer allocator.free(q);
 
     const parse_start = nowNs();
-    var pr = try geode.parse(allocator, q, .{});
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
     const parse_end = nowNs();
-    defer pr.deinit();
+    defer handle.release();
 
-    var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
     const exec_end = nowNs();
     defer r.deinit(allocator);
 
@@ -253,6 +278,7 @@ fn runMergeSingle(
 fn runCreateEdge(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -269,11 +295,15 @@ fn runCreateEdge(
     defer allocator.free(q);
 
     const parse_start = nowNs();
-    var pr = try geode.parse(allocator, q, .{});
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
     const parse_end = nowNs();
-    defer pr.deinit();
+    defer handle.release();
 
-    var r = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
     const exec_end = nowNs();
     defer r.deinit(allocator);
 
@@ -289,6 +319,7 @@ fn runCreateEdge(
 const RunFn = *const fn (
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     iter: usize,
     parse_samples: []u64,
     exec_samples: []u64,
@@ -321,6 +352,7 @@ const MUTATION_SCENARIOS = [_]MutationScenario{
 fn runWarmup(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
     scn: MutationScenario,
     tmp_parse: []u64,
     tmp_exec: []u64,
@@ -331,7 +363,7 @@ fn runWarmup(
         // start at 1_000_000 / 3_000_000 so iter=0 is always in the timed range
         // and won't collide with the timed IDs. delete_single warmup at iter=0
         // would delete node 0; that's fine — we don't care about warmup correctness.
-        try scn.runFn(allocator, ctx, 0, tmp_parse, tmp_exec, tmp_rows);
+        try scn.runFn(allocator, ctx, ast_cache, 0, tmp_parse, tmp_exec, tmp_rows);
     }
 }
 
@@ -345,6 +377,14 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
     // when a caller-held parse cache retains live allocations across
     // iterations.  See `tests/test_gap0810_reproduce_regression.zig`.
     const allocator = std.heap.smp_allocator;
+
+    // GAP-0810: process-scoped AST cache. Mutation queries bake the
+    // iteration-varying ID into the query text, so most iterations miss,
+    // but routing through the cache still exercises the production parse
+    // path and amortizes repeated warmup/timed lookups for the constant
+    // warmup query (iter=0) across all scenarios.
+    var ast_cache = geode.SharedAstCache.init(allocator, 64);
+    defer ast_cache.deinit();
 
     // --- argv parsing: --output <path> ----------------------------------------
     const raw_argv = proc_init.args.vector;
@@ -437,14 +477,14 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
         const tmp_rows = try allocator.alloc(u64, 1);
         defer allocator.free(tmp_rows);
 
-        runWarmup(allocator, ctx, scn, tmp_parse, tmp_exec, tmp_rows) catch |err| {
+        runWarmup(allocator, ctx, &ast_cache, scn, tmp_parse, tmp_exec, tmp_rows) catch |err| {
             std.debug.print("  [scenario={s}] warmup error: {}\n", .{ scn.name, err });
             // Non-fatal: proceed to timed loop.
         };
 
         // Timed loop.
         for (0..scn.iterations) |i| {
-            scn.runFn(allocator, ctx, i, parse_ns_samples, execute_ns_samples, row_count_samples) catch |err| {
+            scn.runFn(allocator, ctx, &ast_cache, i, parse_ns_samples, execute_ns_samples, row_count_samples) catch |err| {
                 std.debug.print("  [scenario={s}] iter {d} error: {}\n", .{ scn.name, i, err });
                 // Fill remaining samples with the last recorded value or 0 to keep slice valid.
                 if (i < parse_ns_samples.len) {
