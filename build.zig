@@ -1184,6 +1184,14 @@ pub fn build(b: *std.Build) void {
     });
     query_datasets_mod.addImport("geode", root_mod);
 
+    // Task 0.4: common_query scenario spec + expand() helpers (plan 2026-04-20).
+    const common_query_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/common_query.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    common_query_mod.addImport("bench_schema", bench_schema_mod);
+
     // GAP-0279: bench_timeseries executable (ingestion + GQL eval benchmark)
     const bench_ts_exe = b.addExecutable(.{ .name = "bench_timeseries", .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_timeseries.zig"), .target = target, .optimize = optimize }) });
     bench_ts_exe.root_module.addImport("geode", root_mod);
@@ -1217,6 +1225,17 @@ pub fn build(b: *std.Build) void {
     query_datasets_test.root_module.addImport("query_datasets", query_datasets_mod);
     const run_query_datasets_test = b.addRunArtifact(query_datasets_test);
     test_perf_step.dependOn(&run_query_datasets_test.step);
+
+    // Task 0.4: common_query scenario spec unit test.
+    const common_query_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/perf/test_common_query.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    common_query_test.root_module.addImport("bench_schema", bench_schema_mod);
+    common_query_test.root_module.addImport("common_query", common_query_mod);
+    const run_common_query_test = b.addRunArtifact(common_query_test);
+    test_perf_step.dependOn(&run_common_query_test.step);
 
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
