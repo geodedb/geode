@@ -721,12 +721,26 @@ fn collectStartSlots(
         return try allocator.alloc(u64, 0);
     }
 
-    // GAP-0808 point-read fast path: O(1) merge_prop_index lookup when the
-    // pattern is `(:Label {key: scalar})`. Skips the label-scan +
-    // per-node-property-filter for the loadtest's point_read shape
-    // `MATCH (p:LT_Person {lt_id: 42}) RETURN p.name, p.age`. Authoritative
-    // when the index handles the value type — returns a single-slot slice
-    // on hit, an empty slice on definitive miss.
+    // GAP-0808 point-read fast path — FIXED to use the ADAPTER index.
+    //
+    // First land used the store-level `merge_prop_index`, which is
+    // populated only by live `setNodeProperty` calls and is empty after
+    // a server restart (the store reconstructs node records lazily from
+    // the adapter on demand but doesn't rebuild the merge index). A
+    // post-restart point-read therefore returned zero rows even when the
+    // data was present. That's a correctness bug.
+    //
+    // The adapter-level `exact_node_property_index` IS persisted to disk
+    // and rebuilt on startup (see `graph_storage_adapter.openGraph`'s
+    // "property index loaded from disk" / "rebuilt from scan" branches).
+    // Use it instead, via `getCandidateNodesByLabelAndProperty`. Candidates
+    // may include hash collisions; we verify each via
+    // `nodeMatchesPatternBySlot` so the final result exactly matches what
+    // the scan-path below would produce.
+    //
+    // For `(:Label {key: scalar})` this reduces `O(|label posting list|)`
+    // to `O(|hash-bucket|)` — typically 1 on well-distributed keys. For
+    // the loadtest's 500-2000-node scenarios this is the ~20x QPS win.
     fp: {
         if (pattern.labels.len != 1) break :fp;
         const props = pattern.props orelse break :fp;
@@ -749,23 +763,17 @@ fn collectStartSlots(
         };
         const pv = pv_opt orelse break :fp;
 
-        const store = graph_store.getGlobalStore(allocator);
-        const id_map = store.getIdMap(graph_name) orelse break :fp;
+        const candidates = adapter.getCandidateNodesByLabelAndProperty(graph_name, pattern.labels[0], props[0].key, pv, allocator) catch break :fp;
+        defer allocator.free(candidates);
 
-        var node_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, pattern.labels[0], props[0].key, pv, &node_id)) {
-            .found => {
-                const slot = id_map.nodeSlot(@as(u128, node_id)) orelse break :fp;
-                const out = try allocator.alloc(u64, 1);
-                out[0] = slot;
-                return out;
-            },
-            .not_found => {
-                // Index is authoritative — no matching node.
-                return try allocator.alloc(u64, 0);
-            },
-            .not_indexable => break :fp,
+        var verified = try std.ArrayList(u64).initCapacity(allocator, candidates.len);
+        defer verified.deinit(allocator);
+        for (candidates) |slot_id| {
+            if (try nodeMatchesPatternBySlot(allocator, adapter, graph_name, slot_id, pattern, param_names, param_values, context)) {
+                try verified.append(allocator, slot_id);
+            }
         }
+        return try verified.toOwnedSlice(allocator);
     }
 
     const initial = if (pattern.labels.len > 0)
