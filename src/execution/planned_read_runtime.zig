@@ -8,6 +8,7 @@ const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("../storage/graph_storage_adapter.zig");
 const value_types = @import("../value_types.zig");
 const query_arena = @import("../server/query_arena.zig");
+const pattern_helpers = @import("pattern_helpers.zig");
 
 // Task 1.5 / GAP-0806: interior-dupe scratch allocator resolver. Mirrors
 // `match_operations.scratchAllocatorOr` — when a per-query arena is installed
@@ -718,6 +719,53 @@ fn collectStartSlots(
 ) ![]u64 {
     if (!adapter.graphExists(graph_name)) {
         return try allocator.alloc(u64, 0);
+    }
+
+    // GAP-0808 point-read fast path: O(1) merge_prop_index lookup when the
+    // pattern is `(:Label {key: scalar})`. Skips the label-scan +
+    // per-node-property-filter for the loadtest's point_read shape
+    // `MATCH (p:LT_Person {lt_id: 42}) RETURN p.name, p.age`. Authoritative
+    // when the index handles the value type — returns a single-slot slice
+    // on hit, an empty slice on definitive miss.
+    fp: {
+        if (pattern.labels.len != 1) break :fp;
+        const props = pattern.props orelse break :fp;
+        if (props.len != 1) break :fp;
+        if (pattern_helpers.containsVariableReference(props[0].value.*)) break :fp;
+
+        const prop_env = Env{
+            .names = &.{},
+            .values = &.{},
+            .param_names = param_names,
+            .param_values = param_values,
+            .allocator = allocator,
+        };
+        const expected_val = eval.evalExpr(allocator, props[0].value.*, prop_env) catch break :fp;
+        const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
+            .Str => |s| graph_store.PropertyValue{ .String = s },
+            .Int => |i| graph_store.PropertyValue{ .Int = i },
+            .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+            else => null,
+        };
+        const pv = pv_opt orelse break :fp;
+
+        const store = graph_store.getGlobalStore(allocator);
+        const id_map = store.getIdMap(graph_name) orelse break :fp;
+
+        var node_id: u64 = undefined;
+        switch (store.lookupMergeCandidate(graph_name, pattern.labels[0], props[0].key, pv, &node_id)) {
+            .found => {
+                const slot = id_map.nodeSlot(@as(u128, node_id)) orelse break :fp;
+                const out = try allocator.alloc(u64, 1);
+                out[0] = slot;
+                return out;
+            },
+            .not_found => {
+                // Index is authoritative — no matching node.
+                return try allocator.alloc(u64, 0);
+            },
+            .not_indexable => break :fp,
+        }
     }
 
     const initial = if (pattern.labels.len > 0)

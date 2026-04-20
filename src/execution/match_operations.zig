@@ -6854,7 +6854,55 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
             var simple_node_candidates: std.ArrayList(u64) = .empty;
             defer simple_node_candidates.deinit(allocator);
             var use_label_candidates = false;
-            if (match_labels.len > 0) {
+
+            // GAP-0808 point-read fast path also lives here (mirrors the one
+            // in planned_read_runtime.collectStartSlots) for queries routed
+            // through this legacy path.
+            var fastpath_hit: ?u64 = null;
+            var fastpath_authoritative = false;
+            if (!has_relationship and
+                match_labels.len == 1 and
+                match_props != null and
+                match_props.?.len == 1 and
+                !containsVariableReference(match_props.?[0].value.*))
+            {
+                const prop = match_props.?[0];
+                const prop_env = Env{
+                    .names = &.{},
+                    .values = &.{},
+                    .param_names = param_names,
+                    .param_values = param_values,
+                    .allocator = allocator,
+                };
+                if (eval.evalExpr(allocator, prop.value.*, prop_env)) |expected_val| {
+                    const pv_opt: ?graph_store.PropertyValue = switch (expected_val) {
+                        .Str => |s| graph_store.PropertyValue{ .String = s },
+                        .Int => |i| graph_store.PropertyValue{ .Int = i },
+                        .Bool => |b| graph_store.PropertyValue{ .Bool = b },
+                        else => null,
+                    };
+                    if (pv_opt) |pv| {
+                        var out_id: u64 = undefined;
+                        switch (store.lookupMergeCandidate(filter_graph, match_labels[0], prop.key, pv, &out_id)) {
+                            .found => {
+                                fastpath_hit = out_id;
+                                fastpath_authoritative = true;
+                            },
+                            .not_found => {
+                                fastpath_authoritative = true;
+                            },
+                            .not_indexable => {},
+                        }
+                    }
+                } else |_| {}
+            }
+
+            if (fastpath_authoritative) {
+                if (fastpath_hit) |nid| {
+                    try simple_node_candidates.append(allocator, nid);
+                }
+                use_label_candidates = true;
+            } else if (match_labels.len > 0) {
                 var label_ids = try store.getNodesByLabels(allocator, filter_graph, match_labels, filter_tenant);
                 defer label_ids.deinit(allocator);
                 try simple_node_candidates.ensureTotalCapacity(allocator, label_ids.items.len);

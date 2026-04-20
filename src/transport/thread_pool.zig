@@ -130,6 +130,17 @@ pub const ThreadPoolConfig = struct {
     stack_size: usize = 0,
     /// Name prefix for worker threads (ignored — retained for source compat).
     name_prefix: []const u8 = "geode-worker",
+    /// How long an idle worker parks on its wake condvar before its
+    /// timedWait returns and it re-polls. Upstream default is 250 µs —
+    /// fine for bursty latency-critical work but disastrous for a
+    /// long-lived server: 16 idle workers × 4000 wakes/s each = 64 k
+    /// cross-CPU IPIs + TLB flushes/s on an otherwise idle box (see
+    /// docs/performance/2026-04-19-qps-closure/step-1-profile.md, which
+    /// attributed ~26 % of samples to this spin storm). Default 10 ms
+    /// here — a submitter still wakes an idle worker via the condvar
+    /// signal path with zero added latency, but idle workers no longer
+    /// burn cycles.
+    idle_park_after_ns: u64 = 10_000_000,
 };
 
 /// Thread pool statistics.
@@ -185,6 +196,9 @@ pub const ThreadPool = struct {
             // when a worker thread from one pool submits to a different pool
             // (e.g. main pool worker → per-connection acceptor_pool).
             .scheduler_variant = .global_queue,
+            // GAP-0807: raise default idle park from the upstream 250 µs
+            // to this caller's config (default 10 ms). See config doc.
+            .idle_park_after_ns = config.idle_park_after_ns,
             .allow_blocking_lane = true,
             .blocking_workers = 1,
         });
