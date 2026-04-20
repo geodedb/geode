@@ -477,6 +477,7 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
             .arch = @tagName(builtin.cpu.arch),
             .cpu = cpu,
             .scenario_name = scn.name,
+            .variant = "executor-mutation",
             .dataset_size = "mutation",
             .iterations = scn.iterations,
             .warmup_iterations = scn.warmup,

@@ -122,6 +122,7 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
             .arch = @tagName(builtin.cpu.arch),
             .cpu = cpu,
             .scenario_name = scn.name,
+            .variant = "parser",
             .dataset_size = "none",
             .iterations = iterations,
             .warmup_iterations = warmup,

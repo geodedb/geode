@@ -242,6 +242,7 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                 .arch = @tagName(builtin.cpu.arch),
                 .cpu = cpu,
                 .scenario_name = scn.name,
+                .variant = "executor-match",
                 .dataset_size = size.label(),
                 .iterations = iterations,
                 .warmup_iterations = warmup,
