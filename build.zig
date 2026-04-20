@@ -1237,6 +1237,36 @@ pub fn build(b: *std.Build) void {
     const run_common_query_test = b.addRunArtifact(common_query_test);
     test_perf_step.dependOn(&run_common_query_test.step);
 
+    // Task 1.1: bench_parser — parse-only throughput across 10 canonical query shapes.
+    const bench_parser_exe = b.addExecutable(.{
+        .name = "bench-query-parser",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_parser.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_parser_exe.root_module.addImport("common_query", common_query_mod);
+    bench_parser_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    bench_parser_exe.root_module.addImport("geode", root_mod);
+    const run_bench_parser = b.addRunArtifact(bench_parser_exe);
+    if (b.args) |args| run_bench_parser.addArgs(args);
+    const bench_parser_step = b.step("bench-query-parser", "Parser-only throughput across 10 canonical queries");
+    bench_parser_step.dependOn(&run_bench_parser.step);
+
+    // Task 1.1: bench_parser unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
+    const bench_parser_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_bench_parser.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for GEODE_RUN_SLOW_TESTS env check
+        }),
+    });
+    const run_bench_parser_test = b.addRunArtifact(bench_parser_test);
+    test_perf_step.dependOn(&run_bench_parser_test.step);
+
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
     // scripts/perf-gate.sh (M0.7) and CI.
