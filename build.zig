@@ -1267,6 +1267,38 @@ pub fn build(b: *std.Build) void {
     const run_bench_parser_test = b.addRunArtifact(bench_parser_test);
     test_perf_step.dependOn(&run_bench_parser_test.step);
 
+    // Task 2.1: bench_planner — parse + plan phase timings across 10 canonical
+    // query shapes × 3 dataset sizes. Emits 30 QueryResultRow entries (240
+    // expanded ResultRow entries).
+    const bench_planner_exe = b.addExecutable(.{
+        .name = "bench-query-planner",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_planner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for env-var lookup
+        }),
+    });
+    bench_planner_exe.root_module.addImport("common_query", common_query_mod);
+    bench_planner_exe.root_module.addImport("bench_schema", bench_schema_mod);
+    bench_planner_exe.root_module.addImport("geode", root_mod);
+    const run_bench_planner = b.addRunArtifact(bench_planner_exe);
+    if (b.args) |args| run_bench_planner.addArgs(args);
+    const bench_planner_step = b.step("bench-query-planner", "Parse+plan phase timings across 10 scenarios × 3 dataset sizes");
+    bench_planner_step.dependOn(&run_bench_planner.step);
+
+    // Task 2.1: bench_planner unit/smoke test (opt-in via GEODE_RUN_SLOW_TESTS=1).
+    const bench_planner_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_bench_planner.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true, // std.c.getenv for GEODE_RUN_SLOW_TESTS env check
+        }),
+    });
+    const run_bench_planner_test = b.addRunArtifact(bench_planner_test);
+    test_perf_step.dependOn(&run_bench_planner_test.step);
+
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
     // scripts/perf-gate.sh (M0.7) and CI.
