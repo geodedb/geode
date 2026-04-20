@@ -83,6 +83,13 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // GAP-0810: process-scoped AST cache so repeated parses of the same
+    // scenario query text (10 scenarios × 3 sizes = 30 unique shapes) hit
+    // the cache instead of re-parsing every iteration. Matches the QUIC
+    // server path and keeps bench numbers on the cached-parse code path.
+    var ast_cache = geode.SharedAstCache.init(allocator, 64);
+    defer ast_cache.deinit();
+
     // --- argv parsing: --output <path> ----------------------------------------
     const raw_argv = proc_init.args.vector;
     var output_path: ?[]const u8 = null;
@@ -194,26 +201,35 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
 
             // Warmup — parse + execute but discard results.
             for (0..warmup) |_| {
-                var pr = try geode.parse(allocator, scn.query, .{});
-                defer pr.deinit();
-                var result = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+                const outcome = try geode.parseGqlCached(&ast_cache, scn.query, .{});
+                var handle = switch (outcome) {
+                    .Ok => |h| h,
+                    .Err => return error.ParseFailed,
+                };
+                defer handle.release();
+                var result = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
                 defer result.deinit(allocator);
             }
 
-            // Timed loop: measure parse and execute phases separately.
+            // Timed loop: measure parse (cache lookup or cold miss) and
+            // execute phases separately.
             for (0..iterations) |i| {
                 const parse_start = nowNs();
-                var pr = try geode.parse(allocator, scn.query, .{});
+                const outcome = try geode.parseGqlCached(&ast_cache, scn.query, .{});
+                var handle = switch (outcome) {
+                    .Ok => |h| h,
+                    .Err => return error.ParseFailed,
+                };
                 const parse_end = nowNs();
 
                 const exec_start = nowNs();
-                var result = try geode.execution.executeProgramWithContext(allocator, &pr.program, ctx);
+                var result = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
                 const exec_end = nowNs();
 
                 row_count_samples[i] = @intCast(result.rows.len);
 
                 result.deinit(allocator);
-                pr.deinit();
+                handle.release();
 
                 parse_ns_samples[i] = parse_end - parse_start;
                 execute_ns_samples[i] = exec_end - exec_start;
