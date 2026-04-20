@@ -1176,6 +1176,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Task 0.3: query_datasets seed helpers (plan 2026-04-20).
+    const query_datasets_mod = b.createModule(.{
+        .root_source_file = b.path("benchmarks/query_datasets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    query_datasets_mod.addImport("geode", root_mod);
+
     // GAP-0279: bench_timeseries executable (ingestion + GQL eval benchmark)
     const bench_ts_exe = b.addExecutable(.{ .name = "bench_timeseries", .root_module = b.createModule(.{ .root_source_file = b.path("src/benchmarks/bench_timeseries.zig"), .target = target, .optimize = optimize }) });
     bench_ts_exe.root_module.addImport("geode", root_mod);
@@ -1198,6 +1206,17 @@ pub fn build(b: *std.Build) void {
     const run_bench_schema_test = b.addRunArtifact(bench_schema_test);
     const test_perf_step = b.step("test-perf", "Run perf harness unit tests (bench schema, comparator)");
     test_perf_step.dependOn(&run_bench_schema_test.step);
+
+    // Task 0.3: query_datasets seed helpers unit test.
+    const query_datasets_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/perf/test_query_datasets.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    query_datasets_test.root_module.addImport("geode", root_mod);
+    query_datasets_test.root_module.addImport("query_datasets", query_datasets_mod);
+    const run_query_datasets_test = b.addRunArtifact(query_datasets_test);
+    test_perf_step.dependOn(&run_query_datasets_test.step);
 
     // M0.6: compare-bench — reads two ResultDocument JSONs, exits non-zero
     // if any matched row regressed beyond max(15%, 3σ). Invoked from
