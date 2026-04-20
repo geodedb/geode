@@ -251,6 +251,16 @@ pub const SharedAstCache = struct {
         self.cache.deinit();
     }
 
+    // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="ParseCacheWrapper"; ASPECT=StatsAccessor; STATUS=TESTED; TEST=tests/test_gap0810_parse_cache_wrapper.zig; OWNER=performance; UPDATED=2026-04-20
+    // GAP-0810: read hit/miss counters under the cache lock so callers
+    // (benches, tests, observability endpoints) observe a consistent
+    // snapshot without racing against concurrent `getOrParse` updates.
+    pub fn stats(self: *SharedAstCache) struct { hit_count: u64, miss_count: u64 } {
+        self.lock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.lock.unlock(std.Io.Threaded.global_single_threaded.io());
+        return .{ .hit_count = self.hit_count, .miss_count = self.miss_count };
+    }
+
     pub fn getOrParse(self: *SharedAstCache, query_text: []const u8, opts: geode.ParseOptions) !AstParseOutcome {
         const key = hashQuery(query_text, opts);
 

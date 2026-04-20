@@ -13,7 +13,7 @@ const server_flags = geode.server_flags;
 // CANARY: REQ=REQ-BINARY-PERSIST-001; FEATURE="BinaryPersistence"; ASPECT=ServerInit; STATUS=IMPL; OWNER=server; UPDATED=2026-02-02
 const graph_store = geode.graph_store;
 const index_catalog = @import("index_catalog.zig");
-const query_ast_cache = @import("query_ast_cache.zig");
+const query_ast_cache = @import("query_ast_cache");
 const query_plan_cache = geode.query_plan_cache;
 // CANARY: REQ=REQ-ABAC-WIRE-001; FEATURE="ABAC Enforcement"; ASPECT=ServerInit; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager initialization at server startup

@@ -384,6 +384,21 @@ pub fn build(b: *std.Build) void {
 
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+
+    // GAP-0810: `server/query_ast_cache.zig` must be reachable from both the
+    // public `geode` module (for `parseGqlCached`/`SharedAstCache` re-exports)
+    // AND from the server files that already use it. Zig forbids a file from
+    // appearing in two modules' file sets, so promote it to its own named
+    // module that everyone imports via `@import("query_ast_cache")`. The file
+    // itself still references `geode` types, so we wire the `geode` import
+    // back on the cache module.
+    const query_ast_cache_mod = b.createModule(.{
+        .root_source_file = b.path("src/server/query_ast_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    query_ast_cache_mod.addImport("geode", root_mod);
+    root_mod.addImport("query_ast_cache", query_ast_cache_mod);
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
@@ -451,6 +466,9 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
+    // GAP-0810: named-module form to keep a single owning module for
+    // server/query_ast_cache.zig across lib.zig and server files.
+    geode_exe.root_module.addImport("query_ast_cache", query_ast_cache_mod);
 
     // Phase 1 External Library Imports for CLI
     geode_exe.root_module.addImport("yaml", yaml_mod);
@@ -786,6 +804,18 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0809_where_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0809_where_fastpath_tests = b.addRunArtifact(gap0809_where_fastpath_tests);
+
+    // GAP-0810: public `parseGqlCached` wrapper exposes `SharedAstCache` on
+    // the geode module surface so in-process callers can reuse the parse
+    // cache.
+    const gap0810_parse_cache_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_parse_cache_wrapper.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_parse_cache_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_parse_cache_tests = b.addRunArtifact(gap0810_parse_cache_tests);
 
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
@@ -1438,6 +1468,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_point_read_view_zero_copy_tests.step);
     test_step.dependOn(&run_point_read_view_mutation_tests.step);
     test_step.dependOn(&run_gap0809_where_fastpath_tests.step);
+    test_step.dependOn(&run_gap0810_parse_cache_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
