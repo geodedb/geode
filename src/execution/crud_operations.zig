@@ -851,6 +851,175 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     };
 }
 
+// CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreateFastPath"; ASPECT=HomogeneousDetection; STATUS=TESTED; TEST=tests/test_gap0815_batch_create.zig; OWNER=performance; UPDATED=2026-04-20
+//
+// GAP-0815: detect a query shape where the CREATE pattern contains N >= 3
+// inline standalone node patterns (no hops, no variable references, no edges)
+// that all share the SAME label set and the SAME prop-key set. Matching
+// queries flow into `executeBatchCreateHomogeneous` which allocates all
+// slots and writes properties via `setNodePropertiesBatch` (one adapter
+// lock per node, not one per property setter).
+//
+// Any heterogeneity — different label count / order, different prop key
+// count / order, missing head, hops present, variable names on nodes
+// (so other clauses can reference them), WITH/SET/REMOVE/RETURN clauses —
+// disqualifies the query and the caller falls back to the serial
+// `executeCreateQuery` path.
+const BATCH_CREATE_MIN_CLAUSES: usize = 3;
+
+fn homogeneousPatternEligible(create_pattern: ast.GraphPattern) bool {
+    // Require a minimum clause count — for small N the per-call adapter
+    // lock overhead is in the noise and the detection cost is not worth it.
+    if (create_pattern.chains.len < BATCH_CREATE_MIN_CLAUSES) return false;
+
+    // Use the first chain's head as the template.
+    const first_chain = create_pattern.chains[0];
+    if (first_chain.hops.len != 0) return false;
+    const first_head = first_chain.head orelse return false;
+    // Named nodes may be referenced from subsequent SET/RETURN; also
+    // closes the door on pattern chains that reference this node later.
+    if (first_head.name != null) return false;
+    // At least one label required (match-index predicate shape expected).
+    if (first_head.labels.len == 0) return false;
+
+    const first_props_len: usize = if (first_head.props) |p| p.len else 0;
+
+    // All subsequent chains must mirror the template.
+    for (create_pattern.chains[1..]) |chain| {
+        if (chain.hops.len != 0) return false;
+        const head = chain.head orelse return false;
+        if (head.name != null) return false;
+        if (head.labels.len != first_head.labels.len) return false;
+        for (head.labels, first_head.labels) |a, b| {
+            if (!std.mem.eql(u8, a, b)) return false;
+        }
+
+        const props_len: usize = if (head.props) |p| p.len else 0;
+        if (props_len != first_props_len) return false;
+
+        if (first_props_len != 0) {
+            const head_props = head.props.?;
+            const first_props = first_head.props.?;
+            // Property keys must match in the SAME order — this is the
+            // parse-time order and is stable for a given literal layout.
+            for (head_props, first_props) |hp, fp| {
+                if (!std.mem.eql(u8, hp.key, fp.key)) return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+fn homogeneousCreateEligible(
+    q: ast.Query,
+    create_pattern: ast.GraphPattern,
+    matched_bindings: ?std.StringHashMap(u64),
+) bool {
+    // The batch path emits an empty result set. If the caller wants a
+    // WITH/SET/REMOVE/RETURN or count(*) aggregation we must fall through
+    // to the slow path which tracks created_nodes / total_created_count.
+    if (q.with_clause != null) return false;
+    if (q.set_clauses.len != 0) return false;
+    if (q.remove_clauses.len != 0) return false;
+    if (q.ret.items.len != 0) return false;
+
+    // MATCH-bound variables interact with created_nodes; skip.
+    if (matched_bindings != null) return false;
+
+    return homogeneousPatternEligible(create_pattern);
+}
+
+fn homogeneousCreateStatementEligible(c: ast.CreateStatement) bool {
+    if (c.return_clause != null) return false;
+    return homogeneousPatternEligible(c.pattern);
+}
+
+fn executeBatchCreateHomogeneous(
+    allocator: std.mem.Allocator,
+    create_pattern: ast.GraphPattern,
+    param_names: []const []const u8,
+    param_values: []const Value,
+    current_graph: ?[]const u8,
+) !ExecutionResult {
+    const store = graph_store.getGlobalStore(allocator);
+    const target_graph = current_graph orelse "default";
+    const undo_log = txn_undo_log.getGlobalUndoLog(allocator);
+
+    // Template derived from the first chain.
+    const template_head = create_pattern.chains[0].head.?;
+    const labels = template_head.labels;
+    const template_props: []ast.Property = if (template_head.props) |p| p else &.{};
+
+    // Arena for per-node coerced PropertyValue allocations — all values
+    // live for the duration of the batch call and are freed in one pass
+    // after the adapter writes via `batch_arena.deinit()`.
+    var batch_arena = std.heap.ArenaAllocator.init(allocator);
+    defer batch_arena.deinit();
+    const ba = batch_arena.allocator();
+
+    const env = Env{
+        .names = &.{},
+        .values = &.{},
+        .param_names = param_names,
+        .param_values = param_values,
+        .allocator = allocator,
+    };
+
+    // Reusable batch buffer of adapter-consumable property entries.
+    // Allocated once, overwritten per clause; ba-backed so it's released
+    // in one `batch_arena.deinit()` at the end.
+    var batch_entries: []graph_store.GraphStore.BatchPropertyEntry = &.{};
+    if (template_props.len > 0) {
+        batch_entries = try ba.alloc(graph_store.GraphStore.BatchPropertyEntry, template_props.len);
+    }
+
+    // Walk each CREATE clause in order.
+    for (create_pattern.chains) |chain| {
+        const head = chain.head.?;
+        const props: []ast.Property = if (head.props) |p| p else &.{};
+
+        // Allocate the node slot (auto-index at end, not per-node).
+        const node_id = try store.createNodeWithGraph(labels, target_graph);
+        undo_log.logCreateNode(node_id, current_graph) catch |err| {
+            log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
+        };
+
+        if (props.len == 0) continue;
+
+        // Evaluate each property expression in this clause and coerce to
+        // a PropertyValue that `setNodePropertiesBatch` can consume.
+        for (props, 0..) |prop, pi| {
+            const value = try eval.evalExpr(allocator, prop.value.*, env);
+            const prop_value = try property_mutation.coercePropertyValue(ba, value);
+            batch_entries[pi] = .{ .key = prop.key, .value = prop_value };
+        }
+
+        // Single adapter lock acquisition per node for ALL properties
+        // (vs N separate `setNodeProperty` calls in the serial path).
+        try store.setNodePropertiesBatch(node_id, batch_entries);
+    }
+
+    // Fire advanced-index rebuilds once per (label, key) tuple after all
+    // nodes are written. In the common batch-CREATE case no advanced
+    // index is registered for these labels, so this is a fast O(1)
+    // probe per key.
+    if (template_props.len > 0 and labels.len > 0) {
+        for (template_props) |prop| {
+            property_mutation.rebuildAdvancedIndexesForPropertyPublic(store, labels[0], prop.key);
+        }
+    }
+
+    // Auto-create indexes for the label(s) once for the whole batch.
+    ensureAutoIndexes(allocator, labels);
+
+    return ExecutionResult{
+        .columns = try allocator.alloc([]const u8, 0),
+        .rows = try allocator.alloc([]Value, 0),
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-015; FEATURE="MultiGraphIsolation"; ASPECT=CreateQuery; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeCreateQuery(
     allocator: std.mem.Allocator,
@@ -861,6 +1030,14 @@ pub fn executeCreateQuery(
     param_values: []const Value,
     current_graph: ?[]const u8,
 ) !ExecutionResult {
+    // GAP-0815: homogeneous batch-CREATE fast path. Declines on any
+    // heterogeneity (mixed labels, mixed key sets, named nodes, hops,
+    // WITH/SET/REMOVE/RETURN clauses, MATCH-bound vars), falling through
+    // to the serial loop below.
+    if (homogeneousCreateEligible(q, create_pattern, matched_bindings)) {
+        return executeBatchCreateHomogeneous(allocator, create_pattern, param_names, param_values, current_graph);
+    }
+
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
@@ -1385,6 +1562,20 @@ pub fn executeReturnClauseWithNodes(
 
 // CANARY: REQ=REQ-MULTI-GRAPH-018; FEATURE="MultiGraphIsolation"; ASPECT=ExecuteCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, current_graph: ?[]const u8, context: ExecutionContext) !ExecutionResult {
+    // GAP-0815: homogeneous batch-CREATE fast path for a top-level
+    // `CREATE (:L {...}), (:L {...}), ...` statement (no RETURN). See
+    // `homogeneousPatternEligible` for the detection rules. Declines on
+    // any heterogeneity and falls through to the serial loop below.
+    if (homogeneousCreateStatementEligible(c)) {
+        return executeBatchCreateHomogeneous(
+            allocator,
+            c.pattern,
+            context.query_param_names,
+            context.query_param_values,
+            current_graph,
+        );
+    }
+
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 

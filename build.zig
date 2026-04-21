@@ -899,6 +899,20 @@ pub fn build(b: *std.Build) void {
     gap0814_union_parallelism_tests.root_module.addImport("geode", root_mod);
     const run_gap0814_union_parallelism_tests = b.addRunArtifact(gap0814_union_parallelism_tests);
 
+    // GAP-0815 Task 6.1: batch-CREATE fast path for homogeneous inline node
+    // patterns. A single query with N >= 3 `CREATE (:Label {...}), ...`
+    // clauses that share label set + prop-key set should allocate slots
+    // in one pass and write properties via setNodePropertiesBatch (one
+    // adapter lock per node instead of one per property setter).
+    const gap0815_batch_create_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0815_batch_create.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0815_batch_create_tests.root_module.addImport("geode", root_mod);
+    const run_gap0815_batch_create_tests = b.addRunArtifact(gap0815_batch_create_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1557,6 +1571,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0812_topk_streaming_tests.step);
     test_step.dependOn(&run_gap0813_bulk_materialize_path_tests.step);
     test_step.dependOn(&run_gap0814_union_parallelism_tests.step);
+    test_step.dependOn(&run_gap0815_batch_create_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);

@@ -155,6 +155,18 @@ fn rebuildAdvancedIndexesForProperty(
     queueAdvancedIndexRebuild(store, manager, &names);
 }
 
+// GAP-0815: Public wrapper so the batch-CREATE fast path in
+// `crud_operations.zig` can trigger the same once-per-(label,key)
+// advanced-index rebuild logic as the serial `setNodePropertyFromValue`
+// path, without duplicating the short-circuit check.
+pub fn rebuildAdvancedIndexesForPropertyPublic(
+    store: *graph_store.GraphStore,
+    label: []const u8,
+    property: []const u8,
+) void {
+    rebuildAdvancedIndexesForProperty(store, label, property);
+}
+
 fn rebuildAdvancedIndexesForLabel(store: *graph_store.GraphStore, label: []const u8) void {
     const manager = index_manager.getGlobalIndexManager() orelse return;
     if (!manager.hasAdvancedIndexForLabel(label)) return;
