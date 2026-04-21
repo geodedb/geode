@@ -433,6 +433,398 @@ pub fn countNodesFastPath(
     };
 }
 
+// GAP-0811 Task 2.2: property-aggregate fast-path shared types.
+const AggKind = enum { sum, avg, min, max };
+
+const Cmp = enum { eq, ne, lt, le, gt, ge };
+
+/// Literal value extracted from a simple WHERE predicate. Holds either an
+/// integer, float, or string (strings for eq/ne only — ordering comparisons
+/// on strings are not handled here).
+const LitValue = union(enum) {
+    Int: i64,
+    Float: f64,
+    Str: []const u8,
+    Bool: bool,
+};
+
+const SimpleWhere = struct {
+    key: []const u8,
+    op: Cmp,
+    lit: LitValue,
+};
+
+/// Map an ast.BinOp to the fast-path Cmp, or null if unsupported.
+fn binOpToCmp(op: ast.BinOp) ?Cmp {
+    return switch (op) {
+        .Eq => .eq,
+        .Ne => .ne,
+        .Lt => .lt,
+        .Le => .le,
+        .Gt => .gt,
+        .Ge => .ge,
+        else => null,
+    };
+}
+
+/// If `op` is an ordering cmp (<, <=, >, >=), return its swapped form so we
+/// can normalise `literal OP var.prop` into `var.prop OP' literal`. For
+/// eq/ne the swap is the same op.
+fn swapCmp(op: Cmp) Cmp {
+    return switch (op) {
+        .eq => .eq,
+        .ne => .ne,
+        .lt => .gt,
+        .le => .ge,
+        .gt => .lt,
+        .ge => .le,
+    };
+}
+
+/// Extract a literal value from an AST expression (only primitive literals).
+/// Returns null for anything that would require per-row evaluation.
+fn extractLiteral(expr: ast.Expr) ?LitValue {
+    return switch (expr) {
+        .Int => |i| LitValue{ .Int = i },
+        .BigIntLit => |i| LitValue{ .Int = i },
+        .SmallIntLit => |i| LitValue{ .Int = @as(i64, i) },
+        .DoubleLit => |f| LitValue{ .Float = f },
+        .RealLit => |f| LitValue{ .Float = @as(f64, f) },
+        .String => |s| LitValue{ .Str = s },
+        .TextLit => |s| LitValue{ .Str = s },
+        .Bool => |b| LitValue{ .Bool = b },
+        .Unary => |u| blk: {
+            // Handle `-<number>` literals produced by the parser as Unary(Neg, Int).
+            if (u.op == .Neg) {
+                const inner = extractLiteral(u.expr.*) orelse break :blk null;
+                break :blk switch (inner) {
+                    .Int => |i| LitValue{ .Int = -i },
+                    .Float => |f| LitValue{ .Float = -f },
+                    else => null,
+                };
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+/// Decompose a WHERE expression into a simple `var.key OP literal` shape.
+/// Returns null on anything more complex (AND/OR/function calls/etc).
+fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
+    const bin = switch (where) {
+        .Binary => |b| b,
+        else => return null,
+    };
+    const cmp = binOpToCmp(bin.op) orelse return null;
+
+    // Try `var.prop OP literal`.
+    if (bin.left.* == .PropertyAccess) {
+        const pa = bin.left.PropertyAccess;
+        if (std.mem.eql(u8, pa.object, match_var)) {
+            const lit = extractLiteral(bin.right.*) orelse return null;
+            return .{ .key = pa.property, .op = cmp, .lit = lit };
+        }
+    }
+    // Try `literal OP var.prop` — swap to the canonical form.
+    if (bin.right.* == .PropertyAccess) {
+        const pa = bin.right.PropertyAccess;
+        if (std.mem.eql(u8, pa.object, match_var)) {
+            const lit = extractLiteral(bin.left.*) orelse return null;
+            return .{ .key = pa.property, .op = swapCmp(cmp), .lit = lit };
+        }
+    }
+    return null;
+}
+
+/// Coerce a property value to f64 for ordering comparisons.
+fn propToF64(pv: graph_store.PropertyValue) ?f64 {
+    return switch (pv) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Float => |f| f,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => null,
+    };
+}
+
+/// Coerce a property value to i64 if it's integer-typed.
+fn propToI64(pv: graph_store.PropertyValue) ?i64 {
+    return switch (pv) {
+        .Int => |i| i,
+        else => null,
+    };
+}
+
+/// Evaluate `pv OP lit` on the fast path. Returns false on type mismatches
+/// (lit `String` against numeric `pv`, etc.) and on null/unsupported types.
+fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
+    // Equality/inequality on strings (only eq/ne supported for strings).
+    if (pv == .String and lit == .Str) {
+        const eq = std.mem.eql(u8, pv.String, lit.Str);
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    if (pv == .Bool and lit == .Bool) {
+        const eq = pv.Bool == lit.Bool;
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    // Numeric path.
+    const left = propToF64(pv) orelse return false;
+    const right: f64 = switch (lit) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Float => |f| f,
+        else => return false,
+    };
+    return switch (op) {
+        .eq => left == right,
+        .ne => left != right,
+        .lt => left < right,
+        .le => left <= right,
+        .gt => left > right,
+        .ge => left >= right,
+    };
+}
+
+// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="AggregateFastPath"; ASPECT=PropertyAggregate; STATUS=TESTED; TEST=tests/test_gap0811b_property_aggregate_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+// GAP-0811 Task 2.2: fast path for `MATCH (p:<Label>) [WHERE p.<k> OP lit]?
+// RETURN <agg>(p.<key>)` where <agg> is sum/avg/min/max (case-insensitive).
+//
+// Why this exists: the regular executor path still materialises every node
+// (labels + property map + graph_name dupe) before handing the single target
+// property to the aggregator. At the `large` scale
+// (`MATCH (p:LT_Person) WHERE p.age > 30 RETURN avg(p.age)`) that costs
+// ~900 ms — per-row materialize dominates. We walk the label posting list
+// instead and read only the property the aggregate needs (plus an optional
+// WHERE key), skipping `materializeNode`.
+//
+// Preconditions (all must hold, return null otherwise and let the regular
+// executor run):
+//   - single MATCH chain, single simple node pattern with exactly one label
+//   - no inline property predicate in the pattern
+//   - no FILTER, no WITH, no GROUP BY, no HAVING, no ORDER BY, no OFFSET
+//   - no SET, no DISTINCT in RETURN
+//   - RETURN has exactly one item whose expression is `<agg>(p.<key>)`
+//   - optional single-predicate WHERE of shape `p.<k> OP literal` where
+//     OP ∈ {=, !=, <, <=, >, >=}; no AND/OR
+//   - LIMIT null OR LIMIT > 0 (single aggregated row; LIMIT 0 → empty,
+//     bail)
+//   - no active RLS engine with an authenticated user (per-row RLS policy
+//     enforcement would require materialization)
+// Tenant filtering IS honoured: per-slot we check `node.tenant_id` against
+// `filter_tenant`.
+pub fn propertyAggregateFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null; // require exactly one label
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null; // need the binding name to link RETURN/WHERE
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+
+    // --- Extract the aggregate shape from RETURN ---
+    const item = q.ret.items[0];
+    const call = switch (item.expr) {
+        .Call => |c| c,
+        else => return null,
+    };
+    if (call.callee.* != .Ident) return null;
+    const fname = call.callee.Ident.orig;
+    const kind: AggKind = if (std.ascii.eqlIgnoreCase(fname, "sum"))
+        .sum
+    else if (std.ascii.eqlIgnoreCase(fname, "avg"))
+        .avg
+    else if (std.ascii.eqlIgnoreCase(fname, "min"))
+        .min
+    else if (std.ascii.eqlIgnoreCase(fname, "max"))
+        .max
+    else
+        return null;
+
+    if (call.args.len != 1) return null;
+    const arg = call.args[0].*;
+    const target_key: []const u8 = switch (arg) {
+        .PropertyAccess => |pa| blk: {
+            if (!std.mem.eql(u8, pa.object, match_var)) return null;
+            break :blk pa.property;
+        },
+        .Member => |m| blk: {
+            if (m.target.* != .Ident) return null;
+            if (!std.mem.eql(u8, m.target.Ident.orig, match_var)) return null;
+            break :blk m.field;
+        },
+        else => return null,
+    };
+
+    // --- Optional simple WHERE predicate ---
+    const where_pred: ?SimpleWhere = if (q.where_clause) |w|
+        extractSimpleWhere(w, match_var) orelse return null
+    else
+        null;
+
+    // --- RLS bypass for correctness ---
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.user != null) {
+            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
+            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+        }
+    }
+
+    // --- Iterate the label posting list ---
+    // Mirror `countNodesFastPath`: prefer the handler-installed
+    // `QueryReadSession` snapshot (via `getGlobalStore`) so concurrent
+    // writers don't serialise behind the scan.
+    const writable_store = graph_store.getGlobalStore(allocator);
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
+    const read_store = read_view.getReadStore();
+
+    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+
+    // Accumulators. We keep both int and float paths so that pure-integer
+    // inputs yield Int results for sum/min/max (matching the regular
+    // aggregator) and mixed/decimal inputs promote to Double.
+    var sum_int: i64 = 0;
+    var sum_float: f64 = 0;
+    var has_float: bool = false; // any value observed as float/decimal
+    var count: u64 = 0;
+    var min_int: ?i64 = null;
+    var max_int: ?i64 = null;
+    var min_float: ?f64 = null;
+    var max_float: ?f64 = null;
+
+    if (posting) |slots| {
+        // Pointer to writable store because `getNodeProperty` is not const
+        // (it may lazily decrypt). The read_view keeps concurrent writers
+        // from deleting underneath us; here we only need the pointer type.
+        const prop_store: *graph_store.GraphStore = @constCast(read_store);
+        for (slots) |node_id| {
+            const node = read_store.nodes.get(node_id) orelse continue;
+            // Tenant filter (posting list is not partitioned by tenant).
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            // Optional WHERE filter — single property read.
+            if (where_pred) |p| {
+                const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                if (!comparePvLit(w_val, p.op, p.lit)) continue;
+            }
+            // Target property read.
+            const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+
+            // Update accumulators based on the observed type.
+            const maybe_int = propToI64(t_val);
+            const maybe_f = propToF64(t_val) orelse continue; // skip non-numeric
+
+            count += 1;
+            if (maybe_int) |iv| {
+                // Overflow-safe integer accumulation for sum; fall through
+                // to float on overflow.
+                if (!has_float) {
+                    const r = @addWithOverflow(sum_int, iv);
+                    if (r[1] != 0) {
+                        has_float = true;
+                        sum_float = @as(f64, @floatFromInt(sum_int)) + @as(f64, @floatFromInt(iv));
+                    } else {
+                        sum_int = r[0];
+                    }
+                } else {
+                    sum_float += @as(f64, @floatFromInt(iv));
+                }
+                if (min_int == null or iv < min_int.?) min_int = iv;
+                if (max_int == null or iv > max_int.?) max_int = iv;
+            } else {
+                // Non-int numeric (Float/Decimal): promote sum to float.
+                if (!has_float) {
+                    has_float = true;
+                    sum_float = @as(f64, @floatFromInt(sum_int));
+                }
+                sum_float += maybe_f;
+            }
+            // Always maintain a float min/max alongside int min/max so we
+            // can return the correct type regardless of mix.
+            if (min_float == null or maybe_f < min_float.?) min_float = maybe_f;
+            if (max_float == null or maybe_f > max_float.?) max_float = maybe_f;
+        }
+    }
+
+    // --- Build result value per aggregate kind ---
+    const out_val: Value = switch (kind) {
+        .sum => blk: {
+            if (has_float) break :blk Value{ .Double = sum_float };
+            break :blk Value{ .Int = sum_int };
+        },
+        .avg => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            const total: f64 = if (has_float) sum_float else @as(f64, @floatFromInt(sum_int));
+            break :blk Value{ .Double = total / @as(f64, @floatFromInt(count)) };
+        },
+        .min => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            if (has_float) {
+                break :blk Value{ .Double = min_float.? };
+            }
+            break :blk Value{ .Int = min_int.? };
+        },
+        .max => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            if (has_float) {
+                break :blk Value{ .Double = max_float.? };
+            }
+            break :blk Value{ .Int = max_int.? };
+        },
+    };
+
+    // --- Column name: prefer explicit alias, else synthesize `<agg>(var.key)` ---
+    const col_name: []const u8 = if (item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try std.fmt.allocPrint(allocator, "{s}({s}.{s})", .{ fname, match_var, target_key });
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var row = try allocator.alloc(Value, 1);
+    row[0] = out_val;
+
+    var rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
@@ -4804,6 +5196,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // iterator-heavy aggregation path below. See `countNodesFastPath` for
     // the full list of preconditions and the triage that motivated this.
     if (try countNodesFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-0811 Task 2.2: property-aggregate fast-path for
+    // `MATCH (p:<L>) [WHERE p.<k> OP lit]? RETURN sum|avg|min|max(p.<key>)`.
+    // See `propertyAggregateFastPath` for preconditions — all unsupported
+    // shapes fall through to the regular executor below.
+    if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
 

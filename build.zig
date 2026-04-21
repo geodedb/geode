@@ -842,6 +842,20 @@ pub fn build(b: *std.Build) void {
     gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
 
+    // GAP-0811 Task 2.2: property-aggregate fast-path for
+    // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
+    // posting list and calls `getNodeProperty(node_id, key)` per slot, so
+    // no materializeNode / graph_name dupe / full-property-map dupe runs
+    // per row. Optional simple-WHERE (`p.k OP literal`) is supported.
+    const gap0811b_property_aggregate_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0811b_property_aggregate_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0811b_property_aggregate_tests.root_module.addImport("geode", root_mod);
+    const run_gap0811b_property_aggregate_tests = b.addRunArtifact(gap0811b_property_aggregate_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1496,6 +1510,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0810_parse_cache_tests.step);
     test_step.dependOn(&run_gap0810_cross_subsystem_tests.step);
     test_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
+    test_step.dependOn(&run_gap0811b_property_aggregate_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
