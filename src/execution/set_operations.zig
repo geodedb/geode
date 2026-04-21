@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const value_types = @import("../value_types.zig");
+const graph_store = @import("../graph_store.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -212,7 +213,7 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
     // or shared bindings from the first arm) fall through to the serial
     // path below.
     // CANARY: REQ=REQ-PERF-QPS-0814; FEATURE="ParallelUnionArms"; ASPECT=ForkJoin; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=performance; UPDATED=2026-04-20
-    if (unionArmsAreParallelEligible(union_query)) {
+    if (unionArmsAreParallelEligible(union_query, context)) {
         if (try tryParallelUnion(allocator, union_query, context)) |parallel_result| {
             var result = parallel_result;
             errdefer result.deinit(allocator);
@@ -633,12 +634,92 @@ fn applyUnionPagination(
 /// intersect or except operation, that tail's semantics depend on the
 /// accumulated left-hand result so we must stay serial. A single-arm union
 /// (tails.len == 0) has no parallelism to exploit.
-fn unionArmsAreParallelEligible(union_query: ast.UnionQuery) bool {
+///
+/// GAP-0814-cost-model (2026-04-20): additionally gate on a rough arm-cost
+/// heuristic — if EVERY arm's anchor label posting-list is below
+/// `PARALLEL_UNION_MIN_POSTING_SIZE`, the thread-spawn overhead
+/// (~10-15µs/arm) swamps any parallel savings, so stay serial. Arms whose
+/// cost we can't cheaply predict (subquery, WHERE clause, relationship
+/// hops, etc.) are treated as "expensive" and keep the parallel path — the
+/// conservative default when cost is unknown.
+///
+/// CANARY: REQ=REQ-PERF-QPS-0814; FEATURE="ParallelUnionArms"; ASPECT=CostModelThreshold; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=performance; UPDATED=2026-04-20
+fn unionArmsAreParallelEligible(union_query: ast.UnionQuery, context: ExecutionContext) bool {
     if (union_query.tails.len == 0) return false;
     for (union_query.tails) |tail| {
         if (tail.operation != .union_op) return false;
     }
+
+    // Cost model: if EVERY arm has a predictably small anchor posting-list,
+    // serial execution is cheaper than thread-spawn.
+    const current_graph = if (context.session_state) |session| session.graph else null;
+    const graph = current_graph orelse "default";
+
+    var all_small = true;
+    if (predictArmRowCount(union_query.first, graph)) |n| {
+        if (n >= PARALLEL_UNION_MIN_POSTING_SIZE) all_small = false;
+    } else {
+        all_small = false; // unknown cost → treat as expensive (parallel)
+    }
+
+    if (all_small) {
+        for (union_query.tails) |tail| {
+            if (predictArmRowCount(tail.query, graph)) |n| {
+                if (n >= PARALLEL_UNION_MIN_POSTING_SIZE) {
+                    all_small = false;
+                    break;
+                }
+            } else {
+                all_small = false;
+                break;
+            }
+        }
+    }
+
+    if (all_small) return false; // every arm below threshold → serial
+
     return true;
+}
+
+/// Below this posting-list size, serial UNION is cheaper than spawning a
+/// thread per arm. 500 is the starting-point calibration from the
+/// GAP-0814-cost-model A/B — tune up/down if wall-time evidence shifts.
+const PARALLEL_UNION_MIN_POSTING_SIZE: usize = 500;
+
+/// GAP-0814-cost-model: predict the row-count a single UNION arm will
+/// emit, using the anchor label's posting-list size. Returns null if the
+/// query shape is too complex to predict cheaply (subquery, WHERE clause,
+/// multi-hop pattern, multi-chain pattern, etc.) — callers interpret null
+/// as "unknown/expensive" and keep the parallel path.
+fn predictArmRowCount(q: ast.Query, graph: []const u8) ?usize {
+    // Only predict single-chain, no-hop, single-label MATCH shapes.
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+
+    // Too complex to predict row-count cheaply: a WHERE, UNWIND, LET, CTE
+    // pattern, CALL, subquery, chain-follow-on, or CREATE-after-MATCH can
+    // all drastically change the emit count. Bail so the caller treats
+    // this arm as "expensive" and keeps parallel.
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.unwind_clause != null) return null;
+    if (q.let_bindings.len != 0) return null;
+    if (q.inline_let_bindings.len != 0) return null;
+    if (q.cte_list != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.next_query != null) return null;
+    if (q.create_pattern != null) return null;
+    if (q.merge_statement != null) return null;
+
+    // Read-only: getNodesByLabel is an O(1) map lookup into the label index,
+    // no allocator required (GAP-0814-cost-model Task 2.1 verified).
+    const store = graph_store.getCurrentGlobalStore() orelse return null;
+    const posting = store.getNodesByLabel(graph, head.labels[0]) orelse return 0;
+    return posting.len;
 }
 
 const ArmJob = struct {

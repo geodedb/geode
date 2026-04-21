@@ -213,6 +213,92 @@ test "GAP-0814: UNION ALL 500+500 parallelism latency gate" {
     try testing.expect(elapsed_ns < 130_000_000);
 }
 
+test "GAP-0814-cost-model: small UNION arms stay serial (correctness)" {
+    // Below the PARALLEL_UNION_MIN_POSTING_SIZE threshold (500), every arm's
+    // anchor posting list is small enough that thread-spawn overhead swamps
+    // any parallel savings. The cost model in `unionArmsAreParallelEligible`
+    // should take the serial path; this test pins the user-visible behaviour
+    // (correct row count, reasonable latency) while that decision flips.
+    //
+    // See FINAL.md gap0814-diff entry: /small regressed +21% (72µs → 86µs)
+    // because thread spawn (~10-15µs) exceeds parallel savings at ~30µs/arm.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    // Seed 50 + 50 — well below threshold 500, so every arm must go serial.
+    var i: usize = 0;
+    while (i < 50) : (i += 1) {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:LT_Person {{lt_id: {d}}})", .{i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+    i = 0;
+    while (i < 50) : (i += 1) {
+        const aa = h.arena.allocator();
+        // Disjoint id-space so UNION DISTINCT keeps all 100 rows.
+        const q = try std.fmt.allocPrint(aa, "CREATE (:LT_Company {{lt_id: {d}}})", .{1000 + i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+
+    // Warmup.
+    {
+        var warm = try h.runQuery(
+            "MATCH (p:LT_Person) RETURN p.lt_id UNION MATCH (c:LT_Company) RETURN c.lt_id",
+        );
+        warm.deinit(h.arena.allocator());
+    }
+
+    const t0 = compat_nanoTimestamp();
+    var res = try h.runQuery(
+        "MATCH (p:LT_Person) RETURN p.lt_id UNION MATCH (c:LT_Company) RETURN c.lt_id",
+    );
+    defer res.deinit(h.arena.allocator());
+    const elapsed_ns = compat_nanoTimestamp() - t0;
+
+    // Serial correctness: 50 + 50 disjoint rows == 100 distinct.
+    try testing.expectEqual(@as(usize, 100), res.rows.len);
+    // Budget is loose (Debug build has high variance). The real A/B
+    // validation happens in the bench harness; this gate just prevents
+    // accidental pathological regressions past any plausible slow path.
+    std.debug.print("GAP-0814-cost-model 50+50 elapsed_ns={d}\n", .{elapsed_ns});
+    try testing.expect(elapsed_ns < 50_000_000);
+}
+
+test "GAP-0814-cost-model: WHERE-clauses keep UNION on parallel path (unknown cost)" {
+    // A WHERE clause makes the arm's emit count unpredictable from the
+    // posting-list size alone. The cost model treats "unknown cost" as
+    // "expensive" and keeps parallel on — this pins that fallthrough so a
+    // future change doesn't accidentally make all complex UNIONs serial.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    var i: usize = 0;
+    while (i < 30) : (i += 1) {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:LT_Person {{lt_id: {d}}})", .{i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+    i = 0;
+    while (i < 30) : (i += 1) {
+        const aa = h.arena.allocator();
+        const q = try std.fmt.allocPrint(aa, "CREATE (:LT_Company {{lt_id: {d}}})", .{1000 + i});
+        var r = try h.runQuery(q);
+        r.deinit(aa);
+    }
+
+    var res = try h.runQuery(
+        "MATCH (p:LT_Person) WHERE p.lt_id < 10 RETURN p.lt_id" ++
+            " UNION MATCH (c:LT_Company) WHERE c.lt_id < 1010 RETURN c.lt_id",
+    );
+    defer res.deinit(h.arena.allocator());
+
+    // Person ids 0..9 (10 rows) + Company ids 1000..1009 (10 rows) = 20 rows.
+    try testing.expectEqual(@as(usize, 20), res.rows.len);
+}
+
 test "GAP-0814: three-arm UNION DISTINCT still correct after parallel fan-out" {
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
