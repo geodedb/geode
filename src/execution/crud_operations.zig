@@ -974,16 +974,30 @@ fn executeBatchCreateHomogeneous(
         batch_entries = try ba.alloc(graph_store.GraphStore.BatchPropertyEntry, template_props.len);
     }
 
-    // Walk each CREATE clause in order.
-    for (create_pattern.chains) |chain| {
-        const head = chain.head.?;
-        const props: []ast.Property = if (head.props) |p| p else &.{};
+    // GAP-0815-deep: allocate all N slots under a single adapter mutex
+    // acquisition + a single pre-sized label-posting-list append pass,
+    // instead of calling `createNodeWithGraph` N times. This collapses
+    // the per-clause `getOrCreateGraph` mutex round-trip + the per-node
+    // O(len) `sortedInsert` into one lock + one resize.
+    const slot_ids = try store.createNodesBatch(labels, target_graph, create_pattern.chains.len);
+    defer allocator.free(slot_ids);
 
-        // Allocate the node slot (auto-index at end, not per-node).
-        const node_id = try store.createNodeWithGraph(labels, target_graph);
+    // Per-node undo entries. The undo log API is row-oriented — logging
+    // N entries here keeps rollback semantics identical to the serial
+    // path. The undo log has its own (tier-4+) mutex, so logging N times
+    // does not contend with the storage mutex we just released.
+    for (slot_ids) |node_id| {
         undo_log.logCreateNode(node_id, current_graph) catch |err| {
             log.err("undo log failed", &.{Attr.string("error", @errorName(err))});
         };
+    }
+
+    // Walk each CREATE clause in order to attach properties. The slot has
+    // already been allocated above, so this loop is pure property-write
+    // work (one adapter-lock acquisition per node via `setNodePropertiesBatch`).
+    for (create_pattern.chains, slot_ids) |chain, node_id| {
+        const head = chain.head.?;
+        const props: []ast.Property = if (head.props) |p| p else &.{};
 
         if (props.len == 0) continue;
 

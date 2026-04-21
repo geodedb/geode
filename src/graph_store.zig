@@ -1103,6 +1103,215 @@ pub const GraphStore = struct {
         return id;
     }
 
+    // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=BulkNodeSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
+    /// Allocate `n` node slots in `graph_name` + attach the same label set
+    /// to each, under a SINGLE adapter mutex acquisition + a SINGLE
+    /// label-index posting-list grow per (graph, label). Caller owns the
+    /// returned slice and MUST free it with the same allocator.
+    ///
+    /// Rationale: the per-node `createNodeWithGraph` takes the adapter
+    /// mutex twice per call (once in `getOrCreateGraph`, once in the
+    /// `persistNodePublicId → setNodeProperty` internal-prop write) and
+    /// appends to each label's posting list one slot at a time via
+    /// O(len) `sortedInsert`. For N=100 homogeneous clauses that's ~200
+    /// mutex acquisitions + 100 O(len) inserts + 100 label-index key
+    /// format probes. This batched version resolves the graph/label-ids
+    /// once, pre-sizes each label's posting list, and appends all new
+    /// IDs in one pass (time-ordered, so appends preserve the sorted
+    /// invariant).
+    ///
+    /// Preserves per-node side effects: adapter slot allocation + record
+    /// write + label attach, IdMap slot mapping, in-memory `nodes` entry,
+    /// label posting list update, persisted internal-id property, mutation
+    /// notify. The undo log and auto-index rebuild are the caller's
+    /// responsibility (the batch caller can invoke them once per batch,
+    /// or once per slot, as appropriate — `executeBatchCreateHomogeneous`
+    /// logs per slot because the txn_undo_log API is row-oriented).
+    ///
+    /// The returned slice is allocated via `out_allocator` so callers can
+    /// free it with the same allocator (e.g. test `testing.allocator` vs
+    /// the internal `smp_allocator`).
+    pub fn createNodesBatch(
+        self: *GraphStore,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        n: usize,
+    ) ![]u64 {
+        return self.createNodesBatchWithAllocator(labels, graph_name, n, self.allocator);
+    }
+
+    /// Variant of `createNodesBatch` that allocates the result slice via
+    /// the caller-supplied allocator (used by tests that want to free the
+    /// result with `std.testing.allocator` even though the store uses a
+    /// different internal allocator).
+    pub fn createNodesBatchWithAllocator(
+        self: *GraphStore,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        n: usize,
+        out_allocator: std.mem.Allocator,
+    ) ![]u64 {
+        if (n == 0) return try out_allocator.alloc(u64, 0);
+
+        const tenant = fle_integration.getCurrentTenantId();
+
+        // --- Adapter path: one mutex acquisition for all N slots. ---
+        var adapter_slot_ids: ?[]u64 = null;
+        defer if (adapter_slot_ids) |s| self.allocator.free(s);
+        if (global_adapter) |adapter| {
+            adapter_slot_ids = try adapter.createNodesBatch(graph_name, labels, n, self.allocator);
+        } else if (global_vtable) |vt| {
+            // Fall back to per-slot vtable dispatch if no direct adapter is
+            // available (rare path — covered for API symmetry).
+            const slots = try self.allocator.alloc(u64, n);
+            errdefer self.allocator.free(slots);
+            var j: usize = 0;
+            while (j < n) : (j += 1) {
+                slots[j] = try vt.createNodeFn(vt.ctx, graph_name, labels);
+            }
+            adapter_slot_ids = slots;
+        }
+
+        try self.ensureGraph(graph_name);
+
+        // Pre-size the nodes hashmap to amortize rehashes across the batch.
+        try self.nodes.ensureUnusedCapacity(@intCast(n));
+
+        // Pre-size each label's posting list so the N sorted inserts can
+        // bypass N individual grow-and-shift operations. Since
+        // `generateTimeBasedId` returns strictly-increasing IDs (UUIDv7
+        // top bits are a monotonic timestamp + seq), the batch IDs are
+        // all greater than any previously inserted ID for this graph +
+        // label — so appending preserves the sorted invariant.
+        for (labels) |label| {
+            const posting = try self.ensureLabelPostingList(graph_name, label);
+            try posting.ensureUnusedCapacity(self.allocator, n);
+        }
+
+        // Allocate result slice (caller-owned, caller's allocator).
+        const public_ids = try out_allocator.alloc(u64, n);
+        errdefer out_allocator.free(public_ids);
+
+        // Pre-resolve IdMap once (graph name already ensured above).
+        const id_map_opt: ?*id_map_mod.IdMap = if (adapter_slot_ids != null) try self.getOrCreateIdMap(graph_name) else null;
+
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const public_id = generateTimeBasedId();
+            public_ids[i] = public_id;
+
+            // Per-node label strings must be individually-owned (the
+            // GraphStore Node deinit frees each string + the outer slice).
+            const labels_copy = try self.allocator.alloc([]const u8, labels.len);
+            errdefer self.allocator.free(labels_copy);
+            var filled: usize = 0;
+            errdefer for (labels_copy[0..filled]) |s| self.allocator.free(s);
+            for (labels, 0..) |label, li| {
+                labels_copy[li] = try self.allocator.dupe(u8, label);
+                filled += 1;
+            }
+
+            const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(graph_name_copy);
+            const tenant_id_copy = try self.allocator.dupe(u8, tenant);
+            errdefer self.allocator.free(tenant_id_copy);
+
+            // Persist the public ID + IdMap entry via the adapter (each
+            // call takes its own adapter mutex once — this is unavoidable
+            // at the current adapter API shape but dwarfed by the savings
+            // above).
+            if (adapter_slot_ids) |slots| {
+                if (global_vtable) |vt| {
+                    persistNodePublicId(vt, graph_name, slots[i], public_id) catch |err| {
+                        // Roll back the adapter slot on error. We cannot
+                        // recover slots already committed earlier in the
+                        // batch — their public IDs are emitted but the
+                        // caller never saw the return value (errdefer on
+                        // public_ids above drops it).
+                        if (global_vtable) |v| v.deleteNodeFn(v.ctx, graph_name, slots[i]) catch {};
+                        return err;
+                    };
+                }
+                if (id_map_opt) |im| {
+                    try im.insertNodeWithSlot(@as(u128, public_id), slots[i]);
+                }
+            }
+
+            // In-memory node entry.
+            const node = Node{
+                .id = public_id,
+                .labels = labels_copy,
+                .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+                .graph_name = graph_name_copy,
+                .tenant_id = tenant_id_copy,
+            };
+            try self.nodes.put(public_id, node);
+
+            // Label index: append-only (monotonic IDs preserve sort).
+            for (labels) |label| {
+                try self.appendToLabelIndex(graph_name, label, public_id);
+            }
+
+            // WAL / mutation notification per node.
+            notifyMutation(.create_node, public_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+        }
+
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+        log.debug("Batch node creation", &.{
+            Attr.int("count", @intCast(n)),
+            Attr.int("total_nodes", @intCast(self.nodes.count())),
+        });
+
+        return public_ids;
+    }
+
+    /// Resolve (graph, label) → pointer to the posting list in `label_index`,
+    /// creating the entry on first sight. Returns a stable pointer that is
+    /// valid until the caller yields back into `label_index` (the `nodes`
+    /// map and the `label_index` map are independent; appending within the
+    /// posting list does not invalidate the outer-map pointer).
+    fn ensureLabelPostingList(self: *GraphStore, graph_name: []const u8, label: []const u8) !*std.ArrayList(u64) {
+        var buf: [512]u8 = undefined;
+        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
+            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+            const result = try self.label_index.getOrPut(key);
+            if (!result.found_existing) {
+                result.value_ptr.* = std.ArrayList(u64).empty;
+            } else {
+                self.allocator.free(key);
+            }
+            return result.value_ptr;
+        };
+
+        if (self.label_index.getPtr(probe_key)) |list| return list;
+
+        const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
+        const result = try self.label_index.getOrPut(key);
+        if (!result.found_existing) {
+            result.value_ptr.* = std.ArrayList(u64).empty;
+        } else {
+            self.allocator.free(key);
+        }
+        return result.value_ptr;
+    }
+
+    /// Append-only label-index insert. Used only by the batch path where
+    /// the caller guarantees the new id is greater than every id already
+    /// present for this (graph, label) — which holds for the batch path
+    /// because `generateTimeBasedId` is monotonic within a batch. Falls
+    /// back to a sorted insert if the monotonic invariant is accidentally
+    /// violated (e.g. clock skew), so correctness is preserved.
+    fn appendToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
+        const posting = try self.ensureLabelPostingList(graph_name, label);
+        if (posting.items.len == 0 or posting.items[posting.items.len - 1] < node_id) {
+            try posting.append(self.allocator, node_id);
+        } else {
+            // Defensive fallback for non-monotonic ids.
+            try sortedInsert(posting, self.allocator, node_id);
+        }
+    }
+
     fn createNodeWithIdInternal(
         self: *GraphStore,
         node_id: u64,

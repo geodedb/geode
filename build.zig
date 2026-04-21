@@ -913,6 +913,19 @@ pub fn build(b: *std.Build) void {
     gap0815_batch_create_tests.root_module.addImport("geode", root_mod);
     const run_gap0815_batch_create_tests = b.addRunArtifact(gap0815_batch_create_tests);
 
+    // GAP-0815-deep: adapter-level bulk node-slot allocation. Collapses the
+    // N per-clause `getOrCreateGraph` mutex acquisitions + the N label-index
+    // sortedInsert operations from the shallow batch path into ONE adapter
+    // lock + one pre-sized label-posting-list append pass.
+    const gap0815_deep_bulk_create_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0815_deep_bulk_create.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0815_deep_bulk_create_tests.root_module.addImport("geode", root_mod);
+    const run_gap0815_deep_bulk_create_tests = b.addRunArtifact(gap0815_deep_bulk_create_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1572,6 +1585,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0813_bulk_materialize_path_tests.step);
     test_step.dependOn(&run_gap0814_union_parallelism_tests.step);
     test_step.dependOn(&run_gap0815_batch_create_tests.step);
+    test_step.dependOn(&run_gap0815_deep_bulk_create_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
