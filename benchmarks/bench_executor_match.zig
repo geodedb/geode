@@ -220,7 +220,6 @@ pub fn main(proc_init: std.process.Init.Minimal) !void {
                     .Ok => |h| h,
                     .Err => return error.ParseFailed,
                 };
-                errdefer handle.release();
                 const parse_end = nowNs();
 
                 const exec_start = nowNs();
