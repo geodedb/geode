@@ -829,6 +829,21 @@ pub fn build(b: *std.Build) void {
     gap0810_cross_subsystem_tests.root_module.addImport("geode", root_mod);
     const run_gap0810_cross_subsystem_tests = b.addRunArtifact(gap0810_cross_subsystem_tests);
 
+    // GAP-0810 INVESTIGATE: regression reproducer — opt-in via
+    // `zig build test-gap0810-regression`.  This exercises the
+    // cached-AST-reuse-after-store-reset path described in
+    // docs/performance/2026-04-20-query-bench/gap0810-investigation.md.
+    const gap0810_regression_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_reproduce_regression.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_regression_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_regression_tests = b.addRunArtifact(gap0810_regression_tests);
+    const gap0810_regression_step = b.step("test-gap0810-regression", "GAP-0810 investigation reproducer");
+    gap0810_regression_step.dependOn(&run_gap0810_regression_tests.step);
+
     // GAP-0811 Task 2.1: label-scoped count fast-path via label-index
     // cardinality — `MATCH (p:Label) RETURN count(p)` now routes through
     // `countNodesByLabel` O(1) posting-list length instead of the per-node
@@ -1561,6 +1576,8 @@ pub fn build(b: *std.Build) void {
     compare_bench_test.root_module.addImport("compare_bench", compare_bench_mod);
     const run_compare_bench_test = b.addRunArtifact(compare_bench_test);
     test_perf_step.dependOn(&run_compare_bench_test.step);
+    // GAP-0810 regression reproducer — pins the parse-cache reuse envelope.
+    test_perf_step.dependOn(&run_gap0810_regression_tests.step);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);

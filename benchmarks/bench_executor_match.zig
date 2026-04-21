@@ -79,9 +79,20 @@ const SCENARIOS = [_]struct { name: []const u8, query: []const u8 }{
 const DATASET_SIZES = [_]common_query.DatasetSize{ .small, .medium, .large };
 
 pub fn main(proc_init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // GAP-0810-INVESTIGATE: use smp_allocator (the production allocator
+    // chosen by `graph_store.global_allocator` per GAP-0754) instead of
+    // DebugAllocator.  DebugAllocator's per-allocation bookkeeping has
+    // O(live_allocations) cost on free, which artificially penalizes
+    // code paths that retain live allocations across timed iterations
+    // (e.g. an in-process parse cache).  See
+    // `tests/test_gap0810_reproduce_regression.zig` for the reproducer
+    // that pinned this down — with DebugAllocator the A/B gate showed a
+    // phantom +37-117% execute regression when wiring parseGqlCached;
+    // under smp_allocator the regression evaporates and the expected
+    // parse-cache win surfaces.  Matches the server's real runtime
+    // behavior (QUIC handler allocates from smp_allocator in
+    // ReleaseFast).
+    const allocator = std.heap.smp_allocator;
 
     // --- argv parsing: --output <path> ----------------------------------------
     const raw_argv = proc_init.args.vector;

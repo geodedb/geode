@@ -340,9 +340,11 @@ fn runWarmup(
 // --------------------------------------------------------------------------
 
 pub fn main(proc_init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    // GAP-0810-INVESTIGATE: use smp_allocator to match the server runtime
+    // and avoid DebugAllocator bookkeeping inflating per-iter latencies
+    // when a caller-held parse cache retains live allocations across
+    // iterations.  See `tests/test_gap0810_reproduce_regression.zig`.
+    const allocator = std.heap.smp_allocator;
 
     // --- argv parsing: --output <path> ----------------------------------------
     const raw_argv = proc_init.args.vector;
