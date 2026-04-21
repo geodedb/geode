@@ -154,7 +154,7 @@ Each bottleneck above maps to one `perf/` ticket. Suggested order (by impact × 
 | 1    | GAP-0810   | shared AST cache in executeProgramWithContext      | 2-5×       | 3d | ⚠️ partial — infra landed (`e3391f5d`, `c1b660fd`); bench win blocked pending investigation (see GAP-0810-INVESTIGATE below) |
 | 1a   | GAP-0810-INVESTIGATE | cached-parse vs store-reset regression   | –          | 2d | open |
 | ~~2~~| GAP-0811   | aggregation-aware planner (count/avg no materialize)| 388-11 000× measured | 3d | ✅ done (`f9121c62` + `6b4e0f7d` + `58396844` + `d03a5154`; ledger `f7b53ef2`) |
-| 3    | GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 5-20×      | 4d | open |
+| ~~3~~| GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 292-1025× measured | 4d | ✅ done (`d6045bfb`; ledger `b7feff32`) |
 | 4    | GAP-0813   | bulk materializePath for multi-hop traversals     | 2-5×       | 5d | open |
 | 5    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d | open |
 | 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | open |
