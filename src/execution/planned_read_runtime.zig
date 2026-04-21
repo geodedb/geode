@@ -541,9 +541,17 @@ fn executePatternQuery(
         const current_edges = try allocator.alloc(PathEdge, chain.hops.len);
         defer allocator.free(current_edges);
 
+        // GAP-0813: build projection plan once per query so every path
+        // row can skip fetching properties the downstream consumers never
+        // touch. `buildProjectionPlan` returns null when pruning isn't
+        // applicable — the materialize path falls back to full per-node
+        // property fetch in that case.
+        const projection_plan = try buildProjectionPlan(allocator, q, plan);
+        defer if (projection_plan) |pp| freeProjectionPlan(allocator, pp);
+
         for (start_slots) |start_slot| {
             current_nodes[0] = start_slot;
-            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0);
+            try exploreHops(allocator, adapter, plan.graph_name, q, context, plan, param_names, param_values, &rows, owned_entities, trace, current_nodes, current_edges, 0, projection_plan);
         }
     }
 
@@ -576,10 +584,11 @@ fn exploreHops(
     current_nodes: []u64,
     current_edges: []PathEdge,
     hop_index: usize,
+    projection_plan: ?[]const BindingProjection,
 ) !void {
     const chain = q.match.chains[0];
     if (hop_index == chain.hops.len) {
-        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities);
+        try materializePathRow(allocator, q, context, plan, graph_name, current_nodes, current_edges, param_names, param_values, rows, owned_entities, projection_plan);
         return;
     }
 
@@ -602,7 +611,7 @@ fn exploreHops(
         current_edges[hop_index] = edge;
         current_nodes[hop_index + 1] = edge.next_slot;
         produced += 1;
-        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1);
+        try exploreHops(allocator, adapter, graph_name, q, context, plan, param_names, param_values, rows, owned_entities, trace, current_nodes, current_edges, hop_index + 1, projection_plan);
     }
 
     trace.ops[op_index].rows += produced;
@@ -651,6 +660,445 @@ fn materializeNodeOnlyRow(
     }
 }
 
+// GAP-0813: per-binding projection plan for multi-hop path materialization.
+//
+// `materializePathRow` previously called the full `materializeNode` for every
+// path endpoint, which populated a `StringHashMap` of every persisted
+// property + dupe'd the `graph_name`. For a query like
+//
+//     MATCH (a:LT_Person {lt_id: 42})-[:LT_KNOWS]->(b)-[:LT_KNOWS]->(c)
+//     RETURN DISTINCT c.name, c.lt_id LIMIT 20
+//
+// the intermediate `b` never has its properties read by anything — the
+// projection throws them away. This plan lets us:
+//
+//   * skip property fetch for unused bindings (`unused`),
+//   * fetch only the referenced keys for partially-used bindings (`keys`),
+//   * fall back to full materialize for bindings the analyzer can't prove
+//     are projection-bounded (`full`).
+const BindingProjection = union(enum) {
+    unused,
+    keys: []const []const u8,
+    full,
+};
+
+/// Build a per-binding projection plan by walking every expression that
+/// can read a bound variable after the path row is materialized.
+///
+/// Returns `null` if the caller should fall back to full materialize —
+/// e.g. there are no bindings of node kind, or every binding is `full`
+/// anyway (nothing to gain).
+///
+/// Conservative by design: any reference we don't fully understand
+/// (bare `Ident("c")`, nested call on a node value, etc.) promotes the
+/// binding to `full`. The returned slice + its per-binding `keys`
+/// sub-slices all live on `allocator` and must be freed by
+/// `freeProjectionPlan`.
+fn buildProjectionPlan(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    plan: *const Plan,
+) !?[]BindingProjection {
+    if (plan.binding_names.len == 0) return null;
+
+    // Start all node bindings in `unused` and all edge bindings in `full`.
+    // We don't try to prune edge properties — edges typically carry 0-2
+    // properties so the hashmap+dupe overhead is dwarfed by the node-side
+    // cost, and edges use a different adapter path (`getAllEdgeProperties`)
+    // that doesn't have a cheap single-key lookup without extra plumbing.
+    var projections = try allocator.alloc(BindingProjection, plan.binding_names.len);
+    errdefer allocator.free(projections);
+
+    // Per-binding key lists, one ArrayList per node binding. Indices that
+    // correspond to edge bindings stay unused.
+    var key_lists = try allocator.alloc(std.ArrayList([]const u8), plan.binding_names.len);
+    defer allocator.free(key_lists);
+    for (key_lists) |*list| list.* = std.ArrayList([]const u8).empty;
+    errdefer {
+        // Free any keys we may have duped into the lists on error path.
+        for (key_lists) |*list| {
+            for (list.items) |k| allocator.free(k);
+            list.deinit(allocator);
+        }
+    }
+
+    for (projections, 0..) |*proj, idx| {
+        proj.* = if (plan.binding_kinds[idx] == .node) .unused else .full;
+    }
+
+    // Analyze the union of expressions that could touch a bound variable
+    // after the initial row is materialized.
+    var failed = false;
+    analyzeExpressionsForProjection(allocator, q, plan, projections, key_lists, &failed);
+
+    if (failed) {
+        for (key_lists) |*list| {
+            for (list.items) |k| allocator.free(k);
+            list.deinit(allocator);
+        }
+        allocator.free(projections);
+        return null;
+    }
+
+    // Commit the per-binding keys from the scratch ArrayLists into the
+    // returned projection slice. Keys themselves are already owned by
+    // `allocator` (see `recordBindingKey`); we dedupe in place and
+    // transfer ownership of the slice.
+    for (projections, 0..) |*proj, idx| {
+        switch (proj.*) {
+            .unused => {
+                // Defensive: analyzer only promotes to .keys on member
+                // accesses; .unused + non-empty list shouldn't happen,
+                // but clean up just in case.
+                for (key_lists[idx].items) |k| allocator.free(k);
+                key_lists[idx].deinit(allocator);
+            },
+            .keys => {
+                const deduped = dedupInPlace(key_lists[idx].items, allocator);
+                // Truncate the list to the dedup length before transferring.
+                key_lists[idx].items = key_lists[idx].items[0..deduped];
+                const owned = key_lists[idx].toOwnedSlice(allocator) catch |err| {
+                    // toOwnedSlice on Zig 0.16 can OOM — treat as bail.
+                    // Free remaining keys and unwind.
+                    for (key_lists[idx].items) |k| allocator.free(k);
+                    key_lists[idx].deinit(allocator);
+                    // Free everything we already committed.
+                    for (projections[0..idx]) |p| switch (p) {
+                        .keys => |k| {
+                            for (k) |s| allocator.free(s);
+                            allocator.free(k);
+                        },
+                        else => {},
+                    };
+                    // And the remaining scratch lists.
+                    for (key_lists[idx + 1 ..]) |*rest| {
+                        for (rest.items) |s| allocator.free(s);
+                        rest.deinit(allocator);
+                    }
+                    allocator.free(projections);
+                    return err;
+                };
+                proj.* = .{ .keys = owned };
+            },
+            .full => {
+                for (key_lists[idx].items) |k| allocator.free(k);
+                key_lists[idx].deinit(allocator);
+            },
+        }
+    }
+
+    // If nothing is prunable (every node binding went `.full`), skip the
+    // work and signal caller to take the plain path.
+    var any_pruned = false;
+    for (projections, 0..) |proj, idx| {
+        if (plan.binding_kinds[idx] != .node) continue;
+        switch (proj) {
+            .unused, .keys => {
+                any_pruned = true;
+                break;
+            },
+            .full => {},
+        }
+    }
+    if (!any_pruned) {
+        freeProjectionPlan(allocator, projections);
+        return null;
+    }
+
+    return projections;
+}
+
+/// Dedup a slice of owned strings in place. Duplicates are freed via
+/// `allocator`. Returns the new logical length; the caller should slice
+/// the backing array to that length.
+fn dedupInPlace(keys: [][]const u8, allocator: std.mem.Allocator) usize {
+    var write: usize = 0;
+    outer: for (keys) |k| {
+        for (keys[0..write]) |existing| {
+            if (std.mem.eql(u8, existing, k)) {
+                allocator.free(k);
+                continue :outer;
+            }
+        }
+        keys[write] = k;
+        write += 1;
+    }
+    return write;
+}
+
+fn freeProjectionPlan(allocator: std.mem.Allocator, plan: []BindingProjection) void {
+    for (plan) |proj| {
+        switch (proj) {
+            .keys => |keys| {
+                for (keys) |k| allocator.free(k);
+                allocator.free(keys);
+            },
+            else => {},
+        }
+    }
+    allocator.free(plan);
+}
+
+fn analyzeExpressionsForProjection(
+    allocator: std.mem.Allocator,
+    q: *const ast.Query,
+    plan: *const Plan,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    // RETURN items
+    for (q.ret.items) |item| {
+        analyzeExprForProjection(allocator, item.expr, plan, projections, key_lists, failed);
+        if (failed.*) return;
+    }
+    // Inline LET bindings (LET foo = expr AFTER match).
+    for (q.inline_let_bindings) |binding| {
+        analyzeExprForProjection(allocator, binding.value, plan, projections, key_lists, failed);
+        if (failed.*) return;
+    }
+    // WHERE / FILTER — if they fire post-materialize.
+    if (q.where_clause) |w| {
+        analyzeExprForProjection(allocator, w, plan, projections, key_lists, failed);
+        if (failed.*) return;
+    }
+    if (q.filter_clause) |f| {
+        analyzeExprForProjection(allocator, f, plan, projections, key_lists, failed);
+        if (failed.*) return;
+    }
+    // ORDER BY keys
+    if (q.order_by) |ob| {
+        for (ob.keys) |ok| {
+            analyzeExprForProjection(allocator, ok.expr, plan, projections, key_lists, failed);
+            if (failed.*) return;
+        }
+    }
+    // GROUP BY / HAVING
+    if (q.group_by) |gb| {
+        for (gb.keys) |k| {
+            analyzeExprForProjection(allocator, k, plan, projections, key_lists, failed);
+            if (failed.*) return;
+        }
+    }
+    if (q.having) |h| {
+        analyzeExprForProjection(allocator, h, plan, projections, key_lists, failed);
+        if (failed.*) return;
+    }
+    // WITH clause: if present, its items read the bound vars directly.
+    if (q.with_clause) |wc| {
+        for (wc.items) |item| {
+            analyzeExprForProjection(allocator, item.expr, plan, projections, key_lists, failed);
+            if (failed.*) return;
+        }
+        if (wc.order_by) |ob_ptr| {
+            for (ob_ptr.keys) |ok| {
+                analyzeExprForProjection(allocator, ok.expr, plan, projections, key_lists, failed);
+                if (failed.*) return;
+            }
+        }
+    }
+    // Path variable assignment reads every node + edge in the row. If a
+    // path var is bound, we cannot prune any node binding.
+    if (q.path_variable != null) {
+        for (projections, 0..) |*proj, idx| {
+            if (plan.binding_kinds[idx] == .node) proj.* = .full;
+        }
+    }
+    // SET / REMOVE / DELETE write-side operations may reference the nodes.
+    // Analyzer doesn't inspect these — if any of them is present, bail.
+    if (q.set_clauses.len > 0 or q.remove_clauses.len > 0 or q.delete_items.len > 0) {
+        failed.* = true;
+        return;
+    }
+    // Call clause / subqueries / next_query / CTEs / CREATE / MERGE —
+    // any of these may reference the bound vars opaquely. Bail out.
+    if (q.call_clause != null or q.initial_call_subquery != null or
+        q.next_query != null or q.cte_list != null or
+        q.create_pattern != null or q.merge_statement != null or
+        q.unwind_clause != null or q.for_statement != null)
+    {
+        failed.* = true;
+        return;
+    }
+}
+
+/// Look up the binding index for a plan variable name. Case-sensitive
+/// match on the binding's original identifier text.
+fn findBindingIndex(plan: *const Plan, name: []const u8) ?usize {
+    for (plan.binding_names, 0..) |bn, idx| {
+        if (std.mem.eql(u8, bn, name)) return idx;
+    }
+    return null;
+}
+
+fn analyzeExprForProjection(
+    allocator: std.mem.Allocator,
+    expr: ast.Expr,
+    plan: *const Plan,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    if (failed.*) return;
+    switch (expr) {
+        // Bare identifier — if it names a binding, we must keep full
+        // props (someone is asking for the Node value itself).
+        .Ident => |ident| {
+            if (findBindingIndex(plan, ident.orig)) |idx| {
+                // Only promote if this binding is a node. Edge bindings
+                // already sit at .full per buildProjectionPlan init.
+                if (plan.binding_kinds[idx] == .node) {
+                    projections[idx] = .full;
+                }
+            }
+        },
+        // p.key → record (p, key).
+        .Member => |m| {
+            if (m.target.* == .Ident) {
+                const target_ident = m.target.Ident;
+                if (findBindingIndex(plan, target_ident.orig)) |idx| {
+                    if (plan.binding_kinds[idx] == .node) {
+                        recordBindingKey(allocator, idx, m.field, projections, key_lists, failed);
+                    }
+                    return;
+                }
+            }
+            analyzeExprForProjection(allocator, m.target.*, plan, projections, key_lists, failed);
+        },
+        .PropertyAccess => |pa| {
+            if (findBindingIndex(plan, pa.object)) |idx| {
+                if (plan.binding_kinds[idx] == .node) {
+                    recordBindingKey(allocator, idx, pa.property, projections, key_lists, failed);
+                }
+            }
+        },
+        .Binary => |bin| {
+            analyzeExprForProjection(allocator, bin.left.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            analyzeExprForProjection(allocator, bin.right.*, plan, projections, key_lists, failed);
+        },
+        .Unary => |un| {
+            analyzeExprForProjection(allocator, un.expr.*, plan, projections, key_lists, failed);
+        },
+        .Call => |call| {
+            for (call.args) |arg| {
+                analyzeExprForProjection(allocator, arg.*, plan, projections, key_lists, failed);
+                if (failed.*) return;
+            }
+        },
+        .Index => |ix| {
+            analyzeExprForProjection(allocator, ix.target.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            analyzeExprForProjection(allocator, ix.index.*, plan, projections, key_lists, failed);
+        },
+        .Slice => |sl| {
+            analyzeExprForProjection(allocator, sl.target.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            if (sl.start) |s| {
+                analyzeExprForProjection(allocator, s.*, plan, projections, key_lists, failed);
+                if (failed.*) return;
+            }
+            if (sl.end) |e| {
+                analyzeExprForProjection(allocator, e.*, plan, projections, key_lists, failed);
+            }
+        },
+        .List => |items| {
+            for (items) |item| {
+                analyzeExprForProjection(allocator, item.*, plan, projections, key_lists, failed);
+                if (failed.*) return;
+            }
+        },
+        .In => |in_expr| {
+            analyzeExprForProjection(allocator, in_expr.value.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            for (in_expr.set) |s| {
+                analyzeExprForProjection(allocator, s.*, plan, projections, key_lists, failed);
+                if (failed.*) return;
+            }
+        },
+        .InListExpr => |ile| {
+            analyzeExprForProjection(allocator, ile.value.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            analyzeExprForProjection(allocator, ile.list_expr.*, plan, projections, key_lists, failed);
+        },
+        .IsNull => |isn| {
+            analyzeExprForProjection(allocator, isn.target.*, plan, projections, key_lists, failed);
+        },
+        .IsUnknown => |isu| {
+            analyzeExprForProjection(allocator, isu.target.*, plan, projections, key_lists, failed);
+        },
+        .StartsWith => |sw| {
+            analyzeExprForProjection(allocator, sw.value.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            analyzeExprForProjection(allocator, sw.prefix.*, plan, projections, key_lists, failed);
+        },
+        .EndsWith => |ew| {
+            analyzeExprForProjection(allocator, ew.value.*, plan, projections, key_lists, failed);
+            if (failed.*) return;
+            analyzeExprForProjection(allocator, ew.suffix.*, plan, projections, key_lists, failed);
+        },
+        // Anything else — subqueries, exists, unknown shapes — conservatively bail.
+        .InSubquery => failed.* = true,
+        // Pure literals are safe — no bound-variable refs.
+        .Int,
+        .String,
+        .Bool,
+        .Null,
+        .Decimal,
+        .SmallIntLit,
+        .BigIntLit,
+        .RealLit,
+        .DoubleLit,
+        .CharLit,
+        .VarcharLit,
+        .TextLit,
+        .ByteaLit,
+        .JsonLit,
+        .JsonbLit,
+        .XmlLit,
+        .UrlLit,
+        .DomainLit,
+        .UuidLit,
+        .EnumLit,
+        .ArrayLit,
+        .BitLit,
+        .VarBitLit,
+        .Date,
+        .DateTime,
+        .Time,
+        .LocalDateTime,
+        => {},
+        else => failed.* = true,
+    }
+}
+
+fn recordBindingKey(
+    allocator: std.mem.Allocator,
+    idx: usize,
+    key: []const u8,
+    projections: []BindingProjection,
+    key_lists: []std.ArrayList([]const u8),
+    failed: *bool,
+) void {
+    switch (projections[idx]) {
+        .unused => projections[idx] = .{ .keys = &.{} },
+        .keys, .full => {},
+    }
+    if (projections[idx] == .full) return;
+    // Dupe the key onto the caller's allocator so the scratch list owns
+    // it. buildProjectionPlan re-dupes on commit, but this keeps lifetime
+    // management uniform whether we commit or bail.
+    const owned = allocator.dupe(u8, key) catch {
+        failed.* = true;
+        return;
+    };
+    key_lists[idx].append(allocator, owned) catch {
+        allocator.free(owned);
+        failed.* = true;
+        return;
+    };
+}
+
 fn materializePathRow(
     allocator: std.mem.Allocator,
     q: *const ast.Query,
@@ -663,6 +1111,7 @@ fn materializePathRow(
     param_values: []const Value,
     rows: *std.ArrayList([]Value),
     owned_entities: *OwnedGraphEntities,
+    projection_plan: ?[]const BindingProjection,
 ) !void {
     var local_nodes = std.ArrayList(*graph_store.Node).empty;
     defer local_nodes.deinit(allocator);
@@ -674,7 +1123,7 @@ fn materializePathRow(
     for (binding_values) |*value| value.* = Value{ .Null = {} };
 
     if (plan.root_index) |idx| {
-        const root_node = try materializeNode(allocator, graph_name, node_slots[0]);
+        const root_node = try materializeNodeForBinding(allocator, graph_name, node_slots[0], projection_plan, idx);
         try local_nodes.append(allocator, root_node);
         binding_values[idx] = Value{ .Node = root_node };
     }
@@ -684,7 +1133,7 @@ fn materializePathRow(
         try local_edges.append(allocator, edge);
         binding_values[hop_binding.rel_index] = Value{ .Edge = edge };
 
-        const right_node = try materializeNode(allocator, graph_name, node_slots[hop_idx + 1]);
+        const right_node = try materializeNodeForBinding(allocator, graph_name, node_slots[hop_idx + 1], projection_plan, hop_binding.right_index);
         try local_nodes.append(allocator, right_node);
         binding_values[hop_binding.right_index] = Value{ .Node = right_node };
     }
@@ -706,6 +1155,26 @@ fn materializePathRow(
     for (local_edges.items) |edge| {
         try owned_entities.trackEdge(edge);
     }
+}
+
+/// Route to the right materialize variant based on this binding's
+/// projection entry. Node bindings marked `.unused` get a minimal node
+/// (no property map population); `.keys` get only those keys fetched;
+/// `.full` (or no projection plan at all) takes the full-materialize path.
+fn materializeNodeForBinding(
+    allocator: std.mem.Allocator,
+    graph_name: []const u8,
+    slot_id: u64,
+    projection_plan: ?[]const BindingProjection,
+    binding_idx: usize,
+) !*graph_store.Node {
+    const plan = projection_plan orelse return materializeNode(allocator, graph_name, slot_id);
+    if (binding_idx >= plan.len) return materializeNode(allocator, graph_name, slot_id);
+    return switch (plan[binding_idx]) {
+        .full => materializeNode(allocator, graph_name, slot_id),
+        .unused => materializeNodeProjected(allocator, graph_name, slot_id, &.{}),
+        .keys => |keys| materializeNodeProjected(allocator, graph_name, slot_id, keys),
+    };
 }
 
 /// Simple equality predicate extracted from a WHERE clause, pointing
@@ -1086,6 +1555,61 @@ fn propsMatch(
         }
     }
     return true;
+}
+
+/// GAP-0813: like `materializeNode` but fetches only the property keys
+/// named in `needed_keys`. Pass an empty slice when no properties are
+/// required — the resulting Node still has its id, labels and graph_name
+/// populated, just an empty property map. This skips the per-node
+/// `getAllNodeProperties` hashmap+dupe work.
+fn materializeNodeProjected(
+    allocator: std.mem.Allocator,
+    graph_name: []const u8,
+    slot_id: u64,
+    needed_keys: []const []const u8,
+) !*graph_store.Node {
+    const scratch = scratchOr(allocator);
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.Unsupported;
+    const store = graph_store.getGlobalStore(allocator);
+    const external_id = try resolveExternalNodeId(allocator, adapter, store, graph_name, slot_id);
+
+    const labels = try adapter.getNodeLabels(graph_name, slot_id, scratch);
+    errdefer {
+        for (labels) |label| scratch.free(label);
+        scratch.free(labels);
+    }
+
+    const node = try allocator.create(graph_store.Node);
+    errdefer allocator.destroy(node);
+    node.* = .{
+        .id = external_id,
+        .labels = labels,
+        .properties = std.StringHashMap(graph_store.PropertyValue).init(scratch),
+        .graph_name = try scratch.dupe(u8, graph_name),
+    };
+    errdefer {
+        node.properties.deinit();
+        scratch.free(node.graph_name);
+    }
+
+    // Per-key lookup: `getNodeProperty` uses a per-page directory hash
+    // scan (PERF-0023 in graph_storage/prop_store.zig). For the 1-2
+    // keys typical of projection-pruned reads this is dramatically
+    // cheaper than `getAllNodeProperties` — no iterator state, no full
+    // hashmap population, no dupe of every persisted key.
+    for (needed_keys) |key| {
+        const maybe_val = adapter.getNodeProperty(graph_name, slot_id, key, scratch) catch |err| switch (err) {
+            error.NodeNotFound => return error.NodeNotFound,
+            else => return err,
+        };
+        const val = maybe_val orelse continue;
+        const decoded = try graph_storage_adapter.fromStorageProperty(scratch, val);
+        const owned_key = try scratch.dupe(u8, key);
+        try node.properties.put(owned_key, decoded);
+    }
+
+    return node;
 }
 
 pub fn materializeNode(allocator: std.mem.Allocator, graph_name: []const u8, slot_id: u64) !*graph_store.Node {
@@ -1887,11 +2411,27 @@ fn isStorageNativeQuery(q: *const ast.Query) bool {
     for (chain.hops, 0..) |hop, hop_idx| {
         if (hop.rel.min_len != null or hop.rel.max_len != null) return false;
         if (hop_idx != 0) {
-            if (hop.left.name) |name| {
-                if (containsName(names[0..name_count], name)) return false;
-                if (name_count >= names.len) return false;
-                names[name_count] = name;
-                name_count += 1;
+            // GAP-0813: the left node of any non-first hop is the same
+            // entity as the right node of the previous hop. If a name is
+            // given, it MUST match the previous hop's right.name (or the
+            // anonymous chain continuation). It is NOT a duplicate — it
+            // is a reference to the node we already know about. We
+            // simply skip re-registration. If the previous hop's right
+            // was anonymous but this left is named, add it; if both
+            // named and they disagree, reject (the planner can't resolve
+            // that without extra work).
+            if (hop.left.name) |left_name| {
+                const prev_right_name = chain.hops[hop_idx - 1].right.name;
+                if (prev_right_name) |prn| {
+                    if (!std.mem.eql(u8, prn, left_name)) return false;
+                    // Same name — already registered. Skip.
+                } else {
+                    // Previous hop's right was anonymous. Register this name now.
+                    if (containsName(names[0..name_count], left_name)) return false;
+                    if (name_count >= names.len) return false;
+                    names[name_count] = left_name;
+                    name_count += 1;
+                }
             }
         }
         if (hop.rel.name) |name| {

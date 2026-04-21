@@ -870,6 +870,21 @@ pub fn build(b: *std.Build) void {
     gap0812_topk_streaming_tests.root_module.addImport("geode", root_mod);
     const run_gap0812_topk_streaming_tests = b.addRunArtifact(gap0812_topk_streaming_tests);
 
+    // GAP-0813 Task 4.1: projection-pruned materialize for multi-hop path
+    // queries. When the RETURN clause references only a small set of
+    // `<var>.<key>` property accesses (and all other references to bound
+    // variables are similarly pure), `materializePathRow` fetches only
+    // those keys per node instead of allocating a full property map +
+    // dupe'd graph_name per hop.
+    const gap0813_bulk_materialize_path_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0813_bulk_materialize_path.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0813_bulk_materialize_path_tests.root_module.addImport("geode", root_mod);
+    const run_gap0813_bulk_materialize_path_tests = b.addRunArtifact(gap0813_bulk_materialize_path_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1526,6 +1541,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
     test_step.dependOn(&run_gap0811b_property_aggregate_tests.step);
     test_step.dependOn(&run_gap0812_topk_streaming_tests.step);
+    test_step.dependOn(&run_gap0813_bulk_materialize_path_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
