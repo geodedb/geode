@@ -829,6 +829,19 @@ pub fn build(b: *std.Build) void {
     gap0810_cross_subsystem_tests.root_module.addImport("geode", root_mod);
     const run_gap0810_cross_subsystem_tests = b.addRunArtifact(gap0810_cross_subsystem_tests);
 
+    // GAP-0811 Task 2.1: label-scoped count fast-path via label-index
+    // cardinality — `MATCH (p:Label) RETURN count(p)` now routes through
+    // `countNodesByLabel` O(1) posting-list length instead of the per-node
+    // materialize loop.
+    const gap0811_aggregation_fastpath_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0811_aggregation_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
+    const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1482,6 +1495,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0809_where_fastpath_tests.step);
     test_step.dependOn(&run_gap0810_parse_cache_tests.step);
     test_step.dependOn(&run_gap0810_cross_subsystem_tests.step);
+    test_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);

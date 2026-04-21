@@ -273,23 +273,28 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
 }
 
 // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
-// COUNT_PUSHDOWN: fast-path for unlabeled `MATCH (n) RETURN count(n)` /
-// `count(*)`. Mirrors the labeled fast-path in
-// `executeMultiChainRelationshipMatch` at :1726-1735 which uses the label
-// index; this version applies when there is no label to pivot on. Rather
-// than iterating every node and building a MatchBinding per row (the old
-// unlabeled fallback at :1736-1754 / :5725-5860), we delegate directly to
-// `store.countNodesForGraph(filter_graph, filter_tenant)` and emit a
-// single-row result. Zero per-row allocations, zero iterator contention
-// with concurrent WAL/checkpoint writers — which is the root cause of the
-// 1-in-4 `shell_comprehensive_tests.yml::count-nodes` 30-second flake
-// triaged in docs/audit/bugfix-shell-count-nodes-triage.md.
+// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelScopedCount; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+// COUNT_PUSHDOWN: fast-path for `MATCH (n) RETURN count(n)` / `count(*)`,
+// now also covering the single-label case `MATCH (n:Label) RETURN count(n)`.
+// Mirrors the labeled fast-path in `executeMultiChainRelationshipMatch` at
+// :1726-1735 which uses the label index. Rather than iterating every node
+// and building a MatchBinding per row (the old unlabeled fallback at
+// :1736-1754 / :5725-5860), we delegate directly to
+// `store.countNodesForGraph(filter_graph, filter_tenant)` for the unlabeled
+// case, or `store.countNodesByLabel(filter_graph, label, filter_tenant)`
+// for the labeled case (GAP-0811), and emit a single-row result. Zero
+// per-row allocations, zero iterator contention with concurrent WAL/
+// checkpoint writers — which is the root cause of the 1-in-4
+// `shell_comprehensive_tests.yml::count-nodes` 30-second flake triaged
+// in docs/audit/bugfix-shell-count-nodes-triage.md.
 //
 // Returns null when the query is NOT a count-only pushdown candidate so
 // the caller falls back to the regular executor. Preconditions (all must
 // hold):
-//   - single MATCH chain with a single simple node pattern (n) — no labels,
-//     no properties, no relationships, no path variable;
+//   - single MATCH chain with a single simple node pattern (n) or (n:L) —
+//     at most one label, no inline properties, no relationships, no path
+//     variable. Multi-label still falls back because posting-list
+//     intersection cost is better amortized with early-termination;
 //   - RETURN has exactly one item which is `count(<single-var-expr>)` or
 //     `count(*)` (case-insensitive), no DISTINCT qualifier;
 //   - no WHERE, no FILTER, no WITH, no GROUP BY, no ORDER BY, no SET,
@@ -298,8 +303,9 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
 //     bailed to the regular path for correctness);
 //   - no active RLS engine with an authenticated user (RLS can filter
 //     per-row; the fast-path can't honour that cleanly — fall back).
-// Tenant filtering IS honoured: `countNodesForGraph` applies the same
-// `filter_tenant` the regular path would.
+// Tenant filtering IS honoured: both `countNodesForGraph` and
+// `countNodesByLabel` apply the same `filter_tenant` the regular path
+// would.
 pub fn countNodesFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -314,7 +320,10 @@ pub fn countNodesFastPath(
     if (chain.name != null) return null; // path variable bound to chain
     if (q.path_variable != null) return null;
     const head = chain.head orelse return null;
-    if (head.labels.len != 0) return null;
+    // GAP-0811: accept zero or one label. Multi-label still falls back —
+    // intersection cost is better amortized by the regular path's
+    // early-termination once the two-pointer merge completes.
+    if (head.labels.len > 1) return null;
     if (head.props != null) return null;
 
     // Shape: single RETURN item that is `count(n)` or `count(*)`, no DISTINCT.
@@ -386,11 +395,19 @@ pub fn countNodesFastPath(
     // (via `getGlobalStore`) so we read from the pre-captured deep-clone
     // instead of the live store. When no session is installed this falls
     // back to the live store + ReadView as before.
+    //
+    // GAP-0811: For single-label counts, route through
+    // `countNodesByLabel` which is O(1) on the label posting list when
+    // tenant filtering is not active. For unlabeled counts we keep
+    // `countNodesForGraph`.
     const writable_store = graph_store.getGlobalStore(allocator);
     var read_view = graph_store.ReadView.init(allocator, writable_store);
     defer read_view.deinit();
     const store = read_view.getReadStore();
-    const n = store.countNodesForGraph(filter_graph, filter_tenant);
+    const n: usize = if (head.labels.len == 1)
+        store.countNodesByLabel(filter_graph, head.labels[0], filter_tenant)
+    else
+        store.countNodesForGraph(filter_graph, filter_tenant);
 
     // Build single-row `{<alias>: n}` result. Match the column-naming
     // conventions of `generateUniqueColumnNames`: prefer explicit alias,

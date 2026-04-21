@@ -2042,6 +2042,44 @@ pub const GraphStore = struct {
         return count;
     }
 
+    // CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelIndexCardinality; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+    // GAP-0811: Label-scoped O(1) cardinality for the count fast-path.
+    //
+    // When `tenant == null` we can return the label-index posting-list length
+    // directly — `deleteNodeNoSave` calls `removeFromLabelIndex` for every
+    // label on a deleted node, so the posting list's length is an exact count
+    // of live nodes with that (graph, label) pair.
+    //
+    // When `tenant != null` we must iterate the posting list and check each
+    // node's `tenant_id`, because the label index is not partitioned by
+    // tenant. This is still strictly cheaper than `countNodesForGraph` which
+    // scans ALL nodes in the graph (not just those with the label).
+    //
+    // Called by `countNodesFastPath` in `src/execution/match_operations.zig`
+    // for `MATCH (p:<Label>) RETURN count(p)` / `count(*)`. Parallels
+    // `countNodesForGraph` for the unlabeled case.
+    pub fn countNodesByLabel(
+        self: *const GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        tenant: ?[]const u8,
+    ) usize {
+        const posting = self.getNodesByLabel(graph_name, label) orelse return 0;
+        if (tenant == null) {
+            // O(1) — `removeFromLabelIndex` keeps the posting list in sync on
+            // delete, so `.len` is the exact live count.
+            return posting.len;
+        }
+        const tid = tenant.?;
+        var count: usize = 0;
+        for (posting) |node_id| {
+            const node = self.nodes.get(node_id) orelse continue;
+            if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            count += 1;
+        }
+        return count;
+    }
+
     pub fn getEdgeCount(self: *GraphStore) usize {
         return self.edges.count();
     }
