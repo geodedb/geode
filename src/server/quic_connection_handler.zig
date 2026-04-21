@@ -84,7 +84,7 @@ const planned_read_runtime = geode.planned_read_runtime;
 const node_scan_stream = geode.node_scan_stream;
 const pooled = @import("transport/thread_pool");
 // Issue #444: Import AST cache to wire into parse hot path
-const query_ast_cache = @import("query_ast_cache.zig");
+const query_ast_cache = @import("query_ast_cache");
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");

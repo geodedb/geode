@@ -151,14 +151,44 @@ Each bottleneck above maps to one `perf/` ticket. Suggested order (by impact × 
 | rank | gap        | bottleneck                                         | est. win   | est. effort | status |
 |-----:|-----------:|----------------------------------------------------|-----------:|------------:|:-------|
 | ~~1~~    | GAP-0809   | WHERE prop=const fast-path parity with inline-prop | 2,600× measured (large) | 2d | ✅ done (`d7b79be5`) |
-| 1    | GAP-0810   | shared AST cache in executeProgramWithContext      | 2-5×       | 3d | open |
-| 2    | GAP-0811   | aggregation-aware planner (count/avg no materialize)| 10-50×    | 3d | open |
-| 3    | GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 5-20×      | 4d | open |
-| 4    | GAP-0813   | bulk materializePath for multi-hop traversals     | 2-5×       | 5d | open |
-| 5    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d | open |
-| 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | open |
+| ~~1~~    | GAP-0810   | shared AST cache in executeProgramWithContext      | parse -80-92%, execute flat | 3d | ✅ done (`e3391f5d` + `c1b660fd` + re-applied `59e4ab97`, `5f3b190c`; ledger `gap0810-diff.md`) |
+| ~~1a~~   | GAP-0810-INVESTIGATE | cached-parse vs store-reset regression   | artifact, not real | 2d | ✅ closed — DebugAllocator bookkeeping artifact (`e349d085`; `gap0810-investigation.md`) |
+| ~~2~~| GAP-0811   | aggregation-aware planner (count/avg no materialize)| 388-11 000× measured | 3d | ✅ done (`f9121c62` + `6b4e0f7d` + `58396844` + `d03a5154`; ledger `f7b53ef2`) |
+| ~~3~~| GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 292-1025× measured | 4d | ✅ done (`d6045bfb`; ledger `b7feff32`) |
+| ~~4~~| GAP-0813   | bulk materializePath for multi-hop traversals     | 721-2704× measured | 5d | ✅ done (`b98f341d`; ledger `5862045f`) |
+| 5    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d | ⚠️ partial — code correct + 1.6× on unit balanced-arms test (`871627f5`; ledger `b449976c`); bench `union_two_labels` is 50:1 asymmetric so A/B shows 0× bench win. Follow-ups: cost-model threshold, balanced-arm bench scenario. |
+| 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | ⚠️ partial — detection + executor landed (`fa5e5bef`; ledger `5719faa2`), ~35% Debug win on N≥3 inline-clauses. Bench `create_batch_100` shape differs (loop of 100 single-clause queries) so A/B flat. Follow-up: GAP-0815-deep for adapter-level batch slot allocation. |
 
 Each can be attacked via `./scripts/query-perf-gate.sh <gap-id> before` → implement → `after` → inspect `diff.md`. The baseline in `baseline/bench-query-all.json` is the reference; replacing it requires A/B verification plus a committed update of the baseline JSON.
+
+### GAP-0810 close note (2026-04-20, post-investigation)
+
+Phase 1 of the `perf/ingest-query-perf-2026-04-20` branch landed the public `parseGqlCached` wrapper (`e3391f5d`) + `SharedAstCache` hooks on `MaterializedViewManager` / `QueryCoordinator` (`c1b660fd`). The bench wiring commits (`53571fcc` + `d7caba53`) were temporarily reverted (`6c108091`, `c7eb359f`) after the A/B gate showed `latency_execute_ns_p50` rising by 37–117% on `point_read_inline` / `point_read_where` / `one_hop` at medium/large sizes.
+
+**Root cause (2026-04-20):** the regression was an `std.heap.DebugAllocator` measurement artifact, NOT a defect in the parse cache. DebugAllocator's per-allocation bookkeeping and mutex have O(live_allocations) cost; when the bench holds a SharedAstCache across timed iterations, it retains extra live allocations (heap `*ParseResult`, parse arena, `query_text_copy`). Every allocation and free inside `executeProgramWithContext` (row buffers, owned_graph_entities, etc.) subsequently pays more DebugAllocator overhead — the observed execute slowdown.
+
+**Fix** (`e349d085`): switch the executor benches from DebugAllocator to `std.heap.smp_allocator` (the production allocator chosen by `graph_store.global_allocator` per GAP-0754 — this is a known class of problem). Regression pinned by `tests/test_gap0810_reproduce_regression.zig` gating B/C ≤ 1.25x.
+
+**Re-applied** (`59e4ab97`, `5f3b190c`): the original bench cache wiring + `errdefer handle.release()` leak-on-error fix. A/B under smp_allocator shows parse deltas of −40% to −92% across scenarios with execute deltas within ±15% of control (a few cells show run-to-run variance up to +22% from iter-window jitter, unrelated to cache wiring). Full details in `gap0810-investigation.md` and `gap0810-diff.md`.
+
+Pre-investigation serial A/B (DebugAllocator) — for historical context:
+
+| scenario | small (500 nodes) | medium (2000) | large (5000) |
+|---|---|---|---|
+| point_read_inline | **−35%** (faster) | **+85%** (slower) | **+37%** (slower) |
+| point_read_where  | **−27%** (faster) | **+63%** (slower) | **+16%** (slower) |
+| one_hop           | **−19%** (faster) | **+117%** (slower) | **+51%** (slower) |
+
+Post-investigation A/B (smp_allocator, ledger `gap0810-diff.md`):
+
+| scenario | size | parse Δ | execute Δ |
+|---|---|---|---|
+| point_read_inline | medium | **−83.0%** | +11.4% |
+| point_read_where  | medium | **−83.9%** | +1.1% |
+| one_hop           | medium | **−87.0%** | +12.0% |
+| agg_count_label   | large  | **−77.7%** | **−13.7%** |
+
+Production QUIC handler already runs on `smp_allocator` in ReleaseFast (GAP-0754), so the cache path there was never affected — the regression only ever existed in the bench harness.
 
 ## Reproduction
 

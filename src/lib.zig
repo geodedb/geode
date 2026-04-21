@@ -582,6 +582,34 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment, .has_unwind = p.has_unwind } };
 }
 
+// CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="ParseCacheWrapper"; ASPECT=PublicSurface; STATUS=TESTED; TEST=tests/test_gap0810_parse_cache_wrapper.zig; OWNER=performance; UPDATED=2026-04-20
+// GAP-0810: re-export the server-side AST parse cache on the public `geode`
+// module so in-process callers (benches, materialized-view refresh,
+// distributed coordinator) can amortize the parser cost without reaching
+// into `src/server/*` directly. Parser is ~100x more expensive than the
+// planner per docs/performance/2026-04-20-query-bench/FINAL.md §6.
+const query_ast_cache = @import("query_ast_cache");
+pub const SharedAstCache = query_ast_cache.SharedAstCache;
+pub const AstHandle = query_ast_cache.AstHandle;
+pub const AstParseOutcome = query_ast_cache.AstParseOutcome;
+
+/// Cached variant of `parseGqlOutcome`. Returns an `AstHandle` outcome whose
+/// caller MUST call `.release()` on the `.Ok` payload; the underlying
+/// `ParseResult` is owned by the cache and shared across callers for the
+/// same `(query_text, opts)` key.
+///
+/// Rationale: the parser is ~100x more expensive than the planner. Any
+/// in-process caller that executes the same query shape in a loop (bench
+/// harness, materialized-view refresh, distributed coordinator) should use
+/// this wrapper instead of `parseGqlOutcome` directly.
+pub fn parseGqlCached(
+    cache: *SharedAstCache,
+    query_text: []const u8,
+    opts: ParseOptions,
+) !AstParseOutcome {
+    return cache.getOrParse(query_text, opts);
+}
+
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");

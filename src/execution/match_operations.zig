@@ -273,23 +273,28 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
 }
 
 // CANARY: REQ=REQ-PERF-COUNT-NODES-PUSHDOWN; FEATURE="UnlabeledMatchCountPushdown"; ASPECT=FastPath; STATUS=TESTED; TEST=tests/test_count_nodes_pushdown_perf.zig; OWNER=execution; UPDATED=2026-04-16
-// COUNT_PUSHDOWN: fast-path for unlabeled `MATCH (n) RETURN count(n)` /
-// `count(*)`. Mirrors the labeled fast-path in
-// `executeMultiChainRelationshipMatch` at :1726-1735 which uses the label
-// index; this version applies when there is no label to pivot on. Rather
-// than iterating every node and building a MatchBinding per row (the old
-// unlabeled fallback at :1736-1754 / :5725-5860), we delegate directly to
-// `store.countNodesForGraph(filter_graph, filter_tenant)` and emit a
-// single-row result. Zero per-row allocations, zero iterator contention
-// with concurrent WAL/checkpoint writers — which is the root cause of the
-// 1-in-4 `shell_comprehensive_tests.yml::count-nodes` 30-second flake
-// triaged in docs/audit/bugfix-shell-count-nodes-triage.md.
+// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="CountFastPath"; ASPECT=LabelScopedCount; STATUS=TESTED; TEST=tests/test_gap0811_aggregation_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+// COUNT_PUSHDOWN: fast-path for `MATCH (n) RETURN count(n)` / `count(*)`,
+// now also covering the single-label case `MATCH (n:Label) RETURN count(n)`.
+// Mirrors the labeled fast-path in `executeMultiChainRelationshipMatch` at
+// :1726-1735 which uses the label index. Rather than iterating every node
+// and building a MatchBinding per row (the old unlabeled fallback at
+// :1736-1754 / :5725-5860), we delegate directly to
+// `store.countNodesForGraph(filter_graph, filter_tenant)` for the unlabeled
+// case, or `store.countNodesByLabel(filter_graph, label, filter_tenant)`
+// for the labeled case (GAP-0811), and emit a single-row result. Zero
+// per-row allocations, zero iterator contention with concurrent WAL/
+// checkpoint writers — which is the root cause of the 1-in-4
+// `shell_comprehensive_tests.yml::count-nodes` 30-second flake triaged
+// in docs/audit/bugfix-shell-count-nodes-triage.md.
 //
 // Returns null when the query is NOT a count-only pushdown candidate so
 // the caller falls back to the regular executor. Preconditions (all must
 // hold):
-//   - single MATCH chain with a single simple node pattern (n) — no labels,
-//     no properties, no relationships, no path variable;
+//   - single MATCH chain with a single simple node pattern (n) or (n:L) —
+//     at most one label, no inline properties, no relationships, no path
+//     variable. Multi-label still falls back because posting-list
+//     intersection cost is better amortized with early-termination;
 //   - RETURN has exactly one item which is `count(<single-var-expr>)` or
 //     `count(*)` (case-insensitive), no DISTINCT qualifier;
 //   - no WHERE, no FILTER, no WITH, no GROUP BY, no ORDER BY, no SET,
@@ -298,8 +303,9 @@ fn returnItemsHaveAggregation(items: []const ast.ReturnItem) bool {
 //     bailed to the regular path for correctness);
 //   - no active RLS engine with an authenticated user (RLS can filter
 //     per-row; the fast-path can't honour that cleanly — fall back).
-// Tenant filtering IS honoured: `countNodesForGraph` applies the same
-// `filter_tenant` the regular path would.
+// Tenant filtering IS honoured: both `countNodesForGraph` and
+// `countNodesByLabel` apply the same `filter_tenant` the regular path
+// would.
 pub fn countNodesFastPath(
     allocator: std.mem.Allocator,
     q: ast.Query,
@@ -314,7 +320,10 @@ pub fn countNodesFastPath(
     if (chain.name != null) return null; // path variable bound to chain
     if (q.path_variable != null) return null;
     const head = chain.head orelse return null;
-    if (head.labels.len != 0) return null;
+    // GAP-0811: accept zero or one label. Multi-label still falls back —
+    // intersection cost is better amortized by the regular path's
+    // early-termination once the two-pointer merge completes.
+    if (head.labels.len > 1) return null;
     if (head.props != null) return null;
 
     // Shape: single RETURN item that is `count(n)` or `count(*)`, no DISTINCT.
@@ -386,11 +395,19 @@ pub fn countNodesFastPath(
     // (via `getGlobalStore`) so we read from the pre-captured deep-clone
     // instead of the live store. When no session is installed this falls
     // back to the live store + ReadView as before.
+    //
+    // GAP-0811: For single-label counts, route through
+    // `countNodesByLabel` which is O(1) on the label posting list when
+    // tenant filtering is not active. For unlabeled counts we keep
+    // `countNodesForGraph`.
     const writable_store = graph_store.getGlobalStore(allocator);
     var read_view = graph_store.ReadView.init(allocator, writable_store);
     defer read_view.deinit();
     const store = read_view.getReadStore();
-    const n = store.countNodesForGraph(filter_graph, filter_tenant);
+    const n: usize = if (head.labels.len == 1)
+        store.countNodesByLabel(filter_graph, head.labels[0], filter_tenant)
+    else
+        store.countNodesForGraph(filter_graph, filter_tenant);
 
     // Build single-row `{<alias>: n}` result. Match the column-naming
     // conventions of `generateUniqueColumnNames`: prefer explicit alias,
@@ -408,6 +425,649 @@ pub fn countNodesFastPath(
 
     var rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+// GAP-0811 Task 2.2: property-aggregate fast-path shared types.
+const AggKind = enum { sum, avg, min, max };
+
+const Cmp = enum { eq, ne, lt, le, gt, ge };
+
+/// Literal value extracted from a simple WHERE predicate. Holds either an
+/// integer, float, or string (strings for eq/ne only — ordering comparisons
+/// on strings are not handled here).
+const LitValue = union(enum) {
+    Int: i64,
+    Float: f64,
+    Str: []const u8,
+    Bool: bool,
+};
+
+const SimpleWhere = struct {
+    key: []const u8,
+    op: Cmp,
+    lit: LitValue,
+};
+
+/// Map an ast.BinOp to the fast-path Cmp, or null if unsupported.
+fn binOpToCmp(op: ast.BinOp) ?Cmp {
+    return switch (op) {
+        .Eq => .eq,
+        .Ne => .ne,
+        .Lt => .lt,
+        .Le => .le,
+        .Gt => .gt,
+        .Ge => .ge,
+        else => null,
+    };
+}
+
+/// If `op` is an ordering cmp (<, <=, >, >=), return its swapped form so we
+/// can normalise `literal OP var.prop` into `var.prop OP' literal`. For
+/// eq/ne the swap is the same op.
+fn swapCmp(op: Cmp) Cmp {
+    return switch (op) {
+        .eq => .eq,
+        .ne => .ne,
+        .lt => .gt,
+        .le => .ge,
+        .gt => .lt,
+        .ge => .le,
+    };
+}
+
+/// Extract a literal value from an AST expression (only primitive literals).
+/// Returns null for anything that would require per-row evaluation.
+fn extractLiteral(expr: ast.Expr) ?LitValue {
+    return switch (expr) {
+        .Int => |i| LitValue{ .Int = i },
+        .BigIntLit => |i| LitValue{ .Int = i },
+        .SmallIntLit => |i| LitValue{ .Int = @as(i64, i) },
+        .DoubleLit => |f| LitValue{ .Float = f },
+        .RealLit => |f| LitValue{ .Float = @as(f64, f) },
+        .String => |s| LitValue{ .Str = s },
+        .TextLit => |s| LitValue{ .Str = s },
+        .Bool => |b| LitValue{ .Bool = b },
+        .Unary => |u| blk: {
+            // Handle `-<number>` literals produced by the parser as Unary(Neg, Int).
+            if (u.op == .Neg) {
+                const inner = extractLiteral(u.expr.*) orelse break :blk null;
+                break :blk switch (inner) {
+                    .Int => |i| LitValue{ .Int = -i },
+                    .Float => |f| LitValue{ .Float = -f },
+                    else => null,
+                };
+            }
+            break :blk null;
+        },
+        else => null,
+    };
+}
+
+/// Decompose a WHERE expression into a simple `var.key OP literal` shape.
+/// Returns null on anything more complex (AND/OR/function calls/etc).
+/// Reuse the existing `extractVarProperty` helper (at line ~181) that
+/// handles both `.PropertyAccess` and `.Member` AST shapes and returns
+/// `{ variable, property }`. We wrap it here with a match_var check so
+/// callers can ask "is this var.prop for MY var?"
+fn extractBoundVarProperty(expr: ast.Expr, match_var: []const u8) ?[]const u8 {
+    const vp = extractVarProperty(expr) orelse return null;
+    if (!std.mem.eql(u8, vp.variable, match_var)) return null;
+    return vp.property;
+}
+
+fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
+    const bin = switch (where) {
+        .Binary => |b| b,
+        else => return null,
+    };
+    const cmp = binOpToCmp(bin.op) orelse return null;
+
+    // Try `var.prop OP literal` — either .PropertyAccess or .Member shape.
+    if (extractBoundVarProperty(bin.left.*, match_var)) |key| {
+        const lit = extractLiteral(bin.right.*) orelse return null;
+        return .{ .key = key, .op = cmp, .lit = lit };
+    }
+    // Try `literal OP var.prop` — swap to the canonical form.
+    if (extractBoundVarProperty(bin.right.*, match_var)) |key| {
+        const lit = extractLiteral(bin.left.*) orelse return null;
+        return .{ .key = key, .op = swapCmp(cmp), .lit = lit };
+    }
+    return null;
+}
+
+/// Coerce a property value to f64 for ordering comparisons.
+fn propToF64(pv: graph_store.PropertyValue) ?f64 {
+    return switch (pv) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Float => |f| f,
+        .Decimal => |d| @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale))),
+        else => null,
+    };
+}
+
+/// Coerce a property value to i64 if it's integer-typed.
+fn propToI64(pv: graph_store.PropertyValue) ?i64 {
+    return switch (pv) {
+        .Int => |i| i,
+        else => null,
+    };
+}
+
+/// Evaluate `pv OP lit` on the fast path. Returns false on type mismatches
+/// (lit `String` against numeric `pv`, etc.) and on null/unsupported types.
+fn comparePvLit(pv: graph_store.PropertyValue, op: Cmp, lit: LitValue) bool {
+    // Equality/inequality on strings (only eq/ne supported for strings).
+    if (pv == .String and lit == .Str) {
+        const eq = std.mem.eql(u8, pv.String, lit.Str);
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    if (pv == .Bool and lit == .Bool) {
+        const eq = pv.Bool == lit.Bool;
+        return switch (op) {
+            .eq => eq,
+            .ne => !eq,
+            else => false,
+        };
+    }
+    // Numeric path.
+    const left = propToF64(pv) orelse return false;
+    const right: f64 = switch (lit) {
+        .Int => |i| @as(f64, @floatFromInt(i)),
+        .Float => |f| f,
+        else => return false,
+    };
+    return switch (op) {
+        .eq => left == right,
+        .ne => left != right,
+        .lt => left < right,
+        .le => left <= right,
+        .gt => left > right,
+        .ge => left >= right,
+    };
+}
+
+// CANARY: REQ=REQ-PERF-QPS-0811; FEATURE="AggregateFastPath"; ASPECT=PropertyAggregate; STATUS=TESTED; TEST=tests/test_gap0811b_property_aggregate_fastpath.zig; OWNER=performance; UPDATED=2026-04-20
+// GAP-0811 Task 2.2: fast path for `MATCH (p:<Label>) [WHERE p.<k> OP lit]?
+// RETURN <agg>(p.<key>)` where <agg> is sum/avg/min/max (case-insensitive).
+//
+// Why this exists: the regular executor path still materialises every node
+// (labels + property map + graph_name dupe) before handing the single target
+// property to the aggregator. At the `large` scale
+// (`MATCH (p:LT_Person) WHERE p.age > 30 RETURN avg(p.age)`) that costs
+// ~900 ms — per-row materialize dominates. We walk the label posting list
+// instead and read only the property the aggregate needs (plus an optional
+// WHERE key), skipping `materializeNode`.
+//
+// Preconditions (all must hold, return null otherwise and let the regular
+// executor run):
+//   - single MATCH chain, single simple node pattern with exactly one label
+//   - no inline property predicate in the pattern
+//   - no FILTER, no WITH, no GROUP BY, no HAVING, no ORDER BY, no OFFSET
+//   - no SET, no DISTINCT in RETURN
+//   - RETURN has exactly one item whose expression is `<agg>(p.<key>)`
+//   - optional single-predicate WHERE of shape `p.<k> OP literal` where
+//     OP ∈ {=, !=, <, <=, >, >=}; no AND/OR
+//   - LIMIT null OR LIMIT > 0 (single aggregated row; LIMIT 0 → empty,
+//     bail)
+//   - no active RLS engine with an authenticated user (per-row RLS policy
+//     enforcement would require materialization)
+// Tenant filtering IS honoured: per-slot we check `node.tenant_id` against
+// `filter_tenant`.
+pub fn propertyAggregateFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null; // require exactly one label
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null; // need the binding name to link RETURN/WHERE
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.limit) |lim| {
+        if (lim == 0) return null;
+    }
+
+    // --- Extract the aggregate shape from RETURN ---
+    const item = q.ret.items[0];
+    const call = switch (item.expr) {
+        .Call => |c| c,
+        else => return null,
+    };
+    if (call.callee.* != .Ident) return null;
+    const fname = call.callee.Ident.orig;
+    const kind: AggKind = if (std.ascii.eqlIgnoreCase(fname, "sum"))
+        .sum
+    else if (std.ascii.eqlIgnoreCase(fname, "avg"))
+        .avg
+    else if (std.ascii.eqlIgnoreCase(fname, "min"))
+        .min
+    else if (std.ascii.eqlIgnoreCase(fname, "max"))
+        .max
+    else
+        return null;
+
+    if (call.args.len != 1) return null;
+    const arg = call.args[0].*;
+    const target_key: []const u8 = extractBoundVarProperty(arg, match_var) orelse return null;
+
+    // --- Optional simple WHERE predicate ---
+    const where_pred: ?SimpleWhere = if (q.where_clause) |w|
+        extractSimpleWhere(w, match_var) orelse return null
+    else
+        null;
+
+    // --- RLS bypass for correctness ---
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.user != null) {
+            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
+            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+        }
+    }
+
+    // --- Iterate the label posting list ---
+    // Mirror `countNodesFastPath`: prefer the handler-installed
+    // `QueryReadSession` snapshot (via `getGlobalStore`) so concurrent
+    // writers don't serialise behind the scan.
+    const writable_store = graph_store.getGlobalStore(allocator);
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
+    const read_store = read_view.getReadStore();
+
+    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+
+    // Accumulators. We keep both int and float paths so that pure-integer
+    // inputs yield Int results for sum/min/max (matching the regular
+    // aggregator) and mixed/decimal inputs promote to Double.
+    var sum_int: i64 = 0;
+    var sum_float: f64 = 0;
+    var has_float: bool = false; // any value observed as float/decimal
+    var count: u64 = 0;
+    var min_int: ?i64 = null;
+    var max_int: ?i64 = null;
+    var min_float: ?f64 = null;
+    var max_float: ?f64 = null;
+
+    if (posting) |slots| {
+        // Pointer to writable store because `getNodeProperty` is not const
+        // (it may lazily decrypt). The read_view keeps concurrent writers
+        // from deleting underneath us; here we only need the pointer type.
+        const prop_store: *graph_store.GraphStore = @constCast(read_store);
+        for (slots) |node_id| {
+            const node = read_store.nodes.get(node_id) orelse continue;
+            // Tenant filter (posting list is not partitioned by tenant).
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            // Optional WHERE filter — single property read.
+            if (where_pred) |p| {
+                const w_val = prop_store.getNodeProperty(node_id, p.key) orelse continue;
+                if (!comparePvLit(w_val, p.op, p.lit)) continue;
+            }
+            // Target property read.
+            const t_val = prop_store.getNodeProperty(node_id, target_key) orelse continue;
+
+            // Update accumulators based on the observed type.
+            const maybe_int = propToI64(t_val);
+            const maybe_f = propToF64(t_val) orelse continue; // skip non-numeric
+
+            count += 1;
+            if (maybe_int) |iv| {
+                // Overflow-safe integer accumulation for sum; fall through
+                // to float on overflow.
+                if (!has_float) {
+                    const r = @addWithOverflow(sum_int, iv);
+                    if (r[1] != 0) {
+                        has_float = true;
+                        sum_float = @as(f64, @floatFromInt(sum_int)) + @as(f64, @floatFromInt(iv));
+                    } else {
+                        sum_int = r[0];
+                    }
+                } else {
+                    sum_float += @as(f64, @floatFromInt(iv));
+                }
+                if (min_int == null or iv < min_int.?) min_int = iv;
+                if (max_int == null or iv > max_int.?) max_int = iv;
+            } else {
+                // Non-int numeric (Float/Decimal): promote sum to float.
+                if (!has_float) {
+                    has_float = true;
+                    sum_float = @as(f64, @floatFromInt(sum_int));
+                }
+                sum_float += maybe_f;
+            }
+            // Always maintain a float min/max alongside int min/max so we
+            // can return the correct type regardless of mix.
+            if (min_float == null or maybe_f < min_float.?) min_float = maybe_f;
+            if (max_float == null or maybe_f > max_float.?) max_float = maybe_f;
+        }
+    }
+
+    // --- Build result value per aggregate kind ---
+    const out_val: Value = switch (kind) {
+        .sum => blk: {
+            if (has_float) break :blk Value{ .Double = sum_float };
+            break :blk Value{ .Int = sum_int };
+        },
+        .avg => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            const total: f64 = if (has_float) sum_float else @as(f64, @floatFromInt(sum_int));
+            break :blk Value{ .Double = total / @as(f64, @floatFromInt(count)) };
+        },
+        .min => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            if (has_float) {
+                break :blk Value{ .Double = min_float.? };
+            }
+            break :blk Value{ .Int = min_int.? };
+        },
+        .max => blk: {
+            if (count == 0) break :blk Value{ .Null = {} };
+            if (has_float) {
+                break :blk Value{ .Double = max_float.? };
+            }
+            break :blk Value{ .Int = max_int.? };
+        },
+    };
+
+    // --- Column name: prefer explicit alias, else synthesize `<agg>(var.key)` ---
+    const col_name: []const u8 = if (item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try std.fmt.allocPrint(allocator, "{s}({s}.{s})", .{ fname, match_var, target_key });
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var row = try allocator.alloc(Value, 1);
+    row[0] = out_val;
+
+    var rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
+// GAP-0812 Task 3.1: direction of ORDER BY for the top-K fast path.
+const OrderDir = enum { asc, desc };
+
+/// Scratch entry held in the K-bounded heap. We keep the property value in
+/// its native type (int XOR float) so we can re-emit it with the same `Value`
+/// tag the slow path would — preserving Int → Int / Double → Double round-
+/// tripping. `node_id` is retained for future extensions (e.g., returning
+/// the node itself); for now only `val_*` is written back.
+const TopKEntry = struct {
+    // Exactly one of val_int / val_float is meaningful, per `is_float`.
+    val_int: i64 = 0,
+    val_float: f64 = 0,
+    is_float: bool = false,
+    node_id: u64 = 0,
+};
+
+/// Numeric comparison that keeps same-type compares lossless. Returns
+/// `true` iff `a < b`.
+fn entryLess(a: TopKEntry, b: TopKEntry) bool {
+    if (!a.is_float and !b.is_float) return a.val_int < b.val_int;
+    const af: f64 = if (a.is_float) a.val_float else @as(f64, @floatFromInt(a.val_int));
+    const bf: f64 = if (b.is_float) b.val_float else @as(f64, @floatFromInt(b.val_int));
+    return af < bf;
+}
+
+fn entryGreater(a: TopKEntry, b: TopKEntry) bool {
+    return entryLess(b, a);
+}
+
+/// Manual heap ops — std.heap.PriorityQueue in Zig 0.16 is a growable owning
+/// container and doesn't expose in-place sift over a pre-allocated slice.
+/// We only need min-heap (for DESC: kick the smallest) and max-heap (for
+/// ASC: kick the largest), so hand-rolled sift operations on an
+/// `ArrayList` buffer are simpler and allocation-free in the hot loop.
+fn heapSiftUp(items: []TopKEntry, start: usize, is_desc: bool) void {
+    var i = start;
+    while (i > 0) {
+        const parent = (i - 1) / 2;
+        const swap = if (is_desc)
+            entryLess(items[i], items[parent]) // min-heap: child smaller => bubble up
+        else
+            entryGreater(items[i], items[parent]); // max-heap: child larger => bubble up
+        if (!swap) break;
+        const tmp = items[i];
+        items[i] = items[parent];
+        items[parent] = tmp;
+        i = parent;
+    }
+}
+
+fn heapSiftDown(items: []TopKEntry, start: usize, is_desc: bool) void {
+    const n = items.len;
+    var i = start;
+    while (true) {
+        const l = 2 * i + 1;
+        const r = 2 * i + 2;
+        var target = i;
+        if (l < n) {
+            const swap_l = if (is_desc)
+                entryLess(items[l], items[target])
+            else
+                entryGreater(items[l], items[target]);
+            if (swap_l) target = l;
+        }
+        if (r < n) {
+            const swap_r = if (is_desc)
+                entryLess(items[r], items[target])
+            else
+                entryGreater(items[r], items[target]);
+            if (swap_r) target = r;
+        }
+        if (target == i) break;
+        const tmp = items[i];
+        items[i] = items[target];
+        items[target] = tmp;
+        i = target;
+    }
+}
+
+// CANARY: REQ=REQ-PERF-QPS-0812; FEATURE="TopKOrderedFastPath"; ASPECT=BoundedHeap; STATUS=TESTED; TEST=tests/test_gap0812_topk_streaming.zig; OWNER=performance; UPDATED=2026-04-20
+// GAP-0812 Task 3.1: fast path for
+//   `MATCH (p:<Label>) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`
+// where RETURN and ORDER BY target the same property on the same binding.
+//
+// Why this exists: the regular executor still builds every binding row,
+// materialises every matching node, and runs a full sort before applying
+// LIMIT. At 5000 nodes with LIMIT 50 the bench scenario `order_by_limit`
+// costs ~908 ms; we want streaming-with-heap behaviour that touches
+// ~N log K ≈ 30k compares and never materialises.
+//
+// Preconditions (all must hold, else return null and the caller falls
+// through to the regular executor):
+//   - single MATCH chain, single simple node pattern with exactly 1 label
+//   - no inline pattern properties; no WHERE/FILTER/WITH/GROUP BY/HAVING
+//   - no SET clauses, no DISTINCT in RETURN
+//   - RETURN has exactly 1 item whose expression is `<var>.<key>`
+//   - ORDER BY has exactly 1 key, same `<var>.<key>` as RETURN, ASC or DESC
+//   - no NULLS policy override (parser default is ok)
+//   - LIMIT literal, 0 < K <= 10_000 (beyond K~10k the heap cost dominates
+//     and sort-then-trim wins — bail)
+//   - no active RLS engine with an authenticated user
+// Tenant filtering IS honoured: per-slot we check `node.tenant_id`.
+pub fn topKOrderedFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.set_clauses.len != 0) return null;
+
+    // --- LIMIT must be a positive literal, bounded ---
+    const k_raw = q.limit orelse return null;
+    if (q.limit_param != null) return null; // parameterised LIMIT: bail
+    if (k_raw == 0) return null;
+    if (k_raw > 10_000) return null;
+    const k: usize = k_raw;
+    // Skip OFFSET — top-K with offset needs a larger K; let the slow path
+    // handle it cleanly.
+    if (q.offset) |off| {
+        if (off != 0) return null;
+    }
+
+    // --- RETURN shape ---
+    const ret_item = q.ret.items[0];
+    const ret_key = extractBoundVarProperty(ret_item.expr, match_var) orelse return null;
+
+    // --- ORDER BY shape ---
+    const order_by = q.order_by orelse return null;
+    if (order_by.keys.len != 1) return null;
+    const ob_key_entry = order_by.keys[0];
+    if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
+    const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
+    if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
+    const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
+
+    // --- RLS bypass for correctness ---
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.user != null) {
+            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
+            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+        }
+    }
+
+    // --- Iterate the label posting list + bounded heap ---
+    const writable_store = graph_store.getGlobalStore(allocator);
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
+    const read_store = read_view.getReadStore();
+    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+
+    // Heap buffer capacity K (never grows beyond K).
+    var heap = try std.ArrayList(TopKEntry).initCapacity(allocator, k);
+    defer heap.deinit(allocator);
+
+    const is_desc = (dir == .desc);
+
+    if (posting) |slots| {
+        const prop_store: *graph_store.GraphStore = @constCast(read_store);
+        for (slots) |node_id| {
+            const node = read_store.nodes.get(node_id) orelse continue;
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
+
+            // Build entry in native type. Skip non-numeric (parity with
+            // slow-path ordering which coerces via value comparators).
+            var entry: TopKEntry = .{ .node_id = node_id };
+            switch (pv) {
+                .Int => |iv| {
+                    entry.val_int = iv;
+                    entry.is_float = false;
+                },
+                .Float => |fv| {
+                    entry.val_float = fv;
+                    entry.is_float = true;
+                },
+                .Decimal => |d| {
+                    entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                    entry.is_float = true;
+                },
+                else => continue,
+            }
+
+            if (heap.items.len < k) {
+                heap.appendAssumeCapacity(entry);
+                heapSiftUp(heap.items, heap.items.len - 1, is_desc);
+            } else {
+                // Compare against heap root (the "worst" in our K-window).
+                // DESC → min-heap; a new entry must be GREATER than root to
+                // enter. ASC → max-heap; a new entry must be LESS than root.
+                const root = heap.items[0];
+                const should_insert = if (is_desc) entryLess(root, entry) else entryLess(entry, root);
+                if (!should_insert) continue;
+                heap.items[0] = entry;
+                heapSiftDown(heap.items, 0, is_desc);
+            }
+        }
+    }
+
+    // --- Extract K results in sorted order (final output order matches slow path) ---
+    // Ascending sort first, then reverse for DESC. Uses stable-enough heap
+    // pop order: we just sort the finished slice with std.mem.sort.
+    std.mem.sort(TopKEntry, heap.items, {}, struct {
+        fn lt(_: void, a: TopKEntry, b: TopKEntry) bool {
+            return entryLess(a, b);
+        }
+    }.lt);
+    if (is_desc) std.mem.reverse(TopKEntry, heap.items);
+
+    // --- Build ExecutionResult ---
+    // Column naming: mirror `generateUniqueColumnNames` — explicit alias,
+    // else `<var>.<key>`.
+    const col_name: []const u8 = if (ret_item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try std.fmt.allocPrint(allocator, "{s}.{s}", .{ match_var, ret_key });
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var rows = try allocator.alloc([]Value, heap.items.len);
+    for (heap.items, 0..) |entry, i| {
+        const row = try allocator.alloc(Value, 1);
+        row[0] = if (entry.is_float)
+            Value{ .Double = entry.val_float }
+        else
+            Value{ .Int = entry.val_int };
+        rows[i] = row;
+    }
 
     return ExecutionResult{
         .columns = columns,
@@ -4787,6 +5447,20 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // iterator-heavy aggregation path below. See `countNodesFastPath` for
     // the full list of preconditions and the triage that motivated this.
     if (try countNodesFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-0811 Task 2.2: property-aggregate fast-path for
+    // `MATCH (p:<L>) [WHERE p.<k> OP lit]? RETURN sum|avg|min|max(p.<key>)`.
+    // See `propertyAggregateFastPath` for preconditions — all unsupported
+    // shapes fall through to the regular executor below.
+    if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+    // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`.
+    // Walks the label posting list once with a K-bounded heap instead of
+    // materialising every node + full-sort + trim.
+    if (try topKOrderedFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
 

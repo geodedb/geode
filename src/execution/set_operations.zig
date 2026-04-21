@@ -2,6 +2,7 @@ const std = @import("std");
 const ast = @import("../gql/ast.zig");
 const eval = @import("../eval.zig");
 const value_types = @import("../value_types.zig");
+const graph_store = @import("../graph_store.zig");
 
 // Import from parent execution module
 const execution = @import("../execution.zig");
@@ -204,6 +205,23 @@ pub fn executeExcept(allocator: std.mem.Allocator, except_query: ast.BinarySet, 
 // CANARY: REQ=REQ-MULTI-GRAPH-UNION-002; FEATURE="MultiGraphIsolation"; ASPECT=UnionExecution; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-23
 // Fixed: UNION queries now properly propagate graph context to sub-queries
 pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.UnionQuery, context: ExecutionContext) !ExecutionResult {
+    // GAP-0814 Task 5.1: if every tail is a pure UNION / UNION ALL and the
+    // first arm did not leak variable_bindings (no CREATE-then-SELECT
+    // chains), dispatch each arm onto its own thread and merge on return.
+    // This halves wall-time for `A UNION B` when the two arms are
+    // independent scans. Non-eligible unions (intersect/except mixed in,
+    // or shared bindings from the first arm) fall through to the serial
+    // path below.
+    // CANARY: REQ=REQ-PERF-QPS-0814; FEATURE="ParallelUnionArms"; ASPECT=ForkJoin; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=performance; UPDATED=2026-04-20
+    if (unionArmsAreParallelEligible(union_query, context)) {
+        if (try tryParallelUnion(allocator, union_query, context)) |parallel_result| {
+            var result = parallel_result;
+            errdefer result.deinit(allocator);
+            try applyUnionPagination(allocator, &result, union_query, context);
+            return result;
+        }
+    }
+
     // Execute first query with context (for graph isolation)
     var result = try executeQueryNoLimitWithContext(allocator, union_query.first, context);
     errdefer result.deinit(allocator);
@@ -492,9 +510,22 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
         }
     }
 
+    try applyUnionPagination(allocator, &result, union_query, context);
+    return result;
+}
+
+/// Apply ORDER BY / OFFSET / LIMIT from a UNION query to the combined result.
+/// Extracted from `executeUnionWithContext` so the parallel fork-join path
+/// (GAP-0814 Task 5.1) can share the pagination logic.
+fn applyUnionPagination(
+    allocator: std.mem.Allocator,
+    result: *ExecutionResult,
+    union_query: ast.UnionQuery,
+    context: ExecutionContext,
+) !void {
     // Apply ORDER BY from the union query to the entire result
     if (union_query.order_by) |order| {
-        try sortRows(allocator, &result, order.*);
+        try sortRows(allocator, result, order.*);
     }
 
     // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled
@@ -595,6 +626,270 @@ pub fn executeUnionWithContext(allocator: std.mem.Allocator, union_query: ast.Un
             allocator.free(result.rows);
             result.rows = new_rows;
         }
+    }
+}
+
+/// GAP-0814 Task 5.1: decide if a UNION chain's arms can safely run in parallel.
+/// Only pure `UNION` / `UNION ALL` chains are eligible — if any tail is an
+/// intersect or except operation, that tail's semantics depend on the
+/// accumulated left-hand result so we must stay serial. A single-arm union
+/// (tails.len == 0) has no parallelism to exploit.
+///
+/// GAP-0814-cost-model (2026-04-20): additionally gate on a rough arm-cost
+/// heuristic — if EVERY arm's anchor label posting-list is below
+/// `PARALLEL_UNION_MIN_POSTING_SIZE`, the thread-spawn overhead
+/// (~10-15µs/arm) swamps any parallel savings, so stay serial. Arms whose
+/// cost we can't cheaply predict (subquery, WHERE clause, relationship
+/// hops, etc.) are treated as "expensive" and keep the parallel path — the
+/// conservative default when cost is unknown.
+///
+/// CANARY: REQ=REQ-PERF-QPS-0814; FEATURE="ParallelUnionArms"; ASPECT=CostModelThreshold; STATUS=TESTED; TEST=tests/test_gap0814_union_parallelism.zig; OWNER=performance; UPDATED=2026-04-20
+fn unionArmsAreParallelEligible(union_query: ast.UnionQuery, context: ExecutionContext) bool {
+    if (union_query.tails.len == 0) return false;
+    for (union_query.tails) |tail| {
+        if (tail.operation != .union_op) return false;
+    }
+
+    // Cost model: if EVERY arm has a predictably small anchor posting-list,
+    // serial execution is cheaper than thread-spawn.
+    const current_graph = if (context.session_state) |session| session.graph else null;
+    const graph = current_graph orelse "default";
+
+    var all_small = true;
+    if (predictArmRowCount(union_query.first, graph)) |n| {
+        if (n >= PARALLEL_UNION_MIN_POSTING_SIZE) all_small = false;
+    } else {
+        all_small = false; // unknown cost → treat as expensive (parallel)
+    }
+
+    if (all_small) {
+        for (union_query.tails) |tail| {
+            if (predictArmRowCount(tail.query, graph)) |n| {
+                if (n >= PARALLEL_UNION_MIN_POSTING_SIZE) {
+                    all_small = false;
+                    break;
+                }
+            } else {
+                all_small = false;
+                break;
+            }
+        }
+    }
+
+    if (all_small) return false; // every arm below threshold → serial
+
+    return true;
+}
+
+/// Below this posting-list size, serial UNION is cheaper than spawning a
+/// thread per arm. 500 is the starting-point calibration from the
+/// GAP-0814-cost-model A/B — tune up/down if wall-time evidence shifts.
+const PARALLEL_UNION_MIN_POSTING_SIZE: usize = 500;
+
+/// GAP-0814-cost-model: predict the row-count a single UNION arm will
+/// emit, using the anchor label's posting-list size. Returns null if the
+/// query shape is too complex to predict cheaply (subquery, WHERE clause,
+/// multi-hop pattern, multi-chain pattern, etc.) — callers interpret null
+/// as "unknown/expensive" and keep the parallel path.
+fn predictArmRowCount(q: ast.Query, graph: []const u8) ?usize {
+    // Only predict single-chain, no-hop, single-label MATCH shapes.
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+
+    // Too complex to predict row-count cheaply: a WHERE, UNWIND, LET, CTE
+    // pattern, CALL, subquery, chain-follow-on, or CREATE-after-MATCH can
+    // all drastically change the emit count. Bail so the caller treats
+    // this arm as "expensive" and keeps parallel.
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.unwind_clause != null) return null;
+    if (q.let_bindings.len != 0) return null;
+    if (q.inline_let_bindings.len != 0) return null;
+    if (q.cte_list != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.next_query != null) return null;
+    if (q.create_pattern != null) return null;
+    if (q.merge_statement != null) return null;
+
+    // Read-only: getNodesByLabel is an O(1) map lookup into the label index,
+    // no allocator required (GAP-0814-cost-model Task 2.1 verified).
+    const store = graph_store.getCurrentGlobalStore() orelse return null;
+    const posting = store.getNodesByLabel(graph, head.labels[0]) orelse return 0;
+    return posting.len;
+}
+
+const ArmJob = struct {
+    query: ast.Query,
+    context: ExecutionContext,
+    allocator: std.mem.Allocator,
+    result: ?ExecutionResult = null,
+    err: ?anyerror = null,
+
+    fn runnerEntry(self: *ArmJob) void {
+        // Each thread gets its own threadlocal active context via
+        // `executeQueryNoLimitWithContext` -> `executeQueryWithContext`
+        // which pushes/pops `g_active_context`. No shared mutable state.
+        self.result = executeQueryNoLimitWithContext(self.allocator, self.query, self.context) catch |err| {
+            self.err = err;
+            return;
+        };
+    }
+};
+
+/// GAP-0814 Task 5.1: fork-join all union arms, then merge.
+/// Returns `null` if parallelism was elected not to be used (e.g. thread
+/// spawn failure), signalling the caller to take the serial path. Any
+/// per-arm execution error is propagated up.
+fn tryParallelUnion(
+    allocator: std.mem.Allocator,
+    union_query: ast.UnionQuery,
+    context: ExecutionContext,
+) !?ExecutionResult {
+    const arm_count = union_query.tails.len + 1;
+    std.debug.assert(arm_count >= 2);
+
+    var jobs = try allocator.alloc(ArmJob, arm_count);
+    defer allocator.free(jobs);
+
+    // Arm 0: the first query. Arms 1..N: each tail's query (preserves
+    // original left-to-right order so UNION DISTINCT merge is stable).
+    jobs[0] = .{ .query = union_query.first, .context = context, .allocator = allocator };
+    for (union_query.tails, 0..) |tail, i| {
+        jobs[i + 1] = .{ .query = tail.query, .context = context, .allocator = allocator };
+    }
+
+    // Spawn a thread for every arm except the last, which we run on the
+    // calling thread. This keeps worker count == arm_count - 1 and avoids
+    // the overhead of self-submitting the final arm to the pool.
+    const spawn_count = arm_count - 1;
+    var threads = try allocator.alloc(std.Thread, spawn_count);
+    defer allocator.free(threads);
+
+    var spawned: usize = 0;
+    errdefer {
+        // Join anything we already spawned so threads can complete their
+        // alloc/free traffic against `allocator` before we return the error.
+        for (threads[0..spawned]) |*t| t.join();
+        // Clean up any arm results that made it back.
+        for (jobs) |*job| {
+            if (job.result) |*res| res.deinit(allocator);
+        }
+    }
+
+    while (spawned < spawn_count) {
+        threads[spawned] = std.Thread.spawn(.{}, ArmJob.runnerEntry, .{&jobs[spawned]}) catch {
+            // Thread spawn failure: signal caller to fall back to serial.
+            // We haven't mutated any result state yet beyond jobs[0..spawned]
+            // which we tear down via errdefer. Return null through a
+            // sentinel error path.
+            for (threads[0..spawned]) |*t| t.join();
+            for (jobs) |*job| {
+                if (job.result) |*res| res.deinit(allocator);
+            }
+            return null;
+        };
+        spawned += 1;
+    }
+
+    // Run the last arm inline on the calling thread — saves one thread
+    // round-trip and keeps the happy-path latency close to max(arm_ns).
+    jobs[arm_count - 1].runnerEntry();
+
+    // Join all workers.
+    for (threads) |*t| t.join();
+
+    // Propagate the first error, if any.
+    for (jobs) |*job| {
+        if (job.err) |e| {
+            for (jobs) |*j2| {
+                if (j2.result) |*res| res.deinit(allocator);
+            }
+            return e;
+        }
+    }
+
+    // Merge: take arm 0 as the accumulator (takes ownership of its rows),
+    // then walk arms 1..N applying UNION ALL / UNION DISTINCT semantics
+    // against the accumulator in the original order.
+    var result = jobs[0].result.?;
+    jobs[0].result = null; // transfer ownership so defer cleanup skips it
+    errdefer result.deinit(allocator);
+
+    for (union_query.tails, 0..) |tail, tail_idx| {
+        const job_idx = tail_idx + 1;
+        var part_result = jobs[job_idx].result.?;
+        jobs[job_idx].result = null;
+        defer part_result.deinit(allocator);
+
+        if (part_result.columns.len != result.columns.len) {
+            return error.UnionColumnCountMismatch;
+        }
+
+        if (tail.all) {
+            // UNION ALL — append all rows, duplicating values since
+            // part_result will free them on deinit.
+            const old_rows = result.rows;
+            const new_total = old_rows.len + part_result.rows.len;
+            result.rows = try allocator.alloc([]Value, new_total);
+            for (old_rows, 0..) |row, i| result.rows[i] = row;
+            for (part_result.rows, 0..) |row, i| {
+                const new_row = try allocator.alloc(Value, row.len);
+                for (row, 0..) |val, j| new_row[j] = val;
+                result.rows[old_rows.len + i] = new_row;
+            }
+            allocator.free(old_rows);
+        } else {
+            // UNION DISTINCT — deduplicate across accumulator + incoming arm.
+            var new_rows = try std.ArrayList([]Value).initCapacity(
+                allocator,
+                result.rows.len + part_result.rows.len,
+            );
+
+            for (result.rows) |row| {
+                var is_duplicate = false;
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        is_duplicate = true;
+                        break;
+                    }
+                }
+                if (!is_duplicate) {
+                    const new_row = try allocator.alloc(Value, row.len);
+                    for (row, 0..) |val, j| new_row[j] = val;
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+
+            for (part_result.rows) |row| {
+                var is_duplicate = false;
+                for (new_rows.items) |existing_row| {
+                    if (rowsEqual(row, existing_row)) {
+                        is_duplicate = true;
+                        break;
+                    }
+                }
+                if (!is_duplicate) {
+                    const new_row = try allocator.alloc(Value, row.len);
+                    for (row, 0..) |val, j| new_row[j] = val;
+                    try new_rows.append(allocator, new_row);
+                }
+            }
+
+            // Free the old accumulator rows — we've copied anything we needed.
+            for (result.rows) |row| allocator.free(row);
+            allocator.free(result.rows);
+
+            result.rows = try new_rows.toOwnedSlice(allocator);
+        }
+    }
+
+    // Clear any remaining job results (should be none after the merge loop).
+    for (jobs) |*job| {
+        if (job.result) |*res| res.deinit(allocator);
     }
 
     return result;

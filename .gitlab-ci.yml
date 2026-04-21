@@ -5,9 +5,13 @@
 
 include:
   # Zig code formatting and quality check
+  # CI-FIX: pinned to project's Zig version (0.16.0). Previously "0.15.2"
+  # which caused Exec-format-error on ARM64 runners because that version
+  # wasn't available for the catalog component's download script. All
+  # other CI jobs already use ZIG_VERSION=0.16.0 from the global vars.
   - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
     inputs:
-      zig_version: "0.15.2"
+      zig_version: "0.16.0"
       paths: "src/"
       stage: lint
       allow_failure: false
@@ -1011,7 +1015,14 @@ test-harness-integration:
 security-secrets:
   stage: security
   needs: []  # Run independently of test stage
-  image: zricethezav/gitleaks:v8.24.2
+  # CI-FIX: GitLab's runner wraps `script:` commands in `sh -c "..."`, but
+  # the gitleaks image's ENTRYPOINT is the `gitleaks` binary itself — so
+  # the runner invokes `gitleaks sh -c "..."` which fails with "unknown
+  # command sh for gitleaks". Override the entrypoint to an empty string
+  # so the runner's shell wrapper works.
+  image:
+    name: zricethezav/gitleaks:v8.24.2
+    entrypoint: [""]
   script:
     - gitleaks detect --source . --config .gitleaks.toml --redact --no-git --exit-code 1
   rules:
@@ -1023,7 +1034,12 @@ security-secrets:
 security-trivy:
   stage: security
   needs: []  # Run independently of test stage
-  image: aquasec/trivy:0.58.1
+  # CI-FIX: same entrypoint override as security-secrets above — trivy
+  # image's ENTRYPOINT is the `trivy` binary so the runner's `sh -c ...`
+  # wrap becomes `trivy sh -c "..."`. Override to empty string.
+  image:
+    name: aquasec/trivy:0.58.1
+    entrypoint: [""]
   retry:
     max: 2
     when:

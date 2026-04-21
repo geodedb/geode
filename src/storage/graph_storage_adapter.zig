@@ -888,6 +888,75 @@ pub const StorageAdapter = struct {
         return node_id;
     }
 
+    // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
+    /// Allocate `n` node slots in the given graph + attach the same label set
+    /// to each, under a SINGLE adapter mutex acquisition (vs N for N separate
+    /// `createNode` calls). Caller owns the returned `[]u64`.
+    ///
+    /// Rationale: `createNode` calls `getOrCreateGraph` each invocation,
+    /// which takes `self.mutex` once per call. For N homogeneous CREATE
+    /// clauses this is the dominant per-clause overhead (the engine-level
+    /// `allocNode` / `putNode` / `addLabel` work itself runs lock-free
+    /// afterward). This variant resolves the `ManagedGraph` once and then
+    /// caches label-id lookups across all N slots.
+    ///
+    /// Returns node slot IDs in the same order as their allocation (which
+    /// is the order they are handed to the caller and the order they
+    /// should be inserted into higher-level indices — e.g. GraphStore's
+    /// label-posting-list append).
+    pub fn createNodesBatch(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        labels: []const []const u8,
+        n: usize,
+        out_allocator: Allocator,
+    ) ![]u64 {
+        if (n == 0) return try out_allocator.alloc(u64, 0);
+
+        // Single adapter-mutex acquisition for the graph lookup (see
+        // `getOrCreateGraph`). The ManagedGraph pointer is stable once
+        // registered; subsequent engine operations don't need the adapter
+        // mutex.
+        const mg = try self.getOrCreateGraph(graph_name);
+
+        // Resolve label strings → label ids once; apply to every new slot.
+        var label_ids_buf: [8]gs.LabelId = undefined;
+        var label_ids: []gs.LabelId = if (labels.len <= label_ids_buf.len)
+            label_ids_buf[0..labels.len]
+        else
+            try self.allocator.alloc(gs.LabelId, labels.len);
+        defer if (labels.len > label_ids_buf.len) self.allocator.free(label_ids);
+        for (labels, 0..) |lbl, i| {
+            label_ids[i] = try mg.label_dict.getOrCreate(lbl);
+        }
+
+        const rec_template = gs.node.NodeRec{
+            .out_head = 0,
+            .in_head = 0,
+            .prop_head = 0,
+            .label_head = 0,
+            .label_count = 0,
+            .flags = 0,
+            ._pad = .{ 0, 0, 0, 0 },
+            .txn_stamp = 1,
+        };
+
+        const out = try out_allocator.alloc(u64, n);
+        errdefer out_allocator.free(out);
+
+        var i: usize = 0;
+        while (i < n) : (i += 1) {
+            const node_id = try mg.engine.allocNode();
+            try mg.engine.putNode(node_id, rec_template);
+            for (label_ids) |label_id| {
+                try mg.engine.addLabel(node_id, label_id);
+            }
+            out[i] = node_id;
+        }
+
+        return out;
+    }
+
     /// Delete a node by ID in the named graph.
     pub fn deleteNode(self: *StorageAdapter, graph_name: []const u8, node_id: u64) !void {
         const mg = blk: {

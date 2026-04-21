@@ -384,6 +384,21 @@ pub fn build(b: *std.Build) void {
 
     // Create root module early so it can be used by executables
     const root_mod = b.createModule(.{ .root_source_file = b.path("src/lib.zig"), .target = target, .optimize = optimize });
+
+    // GAP-0810: `server/query_ast_cache.zig` must be reachable from both the
+    // public `geode` module (for `parseGqlCached`/`SharedAstCache` re-exports)
+    // AND from the server files that already use it. Zig forbids a file from
+    // appearing in two modules' file sets, so promote it to its own named
+    // module that everyone imports via `@import("query_ast_cache")`. The file
+    // itself still references `geode` types, so we wire the `geode` import
+    // back on the cache module.
+    const query_ast_cache_mod = b.createModule(.{
+        .root_source_file = b.path("src/server/query_ast_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    query_ast_cache_mod.addImport("geode", root_mod);
+    root_mod.addImport("query_ast_cache", query_ast_cache_mod);
     // Transport/QUIC for kms_remote dependency chain (lib -> execution -> procedure_registry -> kms -> kms_remote)
     root_mod.addImport("transport/quic", transport_quic_mod);
     root_mod.addImport("vendor_quic", quic_ext_mod); // External library replaces vendored QUIC
@@ -451,6 +466,9 @@ pub fn build(b: *std.Build) void {
     });
     geode_exe.root_module.addImport("build_options", build_options_mod);
     geode_exe.root_module.addImport("geode", root_mod);
+    // GAP-0810: named-module form to keep a single owning module for
+    // server/query_ast_cache.zig across lib.zig and server files.
+    geode_exe.root_module.addImport("query_ast_cache", query_ast_cache_mod);
 
     // Phase 1 External Library Imports for CLI
     geode_exe.root_module.addImport("yaml", yaml_mod);
@@ -786,6 +804,161 @@ pub fn build(b: *std.Build) void {
     }) });
     gap0809_where_fastpath_tests.root_module.addImport("geode", root_mod);
     const run_gap0809_where_fastpath_tests = b.addRunArtifact(gap0809_where_fastpath_tests);
+
+    // GAP-0810: public `parseGqlCached` wrapper exposes `SharedAstCache` on
+    // the geode module surface so in-process callers can reuse the parse
+    // cache.
+    const gap0810_parse_cache_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_parse_cache_wrapper.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_parse_cache_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_parse_cache_tests = b.addRunArtifact(gap0810_parse_cache_tests);
+
+    // GAP-0810 Task 1.3: cross-subsystem cache wiring — materialized-view
+    // refresh + distributed coordinator now share the server's shared AST
+    // cache via optional `ast_cache` fields + `setAstCache()` methods.
+    const gap0810_cross_subsystem_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_cross_subsystem_cache.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_cross_subsystem_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_cross_subsystem_tests = b.addRunArtifact(gap0810_cross_subsystem_tests);
+
+    // GAP-0810 INVESTIGATE: regression reproducer — opt-in via
+    // `zig build test-gap0810-regression`.  This exercises the
+    // cached-AST-reuse-after-store-reset path described in
+    // docs/performance/2026-04-20-query-bench/gap0810-investigation.md.
+    const gap0810_regression_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0810_reproduce_regression.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0810_regression_tests.root_module.addImport("geode", root_mod);
+    const run_gap0810_regression_tests = b.addRunArtifact(gap0810_regression_tests);
+    const gap0810_regression_step = b.step("test-gap0810-regression", "GAP-0810 investigation reproducer");
+    gap0810_regression_step.dependOn(&run_gap0810_regression_tests.step);
+
+    // GAP-0821: multi-label MATCH diagnostic — probes the claim that
+    // `MATCH (p:LT_Person)` runs 9x slower when the store also contains
+    // unrelated LT_Company nodes. Measures smp_allocator vs DebugAllocator
+    // separately so we can tell a real regression from a GAP-0810-shaped
+    // allocator artifact. Opt-in via `zig build test-gap0821-multilabel-match-diagnostic`.
+    const gap0821_multilabel_diag_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0821_multilabel_match_diagnostic.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0821_multilabel_diag_tests.root_module.addImport("geode", root_mod);
+    const run_gap0821_multilabel_diag_tests = b.addRunArtifact(gap0821_multilabel_diag_tests);
+    const gap0821_multilabel_diag_step = b.step(
+        "test-gap0821-multilabel-match-diagnostic",
+        "GAP-0821 diagnostic: multi-label MATCH slowdown claim",
+    );
+    gap0821_multilabel_diag_step.dependOn(&run_gap0821_multilabel_diag_tests.step);
+
+    // GAP-0811 Task 2.1: label-scoped count fast-path via label-index
+    // cardinality — `MATCH (p:Label) RETURN count(p)` now routes through
+    // `countNodesByLabel` O(1) posting-list length instead of the per-node
+    // materialize loop.
+    const gap0811_aggregation_fastpath_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0811_aggregation_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0811_aggregation_fastpath_tests.root_module.addImport("geode", root_mod);
+    const run_gap0811_aggregation_fastpath_tests = b.addRunArtifact(gap0811_aggregation_fastpath_tests);
+
+    // GAP-0811 Task 2.2: property-aggregate fast-path for
+    // `MATCH (p:Label) RETURN sum|avg|min|max(p.key)` — iterates the label
+    // posting list and calls `getNodeProperty(node_id, key)` per slot, so
+    // no materializeNode / graph_name dupe / full-property-map dupe runs
+    // per row. Optional simple-WHERE (`p.k OP literal`) is supported.
+    const gap0811b_property_aggregate_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0811b_property_aggregate_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0811b_property_aggregate_tests.root_module.addImport("geode", root_mod);
+    const run_gap0811b_property_aggregate_tests = b.addRunArtifact(gap0811b_property_aggregate_tests);
+
+    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+    // `MATCH (p:Label) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`
+    // — walks the label posting list once with a K-bounded heap over the
+    // ordered property, skipping the materialize-every-node + full-sort
+    // path taken by the regular executor.
+    const gap0812_topk_streaming_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0812_topk_streaming.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0812_topk_streaming_tests.root_module.addImport("geode", root_mod);
+    const run_gap0812_topk_streaming_tests = b.addRunArtifact(gap0812_topk_streaming_tests);
+
+    // GAP-0813 Task 4.1: projection-pruned materialize for multi-hop path
+    // queries. When the RETURN clause references only a small set of
+    // `<var>.<key>` property accesses (and all other references to bound
+    // variables are similarly pure), `materializePathRow` fetches only
+    // those keys per node instead of allocating a full property map +
+    // dupe'd graph_name per hop.
+    const gap0813_bulk_materialize_path_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0813_bulk_materialize_path.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0813_bulk_materialize_path_tests.root_module.addImport("geode", root_mod);
+    const run_gap0813_bulk_materialize_path_tests = b.addRunArtifact(gap0813_bulk_materialize_path_tests);
+
+    // GAP-0814 Task 5.1: parallelize independent UNION arms via thread
+    // fork-join so the two (or more) legs of a `A UNION [ALL] B` don't
+    // execute serially. Arms that don't share state (no bindings from a
+    // prior CREATE arm, pure unions) are dispatched to worker threads
+    // and their rows are merged on the main thread.
+    const gap0814_union_parallelism_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0814_union_parallelism.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0814_union_parallelism_tests.root_module.addImport("geode", root_mod);
+    const run_gap0814_union_parallelism_tests = b.addRunArtifact(gap0814_union_parallelism_tests);
+
+    // GAP-0815 Task 6.1: batch-CREATE fast path for homogeneous inline node
+    // patterns. A single query with N >= 3 `CREATE (:Label {...}), ...`
+    // clauses that share label set + prop-key set should allocate slots
+    // in one pass and write properties via setNodePropertiesBatch (one
+    // adapter lock per node instead of one per property setter).
+    const gap0815_batch_create_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0815_batch_create.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0815_batch_create_tests.root_module.addImport("geode", root_mod);
+    const run_gap0815_batch_create_tests = b.addRunArtifact(gap0815_batch_create_tests);
+
+    // GAP-0815-deep: adapter-level bulk node-slot allocation. Collapses the
+    // N per-clause `getOrCreateGraph` mutex acquisitions + the N label-index
+    // sortedInsert operations from the shallow batch path into ONE adapter
+    // lock + one pre-sized label-posting-list append pass.
+    const gap0815_deep_bulk_create_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0815_deep_bulk_create.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0815_deep_bulk_create_tests.root_module.addImport("geode", root_mod);
+    const run_gap0815_deep_bulk_create_tests = b.addRunArtifact(gap0815_deep_bulk_create_tests);
 
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
@@ -1422,6 +1595,8 @@ pub fn build(b: *std.Build) void {
     compare_bench_test.root_module.addImport("compare_bench", compare_bench_mod);
     const run_compare_bench_test = b.addRunArtifact(compare_bench_test);
     test_perf_step.dependOn(&run_compare_bench_test.step);
+    // GAP-0810 regression reproducer — pins the parse-cache reuse envelope.
+    test_perf_step.dependOn(&run_gap0810_regression_tests.step);
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
@@ -1438,6 +1613,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_point_read_view_zero_copy_tests.step);
     test_step.dependOn(&run_point_read_view_mutation_tests.step);
     test_step.dependOn(&run_gap0809_where_fastpath_tests.step);
+    test_step.dependOn(&run_gap0810_parse_cache_tests.step);
+    test_step.dependOn(&run_gap0810_cross_subsystem_tests.step);
+    test_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
+    test_step.dependOn(&run_gap0811b_property_aggregate_tests.step);
+    test_step.dependOn(&run_gap0812_topk_streaming_tests.step);
+    test_step.dependOn(&run_gap0813_bulk_materialize_path_tests.step);
+    test_step.dependOn(&run_gap0814_union_parallelism_tests.step);
+    test_step.dependOn(&run_gap0815_batch_create_tests.step);
+    test_step.dependOn(&run_gap0815_deep_bulk_create_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);

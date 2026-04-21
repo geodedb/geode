@@ -63,6 +63,13 @@ pub const QueryCoordinator = struct {
     metrics: CoordinatorMetrics,
     stats_registry: ?*cbo.StatsRegistry = null, // GAP-0077: Optional statistics registry
     pool: parallel_wrapper.ParallelPool, // PERF-D007: Reuse pool across queries
+    // GAP-0810: optional shared AST cache. When wired by the server via
+    // setAstCache(), local-fragment parses route through `parseGqlCached`
+    // so repeated fragment shapes amortize the parser cost across queries
+    // and across subsystems. Null means "no cache — fall back to parseGql",
+    // preserving every standalone caller (tests, shell invocation).
+    // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="SharedAstCache"; ASPECT=CoordinatorWiring; STATUS=TESTED; TEST=tests/test_gap0810_cross_subsystem_cache.zig; OWNER=performance; UPDATED=2026-04-20
+    ast_cache: ?*@import("../lib.zig").SharedAstCache = null,
 
     const Self = @This();
 
@@ -75,7 +82,16 @@ pub const QueryCoordinator = struct {
             .node_registry = try NodeRegistry.init(allocator),
             .metrics = CoordinatorMetrics.init(),
             .pool = parallel_wrapper.ParallelPool.init(allocator, null),
+            .ast_cache = null,
         };
+    }
+
+    /// GAP-0810: wire a process-wide shared AST cache into the coordinator.
+    /// The server calls this at startup with `ServerState.shared_ast_cache`
+    /// so that local fragment parses reuse handles across queries. Pass null
+    /// to disable; cache lifetime must outlive the coordinator.
+    pub fn setAstCache(self: *Self, cache: ?*@import("../lib.zig").SharedAstCache) void {
+        self.ast_cache = cache;
     }
 
     pub fn deinit(self: *Self) void {
@@ -281,17 +297,53 @@ pub const QueryCoordinator = struct {
         const lib = @import("../lib.zig");
         const execution = @import("../execution.zig");
 
-        const parse_result = lib.parseGql(query_text, self.allocator) catch |err| {
-            // On parse error, return empty result with error indication
-            _ = err;
-            return federation.QueryResults{
-                .rows = &.{},
-                .schema = &.{},
-                .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
-                .ordered = false,
+        // GAP-0810: route through shared AST cache when the server has wired
+        // one — repeated fragment shapes amortize the parser cost. The
+        // cache-owned handle lives until exec_result.deinit below, so we
+        // capture both and release/deinit in reverse order via `defer`.
+        var ast_handle: ?@import("../lib.zig").AstHandle = null;
+        var owned_parse_result: ?lib.ParseResult = null;
+        defer {
+            if (ast_handle) |*h| h.release();
+            if (owned_parse_result) |*pr| pr.deinit();
+        }
+
+        const parse_result: *const lib.ParseResult = parse_blk: {
+            if (self.ast_cache) |cache| {
+                const outcome = lib.parseGqlCached(cache, query_text, .{}) catch {
+                    return federation.QueryResults{
+                        .rows = &.{},
+                        .schema = &.{},
+                        .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
+                        .ordered = false,
+                    };
+                };
+                switch (outcome) {
+                    .Err => {
+                        return federation.QueryResults{
+                            .rows = &.{},
+                            .schema = &.{},
+                            .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
+                            .ordered = false,
+                        };
+                    },
+                    .Ok => |h| {
+                        ast_handle = h;
+                        break :parse_blk h.parse_result;
+                    },
+                }
+            }
+            const pr = lib.parseGql(query_text, self.allocator) catch {
+                return federation.QueryResults{
+                    .rows = &.{},
+                    .schema = &.{},
+                    .execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time)),
+                    .ordered = false,
+                };
             };
+            owned_parse_result = pr;
+            break :parse_blk &owned_parse_result.?;
         };
-        defer parse_result.deinit();
 
         // Get execution context
         const catalog = execution.ensureCatalogInstance(self.allocator) catch {
