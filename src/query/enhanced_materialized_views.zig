@@ -45,6 +45,9 @@ const graph_storage = @import("../types/graph_common.zig");
 const mvcc = @import("../server/txn/mvcc.zig");
 const Parser = @import("../gql/parser.zig").Parser;
 const Lexer = @import("../gql/lexer.zig").Lexer;
+// GAP-0810: optional shared AST cache surface (mirrors Task 1.3 wiring in
+// `src/query/materialized_views.zig`). See `setAstCache()` below.
+const lib = @import("../lib.zig");
 
 /// Complete materialized view management system with refresh logic
 pub const MaterializedViewManager = struct {
@@ -54,6 +57,16 @@ pub const MaterializedViewManager = struct {
     refresh_scheduler: RefreshScheduler,
     query_rewriter: QueryRewriter,
     metrics: ViewMetrics,
+    // GAP-0810: optional shared AST cache. When wired by the server via
+    // `setAstCache()`, scope-bounded parses (currently the query-rewrite
+    // path in `QueryRewriter.findApplicableViews`) route through
+    // `lib.parseGqlCached` so identical incoming-query shapes amortize the
+    // parser cost. Null means "no cache -- fall back to the direct
+    // Parser/Lexer path", which preserves every existing standalone caller
+    // (tests, shell, benches). See also the long-lifetime caveat on
+    // `parseAndValidateQuery` below.
+    // CANARY: REQ=REQ-PERF-QPS-0810; FEATURE="SharedAstCache"; ASPECT=EnhancedViewWiring; STATUS=IMPL; TEST=tests/test_gap0810_cross_subsystem_cache.zig; OWNER=performance; UPDATED=2026-04-20
+    ast_cache: ?*lib.SharedAstCache = null,
 
     pub fn init(allocator: Allocator) !MaterializedViewManager {
         return MaterializedViewManager{
@@ -63,7 +76,27 @@ pub const MaterializedViewManager = struct {
             .refresh_scheduler = try RefreshScheduler.init(allocator),
             .query_rewriter = try QueryRewriter.init(allocator),
             .metrics = ViewMetrics.init(),
+            .ast_cache = null,
         };
+    }
+
+    /// GAP-0810: wire a process-wide shared AST cache into the enhanced
+    /// view manager. The server is expected to call this at startup with
+    /// `ServerState.shared_ast_cache` so query-rewrite parses reuse handles
+    /// across refresh cycles and across subsystems (QUIC handler,
+    /// distributed coordinator, classic view manager). Pass null to
+    /// disable; cache lifetime must outlive the manager.
+    ///
+    /// Note: at the time of writing (2026-04-20) the enhanced manager is
+    /// not yet constructed anywhere in `src/server/*`, so this hook is
+    /// present-but-dormant in production. See
+    /// `docs/performance/2026-04-20-query-bench/enhanced-manager-cache-note.md`
+    /// for the disposition.
+    pub fn setAstCache(self: *MaterializedViewManager, cache: ?*lib.SharedAstCache) void {
+        self.ast_cache = cache;
+        // Propagate into the nested rewriter -- that's the only parse
+        // callsite here with a scope-bounded lifetime that's safe to cache.
+        self.query_rewriter.ast_cache = cache;
     }
 
     pub fn deinit(self: *MaterializedViewManager) void {
@@ -1112,10 +1145,15 @@ const RefreshScheduler = struct {
 // CANARY: REQ=REQ-MATVIEW-REWRITE-001; FEATURE="Query Rewriting for Materialized Views"; ASPECT=QueryRewrite; STATUS=TESTED; TEST=geodetestlab/specs/geode_advanced_features.yml; OWNER=query; UPDATED=2026-01-08
 const QueryRewriter = struct {
     allocator: Allocator,
+    // GAP-0810: same optional cache surface as `MaterializedViewManager`;
+    // wired via `MaterializedViewManager.setAstCache()`. Null preserves
+    // the existing arena-backed parse path.
+    ast_cache: ?*lib.SharedAstCache = null,
 
     fn init(allocator: Allocator) !QueryRewriter {
         return QueryRewriter{
             .allocator = allocator,
+            .ast_cache = null,
         };
     }
 
@@ -1128,7 +1166,37 @@ const QueryRewriter = struct {
         query: []const u8,
         catalog: *ViewCatalog,
     ) !?QueryRewrite {
-        // Parse the incoming query to extract patterns
+        // GAP-0810: when the server has wired a shared AST cache, route
+        // through it so identical incoming-query shapes amortize the
+        // parser cost. This parse site is scope-bounded -- both branches
+        // read `incoming_query` only within this function, which is why
+        // it's safe to release the cache handle (or deinit the arena) at
+        // end of scope. Long-lifetime parse sites in this file (see
+        // `parseAndValidateQuery` above) are deliberately NOT cached
+        // because they leak arena-backed string slices into the view
+        // catalog.
+        if (self.ast_cache) |cache| {
+            const outcome = lib.parseGqlCached(cache, query, .{}) catch {
+                return null;
+            };
+            var handle = switch (outcome) {
+                .Err => return null,
+                .Ok => |h| h,
+            };
+            defer handle.release();
+
+            const program = handle.parse_result.program;
+            if (program.statements.len == 0) return null;
+            const incoming_query = switch (program.statements[0]) {
+                .Query => |q| q,
+                .Union => |u| u.first,
+                else => return null,
+            };
+            return try self.buildRewriteForQuery(query, incoming_query, catalog);
+        }
+
+        // Fallback: arena-backed direct parse (preserves behavior for
+        // every existing caller that hasn't called `setAstCache`).
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
@@ -1152,6 +1220,22 @@ const QueryRewriter = struct {
             else => return null,
         };
 
+        return try self.buildRewriteForQuery(query, incoming_query, catalog);
+    }
+
+    // GAP-0810: shared body used by both the cached and uncached parse
+    // branches above. Both branches release their parse result at end of
+    // scope AFTER this helper returns, so the `incoming_query` argument
+    // and `query` byte slice remain valid for the full duration. The
+    // `QueryRewrite` returned deep-copies `rewritten_query` and
+    // `original_query` via allocator -- it does NOT retain references
+    // into the parse result.
+    fn buildRewriteForQuery(
+        self: *QueryRewriter,
+        query: []const u8,
+        incoming_query: ast.Query,
+        catalog: *ViewCatalog,
+    ) !?QueryRewrite {
         // Extract labels and relationship types from incoming query
         var incoming_labels = std.StringHashMap(void).init(self.allocator);
         defer incoming_labels.deinit();

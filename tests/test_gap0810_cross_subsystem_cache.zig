@@ -5,20 +5,28 @@
 // `parseGqlCached` surface that the materialized-view refresh and
 // distributed coordinator subsystems now route through. Task 1.3 added
 // `ast_cache: ?*geode.SharedAstCache` fields + `setAstCache()` methods to
-// `MaterializedViewManager` and `QueryCoordinator` so both subsystems
-// share the server's `ServerState.shared_ast_cache`.
+// `MaterializedViewManager` (classic) and `QueryCoordinator` so both
+// subsystems share the server's `ServerState.shared_ast_cache`. Task 18
+// (follow-up) extended the same pattern to the *enhanced* view manager at
+// `src/query/enhanced_materialized_views.zig` -- see
+// `docs/performance/2026-04-20-query-bench/enhanced-manager-cache-note.md`
+// for the disposition of that wiring (hook present; no production caller
+// invokes it yet). The enhanced `QueryCoordinator` does not parse GQL, so
+// it is intentionally not wired.
 //
 // The goal here is to confirm the wiring is real: calling `parseGqlCached`
 // twice on identical input must register exactly one miss and at least one
 // hit. That proves the cache is a single shared instance reachable from
-// any caller, which is the property the view manager and coordinator now
+// any caller, which is the property the view managers and coordinator now
 // depend on.
 //
 // We do not stand up a full `MaterializedViewManager` or `QueryCoordinator`
 // instance here — those require heavyweight dependencies (catalog,
 // federation config, thread pools) that aren't appropriate for a unit
-// test. The functional equivalent — that the cache surface is reachable
-// and stats track correctly — is asserted directly.
+// test, and the enhanced manager is not part of the public `geode` module
+// surface so it can't be reached through `@import("geode")` without
+// scope-creep. The functional equivalent — that the cache surface is
+// reachable and stats track correctly — is asserted directly.
 
 const std = @import("std");
 const geode = @import("geode");
