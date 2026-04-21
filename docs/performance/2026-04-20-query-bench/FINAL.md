@@ -157,7 +157,7 @@ Each bottleneck above maps to one `perf/` ticket. Suggested order (by impact × 
 | ~~3~~| GAP-0812   | ORDER BY + LIMIT streaming top-K                   | 292-1025× measured | 4d | ✅ done (`d6045bfb`; ledger `b7feff32`) |
 | ~~4~~| GAP-0813   | bulk materializePath for multi-hop traversals     | 721-2704× measured | 5d | ✅ done (`b98f341d`; ledger `5862045f`) |
 | 5    | GAP-0814   | UNION-leg parallelism                              | ~2×        | 2d | ⚠️ partial — code correct + 1.6× on unit balanced-arms test (`871627f5`; ledger `b449976c`); bench `union_two_labels` is 50:1 asymmetric so A/B shows 0× bench win. Follow-ups: cost-model threshold, balanced-arm bench scenario. |
-| 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | open |
+| 6    | GAP-0815   | batch-CREATE planner (shared label/prop shape)     | 3-10×      | 4d | ⚠️ partial — detection + executor landed (`fa5e5bef`; ledger `5719faa2`), ~35% Debug win on N≥3 inline-clauses. Bench `create_batch_100` shape differs (loop of 100 single-clause queries) so A/B flat. Follow-up: GAP-0815-deep for adapter-level batch slot allocation. |
 
 Each can be attacked via `./scripts/query-perf-gate.sh <gap-id> before` → implement → `after` → inspect `diff.md`. The baseline in `baseline/bench-query-all.json` is the reference; replacing it requires A/B verification plus a committed update of the baseline JSON.
 
