@@ -885,6 +885,20 @@ pub fn build(b: *std.Build) void {
     gap0813_bulk_materialize_path_tests.root_module.addImport("geode", root_mod);
     const run_gap0813_bulk_materialize_path_tests = b.addRunArtifact(gap0813_bulk_materialize_path_tests);
 
+    // GAP-0814 Task 5.1: parallelize independent UNION arms via thread
+    // fork-join so the two (or more) legs of a `A UNION [ALL] B` don't
+    // execute serially. Arms that don't share state (no bindings from a
+    // prior CREATE arm, pure unions) are dispatched to worker threads
+    // and their rows are merged on the main thread.
+    const gap0814_union_parallelism_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0814_union_parallelism.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0814_union_parallelism_tests.root_module.addImport("geode", root_mod);
+    const run_gap0814_union_parallelism_tests = b.addRunArtifact(gap0814_union_parallelism_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1542,6 +1556,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0811b_property_aggregate_tests.step);
     test_step.dependOn(&run_gap0812_topk_streaming_tests.step);
     test_step.dependOn(&run_gap0813_bulk_materialize_path_tests.step);
+    test_step.dependOn(&run_gap0814_union_parallelism_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);
