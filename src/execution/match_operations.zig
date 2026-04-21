@@ -511,6 +511,25 @@ fn extractLiteral(expr: ast.Expr) ?LitValue {
 
 /// Decompose a WHERE expression into a simple `var.key OP literal` shape.
 /// Returns null on anything more complex (AND/OR/function calls/etc).
+/// Extract `(var_name, property_name)` from either `.PropertyAccess` (inline
+/// pattern-local access) or `.Member` (WHERE-clause access). The parser
+/// emits different shapes depending on context, but semantically both are
+/// "var.prop" — the fast path treats them identically.
+fn extractVarProperty(expr: ast.Expr, match_var: []const u8) ?[]const u8 {
+    switch (expr) {
+        .PropertyAccess => |pa| {
+            if (!std.mem.eql(u8, pa.object, match_var)) return null;
+            return pa.property;
+        },
+        .Member => |m| {
+            if (m.target.* != .Ident) return null;
+            if (!std.mem.eql(u8, m.target.Ident.orig, match_var)) return null;
+            return m.field;
+        },
+        else => return null,
+    }
+}
+
 fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
     const bin = switch (where) {
         .Binary => |b| b,
@@ -518,21 +537,15 @@ fn extractSimpleWhere(where: ast.Expr, match_var: []const u8) ?SimpleWhere {
     };
     const cmp = binOpToCmp(bin.op) orelse return null;
 
-    // Try `var.prop OP literal`.
-    if (bin.left.* == .PropertyAccess) {
-        const pa = bin.left.PropertyAccess;
-        if (std.mem.eql(u8, pa.object, match_var)) {
-            const lit = extractLiteral(bin.right.*) orelse return null;
-            return .{ .key = pa.property, .op = cmp, .lit = lit };
-        }
+    // Try `var.prop OP literal` — either .PropertyAccess or .Member shape.
+    if (extractVarProperty(bin.left.*, match_var)) |key| {
+        const lit = extractLiteral(bin.right.*) orelse return null;
+        return .{ .key = key, .op = cmp, .lit = lit };
     }
     // Try `literal OP var.prop` — swap to the canonical form.
-    if (bin.right.* == .PropertyAccess) {
-        const pa = bin.right.PropertyAccess;
-        if (std.mem.eql(u8, pa.object, match_var)) {
-            const lit = extractLiteral(bin.left.*) orelse return null;
-            return .{ .key = pa.property, .op = swapCmp(cmp), .lit = lit };
-        }
+    if (extractVarProperty(bin.right.*, match_var)) |key| {
+        const lit = extractLiteral(bin.left.*) orelse return null;
+        return .{ .key = key, .op = swapCmp(cmp), .lit = lit };
     }
     return null;
 }
@@ -671,18 +684,7 @@ pub fn propertyAggregateFastPath(
 
     if (call.args.len != 1) return null;
     const arg = call.args[0].*;
-    const target_key: []const u8 = switch (arg) {
-        .PropertyAccess => |pa| blk: {
-            if (!std.mem.eql(u8, pa.object, match_var)) return null;
-            break :blk pa.property;
-        },
-        .Member => |m| blk: {
-            if (m.target.* != .Ident) return null;
-            if (!std.mem.eql(u8, m.target.Ident.orig, match_var)) return null;
-            break :blk m.field;
-        },
-        else => return null,
-    };
+    const target_key: []const u8 = extractVarProperty(arg, match_var) orelse return null;
 
     // --- Optional simple WHERE predicate ---
     const where_pred: ?SimpleWhere = if (q.where_clause) |w|
