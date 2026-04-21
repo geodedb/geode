@@ -856,6 +856,20 @@ pub fn build(b: *std.Build) void {
     gap0811b_property_aggregate_tests.root_module.addImport("geode", root_mod);
     const run_gap0811b_property_aggregate_tests = b.addRunArtifact(gap0811b_property_aggregate_tests);
 
+    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+    // `MATCH (p:Label) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`
+    // — walks the label posting list once with a K-bounded heap over the
+    // ordered property, skipping the materialize-every-node + full-sort
+    // path taken by the regular executor.
+    const gap0812_topk_streaming_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0812_topk_streaming.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0812_topk_streaming_tests.root_module.addImport("geode", root_mod);
+    const run_gap0812_topk_streaming_tests = b.addRunArtifact(gap0812_topk_streaming_tests);
+
     // Recover graph_store unit tests that were previously included transitively via
     // test_graph_algorithms.zig (old relative @import("graph_store.zig") pulled in graph_store
     // and its transitive deps: fle_integration, uuid, tde_file_encryption, schema/*)
@@ -1511,6 +1525,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_gap0810_cross_subsystem_tests.step);
     test_step.dependOn(&run_gap0811_aggregation_fastpath_tests.step);
     test_step.dependOn(&run_gap0811b_property_aggregate_tests.step);
+    test_step.dependOn(&run_gap0812_topk_streaming_tests.step);
     test_step.dependOn(&run_algo_unit_tests.step);
     // Storage migration tests removed (Phase 2: engine-backed persistence)
     test_step.dependOn(&run_match_call_tests.step);

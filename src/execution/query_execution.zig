@@ -1616,6 +1616,13 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
     if (try match_operations.propertyAggregateFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
         return fast_result;
     }
+    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+    // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> LIMIT K` — walks the
+    // label posting list once with a K-bounded heap over the ordered
+    // property, skipping materialize-every-node + full-sort + trim.
+    if (try match_operations.topKOrderedFastPath(allocator, q, count_pushdown_graph, count_pushdown_tenant)) |fast_result| {
+        return fast_result;
+    }
 
     if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
         return planned_result;

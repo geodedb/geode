@@ -3257,6 +3257,8 @@ REQ-PERF-QPS-0811,AggregateFastPath,PropertyAggregate,TESTED,,,performance,2026-
 REQ-PERF-QPS-0811,CountFastPath,LabelIndexCardinality,TESTED,,,performance,2026-04-20,src/graph_store.zig
 REQ-PERF-QPS-0811,CountFastPath,LabelScopedCount,TESTED,,,performance,2026-04-20,src/execution/match_operations.zig
 REQ-PERF-QPS-0811,CountFastPath,LabelScopedCount,TESTED,,,performance,2026-04-20,tests/test_gap0811_aggregation_fastpath.zig
+REQ-PERF-QPS-0812,TopKOrderedFastPath,BoundedHeap,TESTED,,,performance,2026-04-20,src/execution/match_operations.zig
+REQ-PERF-QPS-0812,TopKOrderedFastPath,BoundedHeap,TESTED,,,performance,2026-04-20,tests/test_gap0812_topk_streaming.zig
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-PERF-QUERY-001,Performance,QueryPerformance,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,Regression,TESTED,,,engine,2026-04-18,tests/test_query_arena_reuse.zig

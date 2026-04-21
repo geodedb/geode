@@ -818,6 +818,264 @@ pub fn propertyAggregateFastPath(
     };
 }
 
+// GAP-0812 Task 3.1: direction of ORDER BY for the top-K fast path.
+const OrderDir = enum { asc, desc };
+
+/// Scratch entry held in the K-bounded heap. We keep the property value in
+/// its native type (int XOR float) so we can re-emit it with the same `Value`
+/// tag the slow path would — preserving Int → Int / Double → Double round-
+/// tripping. `node_id` is retained for future extensions (e.g., returning
+/// the node itself); for now only `val_*` is written back.
+const TopKEntry = struct {
+    // Exactly one of val_int / val_float is meaningful, per `is_float`.
+    val_int: i64 = 0,
+    val_float: f64 = 0,
+    is_float: bool = false,
+    node_id: u64 = 0,
+};
+
+/// Numeric comparison that keeps same-type compares lossless. Returns
+/// `true` iff `a < b`.
+fn entryLess(a: TopKEntry, b: TopKEntry) bool {
+    if (!a.is_float and !b.is_float) return a.val_int < b.val_int;
+    const af: f64 = if (a.is_float) a.val_float else @as(f64, @floatFromInt(a.val_int));
+    const bf: f64 = if (b.is_float) b.val_float else @as(f64, @floatFromInt(b.val_int));
+    return af < bf;
+}
+
+fn entryGreater(a: TopKEntry, b: TopKEntry) bool {
+    return entryLess(b, a);
+}
+
+/// Manual heap ops — std.heap.PriorityQueue in Zig 0.16 is a growable owning
+/// container and doesn't expose in-place sift over a pre-allocated slice.
+/// We only need min-heap (for DESC: kick the smallest) and max-heap (for
+/// ASC: kick the largest), so hand-rolled sift operations on an
+/// `ArrayList` buffer are simpler and allocation-free in the hot loop.
+fn heapSiftUp(items: []TopKEntry, start: usize, is_desc: bool) void {
+    var i = start;
+    while (i > 0) {
+        const parent = (i - 1) / 2;
+        const swap = if (is_desc)
+            entryLess(items[i], items[parent]) // min-heap: child smaller => bubble up
+        else
+            entryGreater(items[i], items[parent]); // max-heap: child larger => bubble up
+        if (!swap) break;
+        const tmp = items[i];
+        items[i] = items[parent];
+        items[parent] = tmp;
+        i = parent;
+    }
+}
+
+fn heapSiftDown(items: []TopKEntry, start: usize, is_desc: bool) void {
+    const n = items.len;
+    var i = start;
+    while (true) {
+        const l = 2 * i + 1;
+        const r = 2 * i + 2;
+        var target = i;
+        if (l < n) {
+            const swap_l = if (is_desc)
+                entryLess(items[l], items[target])
+            else
+                entryGreater(items[l], items[target]);
+            if (swap_l) target = l;
+        }
+        if (r < n) {
+            const swap_r = if (is_desc)
+                entryLess(items[r], items[target])
+            else
+                entryGreater(items[r], items[target]);
+            if (swap_r) target = r;
+        }
+        if (target == i) break;
+        const tmp = items[i];
+        items[i] = items[target];
+        items[target] = tmp;
+        i = target;
+    }
+}
+
+// CANARY: REQ=REQ-PERF-QPS-0812; FEATURE="TopKOrderedFastPath"; ASPECT=BoundedHeap; STATUS=TESTED; TEST=tests/test_gap0812_topk_streaming.zig; OWNER=performance; UPDATED=2026-04-20
+// GAP-0812 Task 3.1: fast path for
+//   `MATCH (p:<Label>) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`
+// where RETURN and ORDER BY target the same property on the same binding.
+//
+// Why this exists: the regular executor still builds every binding row,
+// materialises every matching node, and runs a full sort before applying
+// LIMIT. At 5000 nodes with LIMIT 50 the bench scenario `order_by_limit`
+// costs ~908 ms; we want streaming-with-heap behaviour that touches
+// ~N log K ≈ 30k compares and never materialises.
+//
+// Preconditions (all must hold, else return null and the caller falls
+// through to the regular executor):
+//   - single MATCH chain, single simple node pattern with exactly 1 label
+//   - no inline pattern properties; no WHERE/FILTER/WITH/GROUP BY/HAVING
+//   - no SET clauses, no DISTINCT in RETURN
+//   - RETURN has exactly 1 item whose expression is `<var>.<key>`
+//   - ORDER BY has exactly 1 key, same `<var>.<key>` as RETURN, ASC or DESC
+//   - no NULLS policy override (parser default is ok)
+//   - LIMIT literal, 0 < K <= 10_000 (beyond K~10k the heap cost dominates
+//     and sort-then-trim wins — bail)
+//   - no active RLS engine with an authenticated user
+// Tenant filtering IS honoured: per-slot we check `node.tenant_id`.
+pub fn topKOrderedFastPath(
+    allocator: std.mem.Allocator,
+    q: ast.Query,
+    filter_graph: []const u8,
+    filter_tenant: ?[]const u8,
+) !?ExecutionResult {
+    // --- Shape gates on the MATCH ---
+    if (q.match.chains.len != 1) return null;
+    const chain = q.match.chains[0];
+    if (chain.hops.len != 0) return null;
+    if (chain.is_optional) return null;
+    if (chain.name != null) return null;
+    if (q.path_variable != null) return null;
+    const head = chain.head orelse return null;
+    if (head.labels.len != 1) return null;
+    if (head.props != null) return null;
+    const match_var = head.name orelse return null;
+
+    // --- Shape gates on clauses ---
+    if (q.ret.distinct) return null;
+    if (q.ret.items.len != 1) return null;
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.set_clauses.len != 0) return null;
+
+    // --- LIMIT must be a positive literal, bounded ---
+    const k_raw = q.limit orelse return null;
+    if (q.limit_param != null) return null; // parameterised LIMIT: bail
+    if (k_raw == 0) return null;
+    if (k_raw > 10_000) return null;
+    const k: usize = k_raw;
+    // Skip OFFSET — top-K with offset needs a larger K; let the slow path
+    // handle it cleanly.
+    if (q.offset) |off| {
+        if (off != 0) return null;
+    }
+
+    // --- RETURN shape ---
+    const ret_item = q.ret.items[0];
+    const ret_key = extractBoundVarProperty(ret_item.expr, match_var) orelse return null;
+
+    // --- ORDER BY shape ---
+    const order_by = q.order_by orelse return null;
+    if (order_by.keys.len != 1) return null;
+    const ob_key_entry = order_by.keys[0];
+    if (ob_key_entry.nulls != .default) return null; // explicit NULLS FIRST/LAST: bail
+    const ob_key = extractBoundVarProperty(ob_key_entry.expr, match_var) orelse return null;
+    if (!std.mem.eql(u8, ret_key, ob_key)) return null; // keys must match
+    const dir: OrderDir = if (ob_key_entry.desc) .desc else .asc;
+
+    // --- RLS bypass for correctness ---
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.user != null) {
+            if (rls_types.getGlobalRLSFilterEngine() != null) return null;
+            if (rls_types.getGlobalExprRLSEngine() != null) return null;
+        }
+    }
+
+    // --- Iterate the label posting list + bounded heap ---
+    const writable_store = graph_store.getGlobalStore(allocator);
+    var read_view = graph_store.ReadView.init(allocator, writable_store);
+    defer read_view.deinit();
+    const read_store = read_view.getReadStore();
+    const posting = read_store.getNodesByLabel(filter_graph, head.labels[0]);
+
+    // Heap buffer capacity K (never grows beyond K).
+    var heap = try std.ArrayList(TopKEntry).initCapacity(allocator, k);
+    defer heap.deinit(allocator);
+
+    const is_desc = (dir == .desc);
+
+    if (posting) |slots| {
+        const prop_store: *graph_store.GraphStore = @constCast(read_store);
+        for (slots) |node_id| {
+            const node = read_store.nodes.get(node_id) orelse continue;
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            const pv = prop_store.getNodeProperty(node_id, ret_key) orelse continue;
+
+            // Build entry in native type. Skip non-numeric (parity with
+            // slow-path ordering which coerces via value comparators).
+            var entry: TopKEntry = .{ .node_id = node_id };
+            switch (pv) {
+                .Int => |iv| {
+                    entry.val_int = iv;
+                    entry.is_float = false;
+                },
+                .Float => |fv| {
+                    entry.val_float = fv;
+                    entry.is_float = true;
+                },
+                .Decimal => |d| {
+                    entry.val_float = @as(f64, @floatFromInt(d.coeff)) / std.math.pow(f64, 10, @as(f64, @floatFromInt(d.scale)));
+                    entry.is_float = true;
+                },
+                else => continue,
+            }
+
+            if (heap.items.len < k) {
+                heap.appendAssumeCapacity(entry);
+                heapSiftUp(heap.items, heap.items.len - 1, is_desc);
+            } else {
+                // Compare against heap root (the "worst" in our K-window).
+                // DESC → min-heap; a new entry must be GREATER than root to
+                // enter. ASC → max-heap; a new entry must be LESS than root.
+                const root = heap.items[0];
+                const should_insert = if (is_desc) entryLess(root, entry) else entryLess(entry, root);
+                if (!should_insert) continue;
+                heap.items[0] = entry;
+                heapSiftDown(heap.items, 0, is_desc);
+            }
+        }
+    }
+
+    // --- Extract K results in sorted order (final output order matches slow path) ---
+    // Ascending sort first, then reverse for DESC. Uses stable-enough heap
+    // pop order: we just sort the finished slice with std.mem.sort.
+    std.mem.sort(TopKEntry, heap.items, {}, struct {
+        fn lt(_: void, a: TopKEntry, b: TopKEntry) bool {
+            return entryLess(a, b);
+        }
+    }.lt);
+    if (is_desc) std.mem.reverse(TopKEntry, heap.items);
+
+    // --- Build ExecutionResult ---
+    // Column naming: mirror `generateUniqueColumnNames` — explicit alias,
+    // else `<var>.<key>`.
+    const col_name: []const u8 = if (ret_item.alias) |a|
+        try allocator.dupe(u8, a)
+    else
+        try std.fmt.allocPrint(allocator, "{s}.{s}", .{ match_var, ret_key });
+
+    var columns = try allocator.alloc([]const u8, 1);
+    columns[0] = col_name;
+
+    var rows = try allocator.alloc([]Value, heap.items.len);
+    for (heap.items, 0..) |entry, i| {
+        const row = try allocator.alloc(Value, 1);
+        row[0] = if (entry.is_float)
+            Value{ .Double = entry.val_float }
+        else
+            Value{ .Int = entry.val_int };
+        rows[i] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+    };
+}
+
 // CANARY: REQ=REQ-REFACTOR-MATCH-003; FEATURE="MatchOperationsRefactor"; ASPECT=ShortestPathHandler; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 /// Handle path variable assignment for shortestPath patterns
 /// Returns the execution result if this is a shortestPath pattern, null otherwise
@@ -5196,6 +5454,13 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
     // See `propertyAggregateFastPath` for preconditions — all unsupported
     // shapes fall through to the regular executor below.
     if (try propertyAggregateFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
+        return fast_result;
+    }
+    // GAP-0812 Task 3.1: bounded-heap streaming top-K for
+    // `MATCH (p:<L>) RETURN p.<key> ORDER BY p.<key> [ASC|DESC] LIMIT K`.
+    // Walks the label posting list once with a K-bounded heap instead of
+    // materialising every node + full-sort + trim.
+    if (try topKOrderedFastPath(allocator, q, filter_graph, filter_tenant)) |fast_result| {
         return fast_result;
     }
 
