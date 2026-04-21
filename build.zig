@@ -844,6 +844,25 @@ pub fn build(b: *std.Build) void {
     const gap0810_regression_step = b.step("test-gap0810-regression", "GAP-0810 investigation reproducer");
     gap0810_regression_step.dependOn(&run_gap0810_regression_tests.step);
 
+    // GAP-0821: multi-label MATCH diagnostic — probes the claim that
+    // `MATCH (p:LT_Person)` runs 9x slower when the store also contains
+    // unrelated LT_Company nodes. Measures smp_allocator vs DebugAllocator
+    // separately so we can tell a real regression from a GAP-0810-shaped
+    // allocator artifact. Opt-in via `zig build test-gap0821-multilabel-match-diagnostic`.
+    const gap0821_multilabel_diag_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_gap0821_multilabel_match_diagnostic.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    }) });
+    gap0821_multilabel_diag_tests.root_module.addImport("geode", root_mod);
+    const run_gap0821_multilabel_diag_tests = b.addRunArtifact(gap0821_multilabel_diag_tests);
+    const gap0821_multilabel_diag_step = b.step(
+        "test-gap0821-multilabel-match-diagnostic",
+        "GAP-0821 diagnostic: multi-label MATCH slowdown claim",
+    );
+    gap0821_multilabel_diag_step.dependOn(&run_gap0821_multilabel_diag_tests.step);
+
     // GAP-0811 Task 2.1: label-scoped count fast-path via label-index
     // cardinality — `MATCH (p:Label) RETURN count(p)` now routes through
     // `countNodesByLabel` O(1) posting-list length instead of the per-node
