@@ -5091,6 +5091,48 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
     };
 }
 
+/// R2 (2026-04-22): deadline-aware variant of `acquireGraphWriteLock`.
+/// Returns `error.Deadline` if the per-graph write lock cannot be
+/// acquired before `deadline_mono_ns` (absolute CLOCK_MONOTONIC ns).
+/// Callers should prefer this over `acquireGraphWriteLock` anywhere a
+/// per-request deadline exists — it replaces the old behaviour of
+/// parking forever on `lockUncancelable`, which caused the transport
+/// thread-pool "1 active task" shutdown hang under the 16-worker
+/// ingest workload.
+pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns: u64) !GraphLockHandle {
+    // Take the global read-side write lock up-front (to preserve
+    // historical ordering with `acquireStoreWriteLock`).  If a per-graph
+    // adapter exists we then drive the cancelable acquire; otherwise we
+    // fall back to the global-only path, which already has no per-graph
+    // rwlock so there's nothing to time out on.
+    try acquireStoreWriteLockCancelable(deadline_mono_ns);
+    if (global_adapter) |adapter| {
+        if (adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns)) |mg| {
+            return .{
+                .managed_graph = mg,
+                .is_write = true,
+                .holds_global_store_lock = true,
+            };
+        } else |err| switch (err) {
+            error.Deadline => {
+                // Release the global write lock we optimistically took.
+                releaseStoreWriteLock();
+                return error.Deadline;
+            },
+            else => {
+                // GraphNotFound / other errors — fall through to the
+                // legacy global-lock-only handle (matches the old
+                // `acquireGraphWriteLock` behaviour for these errors).
+            },
+        }
+    }
+    return .{
+        .managed_graph = null,
+        .is_write = true,
+        .holds_global_store_lock = true,
+    };
+}
+
 /// Acquire the shared read lock for `graph_name`, capture a
 /// `QueryReadSession` snapshot of the current graph contents, release the
 /// lock, and return the session.  The returned session carries its own
@@ -5439,6 +5481,43 @@ pub fn releaseStoreLock() void {
 /// Acquire exclusive write lock (for mutations and persistence thread)
 pub fn acquireStoreWriteLock() void {
     g_store_rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+}
+
+/// R2 (2026-04-22): deadline-aware variant of `acquireStoreWriteLock`.
+/// Returns `error.Deadline` if the exclusive write lock cannot be
+/// acquired before `deadline_mono_ns` (absolute CLOCK_MONOTONIC ns).
+pub fn acquireStoreWriteLockCancelable(deadline_mono_ns: u64) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    if (g_store_rwlock.tryLock(io)) return;
+
+    var sleep_ns: u64 = 100 * std.time.ns_per_us;
+    const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+    while (true) {
+        const now = monoNanosNow();
+        if (now >= deadline_mono_ns) return error.Deadline;
+        const remaining = deadline_mono_ns - now;
+        const nap_ns = @min(sleep_ns, remaining);
+        {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(nap_ns / std.time.ns_per_s),
+                .nsec = @intCast(nap_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+        }
+        if (g_store_rwlock.tryLock(io)) return;
+        sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+    }
+}
+
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 /// Release exclusive write lock

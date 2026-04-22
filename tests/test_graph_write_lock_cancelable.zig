@@ -90,28 +90,20 @@ fn contenderTriesWithDeadline(ctx: *ContenderCtx) void {
     waitForFlag(ctx.engaged);
     ctx.attempt_start_ns.* = monoNanos();
 
-    // ---- INTENDED API (not yet implemented) ----
-    // const result = graph_store.acquireGraphWriteLockCancelable(
-    //     ctx.graph_name,
-    //     monoNanos() + ctx.deadline_ns,
-    // );
-    // ctx.attempt_end_ns.* = monoNanos();
-    // if (result) |h| {
-    //     ctx.acquired.store(1, .release);
-    //     graph_store.releaseGraphLock(h);
-    // } else |err| switch (err) {
-    //     error.Deadline => {},
-    //     else => std.debug.print("contender error: {s}\n", .{@errorName(err)}),
-    // }
-
-    // ---- CURRENT API (uncancelable) ----
-    // We call the uncancelable API to prove it blocks past the deadline.
-    // If a cancelable variant is added later, this call site is swapped
-    // to the commented block above.
-    const h = graph_store.acquireGraphWriteLock(ctx.graph_name);
+    // R2 (2026-04-22): cancelable variant landed.  Use it here.
+    const result = graph_store.acquireGraphWriteLockCancelable(
+        ctx.graph_name,
+        monoNanos() + ctx.deadline_ns,
+    );
     ctx.attempt_end_ns.* = monoNanos();
-    ctx.acquired.store(1, .release);
-    graph_store.releaseGraphLock(h);
+    if (result) |h| {
+        ctx.acquired.store(1, .release);
+        graph_store.releaseGraphLock(h);
+    } else |err| {
+        if (err != error.Deadline) {
+            std.debug.print("contender error: {s}\n", .{@errorName(err)});
+        }
+    }
 }
 
 test "graph write lock can be acquired with a deadline (R2)" {

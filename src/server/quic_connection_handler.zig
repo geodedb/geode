@@ -1732,6 +1732,40 @@ fn validateSessionAuth(gpa: std.mem.Allocator, state: *ServerState) !SessionAuth
     return .invalidated;
 }
 
+// R2 (2026-04-22): per-request write-lock deadline helpers.
+
+/// Current CLOCK_MONOTONIC nanoseconds.  Used to compute absolute
+/// deadlines for `graph_store.acquireGraphWriteLockCancelable`.
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
+
+/// Default per-request timeout for acquiring the exclusive graph write
+/// lock.  Matches the thread-pool deinit grace window so a stalled
+/// request gives up BEFORE the transport's shutdown watchdog fires
+/// ("thread-pool deinit timed out with N active tasks").
+const default_mutation_write_lock_timeout_ms: u64 = 30_000;
+
+/// Returns the mutation write-lock timeout (in nanoseconds) for the
+/// current request.  Pulls the value from the connection's cached
+/// `EnvironmentConfig` (set by `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`) when
+/// available; falls back to `default_mutation_write_lock_timeout_ms`.
+fn mutationWriteLockTimeoutNs(state: *const ServerState) u64 {
+    if (state.shared_conn) |shared_ptr| {
+        const shared: *SharedConnState = @ptrCast(@alignCast(shared_ptr));
+        if (shared.env_config) |ec| {
+            return ec.graph_write_lock_timeout_ms * std.time.ns_per_ms;
+        }
+    }
+    return default_mutation_write_lock_timeout_ms * std.time.ns_per_ms;
+}
+
 fn handleClientMessage(
     gpa: std.mem.Allocator,
     state: *ServerState,
@@ -2338,7 +2372,28 @@ fn handleClientMessage(
                 if (is_mutation) {
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
-                    graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
+                    //
+                    // R2 (2026-04-22): use the cancelable variant with a
+                    // per-request deadline.  The previous uncancelable
+                    // acquire parked transport threads forever when one
+                    // worker stalled inside a long-running mutation,
+                    // producing the "thread-pool deinit timed out"
+                    // shutdown warning under the 16-worker ingest workload.
+                    const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+                    const deadline = monoNanosNow() + write_lock_timeout_ns;
+                    if (graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline)) |h| {
+                        graph_lock_handle = h;
+                    } else |err| {
+                        if (err == error.Deadline) {
+                            log.warn("Write lock acquisition timed out", &.{
+                                Attr.string("graph", query_graph_name),
+                                Attr.uint("timeout_ns", write_lock_timeout_ns),
+                            });
+                            try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                            return;
+                        }
+                        return err;
+                    }
                 } else if (analysis.is_point_read) {
                     // GAP-0805: hold the shared read lock across the brief
                     // point-read execute window, backed by a zero-copy view.

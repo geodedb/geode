@@ -47,6 +47,15 @@ pub const EnvironmentConfig = struct {
     inline_results_enabled: bool = true,
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
+    // R2 (2026-04-22): per-request budget for acquiring the per-graph
+    // exclusive write lock.  The previous uncancelable acquire parked
+    // transport threads forever when one worker stalled inside a long-
+    // running mutation, producing the "thread-pool deinit timed out
+    // with 1 active tasks" shutdown warning under the 16-worker ingest
+    // workload.  Default 30 s matches the thread-pool deinit grace
+    // window so a stalled worker gives up before shutdown fires its
+    // watchdog.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
+    graph_write_lock_timeout_ms: u64 = 30_000,
 };
 
 /// Server initialization context containing all initialized resources
@@ -214,6 +223,9 @@ pub fn processEnvironmentVariables(allocator: std.mem.Allocator, memcurve_profil
     }
     if (getenvSlice("GEODE_TELEMETRY_PAGING")) |_| {
         config.telemetry_paging = true;
+    }
+    if (getenvSlice("GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS")) |val| {
+        config.graph_write_lock_timeout_ms = std.fmt.parseInt(u64, val, 10) catch config.graph_write_lock_timeout_ms;
     }
 
     // CANARY: REQ=REQ-ABAC-WIRE-008; FEATURE="ABAC Enforcement"; ASPECT=EnvVar; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15

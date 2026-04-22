@@ -8,6 +8,7 @@
 //! that geode's execution engine calls.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const gs = @import("graph_storage");
 const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
@@ -2223,6 +2224,52 @@ pub const StorageAdapter = struct {
         return mg;
     }
 
+    /// Deadline-aware variant of `acquireGraphWriteLock` (R2, 2026-04-22).
+    /// `deadline_mono_ns` is an absolute CLOCK_MONOTONIC-ish nanosecond
+    /// timestamp (caller typically computes `monoNanos() + budget`).
+    /// Returns `error.Deadline` when the lock could not be acquired before
+    /// the deadline.  Internally uses `tryLock` in an exponentially-
+    /// backing-off loop so the caller thread can honour client or
+    /// shutdown timeouts instead of parking forever.
+    pub fn acquireGraphWriteLockCancelable(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        deadline_mono_ns: u64,
+    ) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        const mg = self.engines.get(graph_name) orelse {
+            self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            return error.GraphNotFound;
+        };
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        // Fast path: uncontended acquire in one call.
+        if (mg.rwlock.tryLock(io)) return mg;
+
+        // Contended: back off until deadline.  Start at 100 µs; cap at
+        // 2 ms so a very long deadline still retries reasonably often
+        // without burning CPU.
+        var sleep_ns: u64 = 100 * std.time.ns_per_us;
+        const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+        while (true) {
+            const now = monoNanosNow();
+            if (now >= deadline_mono_ns) return error.Deadline;
+            const remaining = deadline_mono_ns - now;
+            const nap_ns = @min(sleep_ns, remaining);
+            {
+                const req = std.os.linux.timespec{
+                    .sec = @intCast(nap_ns / std.time.ns_per_s),
+                    .nsec = @intCast(nap_ns % std.time.ns_per_s),
+                };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+            }
+            if (mg.rwlock.tryLock(io)) return mg;
+            sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+        }
+    }
+
     pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
     }
@@ -2277,6 +2324,17 @@ pub const GraphLockHandle = struct {
     graph_name: []const u8,
     mg: *ManagedGraph,
 };
+
+/// CLOCK_MONOTONIC nanoseconds; used by the cancelable write-lock path (R2).
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
 
 // ============================================================================
 // UUID generation helper
