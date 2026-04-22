@@ -1793,10 +1793,21 @@ fn monoNanosNow() u64 {
 }
 
 /// Default per-request timeout for acquiring the exclusive graph write
-/// lock.  Matches the thread-pool deinit grace window so a stalled
-/// request gives up BEFORE the transport's shutdown watchdog fires
-/// ("thread-pool deinit timed out with N active tasks").
-const default_mutation_write_lock_timeout_ms: u64 = 30_000;
+/// lock.
+///
+/// R7 (2026-04-22): raised from 30 s → 120 s.  30 s was too aggressive
+/// for the msft-graph 16-worker-on-one-graph ingest workload — once the
+/// per-statement critical section plus 16-way FIFO queueing approached
+/// the 30 s ceiling, the cascade pattern from the R6 report
+/// (`40001: Write lock acquisition timed out` on every worker, immediate
+/// serial-mode fallback, HELLO retries) kicked in even though each
+/// worker was making forward progress.  120 s gives the same workload
+/// ≈ 4 × the budget it actually needs (sustained aggregate ≈ 5 stmts/s
+/// × 16 workers × 38-statement chunk ≈ 122 s worst case before R7's
+/// 2 × per-op speedup), so normal contended workloads never trip the
+/// cancellation path while a genuinely-stuck worker still surfaces
+/// within 2 minutes.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
+const default_mutation_write_lock_timeout_ms: u64 = 120_000;
 
 /// Returns the mutation write-lock timeout (in nanoseconds) for the
 /// current request.  Pulls the value from the connection's cached
