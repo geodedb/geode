@@ -3240,6 +3240,19 @@ pub fn build(b: *std.Build) void {
     const orphan_txn_step = b.step("test-orphan-txn-cleanup", "Parallel-ingest R3: ServerState teardown on QUIC stream close");
     orphan_txn_step.dependOn(&run_orphan_txn_tests.step);
 
+    // R6 (2026-04-22) — parallel-ingest THROUGHPUT collapse.  Global
+    //     g_store_rwlock was taken EXCLUSIVE on per-graph writes, forcing
+    //     every mutation across every graph to serialise.  See
+    //     `tests/test_r6_parallel_ingest_throughput.zig` for the
+    //     two-property contract this pins.
+    const r6_parallel_ingest_mod = b.createModule(.{ .root_source_file = b.path("tests/test_r6_parallel_ingest_throughput.zig"), .target = target, .optimize = optimize });
+    r6_parallel_ingest_mod.addImport("geode", root_mod);
+    const r6_parallel_ingest_tests = b.addTest(.{ .root_module = r6_parallel_ingest_mod });
+    const run_r6_parallel_ingest_tests = b.addRunArtifact(r6_parallel_ingest_tests);
+    test_step.dependOn(&run_r6_parallel_ingest_tests.step);
+    const r6_parallel_ingest_step = b.step("test-r6-parallel-ingest", "Parallel-ingest R6: throughput regression — cross-graph + same-graph contention bounds");
+    r6_parallel_ingest_step.dependOn(&run_r6_parallel_ingest_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

@@ -5043,10 +5043,25 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
 /// Opaque handle returned by per-graph lock helpers.  Callers pass this back
 /// to the corresponding release function.  When `managed_graph` is non-null
 /// the per-graph path was used; when null the global rwlock was used instead.
+///
+/// R6 (2026-04-22): Per-graph writes now take the GLOBAL store rwlock in
+/// SHARED mode, not EXCLUSIVE.  The per-graph rwlock (`mg.rwlock`) is what
+/// actually serialises writers on a given graph; the global exclusive lock
+/// previously forced every mutation across every graph to queue behind one
+/// single critical section, producing the 0.4 stmts/sec serialised ingest
+/// pathology seen on the 16-worker Go client.  Reads also take the global
+/// lock SHARED, so readers/writers on different graphs no longer block
+/// each other.  Only cross-graph operations (RESTORE, legacy backup paths)
+/// still take the global lock EXCLUSIVE — they use `acquireStoreWriteLock`
+/// directly and are outside this handle type.
 pub const GraphLockHandle = struct {
     managed_graph: ?*graph_storage_adapter.ManagedGraph,
     is_write: bool,
     holds_global_store_lock: bool,
+    /// Whether the global `g_store_rwlock` was taken as EXCLUSIVE.  When
+    /// false (the normal case after R6), the global lock was taken SHARED
+    /// — release via `releaseStoreLock` rather than `releaseStoreWriteLock`.
+    global_lock_is_exclusive: bool = false,
 };
 
 /// Acquire a shared (read) lock scoped to `graph_name`.  If the per-graph
@@ -5071,23 +5086,41 @@ pub fn acquireGraphReadLock(graph_name: []const u8) GraphLockHandle {
     };
 }
 
-/// Acquire an exclusive (write) lock scoped to `graph_name`.  Falls back
-/// to the global store write-lock when no adapter is available.
+/// Acquire an exclusive (write) lock scoped to `graph_name`.
+///
+/// R6 (2026-04-22): takes the GLOBAL store rwlock in SHARED mode (was
+/// previously EXCLUSIVE).  The per-graph `mg.rwlock` still provides the
+/// exclusive-writer guarantee on `graph_name` — which is all a per-graph
+/// write needs.  The old exclusive global acquire forced every mutation
+/// on every graph to serialise behind a single lock, producing the
+/// 0.4 stmts/sec ingest pathology on the 16-worker ingest workload.
+///
+/// When the per-graph adapter is unavailable (legacy / test-only path),
+/// we fall back to the global EXCLUSIVE lock — there is no per-graph
+/// rwlock in that case, so the global exclusive is the only option.
 pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
-    acquireStoreWriteLock();
     if (global_adapter) |adapter| {
+        acquireStoreLock();
         if (adapter.acquireGraphWriteLock(graph_name)) |mg| {
             return .{
                 .managed_graph = mg,
                 .is_write = true,
                 .holds_global_store_lock = true,
+                .global_lock_is_exclusive = false,
             };
-        } else |_| {}
+        } else |_| {
+            // Adapter saw the graph but couldn't acquire — release the
+            // shared global and fall through to the legacy global-only
+            // exclusive path below.
+            releaseStoreLock();
+        }
     }
+    acquireStoreWriteLock();
     return .{
         .managed_graph = null,
         .is_write = true,
         .holds_global_store_lock = true,
+        .global_lock_is_exclusive = true,
     };
 }
 
@@ -5100,36 +5133,48 @@ pub fn acquireGraphWriteLock(graph_name: []const u8) GraphLockHandle {
 /// thread-pool "1 active task" shutdown hang under the 16-worker
 /// ingest workload.
 pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns: u64) !GraphLockHandle {
-    // Take the global read-side write lock up-front (to preserve
-    // historical ordering with `acquireStoreWriteLock`).  If a per-graph
-    // adapter exists we then drive the cancelable acquire; otherwise we
-    // fall back to the global-only path, which already has no per-graph
-    // rwlock so there's nothing to time out on.
-    try acquireStoreWriteLockCancelable(deadline_mono_ns);
+    // R6 (2026-04-22): take the global lock SHARED, not EXCLUSIVE, when a
+    // per-graph adapter exists.  The per-graph rwlock provides the
+    // exclusive-writer guarantee; the global lock only needs to be held so
+    // RESTORE/BACKUP (the only callers that take `g_store_rwlock` in
+    // EXCLUSIVE mode directly) can block all graph work while they run.
+    //
+    // `acquireStoreLock` is `lockSharedUncancelable` — it blocks on a
+    // kernel futex with zero CPU burn, so we don't honour the deadline
+    // while parked there.  The deadline is enforced on the per-graph lock,
+    // which is the only place genuine contention happens under the
+    // multi-worker ingest workload.
     if (global_adapter) |adapter| {
+        acquireStoreLock();
         if (adapter.acquireGraphWriteLockCancelable(graph_name, deadline_mono_ns)) |mg| {
             return .{
                 .managed_graph = mg,
                 .is_write = true,
                 .holds_global_store_lock = true,
+                .global_lock_is_exclusive = false,
             };
         } else |err| switch (err) {
             error.Deadline => {
-                // Release the global write lock we optimistically took.
-                releaseStoreWriteLock();
+                // Release the global shared lock we optimistically took.
+                releaseStoreLock();
                 return error.Deadline;
             },
             else => {
-                // GraphNotFound / other errors — fall through to the
-                // legacy global-lock-only handle (matches the old
-                // `acquireGraphWriteLock` behaviour for these errors).
+                // GraphNotFound / other errors — drop the shared lock and
+                // fall through to the legacy global-exclusive path below
+                // (matches the old behaviour for these errors).
+                releaseStoreLock();
             },
         }
     }
+    // Legacy fallback: no adapter means no per-graph rwlock, so the only
+    // lock we have is the global one.  Take it EXCLUSIVE with the deadline.
+    try acquireStoreWriteLockCancelable(deadline_mono_ns);
     return .{
         .managed_graph = null,
         .is_write = true,
         .holds_global_store_lock = true,
+        .global_lock_is_exclusive = true,
     };
 }
 
@@ -5188,7 +5233,12 @@ pub fn releaseGraphLock(handle: GraphLockHandle) void {
     }
 
     if (handle.holds_global_store_lock) {
-        if (handle.is_write) {
+        // R6 (2026-04-22): `global_lock_is_exclusive` records whether we
+        // took the global rwlock EXCLUSIVE (legacy/fallback) or SHARED
+        // (normal per-graph path).  Release the matching side.  Reads
+        // always take shared; writes take shared on the fast path and
+        // only fall back to exclusive when no per-graph adapter exists.
+        if (handle.global_lock_is_exclusive) {
             releaseStoreWriteLock();
         } else {
             releaseStoreLock();

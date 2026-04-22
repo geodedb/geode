@@ -1284,10 +1284,25 @@ pub fn handleQuicConnection(
     // the bottleneck: a handful of long-running mutations saturated the
     // pool and queued everything else behind them, which fed directly
     // into the "thread-pool deinit timed out with 1 active tasks"
-    // shutdown warning.  Follows the same auto-detect default used by
-    // the top-level connection pool in `main.zig` (num_threads=0).
+    // shutdown warning.
+    //
+    // R6 (2026-04-22): R5's per-connection pool size was too large.
+    // With N client connections each spawning min(CPU, 16) stream
+    // worker threads, an 8-core host under the 16-worker ingest
+    // workload spawned 16 × 8 = 128 stream threads just for stream
+    // dispatch, on top of the 16-wide top-level connection pool.  The
+    // resulting 3-4× oversubscription burned ~800% CPU in kernel
+    // scheduler overhead and context switches even while clients were
+    // effectively serialised behind the per-graph write lock.
+    //
+    // Most clients (including msft-graph / TopologyGraph) use 1-2
+    // streams per connection.  Pool size 4 covers the first stream +
+    // the acceptor loop + a safety margin for multiplexed queries, and
+    // keeps total server thread count bounded: 16 clients × 4 stream
+    // threads = 64, which fits comfortably on 8-16 core hosts.
     const cpu_count = std.Thread.getCpuCount() catch 4;
-    const stream_pool_size: usize = @min(@max(cpu_count, 4), 16);
+    _ = cpu_count; // retained for future per-host tuning; see R6 notes
+    const stream_pool_size: usize = 4;
     const stream_pool = pooled.ThreadPool.init(gpa, .{
         .num_threads = stream_pool_size,
         // Queue capacity scales with pool size so bursty clients don't

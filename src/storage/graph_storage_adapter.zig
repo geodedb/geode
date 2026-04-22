@@ -2247,11 +2247,20 @@ pub const StorageAdapter = struct {
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) return mg;
 
-        // Contended: back off until deadline.  Start at 100 µs; cap at
-        // 2 ms so a very long deadline still retries reasonably often
-        // without burning CPU.
-        var sleep_ns: u64 = 100 * std.time.ns_per_us;
-        const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+        // R6 (2026-04-22): contended path.  Backoff starts at 1 ms (was
+        // 100 µs) and caps at 20 ms.  Under the 16-worker ingest workload
+        // the old 100 µs starting backoff made every waiter thrash the
+        // rwlock's cache line ~10 000 times/second — 16 × 10k = 160 k
+        // atomic CAS per second across the contention region, enough to
+        // stall forward progress and inflate critical-section duration.
+        //
+        // 1 ms → 20 ms cap still honours the R2 test's 100 ms deadline
+        // (`tests/test_graph_write_lock_cancelable.zig`) — the contender
+        // spins at most ~5 tries (1+2+4+8+16 ≈ 31 ms worst-case) before
+        // falling out on the deadline check.  Real workloads with 30 s
+        // deadlines see orders of magnitude less CPU spent on retries.
+        var sleep_ns: u64 = 1 * std.time.ns_per_ms;
+        const max_sleep_ns: u64 = 20 * std.time.ns_per_ms;
         while (true) {
             const now = monoNanosNow();
             if (now >= deadline_mono_ns) return error.Deadline;
