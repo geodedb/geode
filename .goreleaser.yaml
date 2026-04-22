@@ -534,6 +534,20 @@ nfpms:
     file_info:
       mode: 0755
 
+      # QUIC/UDP system tuning helper + canonical sysctl drop-in.
+      # Invoked by scripts/packaging/postinstall.sh at install time and available
+      # to operators for apply/revert/check. Source of truth:
+      # devnw/zig/quic docs/SYSTEM_TUNING.md.
+  - src: deployment/scripts/tune-system.sh
+    dst: /usr/share/geode/deployment/scripts/tune-system.sh
+    file_info:
+      mode: 0755
+
+  - src: deployment/sysctl.d/99-geode-quic.conf
+    dst: /usr/share/geode/deployment/sysctl.d/99-geode-quic.conf
+    file_info:
+      mode: 0644
+
   # Issue #379: Use xz compression for .deb packages (supported everywhere,
   # standard for modern dpkg). Previously used zstd but GoReleaser v2.13.3/nfpm
   # has a bug where the AR archive member offset can be misaligned by 2 bytes,

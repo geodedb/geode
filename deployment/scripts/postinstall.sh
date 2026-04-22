@@ -4,50 +4,34 @@
 
 set -e
 
-# Configure QUIC performance optimizations
-# These settings significantly improve QUIC/UDP throughput for high-bandwidth connections
-echo "Configuring QUIC performance optimizations..."
+# Apply QUIC / UDP system-level tuning.
+# Source-of-truth: devnw/zig/quic docs/SYSTEM_TUNING.md.
+# Applies 11 kernel knobs with "only raise, never lower" semantics and persists
+# them to /etc/sysctl.d/99-geode-quic.conf. Best-effort — never blocks install.
+echo "Applying QUIC/UDP system tuning..."
 
-# Increase UDP buffer sizes for high-throughput QUIC transfers
-# Default values are too small for high-bandwidth connections
-RMEM_MAX=$(sysctl -n net.core.rmem_max 2>/dev/null || echo "0")
-WMEM_MAX=$(sysctl -n net.core.wmem_max 2>/dev/null || echo "0")
+TUNE_SH="/usr/share/geode/deployment/scripts/tune-system.sh"
+TUNE_CONF_FILE="/usr/share/geode/deployment/sysctl.d/99-geode-quic.conf"
 
-# Only update if current values are below recommended (7MB = 7340032 bytes)
-if [ "$RMEM_MAX" -lt 7340032 ] 2>/dev/null; then
-    echo "  Increasing net.core.rmem_max to 7340032 (7MB)..."
-    sysctl -w net.core.rmem_max=7340032 >/dev/null 2>&1 || true
+# Fall back to the build tree when the helper has not been packaged yet
+# (e.g. running this script from a source checkout rather than a .deb/.rpm).
+if [ ! -x "$TUNE_SH" ]; then
+    for cand in "./deployment/scripts/tune-system.sh" "$(dirname "$0")/tune-system.sh"; do
+        if [ -x "$cand" ]; then TUNE_SH="$cand"; break; fi
+    done
+fi
+if [ ! -f "$TUNE_CONF_FILE" ]; then
+    for cand in "./deployment/sysctl.d/99-geode-quic.conf" "$(dirname "$0")/../sysctl.d/99-geode-quic.conf"; do
+        if [ -f "$cand" ]; then TUNE_CONF_FILE="$cand"; break; fi
+    done
 fi
 
-if [ "$WMEM_MAX" -lt 7340032 ] 2>/dev/null; then
-    echo "  Increasing net.core.wmem_max to 7340032 (7MB)..."
-    sysctl -w net.core.wmem_max=7340032 >/dev/null 2>&1 || true
+if [ -x "$TUNE_SH" ] && [ -f "$TUNE_CONF_FILE" ]; then
+    TUNE_CONF="$TUNE_CONF_FILE" "$TUNE_SH" apply || true
+else
+    echo "  Warning: tuning helper not found; skipping system tuning."
+    echo "  See https://gitlab.com/devnw/zig/quic/-/blob/main/docs/SYSTEM_TUNING.md"
 fi
-
-# Persist sysctl settings if /etc/sysctl.d exists
-if [ -d /etc/sysctl.d ]; then
-    SYSCTL_CONF="/etc/sysctl.d/99-geode-quic.conf"
-    if [ ! -f "$SYSCTL_CONF" ]; then
-        echo "  Creating $SYSCTL_CONF for persistent settings..."
-        cat > "$SYSCTL_CONF" << 'EOF'
-# Geode QUIC Performance Optimizations
-# Increase UDP buffer sizes for high-throughput QUIC transfers
-# These settings allow quic-go to use larger buffers, improving performance
-# on high-bandwidth connections.
-
-# Maximum receive socket buffer size (7MB)
-net.core.rmem_max=7340032
-
-# Maximum send socket buffer size (7MB)
-net.core.wmem_max=7340032
-EOF
-        echo "  QUIC performance settings will persist across reboots."
-    fi
-fi
-
-# Note: Generic Segmentation Offload (GSO) is automatically enabled by quic-go
-# on Linux kernel 4.18+. To disable GSO (not recommended), set:
-# Environment="QUIC_GO_DISABLE_GSO=true" in the systemd service file.
 
 # Ensure proper ownership of directories
 echo "Setting up directory permissions..."

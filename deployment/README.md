@@ -253,71 +253,81 @@ sudo systemctl start geode
 
 ## QUIC Performance Optimizations
 
-Geode uses QUIC+TLS for all network communication. For optimal throughput on high-bandwidth connections, configure the following system-level optimizations.
+Geode runs over [`devnw/zig/quic`](https://gitlab.com/devnw/zig/quic). The upstream [`docs/SYSTEM_TUNING.md`](https://gitlab.com/devnw/zig/quic/-/blob/main/docs/SYSTEM_TUNING.md) is the source of truth for OS-level knobs; geode vendors the same values and applies them at install time.
 
-### UDP Buffer Sizes
+### Applied automatically
 
-QUIC transfers can be limited by UDP receive and send buffer sizes. Increase the maximum buffer size to ~7MB:
+Both `apt install geode` / `rpm -i geode` and `make install` run `deployment/scripts/tune-system.sh apply`, which:
 
-**Linux:**
+1. Raises eleven kernel knobs if the running value is lower than ours (never lowers — protects operators who tuned higher).
+2. Installs `/etc/sysctl.d/99-geode-quic.conf` for persistence across reboots.
+3. Runs `sysctl --system` to reload drop-ins in precedence order.
+
+The knobs:
+
+| Knob | Value |
+|---|---|
+| `net.core.rmem_max` | 7340032 (7 MB) |
+| `net.core.wmem_max` | 7340032 (7 MB) |
+| `net.core.rmem_default` | 2500000 |
+| `net.core.wmem_default` | 2500000 |
+| `net.core.netdev_max_backlog` | 5000 |
+| `net.ipv4.udp_mem` | `262144 524288 1048576` |
+| `net.ipv4.udp_rmem_min` | 16384 |
+| `net.ipv4.udp_wmem_min` | 16384 |
+| `net.ipv4.ip_local_port_range` | `1024 65535` |
+| `net.core.default_qdisc` | `fq` |
+| `fs.file-max` | 1048576 |
+
+### Manually applying
 
 ```bash
-# Apply immediately
-sudo sysctl -w net.core.rmem_max=7340032
-sudo sysctl -w net.core.wmem_max=7340032
+./deployment/scripts/tune-system.sh check              # preview
+sudo ./deployment/scripts/tune-system.sh apply         # apply + persist
+sudo ./deployment/scripts/tune-system.sh revert        # undo
+```
 
-# Persist across reboots (add to /etc/sysctl.d/99-geode-quic.conf)
-cat << 'EOF' | sudo tee /etc/sysctl.d/99-geode-quic.conf
-# Geode QUIC Performance Optimizations
-net.core.rmem_max=7340032
-net.core.wmem_max=7340032
-EOF
+When installed from a package, the helper lives at `/usr/share/geode/deployment/scripts/tune-system.sh` and the drop-in at `/usr/share/geode/deployment/sysctl.d/99-geode-quic.conf`.
+
+### Overriding individual knobs
+
+`/etc/sysctl.d/` loads files in lexical order. Place local overrides in a later-sorting file:
+
+```bash
+echo 'net.core.rmem_max=16777216' | sudo tee /etc/sysctl.d/99-zzz-local.conf
 sudo sysctl --system
 ```
 
-**BSD/macOS:**
-
-```bash
-# Apply immediately (requires ~15% padding, so 7MB becomes ~8MB)
-sudo sysctl -w kern.ipc.maxsockbuf=8441037
-
-# Persist across reboots (add to /etc/sysctl.conf on BSD)
-echo "kern.ipc.maxsockbuf=8441037" | sudo tee -a /etc/sysctl.conf
-```
-
-### Generic Segmentation Offload (GSO)
-
-GSO allows the kernel to batch UDP packets, reducing syscall overhead. It's automatically enabled by quic-go on Linux kernel 4.18+.
-
-- **No configuration required** - GSO is enabled automatically
-- **To disable** (not recommended): Set environment variable `QUIC_GO_DISABLE_GSO=true`
-- **Troubleshooting**: If you encounter GSO-related issues, check your kernel version (`uname -r`) and ensure it's 4.18+
-
 ### Path MTU Discovery (DPLPMTUD)
 
-Path MTU Discovery probes the network path to find the optimal packet size, reducing per-packet overhead.
+- Enabled by default in zig-quic.
+- Sends fewer than 10 probe packets over a connection's lifetime.
+- Particularly beneficial on paths supporting MTUs larger than the minimum 1200 bytes.
 
-- **Enabled by default** in all Geode clients
-- Sends fewer than 10 probe packets over a connection's lifetime
-- Particularly beneficial on paths supporting MTUs larger than the minimum 1200 bytes
-- Can be disabled per-connection if needed (see client documentation)
+### BSD / macOS
 
-### Docker Deployments
-
-When running Geode in Docker, pass sysctl settings:
+No scripted apply. Manual approximation:
 
 ```bash
-# Single container
-docker run --sysctl net.core.rmem_max=7340032 \
-           --sysctl net.core.wmem_max=7340032 \
-           geode:latest
-
-# Or configure host sysctls (applies to all containers)
-sudo sysctl -w net.core.rmem_max=7340032
-sudo sysctl -w net.core.wmem_max=7340032
+sudo sysctl -w kern.ipc.maxsockbuf=8441037   # ~7 MB + 15% padding
 ```
 
-For docker-compose, the sysctls are already configured in the default `docker-compose.yml`.
+`fq`, `udp_mem`, and `ip_local_port_range` have no direct BSD equivalents.
+
+### Docker deployments
+
+```bash
+docker run \
+  --sysctl net.core.rmem_max=7340032 \
+  --sysctl net.core.wmem_max=7340032 \
+  --sysctl net.core.rmem_default=2500000 \
+  --sysctl net.core.wmem_default=2500000 \
+  geode:latest
+```
+
+Prefer tuning the host — containers inherit host sysctls unless overridden, and unprivileged containers cannot raise limits at runtime.
+
+Upstream reference: [`devnw/zig/quic` `docs/SYSTEM_TUNING.md`](https://gitlab.com/devnw/zig/quic/-/blob/main/docs/SYSTEM_TUNING.md)
 
 ## Security Hardening
 

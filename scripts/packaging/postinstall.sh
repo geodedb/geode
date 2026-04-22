@@ -19,6 +19,20 @@ chmod 750 /var/lib/geode
 chmod 750 /var/log/geode
 chmod 755 /etc/geode/certs
 
+# Apply QUIC / UDP system-level tuning.
+# Source-of-truth: devnw/zig/quic docs/SYSTEM_TUNING.md.
+# Applies 11 kernel knobs with "only raise, never lower" semantics and persists
+# them to /etc/sysctl.d/99-geode-quic.conf. Best-effort — never blocks install.
+TUNE_SH="/usr/share/geode/deployment/scripts/tune-system.sh"
+TUNE_CONF_FILE="/usr/share/geode/deployment/sysctl.d/99-geode-quic.conf"
+if [ -x "$TUNE_SH" ] && [ -f "$TUNE_CONF_FILE" ]; then
+    echo "Applying QUIC/UDP system tuning..."
+    TUNE_CONF="$TUNE_CONF_FILE" "$TUNE_SH" apply || true
+else
+    echo "Warning: QUIC tuning helper not found at $TUNE_SH; skipping."
+    echo "See https://gitlab.com/devnw/zig/quic/-/blob/main/docs/SYSTEM_TUNING.md"
+fi
+
 # Reload systemd to recognize the new service
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload
