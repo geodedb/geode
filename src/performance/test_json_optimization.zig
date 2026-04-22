@@ -1,9 +1,16 @@
 const std = @import("std");
 
 // Zig 0.16 compat: std.time.Timer removed; use clock_gettime.
+// Cross-platform: Linux uses vDSO-accelerated std.os.linux.*; macOS/BSD
+// go through libc via std.c.*. Matches the pattern in src/admin/fle_commands.zig.
+const builtin = @import("builtin");
 fn compat_getNanos() u64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    if (comptime builtin.os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
     return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 const testing = std.testing;

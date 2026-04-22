@@ -39,7 +39,11 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 fn compat_nanoTimestamp() i128 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    }
     return @as(i128, ts.sec) * 1_000_000_000 + @as(i128, ts.nsec);
 }
 

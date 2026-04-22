@@ -38,7 +38,11 @@ const CompiledExpression = rls.RLSEngine.CompiledExpression;
 
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.REALTIME, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+    }
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
