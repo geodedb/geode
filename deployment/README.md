@@ -4,20 +4,23 @@ This directory contains deployment configuration files for Geode Graph Database.
 
 ## Directory Structure
 
-```
+```text
 deployment/
-├── systemd/           # Systemd service files
-│   ├── geode.service      # Main service (single instance)
-│   ├── geode@.service     # Template for multiple instances
-│   └── geode-auth.service # Authentication management service
-├── config/            # Configuration files
-│   └── geode.conf         # Default configuration
-└── scripts/           # Package installation scripts
-    ├── preinstall.sh      # Pre-installation script
-    ├── postinstall.sh     # Post-installation script
-    ├── preremove.sh       # Pre-removal script
-    └── postremove.sh      # Post-removal script
+├── systemd/               # Systemd service files
+│   ├── geode.service          # Main service (single instance)
+│   ├── geode@.service         # Template for per-port instances
+│   └── geode-auth.service     # Authentication management service
+├── config/                # Configuration files
+│   └── geode.conf             # Default configuration
+├── sysctl.d/              # Kernel tuning drop-ins
+│   └── 99-geode-quic.conf     # Canonical QUIC/UDP sysctl set
+└── scripts/               # Operator-facing helpers
+    └── tune-system.sh         # apply | revert | check the sysctl drop-in
 ```
+
+Package install / remove hooks (preinstall / postinstall / preremove / postremove)
+live under `scripts/packaging/` — one canonical set, wired into `.goreleaser.yaml`
+and used for every `.deb` / `.rpm` / `.apk` build.
 
 ## Systemd Service Files
 

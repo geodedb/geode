@@ -575,6 +575,7 @@ nfpms:
       - libssl3
 
   scripts:
+    preinstall: scripts/packaging/preinstall.sh
     postinstall: scripts/packaging/postinstall.sh
     preremove: scripts/packaging/preremove.sh
     postremove: scripts/packaging/postremove.sh
