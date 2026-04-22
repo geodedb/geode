@@ -862,6 +862,27 @@ pub const StorageAdapter = struct {
     /// new node ID.
     pub fn createNode(self: *StorageAdapter, graph_name: []const u8, labels: []const []const u8) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
+
+        // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
+        // into a SINGLE storage-engine transaction so we incur exactly one
+        // WAL fsync per CREATE, not one per sub-op.
+        //
+        // The engine's auto-commit variants (putNode, addLabel,
+        // putProperty) each call `txn_manager.begin()` + `commit()`, and
+        // `commit()` always ends with `wal.sync()` (fsync) — see
+        // `graph_storage/src/txn.zig:67-85`.  A CREATE (n:Label {prop: x})
+        // therefore incurs 1 putNode + 1 addLabel + 2 setNodeProperty
+        // fsyncs ≈ 40-60 ms on SSD, which was the dominant contributor to
+        // the 50 ms/CREATE median measured by
+        // `bench-query-executor-mutation` baseline (create_single scenario
+        // 2026-04-22).
+        //
+        // Wrapping the sub-ops in an explicit transaction collapses the
+        // fsync count to 1, dropping measured create_single latency
+        // dramatically (expected 5-10× speedup).
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+
         const node_id = try mg.engine.allocNode();
 
         // Write an initial node record.  The txn_stamp must be non-zero so
@@ -877,15 +898,16 @@ pub const StorageAdapter = struct {
             ._pad = .{ 0, 0, 0, 0 },
             .txn_stamp = 1,
         };
-        try mg.engine.putNode(node_id, rec);
+        try mg.engine.putNodeTxn(node_id, rec, txn);
 
         // Attach each label via the engine (updates label blocks in var.store
         // and the label index).
         for (labels) |lbl| {
             const label_id = try mg.label_dict.getOrCreate(lbl);
-            try mg.engine.addLabel(node_id, label_id);
+            try mg.engine.addLabelTxn(node_id, label_id, txn);
         }
 
+        try mg.engine.commitTxn(txn);
         return node_id;
     }
 
@@ -945,16 +967,26 @@ pub const StorageAdapter = struct {
         const out = try out_allocator.alloc(u64, n);
         errdefer out_allocator.free(out);
 
+        // R7 (2026-04-22): collapse N × (1 + L) fsyncs (one per putNode and
+        // one per addLabel) into ONE fsync for the full batch.  This is the
+        // whole reason `createNodesBatch` exists — to amortise per-slot
+        // overhead over a single transaction.  Previously each of the
+        // N × (1 + L) auto-commits did its own `wal.sync()`, so the
+        // "batch" was only amortising the mutex + graph-lookup costs.
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
-            try mg.engine.putNode(node_id, rec_template);
+            try mg.engine.putNodeTxn(node_id, rec_template, txn);
             for (label_ids) |label_id| {
-                try mg.engine.addLabel(node_id, label_id);
+                try mg.engine.addLabelTxn(node_id, label_id, txn);
             }
             out[i] = node_id;
         }
 
+        try mg.engine.commitTxn(txn);
         return out;
     }
 
@@ -971,7 +1003,16 @@ pub const StorageAdapter = struct {
         defer self.allocator.free(label_ids);
         removeNodePropertiesForLabels(mg, node_id, label_ids, rec.prop_head);
 
-        try mg.engine.deleteNode(node_id);
+        // R7 (2026-04-22): wrap the engine deleteNode call in an explicit
+        // transaction — same fsync batching rationale as createNode.  For
+        // deleteNode specifically there is only one engine sub-op, so the
+        // saving is minimal, but using the `*Txn` variant keeps the code
+        // path consistent with the other adapter methods and future-proofs
+        // any follow-up that adds per-property tombstones.
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+        try mg.engine.deleteNodeTxn(node_id, txn);
+        try mg.engine.commitTxn(txn);
     }
 
     /// Retrieve the string labels for a node. Caller owns the returned
@@ -1119,11 +1160,21 @@ pub const StorageAdapter = struct {
                 removeIndexedNodeProperty(mg, label_id, node_id, key, existing);
             }
         }
-        const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, storage_val);
+
+        // R7 (2026-04-22): batch putProperty + putNode into one txn — see
+        // `createNode` for the fsync rationale.  Previously each auto-commit
+        // issued its own `wal.sync()`, making every setNodeProperty ≈ 10 ms
+        // on SSD.
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+
+        const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, key, storage_val, txn);
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
-        try mg.engine.putNode(node_id, rec);
+        try mg.engine.putNodeTxn(node_id, rec, txn);
+
+        try mg.engine.commitTxn(txn);
 
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
@@ -1151,6 +1202,14 @@ pub const StorageAdapter = struct {
         const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
+        // R7 (2026-04-22): wrap the full N-property batch in ONE engine
+        // transaction so the entire batch incurs a single WAL fsync instead
+        // of one per property.  Caller invokes this specifically to amortise
+        // per-property overhead, so collapsing N fsyncs → 1 fsync is the
+        // whole point.
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+
         for (entries) |entry| {
             const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, entry.key, self.allocator) else null;
             defer {
@@ -1165,7 +1224,7 @@ pub const StorageAdapter = struct {
                         removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
                     }
                 }
-                const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, storage_val);
+                const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, entry.key, storage_val, txn);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     try addIndexedNodeProperty(mg, label_id, node_id, entry.key, storage_val);
@@ -1176,7 +1235,7 @@ pub const StorageAdapter = struct {
                         removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
                     }
                 }
-                const new_prop_head = try mg.engine.putProperty(rec.prop_head, entry.key, .null);
+                const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, entry.key, .null, txn);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     try addIndexedNodeProperty(mg, label_id, node_id, entry.key, .null);
@@ -1184,8 +1243,11 @@ pub const StorageAdapter = struct {
             }
         }
 
-        // Write the node record once after all property mutations.
-        try mg.engine.putNode(node_id, rec);
+        // Write the node record once after all property mutations — still
+        // inside the same transaction so the whole batch commits atomically
+        // with a single fsync.
+        try mg.engine.putNodeTxn(node_id, rec, txn);
+        try mg.engine.commitTxn(txn);
     }
 
     /// Remove a property from a node by writing a null tombstone.
@@ -1209,9 +1271,15 @@ pub const StorageAdapter = struct {
             }
         }
 
-        const new_prop_head = try mg.engine.putProperty(rec.prop_head, key, .null);
+        // R7 (2026-04-22): batch putProperty + putNode into one txn.
+        const txn = try mg.engine.beginTxn();
+        errdefer mg.engine.abortTxn(txn) catch {};
+
+        const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
-        try mg.engine.putNode(node_id, rec);
+        try mg.engine.putNodeTxn(node_id, rec, txn);
+
+        try mg.engine.commitTxn(txn);
 
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
