@@ -1799,10 +1799,15 @@ pub const GraphStore = struct {
                             .allocator = self.allocator,
                             .current_user_role = fle_integration.getCurrentUserRole(),
                         };
-                        const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch {
+                        // FLE record-id formatting must NOT go through allocPrint on the
+                        // shared self.allocator — concurrent thread-pool paths (QUIC auth
+                        // lookups, etc.) can trigger `@memcpy arguments alias` inside
+                        // std.Io.Writer.drain when the allocator is contended. Stack buffer
+                        // is large enough for "node_" + u64 (max 25 bytes).
+                        var id_buf: [32]u8 = undefined;
+                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
                             break :blk value;
                         };
-                        defer self.allocator.free(record_id);
                         const encrypted = fle_integration.encryptFieldIfNeeded(
                             fle_ctx,
                             node_type,
@@ -1958,10 +1963,11 @@ pub const GraphStore = struct {
                             .allocator = self.allocator,
                             .current_user_role = fle_integration.getCurrentUserRole(),
                         };
-                        const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch {
+                        // Stack-formatted record ID — see setNodeProperty comment.
+                        var id_buf: [32]u8 = undefined;
+                        const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch {
                             return value;
                         };
-                        defer self.allocator.free(record_id);
                         const encrypted = fle_integration.encryptFieldIfNeeded(
                             fle_ctx,
                             node_type,
@@ -1987,8 +1993,6 @@ pub const GraphStore = struct {
             const value = node.properties.get(key) orelse return null;
 
             // Fast path: skip FLE decryption when no encryption is configured.
-            // This avoids allocPrint on self.allocator from concurrent threads
-            // (e.g. parallel auth lookups) which would alias without a lock.
             if (!fle_integration.hasEncryptedFields()) return value;
 
             // Field-Level Encryption: decrypt string values if encrypted
@@ -2005,9 +2009,13 @@ pub const GraphStore = struct {
                         .current_user_role = fle_integration.getCurrentUserRole(),
                     };
 
-                    // Format record ID
-                    const record_id = std.fmt.allocPrint(self.allocator, "node_{d}", .{node_id}) catch s;
-                    defer if (!std.mem.eql(u8, record_id, s)) self.allocator.free(record_id);
+                    // Format record ID on the stack — NOT via allocPrint on the shared
+                    // self.allocator. Concurrent thread-pool access (QUIC auth lookups,
+                    // parallel query handlers) triggered '@memcpy arguments alias' inside
+                    // std.Io.Writer.drain → ArrayList.ensureTotalCapacityPrecise when the
+                    // allocator was contended. Stack buffer fits "node_" + u64 (<=25 bytes).
+                    var id_buf: [32]u8 = undefined;
+                    const record_id = std.fmt.bufPrint(&id_buf, "node_{d}", .{node_id}) catch s;
 
                     // Decrypt if field is encrypted
                     const decrypted_value = fle_integration.decryptFieldIfNeeded(
@@ -3143,10 +3151,11 @@ pub const GraphStore = struct {
                             .allocator = self.allocator,
                             .current_user_role = fle_integration.getCurrentUserRole(),
                         };
-                        const record_id = std.fmt.allocPrint(self.allocator, "edge_{d}", .{edge_id}) catch {
+                        // Stack-formatted record ID — see setNodeProperty comment.
+                        var id_buf: [32]u8 = undefined;
+                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
                             break :blk value;
                         };
-                        defer self.allocator.free(record_id);
                         const encrypted = fle_integration.encryptFieldIfNeeded(
                             fle_ctx,
                             edge_type,

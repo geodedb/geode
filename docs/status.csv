@@ -852,6 +852,7 @@ REQ-FLE-CATALOG-001,FieldLevelEncryption,CATALOG,TESTED,,,security,2025-10-15,sr
 REQ-FLE-CATALOG-001,FieldLevelEncryption,Catalog,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-CATALOG-001,FieldLevelEncryption,SCHEMA,TESTED,,,security,2026-01-15,src/schema/fle_catalog.zig
 REQ-FLE-CATALOG-002,FLECatalog,ConfigureField,TESTED,,,security,2026-01-28,src/schema/fle_catalog.zig
+REQ-FLE-CONCURRENT-RECORDID-001,FLEConcurrentSafety,RegressionTest,TESTED,,,security,2026-04-22,tests/test_fle_allocprint_alias_regression.zig
 REQ-FLE-DOC-001,FieldLevelEncryption,DOCUMENTATION,TESTED,,,security,2025-10-15,docs/FIELD_LEVEL_ENCRYPTION.md
 REQ-FLE-DOC-001,FieldLevelEncryption,Documentation,TESTED,,,security,2026-01-15,tests/test_gap_0193_high_priority.zig
 REQ-FLE-ENFORCE-001,FLEEnforcement,SecurityTests,TESTED,,,security,2026-01-28,src/security/test_fle_enforcement.zig

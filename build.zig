@@ -2832,6 +2832,14 @@ pub fn build(b: *std.Build) void {
     fle_lifecycle_test.root_module.addImport("geode", root_mod);
     test_step.dependOn(&fle_lifecycle_test.step);
 
+    // REQ-FLE-CONCURRENT-RECORDID-001: regression guard for celebrimbor
+    // 2026-04-22 panic "@memcpy arguments alias" in FLE record-id allocPrint.
+    const fle_allocprint_alias_test = b.addTest(.{
+        .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_fle_allocprint_alias_regression.zig"), .target = target, .optimize = optimize }),
+    });
+    fle_allocprint_alias_test.root_module.addImport("geode", root_mod);
+    test_step.dependOn(&fle_allocprint_alias_test.step);
+
     // FLE Enforcement Security Tests - Critical security verification
     const fle_enforcement_test = b.addTest(.{
         .root_module = b.createModule(.{ .root_source_file = b.path("src/security/test_fle_enforcement.zig"), .target = target, .optimize = optimize }),
