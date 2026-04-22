@@ -3202,6 +3202,44 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // Parallel-ingest hang reproduction tests — see triage of the
+    // "thread-pool deinit timed out after 30000ms with 1 active tasks"
+    // shutdown warning under a 16-worker Go-client ingest workload.
+    //
+    // R1 (src/txn_undo_log.zig:158-205,266-282,651-658) — process-global
+    //     undo log: `begin()` wipes concurrent txns' entries, and appends
+    //     race on a shared ArrayListUnmanaged.
+    const undo_log_isolation_mod = b.createModule(.{ .root_source_file = b.path("tests/test_undo_log_per_transaction_isolation.zig"), .target = target, .optimize = optimize });
+    undo_log_isolation_mod.addImport("geode", root_mod);
+    const undo_log_isolation_tests = b.addTest(.{ .root_module = undo_log_isolation_mod });
+    const run_undo_log_isolation_tests = b.addRunArtifact(undo_log_isolation_tests);
+    test_step.dependOn(&run_undo_log_isolation_tests.step);
+    const undo_log_isolation_step = b.step("test-undo-log-isolation", "Parallel-ingest R1: per-transaction isolation of the global undo log");
+    undo_log_isolation_step.dependOn(&run_undo_log_isolation_tests.step);
+
+    // R2 (src/storage/graph_storage_adapter.zig:2213-2228) — graph write
+    //     lock uses `lockUncancelable`; callers in
+    //     src/server/quic_connection_handler.zig:2341 have no timeout.
+    const write_lock_cancel_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_write_lock_cancelable.zig"), .target = target, .optimize = optimize });
+    write_lock_cancel_mod.addImport("geode", root_mod);
+    const write_lock_cancel_tests = b.addTest(.{ .root_module = write_lock_cancel_mod });
+    const run_write_lock_cancel_tests = b.addRunArtifact(write_lock_cancel_tests);
+    test_step.dependOn(&run_write_lock_cancel_tests.step);
+    const write_lock_cancel_step = b.step("test-graph-write-lock-cancelable", "Parallel-ingest R2: graph write lock honors a caller-supplied deadline");
+    write_lock_cancel_step.dependOn(&run_write_lock_cancel_tests.step);
+
+    // R3 (src/server/server_state.zig:250-384;
+    //     src/server/quic_connection_handler.zig:1696-1722, 2960-3036)
+    //     — ServerState has no teardown; stream close with in-flight
+    //     transaction leaks `in_txn` and undo-log entries.
+    const orphan_txn_mod = b.createModule(.{ .root_source_file = b.path("tests/test_orphan_txn_cleanup_on_stream_close.zig"), .target = target, .optimize = optimize });
+    orphan_txn_mod.addImport("geode", root_mod);
+    const orphan_txn_tests = b.addTest(.{ .root_module = orphan_txn_mod });
+    const run_orphan_txn_tests = b.addRunArtifact(orphan_txn_tests);
+    test_step.dependOn(&run_orphan_txn_tests.step);
+    const orphan_txn_step = b.step("test-orphan-txn-cleanup", "Parallel-ingest R3: ServerState teardown on QUIC stream close");
+    orphan_txn_step.dependOn(&run_orphan_txn_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

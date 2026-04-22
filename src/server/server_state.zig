@@ -382,6 +382,33 @@ pub const ServerState = struct {
         if (self.query_text) |qt| self.allocator.free(qt);
         self.query_text = null;
     }
+
+    // R3 (triage): a QUIC stream may close with an in-flight transaction —
+    // see src/server/quic_connection_handler.zig:1696-1722 / 2960-3036 for
+    // the existing paths.  There is currently NO teardown hook that runs
+    // when a stream closes without COMMIT/ROLLBACK, so `state.in_txn`
+    // stays true and the process-global undo log keeps the orphaned
+    // entries.
+    //
+    // This is a *stub seam* added so reproduction tests can pin the
+    // desired contract:
+    //
+    //   - Clears `in_txn`.
+    //   - Rolls back any open transaction against the passed-in store and
+    //     empties the undo log.
+    //   - Frees owned per-session allocations that would otherwise leak.
+    //
+    // The stub returns `error.NotImplemented` so the regression tests
+    // fail until the fix lands.  Once R3 is fixed, this should grow a
+    // real implementation and drop the error.
+    pub fn tearDownForStreamClose(
+        self: *ServerState,
+        store: ?*@import("../graph_store.zig").GraphStore,
+    ) !void {
+        _ = self;
+        _ = store;
+        return error.NotImplemented;
+    }
 };
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-001B; FEATURE="ServerRefactoring"; ASPECT=SERVER_STATE_STRUCT; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
