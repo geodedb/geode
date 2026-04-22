@@ -1278,9 +1278,21 @@ pub fn handleQuicConnection(
         conn_state.deinit();
     }
 
+    // R5 (2026-04-22): size the per-connection stream worker pool from
+    // CPU count (capped at 16) instead of hardcoding 4 threads.  Under
+    // the 16-worker Go-client ingest workload the old 4-thread pool was
+    // the bottleneck: a handful of long-running mutations saturated the
+    // pool and queued everything else behind them, which fed directly
+    // into the "thread-pool deinit timed out with 1 active tasks"
+    // shutdown warning.  Follows the same auto-detect default used by
+    // the top-level connection pool in `main.zig` (num_threads=0).
+    const cpu_count = std.Thread.getCpuCount() catch 4;
+    const stream_pool_size: usize = @min(@max(cpu_count, 4), 16);
     const stream_pool = pooled.ThreadPool.init(gpa, .{
-        .num_threads = 4,
-        .queue_capacity = 64,
+        .num_threads = stream_pool_size,
+        // Queue capacity scales with pool size so bursty clients don't
+        // spuriously trip backpressure on a wider pool.
+        .queue_capacity = stream_pool_size * 16,
     }) catch |err| {
         log.warn("Failed to initialize stream worker pool, single-stream mode", &.{
             Attr.string("error", @errorName(err)),
