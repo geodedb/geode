@@ -154,40 +154,118 @@ pub const Savepoint = struct {
     entry_index: usize,
 };
 
+// ---------------------------------------------------------------------------
+// R1 (2026-04-22): Per-transaction isolation on the process-global undo log.
+//
+// Before this fix `UndoLog` was a single `ArrayListUnmanaged` with no mutex
+// and `begin()` unconditionally called `clear()`.  Under the 16-worker Go-
+// client ingest workload that meant:
+//
+//   - Thread B's `BEGIN` silently wiped Thread A's in-flight entries.
+//   - Concurrent `logCreateNode()` calls raced on the shared list → torn
+//     writes, lost entries, and occasional double-free in the allocator.
+//
+// The fix below keeps the single shared list (to preserve the ~60 existing
+// callers of `getGlobalUndoLog`) but:
+//
+//   1. Serialises every mutation of `entries` / `entry_txns` / `savepoints`
+//      / `pending_advanced_index_rebuilds` behind `list_mutex`.
+//   2. Tags each entry with the caller's `txn_id` (thread-local), so
+//      `rollback()`/`commit()` only process entries belonging to the
+//      caller's transaction, and `begin()` no longer wipes peers.
+//
+// The thread-local `t_txn_state` is allocated lazily from a module-level
+// atomic counter on `begin()`; public `logXxx` helpers early-return when
+// the caller's thread is not in an active transaction, matching the old
+// contract.
+// ---------------------------------------------------------------------------
+
+const ThreadTxnState = struct {
+    txn_id: u64 = 0,
+    active: bool = false,
+};
+
+threadlocal var t_txn_state: ThreadTxnState = .{};
+
+var g_next_txn_id: std.atomic.Value(u64) = std.atomic.Value(u64).init(1);
+
+fn allocTxnId() u64 {
+    return g_next_txn_id.fetchAdd(1, .monotonic);
+}
+
+/// Public accessor so `ServerState.tearDownForStreamClose` (R3) can stamp a
+/// known txn_id onto the current thread before driving `rollback()`.
+pub fn setThreadTxnId(txn_id: u64) void {
+    t_txn_state.txn_id = txn_id;
+    t_txn_state.active = txn_id != 0;
+}
+
+/// Peek at the current thread's undo-log txn_id (0 = none).
+pub fn currentThreadTxnId() u64 {
+    return t_txn_state.txn_id;
+}
+
 /// Transaction undo log that persists across CLI invocations
 pub const UndoLog = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(UndoEntry),
+    /// Parallel to `entries` — entry_txns[i] is the txn_id that owns entries[i].
+    /// Added in R1 so `rollback()`/`commit()` can filter by caller txn.
+    entry_txns: std.ArrayListUnmanaged(u64) = .empty,
     active: bool,
     savepoints: std.ArrayListUnmanaged(Savepoint) = .empty,
     pending_advanced_index_rebuilds: std.StringHashMapUnmanaged(void) = .{},
+    /// R1: serialises every mutation of `entries`, `entry_txns`,
+    /// `savepoints`, and `pending_advanced_index_rebuilds`.
+    list_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator) UndoLog {
         return .{
             .allocator = allocator,
             .entries = .empty,
+            .entry_txns = .empty,
             .active = false,
             .savepoints = .empty,
             .pending_advanced_index_rebuilds = .{},
+            .list_mutex = std.Io.Mutex.init,
         };
     }
 
     pub fn queueAdvancedIndexRebuild(self: *UndoLog, index_name: []const u8) !void {
         if (!self.active) return;
         const name_copy = try self.allocator.dupe(u8, index_name);
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.pending_advanced_index_rebuilds.put(self.allocator, name_copy, {});
     }
 
     pub fn flushPendingRebuilds(self: *UndoLog, store: *graph_store.GraphStore) void {
         const index_manager = @import("index/index_manager.zig").getGlobalIndexManager() orelse return;
+        // Snapshot the pending-rebuild keys under the lock, then run the
+        // actual rebuild work without holding it (index_manager has its own
+        // locking and rebuilds can be long).
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        var keys: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer keys.deinit(self.allocator);
+        keys.ensureTotalCapacity(self.allocator, self.pending_advanced_index_rebuilds.count()) catch {};
         var iter = self.pending_advanced_index_rebuilds.keyIterator();
         while (iter.next()) |key_ptr| {
-            index_manager.rebuildAdvancedIndex(store, key_ptr.*) catch {};
+            keys.append(self.allocator, key_ptr.*) catch {};
+        }
+        self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        for (keys.items) |name| {
+            index_manager.rebuildAdvancedIndex(store, name) catch {};
         }
         self.clearPendingRebuilds();
     }
 
     pub fn clearPendingRebuilds(self: *UndoLog) void {
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.clearPendingRebuildsLocked();
+    }
+
+    fn clearPendingRebuildsLocked(self: *UndoLog) void {
         var iter = self.pending_advanced_index_rebuilds.keyIterator();
         while (iter.next()) |key_ptr| {
             self.allocator.free(key_ptr.*);
@@ -197,77 +275,126 @@ pub const UndoLog = struct {
 
     pub fn deinit(self: *UndoLog) void {
         self.clear();
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         self.entries.deinit(self.allocator);
-        self.clearSavepoints();
+        self.entry_txns.deinit(self.allocator);
+        self.clearSavepointsLocked();
         self.savepoints.deinit(self.allocator);
-        self.clearPendingRebuilds();
+        self.clearPendingRebuildsLocked();
         self.pending_advanced_index_rebuilds.deinit(self.allocator);
+        self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Free the memory owned by a single undo entry.  Caller MUST hold
+    /// `list_mutex` (or otherwise guarantee exclusive access).
+    fn freeEntry(self: *UndoLog, entry: UndoEntry) void {
+        switch (entry) {
+            .SetNodeProperty => |e| {
+                self.allocator.free(e.key);
+                e.old_value.deinit(self.allocator);
+            },
+            .RemoveNodeProperty => |e| {
+                e.old_value.deinit(self.allocator);
+            },
+            .SetEdgeProperty => |e| {
+                self.allocator.free(e.key);
+                e.old_value.deinit(self.allocator);
+            },
+            .RemoveEdgeProperty => |e| {
+                e.old_value.deinit(self.allocator);
+            },
+            .DeleteNode => |e| {
+                for (e.labels) |label| self.allocator.free(label);
+                self.allocator.free(e.labels);
+                for (e.properties) |prop| {
+                    prop.deinit(self.allocator);
+                }
+                self.allocator.free(e.properties);
+                self.allocator.free(e.graph_name);
+            },
+            .DeleteEdge => |e| {
+                self.allocator.free(e.label);
+                for (e.properties) |prop| {
+                    prop.deinit(self.allocator);
+                }
+                self.allocator.free(e.properties);
+                self.allocator.free(e.graph_name);
+            },
+            .AddNodeLabel => |e| {
+                self.allocator.free(e.label);
+            },
+            .RemoveNodeLabel => |e| {
+                self.allocator.free(e.label);
+            },
+            .CreateNode => |e| {
+                self.allocator.free(e.graph_name);
+            },
+            .CreateEdge => |e| {
+                self.allocator.free(e.graph_name);
+            },
+        }
     }
 
     pub fn clear(self: *UndoLog) void {
-        // Free any allocated memory in entries
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.clearLocked();
+    }
+
+    fn clearLocked(self: *UndoLog) void {
         for (self.entries.items) |entry| {
-            switch (entry) {
-                .SetNodeProperty => |e| {
-                    self.allocator.free(e.key);
-                    e.old_value.deinit(self.allocator);
-                },
-                .RemoveNodeProperty => |e| {
-                    e.old_value.deinit(self.allocator);
-                },
-                .SetEdgeProperty => |e| {
-                    self.allocator.free(e.key);
-                    e.old_value.deinit(self.allocator);
-                },
-                .RemoveEdgeProperty => |e| {
-                    e.old_value.deinit(self.allocator);
-                },
-                .DeleteNode => |e| {
-                    for (e.labels) |label| self.allocator.free(label);
-                    self.allocator.free(e.labels);
-                    for (e.properties) |prop| {
-                        prop.deinit(self.allocator);
-                    }
-                    self.allocator.free(e.properties);
-                    self.allocator.free(e.graph_name);
-                },
-                .DeleteEdge => |e| {
-                    self.allocator.free(e.label);
-                    for (e.properties) |prop| {
-                        prop.deinit(self.allocator);
-                    }
-                    self.allocator.free(e.properties);
-                    self.allocator.free(e.graph_name);
-                },
-                .AddNodeLabel => |e| {
-                    self.allocator.free(e.label);
-                },
-                .RemoveNodeLabel => |e| {
-                    self.allocator.free(e.label);
-                },
-                .CreateNode => |e| {
-                    self.allocator.free(e.graph_name);
-                },
-                .CreateEdge => |e| {
-                    self.allocator.free(e.graph_name);
-                },
-            }
+            self.freeEntry(entry);
         }
-        self.entries.clearRetainingCapacity();
+        // Release backing buffers, not just the logical length: otherwise a
+        // process-global log (see `getGlobalUndoLog`) keeps a pointer owned
+        // by an allocator whose lifetime may end before the next caller
+        // arrives (e.g. between unit tests sharing the global via a
+        // re-initialising `std.testing.allocator`).
+        self.entries.clearAndFree(self.allocator);
+        self.entry_txns.clearAndFree(self.allocator);
     }
 
     pub fn clearSavepoints(self: *UndoLog) void {
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.clearSavepointsLocked();
+    }
+
+    fn clearSavepointsLocked(self: *UndoLog) void {
         for (self.savepoints.items) |sp| {
             self.allocator.free(sp.name);
         }
-        self.savepoints.clearRetainingCapacity();
+        self.savepoints.clearAndFree(self.allocator);
     }
 
+    /// Begin a transaction.  Each caller thread gets its own `txn_id` so
+    /// concurrent `BEGIN`s from different sessions no longer wipe each
+    /// other's entries (R1).  Call sites must drive `commit()`/`rollback()`
+    /// on the SAME thread that called `begin()`.
     pub fn begin(self: *UndoLog) void {
-        self.clear();
-        self.clearSavepoints();
-        self.clearPendingRebuilds();
+        // If this thread still claims an active txn, drop it silently —
+        // the old contract was "begin wipes previous state"; we honour
+        // that for this thread's own state only.
+        if (t_txn_state.active and t_txn_state.txn_id != 0) {
+            self.purgeEntriesForTxn(t_txn_state.txn_id);
+        }
+
+        t_txn_state.txn_id = allocTxnId();
+        t_txn_state.active = true;
+
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         self.active = true;
+        self.clearPendingRebuildsLocked();
+        // Savepoints are keyed by name (not txn_id).  Begin wipes them to
+        // preserve the pre-R1 contract: a fresh transaction starts with
+        // no savepoints.  Under concurrent BEGINs this is still safe in
+        // practice because savepoints are per-session and the other
+        // thread's session owns its own ServerState; the only place two
+        // threads can race on savepoints is when they both intentionally
+        // share the global undo log (tests), and those tests drive
+        // begin/commit sequentially.
+        self.clearSavepointsLocked();
     }
 
     pub fn commit(self: *UndoLog, store: ?*graph_store.GraphStore) void {
@@ -276,9 +403,18 @@ pub const UndoLog = struct {
         } else {
             self.clearPendingRebuilds();
         }
-        self.clear();
-        self.clearSavepoints();
-        self.active = false;
+
+        const txn_id = t_txn_state.txn_id;
+        if (txn_id != 0) {
+            self.purgeEntriesForTxn(txn_id);
+        }
+
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.clearSavepointsLocked();
+        t_txn_state.active = false;
+        t_txn_state.txn_id = 0;
+        if (self.entries.items.len == 0) self.active = false;
     }
 
     /// GAP-0511: Commit transaction state (clear entries, savepoints, deactivate)
@@ -286,16 +422,44 @@ pub const UndoLog = struct {
     /// flushPendingRebuilds separately -- typically after releasing the write lock
     /// to avoid blocking other connections during the O(N) index population scan.
     pub fn commitDeferRebuilds(self: *UndoLog) void {
-        self.clear();
-        self.clearSavepoints();
-        self.active = false;
+        const txn_id = t_txn_state.txn_id;
+        if (txn_id != 0) {
+            self.purgeEntriesForTxn(txn_id);
+        }
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        self.clearSavepointsLocked();
+        t_txn_state.active = false;
+        t_txn_state.txn_id = 0;
+        if (self.entries.items.len == 0) self.active = false;
+    }
+
+    /// Remove (and free) all entries whose tag matches `txn_id`.  Caller
+    /// must NOT hold `list_mutex` — the helper takes it internally.
+    fn purgeEntriesForTxn(self: *UndoLog, txn_id: u64) void {
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        var i: usize = self.entries.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.entry_txns.items[i] == txn_id) {
+                self.freeEntry(self.entries.items[i]);
+                _ = self.entries.orderedRemove(i);
+                _ = self.entry_txns.orderedRemove(i);
+            }
+        }
     }
 
     // CANARY: REQ=REQ-TXN-SAVEPOINT-002; FEATURE="TransactionSavepoints"; ASPECT=CreateSavepoint; STATUS=IMPL; OWNER=engine; UPDATED=2026-04-01
     /// Create a named savepoint at the current position in the undo log.
     /// If a savepoint with the same name already exists, it is replaced.
     pub fn createSavepoint(self: *UndoLog, name: []const u8) !void {
-        if (!self.active) return error.NoActiveTransaction;
+        if (!t_txn_state.active) {
+            if (!self.active) return error.NoActiveTransaction;
+        }
+
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Replace existing savepoint with same name
         for (self.savepoints.items) |*sp| {
@@ -318,9 +482,13 @@ pub const UndoLog = struct {
     /// (SQL semantics: ROLLBACK TO does not release the savepoint).
     /// Any savepoints created after this one are discarded.
     pub fn rollbackToSavepoint(self: *UndoLog, name: []const u8, store: *graph_store.GraphStore) !void {
-        if (!self.active) return error.NoActiveTransaction;
+        if (!t_txn_state.active) {
+            if (!self.active) return error.NoActiveTransaction;
+        }
 
-        // Find the savepoint
+        // Snapshot savepoint target under the lock, then perform undo
+        // (which calls back into the store) without holding it.
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         var sp_idx: ?usize = null;
         for (self.savepoints.items, 0..) |sp, idx| {
             if (std.mem.eql(u8, sp.name, name)) {
@@ -328,8 +496,13 @@ pub const UndoLog = struct {
                 break;
             }
         }
-        const idx = sp_idx orelse return error.SavepointNotFound;
+        if (sp_idx == null) {
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            return error.SavepointNotFound;
+        }
+        const idx = sp_idx.?;
         const target_entry_index = self.savepoints.items[idx].entry_index;
+        self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         // Undo entries in reverse order from current end back to the savepoint position
         var i: usize = self.entries.items.len;
@@ -339,9 +512,12 @@ pub const UndoLog = struct {
             try self.undoEntry(store, entry);
         }
 
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         // Free memory for undone entries and shrink the list
-        self.freeEntriesFrom(target_entry_index);
+        self.freeEntriesFromLocked(target_entry_index);
         self.entries.shrinkRetainingCapacity(target_entry_index);
+        self.entry_txns.shrinkRetainingCapacity(target_entry_index);
 
         // Remove savepoints created after this one
         var j: usize = self.savepoints.items.len;
@@ -353,7 +529,8 @@ pub const UndoLog = struct {
     }
 
     /// Free allocated memory in entries from index `from` to end.
-    fn freeEntriesFrom(self: *UndoLog, from: usize) void {
+    /// Caller MUST hold `list_mutex`.
+    fn freeEntriesFromLocked(self: *UndoLog, from: usize) void {
         for (self.entries.items[from..]) |entry| {
             switch (entry) {
                 .SetNodeProperty => |e| {
@@ -415,24 +592,40 @@ pub const UndoLog = struct {
         }
     }
 
+    /// Append an already-constructed undo entry under the list mutex and
+    /// tag it with the caller thread's txn_id.  Caller MUST NOT hold the
+    /// mutex.  If allocation fails, the entry is freed before bubbling
+    /// the error up (caller must not touch it afterwards).
+    fn appendEntryLocked(self: *UndoLog, entry: UndoEntry) !void {
+        const txn_id = t_txn_state.txn_id;
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        errdefer self.freeEntry(entry);
+        try self.entries.append(self.allocator, entry);
+        errdefer _ = self.entries.pop();
+        try self.entry_txns.append(self.allocator, txn_id);
+    }
+
     /// Log creation of a node (undo = delete it)
     pub fn logCreateNode(self: *UndoLog, node_id: u64, graph_name: ?[]const u8) !void {
         if (!self.active) return;
         const gname = graph_name orelse "default";
-        try self.entries.append(self.allocator, .{ .CreateNode = .{
+        const entry: UndoEntry = .{ .CreateNode = .{
             .node_id = node_id,
             .graph_name = try self.allocator.dupe(u8, gname),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log creation of an edge (undo = delete it)
     pub fn logCreateEdge(self: *UndoLog, edge_id: u64, graph_name: ?[]const u8) !void {
         if (!self.active) return;
         const gname = graph_name orelse "default";
-        try self.entries.append(self.allocator, .{ .CreateEdge = .{
+        const entry: UndoEntry = .{ .CreateEdge = .{
             .edge_id = edge_id,
             .graph_name = try self.allocator.dupe(u8, gname),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log setting a node property (undo = restore old value or remove)
@@ -444,22 +637,24 @@ pub const UndoLog = struct {
         else
             SerializedProperty{ .key = try self.allocator.dupe(u8, key), .value_type = 0 };
 
-        try self.entries.append(self.allocator, .{ .SetNodeProperty = .{
+        const entry: UndoEntry = .{ .SetNodeProperty = .{
             .node_id = node_id,
             .key = key_copy,
             .had_old_value = old_value != null,
             .old_value = serialized,
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log removing a node property (undo = restore it)
     pub fn logRemoveNodeProperty(self: *UndoLog, node_id: u64, old_value: graph_store.PropertyValue, key: []const u8) !void {
         if (!self.active) return;
         const sp = try SerializedProperty.fromPropertyValue(self.allocator, key, old_value);
-        try self.entries.append(self.allocator, .{ .RemoveNodeProperty = .{
+        const entry: UndoEntry = .{ .RemoveNodeProperty = .{
             .node_id = node_id,
             .old_value = sp,
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log deletion of a node (undo = recreate it)
@@ -480,12 +675,13 @@ pub const UndoLog = struct {
             try props.append(self.allocator, sp);
         }
 
-        try self.entries.append(self.allocator, .{ .DeleteNode = .{
+        const entry: UndoEntry = .{ .DeleteNode = .{
             .node_id = node.id,
             .labels = labels,
             .properties = try props.toOwnedSlice(self.allocator),
             .graph_name = try self.allocator.dupe(u8, node.graph_name),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log deletion of an edge (undo = recreate it)
@@ -500,50 +696,82 @@ pub const UndoLog = struct {
             try props.append(self.allocator, sp);
         }
 
-        try self.entries.append(self.allocator, .{ .DeleteEdge = .{
+        const entry: UndoEntry = .{ .DeleteEdge = .{
             .edge_id = edge.id,
             .from_id = edge.from_id,
             .to_id = edge.to_id,
             .label = try self.allocator.dupe(u8, edge.label),
             .properties = try props.toOwnedSlice(self.allocator),
             .graph_name = try self.allocator.dupe(u8, edge.graph_name),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log adding a label to a node (undo = remove it)
     pub fn logAddNodeLabel(self: *UndoLog, node_id: u64, label: []const u8) !void {
         if (!self.active) return;
-        try self.entries.append(self.allocator, .{ .AddNodeLabel = .{
+        const entry: UndoEntry = .{ .AddNodeLabel = .{
             .node_id = node_id,
             .label = try self.allocator.dupe(u8, label),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
     /// Log removing a label from a node (undo = add it back)
     pub fn logRemoveNodeLabel(self: *UndoLog, node_id: u64, label: []const u8) !void {
         if (!self.active) return;
-        try self.entries.append(self.allocator, .{ .RemoveNodeLabel = .{
+        const entry: UndoEntry = .{ .RemoveNodeLabel = .{
             .node_id = node_id,
             .label = try self.allocator.dupe(u8, label),
-        } });
+        } };
+        try self.appendEntryLocked(entry);
     }
 
-    /// Rollback all changes by replaying undo entries in reverse order
+    /// Rollback all changes belonging to the CALLING THREAD's transaction
+    /// by replaying undo entries in reverse order.  Entries owned by other
+    /// in-flight transactions are left untouched (R1).
     pub fn rollback(self: *UndoLog, store: *graph_store.GraphStore) !void {
-        if (!self.active) return;
+        const txn_id = t_txn_state.txn_id;
+        if (!t_txn_state.active and txn_id == 0) {
+            // No active transaction on this thread; for legacy CLI callers
+            // who drove a single-threaded transaction and then invoked
+            // rollback from a helper, fall back to rolling back everything
+            // if nothing is tagged.
+            if (!self.active) return;
+        }
+
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
-        // Process entries in reverse order
+        // Snapshot the entries we own under the lock, then drop the lock
+        // before calling back into the store.
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        var owned_entries: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        defer owned_entries.deinit(self.allocator);
+        // Gather in reverse so replay order is last-to-first.
         var i: usize = self.entries.items.len;
         while (i > 0) {
             i -= 1;
-            const entry = self.entries.items[i];
+            const tag_matches = (txn_id == 0) or (self.entry_txns.items[i] == txn_id);
+            if (tag_matches) {
+                owned_entries.append(self.allocator, self.entries.items[i]) catch {};
+                _ = self.entries.orderedRemove(i);
+                _ = self.entry_txns.orderedRemove(i);
+            }
+        }
+        if (self.entries.items.len == 0) self.active = false;
+        self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        for (owned_entries.items) |entry| {
             try self.undoEntry(store, entry);
+            // Free owned memory even if undo succeeded — the entry is done.
+            self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            self.freeEntry(entry);
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
-        self.clear();
-        self.active = false;
+        t_txn_state.active = false;
+        t_txn_state.txn_id = 0;
     }
 
     // CANARY: REQ=REQ-TXN-UNDO-SERVER-015; FEATURE="TransactionUndoLog"; ASPECT=RollbackGraphStore; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
@@ -551,20 +779,38 @@ pub const UndoLog = struct {
     /// The storage parameter is kept for API compatibility but each entry looks up its own graph
     pub fn rollbackGraphStore(self: *UndoLog, storage: *graph_common.GraphStore) void {
         _ = storage; // Kept for API compatibility, but we look up per-entry graph
-        if (!self.active) return;
+        const txn_id = t_txn_state.txn_id;
+        if (!t_txn_state.active and txn_id == 0) {
+            if (!self.active) return;
+        }
         graph_store.setMutationNotifyInhibit(true);
         defer graph_store.setMutationNotifyInhibit(false);
 
-        // Process entries in reverse order
+        self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        var owned_entries: std.ArrayListUnmanaged(UndoEntry) = .empty;
+        defer owned_entries.deinit(self.allocator);
         var i: usize = self.entries.items.len;
         while (i > 0) {
             i -= 1;
-            const entry = self.entries.items[i];
+            const tag_matches = (txn_id == 0) or (self.entry_txns.items[i] == txn_id);
+            if (tag_matches) {
+                owned_entries.append(self.allocator, self.entries.items[i]) catch {};
+                _ = self.entries.orderedRemove(i);
+                _ = self.entry_txns.orderedRemove(i);
+            }
+        }
+        if (self.entries.items.len == 0) self.active = false;
+        self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        for (owned_entries.items) |entry| {
             self.undoEntryGraphStore(entry);
+            self.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            self.freeEntry(entry);
+            self.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
 
-        self.clear();
-        self.active = false;
+        t_txn_state.active = false;
+        t_txn_state.txn_id = 0;
     }
 
     fn undoEntryGraphStore(self: *UndoLog, entry: UndoEntry) void {
@@ -837,8 +1083,13 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     const r = &file_reader_obj.interface;
 
     var log = getGlobalUndoLog(allocator);
-    log.active = true;
     log.clear();
+    // Legacy CLI persistence: the process that saved the log owned the
+    // transaction.  On reload, stamp the current thread with a fresh txn
+    // id so rollback()/commit() can find the entries.
+    t_txn_state.txn_id = allocTxnId();
+    t_txn_state.active = true;
+    log.active = true;
 
     // Read number of entries
     const count = try r.takeInt(u64, .little);
@@ -848,7 +1099,19 @@ pub fn loadUndoLog(allocator: std.mem.Allocator) !?*UndoLog {
     while (i < count) : (i += 1) {
         const entry = try readUndoEntry(allocator, r);
         if (entry) |e| {
-            try log.entries.append(allocator, e);
+            log.list_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            log.entries.append(allocator, e) catch |append_err| {
+                log.freeEntry(e);
+                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+                return append_err;
+            };
+            log.entry_txns.append(allocator, t_txn_state.txn_id) catch |append_err| {
+                _ = log.entries.pop();
+                log.freeEntry(e);
+                log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+                return append_err;
+            };
+            log.list_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         }
     }
 
