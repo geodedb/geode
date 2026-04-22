@@ -391,6 +391,12 @@ pub fn main() !void {
     // concurrently without corrupting heap state.
     // Zig 0.16: ThreadSafeAllocator removed; DebugAllocator is already thread-safe.
     const gpa = gpa_instance.allocator();
+    // The global catalog singleton is created lazily on the first connection
+    // via ensureCatalogInstance (execution.zig). Without this defer, its
+    // per-load allocations (src/schema/catalog.zig:408 col names etc.) would
+    // outlive the DebugAllocator and surface as leaks on shutdown, which the
+    // test harness interprets as a server crash mid-spec. See ensuing fix.
+    defer geode.execution.cleanupCatalogInstance();
     // Parse server CLI args using modularized cli_args module (M3.2 Phase 3 CLI extraction)
     const config_opt = try cli_args.parseArgs(gpa);
     if (config_opt == null) return; // Help was shown, exit

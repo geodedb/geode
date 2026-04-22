@@ -979,7 +979,13 @@ fn executeBatchCreateHomogeneous(
     // instead of calling `createNodeWithGraph` N times. This collapses
     // the per-clause `getOrCreateGraph` mutex round-trip + the per-node
     // O(len) `sortedInsert` into one lock + one resize.
-    const slot_ids = try store.createNodesBatch(labels, target_graph, create_pattern.chains.len);
+    //
+    // Route the result slice through the per-request `allocator` (via
+    // `createNodesBatchWithAllocator`) so the `defer ... free(slot_ids)`
+    // below pairs with the same allocator. The plain `createNodesBatch`
+    // uses `store.allocator`, which triggers an invalid-free panic on
+    // DebugAllocator when the caller frees with a different arena.
+    const slot_ids = try store.createNodesBatchWithAllocator(labels, target_graph, create_pattern.chains.len, allocator);
     defer allocator.free(slot_ids);
 
     // Per-node undo entries. The undo log API is row-oriented — logging
