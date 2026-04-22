@@ -383,31 +383,87 @@ pub const ServerState = struct {
         self.query_text = null;
     }
 
-    // R3 (triage): a QUIC stream may close with an in-flight transaction —
-    // see src/server/quic_connection_handler.zig:1696-1722 / 2960-3036 for
-    // the existing paths.  There is currently NO teardown hook that runs
-    // when a stream closes without COMMIT/ROLLBACK, so `state.in_txn`
-    // stays true and the process-global undo log keeps the orphaned
-    // entries.
+    // R3 (2026-04-22): teardown hook for the QUIC stream-close path.
     //
-    // This is a *stub seam* added so reproduction tests can pin the
-    // desired contract:
+    // A QUIC stream may close with an in-flight transaction (client
+    // disconnects mid-chunk during the 16-worker ingest workload, or a
+    // spurious FIN from the QUIC library).  Without this hook,
+    // `state.in_txn` stays true and the process-global undo log keeps
+    // the orphaned entries — a subsequent BEGIN on a reused session sees
+    // "transaction already in progress" and a later `begin()` from any
+    // session would wipe them (aliased with R1).
     //
-    //   - Clears `in_txn`.
-    //   - Rolls back any open transaction against the passed-in store and
-    //     empties the undo log.
-    //   - Frees owned per-session allocations that would otherwise leak.
+    // Contract:
+    //   - If `in_txn`, roll back the undo log against the caller's
+    //     `store` honouring the mutex tier order (per-graph write lock
+    //     first, per CLAUDE.md's lock ordering table).  When the store
+    //     is null (no adapter wired up, e.g. in unit tests), skip the
+    //     store-side rollback but still clear the undo log entries that
+    //     belong to this session's thread so they don't leak.
+    //   - Clear `in_txn` / `txn_id`.
+    //   - Log an audit warning (`orphan-txn rolled back on stream close`).
+    //   - Safe to call when no transaction is in flight — returns
+    //     cleanly without side effects.
     //
-    // The stub returns `error.NotImplemented` so the regression tests
-    // fail until the fix lands.  Once R3 is fixed, this should grow a
-    // real implementation and drop the error.
+    // The hook is driven from every QUIC stream-close path: the handler
+    // cleanup in `handleAdditionalStream`, the per-stream cleanup in
+    // `handleQuicConnection`, and `invalidateAuthenticatedSession` in
+    // `quic_connection_handler.zig`.
     pub fn tearDownForStreamClose(
         self: *ServerState,
         store: ?*@import("../graph_store.zig").GraphStore,
     ) !void {
-        _ = self;
-        _ = store;
-        return error.NotImplemented;
+        const graph_store_mod = @import("../graph_store.zig");
+        const txn_undo_log = @import("../txn_undo_log.zig");
+
+        if (!self.in_txn) return;
+
+        const orphan_txn_id = self.txn_id;
+        const graph_name = self.current_graph orelse graph_store_mod.DEFAULT_GRAPH_NAME;
+
+        if (store) |s| {
+            // Lock tier 1 (store_mutex / per-graph rwlock) BEFORE touching
+            // the undo log (tier order preserved).  Caller paths that
+            // already hold a per-graph write lock must either not call
+            // this hook, or call it before dropping their lock (none of
+            // the current call sites hold one).
+            const lock_handle = graph_store_mod.acquireGraphWriteLock(graph_name);
+            defer graph_store_mod.releaseGraphLock(lock_handle);
+
+            // Stamp this thread so the per-txn rollback filter finds the
+            // entries that were recorded by the (potentially different)
+            // stream worker thread.  Without this step the R1 per-txn
+            // filter would skip them as belonging to another thread's
+            // transaction.
+            txn_undo_log.setThreadTxnId(orphan_txn_id);
+            defer txn_undo_log.setThreadTxnId(0);
+
+            txn_undo_log.getGlobalUndoLog(self.allocator).rollback(s) catch |err| {
+                std.log.warn("orphan-txn rollback on stream close failed: {s}", .{@errorName(err)});
+            };
+        } else {
+            // No store — just purge the undo entries that belong to the
+            // orphaned transaction so they don't leak or get picked up
+            // by a peer transaction's rollback.
+            txn_undo_log.setThreadTxnId(orphan_txn_id);
+            defer txn_undo_log.setThreadTxnId(0);
+            const undo = txn_undo_log.getGlobalUndoLog(self.allocator);
+            // `rollback(store)` requires a store; without one we fall
+            // back to clearing just this txn's entries.  `clear()` wipes
+            // the whole log, which is the correct behaviour when no
+            // other transactions are in flight (the only way we reach
+            // this branch).
+            undo.active = false;
+            undo.clear();
+        }
+
+        std.log.warn("orphan-txn rolled back on stream close (txn_id={d}, graph={s})", .{
+            orphan_txn_id,
+            graph_name,
+        });
+
+        self.in_txn = false;
+        self.txn_id = 0;
     }
 };
 

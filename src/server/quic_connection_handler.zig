@@ -753,6 +753,17 @@ fn handleAdditionalStream(ctx_ptr: *anyopaque) void {
     }
 
     defer {
+        // R3 (2026-04-22): roll back any orphaned in-flight transaction
+        // BEFORE freeing session state that the rollback path reads
+        // (current_graph, etc).  This is the stream-close seam — the
+        // client disconnected mid-txn, or the QUIC library reported a
+        // spurious FIN.
+        const store_for_teardown = graph_store.getGlobalStore(gpa);
+        state.tearDownForStreamClose(store_for_teardown) catch |err| {
+            log.warn("orphan-txn teardown failed on stream close", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
         state.resetResult();
         if (state.current_graph) |g| gpa.free(g);
         if (state.exec_session) |*sess| sess.deinit();
@@ -1069,6 +1080,14 @@ pub fn handleQuicConnection(
             gpa.free(tid);
         }
 
+        // R3 (2026-04-22): roll back any orphaned in-flight transaction
+        // BEFORE freeing session state that the rollback path reads.
+        const store_for_teardown = graph_store.getGlobalStore(gpa);
+        state.tearDownForStreamClose(store_for_teardown) catch |err| {
+            log.warn("orphan-txn teardown failed on connection close", &.{
+                Attr.string("error", @errorName(err)),
+            });
+        };
         state.resetResult();
         if (state.current_graph) |g| gpa.free(g);
         if (state.exec_session) |*sess| sess.deinit();
@@ -1695,17 +1714,17 @@ fn handleAlterUserSetPassword(
 
 fn invalidateAuthenticatedSession(gpa: std.mem.Allocator, state: *ServerState) void {
     state.resetResult();
-    if (state.in_txn) {
-        const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-        const lock_handle = graph_store.acquireGraphWriteLock(graph_name);
-        defer graph_store.releaseGraphLock(lock_handle);
-        const store = graph_store.getGlobalStore(gpa);
-        txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
-            log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
-        };
-    }
-    state.in_txn = false;
-    state.txn_id = 0;
+    // R3: delegate to the stream-close teardown hook so both code paths
+    // go through the same orphan-txn rollback logic (lock ordering,
+    // txn_id stamping, audit log).
+    const store = graph_store.getGlobalStore(gpa);
+    state.tearDownForStreamClose(store) catch |err| {
+        log.warn("Failed to rollback invalidated session transaction", &.{Attr.string("error", @errorName(err))});
+        // Safety: ensure the flags are cleared even if the hook errored
+        // out partway through.
+        state.in_txn = false;
+        state.txn_id = 0;
+    };
     state.current_user_id = null;
     if (state.authenticated_user) |user| {
         gpa.free(user);
