@@ -1011,6 +1011,74 @@ pub const StorageAdapter = struct {
         return node_id;
     }
 
+    /// Single-node "bulk-ingest" fast path (Task 11 of the enterprise-ingest-
+    /// throughput plan).  Creates one node with `labels` and `props` in
+    /// `graph_name`, returning the allocated slot's public node id.
+    ///
+    /// Used by the QUIC handler's fast-path dispatch for the msft-graph hot
+    /// pattern `CREATE (n:Label {k: literal_or_param, ...})` (Tasks 10 + 11).
+    /// Bypasses the full executor's AST traversal, row materialization, and
+    /// RLS filter.  Caller is responsible for having already verified the
+    /// pattern via `bulk_ingest.matchSingleStatement`.
+    ///
+    /// Transaction semantics:
+    ///   * Joins the active session / statement engine txn (R8 / R9) via the
+    ///     thread-local `t_current_statement_txn` / `t_session_engine_txn`
+    ///     slots, exactly like `createNode` does.  When no statement txn is
+    ///     open, opens one for the duration of this call.
+    ///   * The `txn_id_opt` parameter is accepted for interface parity with
+    ///     future bulk-edge / bulk-batch variants; when provided, callers
+    ///     must have registered the txn id via `beginStatementTxn`
+    ///     beforehand (the adapter still consults the thread-locals).
+    ///
+    /// Undo-log contract:
+    ///   The caller MUST NOT be inside a rollback-able Geode transaction
+    ///   when invoking `bulkInsertNode` — this method SKIPS the
+    ///   `txn_undo_log.logCreateNode` append that `executeCreate` performs
+    ///   on every CREATE statement.  That is the primary performance lever
+    ///   of the bulk path (GEODE_BULK_INGEST=1 is opt-in for exactly this
+    ///   reason).  Under the bulk env var, rollbacks of individual
+    ///   statements are not supported; the operator is expected to either
+    ///   commit the whole batch or nuke the target data directory.
+    ///
+    /// In-memory store consistency:
+    ///   Routes through `GraphStore.createNodeWithGraph` + `setNodeProperty`
+    ///   so the in-memory node map, label index, and merge-property index
+    ///   stay in sync with the persistent engine state.  Reads that land
+    ///   against the in-memory snapshot therefore see the newly inserted
+    ///   node without waiting for a persistence flush.
+    pub fn bulkInsertNode(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        labels: []const []const u8,
+        props: []const PropKV,
+        txn_id_opt: ?u64,
+    ) !u64 {
+        _ = self;
+        _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
+
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const node_id = try store.createNodeWithGraph(labels, graph_name);
+
+        // Set properties directly on the store — this writes to both the
+        // adapter (via vtable → setNodeProperty → putPropertyTxn) and the
+        // in-memory map.  The statement / session engine txn batches all
+        // sub-ops into a single WAL fsync (R8/R9).
+        for (props) |kv| {
+            try store.setNodeProperty(node_id, kv.key, kv.value);
+        }
+
+        return node_id;
+    }
+
+    /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
+    /// the key bytes and the value payload for the duration of the call; the
+    /// adapter/store copies what it needs internally before returning.
+    pub const PropKV = struct {
+        key: []const u8,
+        value: graph_store.PropertyValue,
+    };
+
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
     /// Allocate `n` node slots in the given graph + attach the same label set
     /// to each, under a SINGLE adapter mutex acquisition (vs N for N separate

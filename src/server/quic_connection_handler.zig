@@ -206,6 +206,166 @@ fn rebuildPendingIndexes(
     while (iter.next()) |k| manager.rebuildAdvancedIndex(store, k.*) catch {};
 }
 
+/// Task 11 (enterprise-ingest-throughput) fast-path dispatcher for the
+/// simple single-label, scalar-property CREATE pattern detected by
+/// `bulk_ingest.matchSingleStatement`.  Writes the node directly through
+/// `adapter.bulkInsertNode`, skipping `executeProgramWithContext`, the
+/// undo log, RLS filtering, and row materialization.  Sends the same
+/// wire response shape (schema 0 cols + final data page + status 00000)
+/// that a no-RETURN CREATE emits from the regular executor.
+///
+/// Lock protocol: takes the per-graph exclusive writer lock for the
+/// duration of the write — matching the existing mutation path in
+/// `processMessage` until Task 16 introduces the two-phase split.  The
+/// session / statement engine txn is joined implicitly via the
+/// adapter's thread-local slots (R8 / R9).
+fn executeBulkSimpleCreate(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    program: *const gql_ast.Program,
+    query_graph_name: []const u8,
+    ctx: execution.ExecutionContext,
+) !void {
+    // The detector has already verified program shape; re-extract the
+    // create statement here.  If detection and dispatch somehow disagree
+    // (a programming error), fall through to the regular executor —
+    // `return error.BulkDispatchDisagreement` would be noise.
+    if (program.statements.len != 1) {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: unexpected program shape", &.{}, &.{});
+        return;
+    }
+    const create_stmt = switch (program.statements[0]) {
+        .Create => |c| c,
+        else => {
+            try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: non-CREATE statement", &.{}, &.{});
+            return;
+        },
+    };
+    if (create_stmt.pattern.chains.len != 1) {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: multi-chain CREATE", &.{}, &.{});
+        return;
+    }
+    const node_pattern = create_stmt.pattern.chains[0].head orelse {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: missing node pattern", &.{}, &.{});
+        return;
+    };
+
+    // Evaluate each property value.  The detector already guaranteed
+    // that every value is a literal or parameter, so we only need to
+    // handle those two cases — any other expression variant would have
+    // been rejected by `bulk_ingest.isScalarPropExpr`.
+    const geode_eval = geode.eval;
+    const property_codec = @import("../property_value_codec.zig");
+    var eval_arena = std.heap.ArenaAllocator.init(gpa);
+    defer eval_arena.deinit();
+    const eval_allocator = eval_arena.allocator();
+
+    const env = geode.makeEnv(
+        &.{},
+        &.{},
+        .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
+    );
+
+    var kvs_buf: [16]geode.graph_storage_adapter.StorageAdapter.PropKV = undefined;
+    const props_slice = node_pattern.props orelse &[_]gql_ast.Property{};
+    var kvs: []geode.graph_storage_adapter.StorageAdapter.PropKV = if (props_slice.len <= kvs_buf.len)
+        kvs_buf[0..props_slice.len]
+    else
+        try eval_allocator.alloc(geode.graph_storage_adapter.StorageAdapter.PropKV, props_slice.len);
+
+    for (props_slice, 0..) |prop, i| {
+        const v = try geode_eval.evalExpr(eval_allocator, prop.value.*, env);
+        const pv = try property_codec.valueToPropertyValue(eval_allocator, v);
+        kvs[i] = .{ .key = prop.key, .value = pv };
+    }
+
+    // Acquire per-graph exclusive write lock with the per-request deadline
+    // policy (same as the regular mutation path — Task 16 will introduce
+    // the two-phase split).  Cancelable so a long queue doesn't pin the
+    // worker forever.
+    var mut_sample = mutation_timing.begin();
+    const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+    const deadline = monoNanosNow() + write_lock_timeout_ns;
+    const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+        if (err == error.Deadline) {
+            log.warn("Write lock acquisition timed out (bulk path)", &.{
+                Attr.string("graph", query_graph_name),
+                Attr.uint("timeout_ns", write_lock_timeout_ns),
+            });
+            try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+            return;
+        }
+        return err;
+    };
+    mut_sample.markLockAcquired();
+
+    // Perform the write.  Adapter is required; on stores without one we
+    // fall back to the regular executor at dispatch time, so this error
+    // shouldn't fire under the bulk opt-in flag.
+    const adapter_opt = graph_store.getGlobalAdapter();
+    if (adapter_opt) |adapter| {
+        const node_id_res = adapter.bulkInsertNode(
+            query_graph_name,
+            node_pattern.labels,
+            kvs,
+            null,
+        );
+        _ = node_id_res catch |err| {
+            graph_store.releaseGraphLock(lock_handle);
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+    } else {
+        graph_store.releaseGraphLock(lock_handle);
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        return;
+    }
+
+    mut_sample.markExecuteDone();
+    graph_store.releaseGraphLock(lock_handle);
+    mut_sample.markLockReleased();
+
+    // Wire response: schema with 0 columns + one page with 0 rows
+    // final=true + status 00000 — identical to the regular executor
+    // output for a no-RETURN CREATE statement.
+    {
+        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+        defer schema_arena.deinit();
+        const sa = schema_arena.allocator();
+        const status = try proto_util.buildStatus(sa, "00000", &.{});
+        const schema_def = schema.SchemaDefinition{
+            .columns = std.ArrayList(schema.ColumnDefinition).empty,
+        };
+        const schema_resp = schema.ExecutionResponse{
+            .status = status,
+            .payload = .{ .schema = schema_def },
+        };
+        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+    }
+    {
+        var page_arena = std.heap.ArenaAllocator.init(gpa);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
+        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
+        const page_resp = schema.ExecutionResponse{
+            .status = page_status,
+            .payload = .{ .page = page },
+        };
+        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+    }
+
+    mut_sample.record("bulk_simple_create");
+
+    // Keep txn / audit / session state tracking consistent with the
+    // regular mutation path so downstream handlers don't observe drift.
+    auditQueryExecution(state, "bulk_simple_create", true);
+    syncGraphFromSession(state);
+    updateTxnStateFromProgram(state, program);
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -2410,6 +2570,23 @@ fn handleClientMessage(
             }
 
             const query_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+
+            // Task 11 (enterprise-ingest-throughput): bulk-ingest fast path.
+            // When GEODE_BULK_INGEST is set AND the parsed statement matches
+            // the simple `CREATE (n:L {k: scalar, ...})` form, short-circuit
+            // to `executeBulkSimpleCreate` — skipping the full executor, the
+            // undo log, RLS filtering, and row materialization.  Any other
+            // statement shape (RETURN, expressions, multi-label, etc.) falls
+            // through to the regular executor path below.
+            if (is_mutation and geode.bulk_ingest.isEnabled()) {
+                const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
+                if (bulk_shape == .simple_node_create) {
+                    try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
+                    return;
+                }
+                // .match_create_edge is reserved for Task 12 dispatch.
+            }
+
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
             // enough to capture a QueryReadSession snapshot; downstream

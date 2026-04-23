@@ -20,6 +20,45 @@
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
 
+// ----------------------------------------------------------------------
+// Bulk-ingest opt-in gate.
+//
+// Task 11 is dispatched behind an env-var so operators can flip the full
+// msft-graph ingest workload through the fast path without rebuilding.
+// The flag is read ONCE at process startup via `initFromEnv` (driven from
+// `src/server/main.zig` alongside `mutation_timing.init(null)`), then
+// queried on every mutation dispatch via the lock-free atomic.
+//
+// Callers MAY also set the flag programmatically (test harness) via
+// `setEnabled`.  The gate is safe to call before `initFromEnv`: it
+// defaults to `false` (regular executor path).
+// ----------------------------------------------------------------------
+
+/// Storage for the bulk-ingest opt-in flag.  Atomics because the startup
+/// init races with worker-thread dispatch (workers spin up before
+/// `main.zig` finishes calling `initFromEnv`) — monotonic reads are fine,
+/// we just need any visible write to eventually propagate.
+var g_bulk_mode: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+/// Read `GEODE_BULK_INGEST` from the process environment and stash the
+/// decision in the global flag.  Any non-empty value enables the fast
+/// path; empty / missing leaves it disabled.  Mirrors `mutation_timing.init`.
+pub fn initFromEnv() void {
+    const raw: ?[]const u8 = if (std.c.getenv("GEODE_BULK_INGEST")) |p| std.mem.span(p) else null;
+    const enabled = if (raw) |v| v.len > 0 else false;
+    g_bulk_mode.store(enabled, .release);
+}
+
+/// Programmatic override used by tests / harnesses.
+pub fn setEnabled(enabled: bool) void {
+    g_bulk_mode.store(enabled, .release);
+}
+
+/// True when the bulk-ingest fast path is enabled for this process.
+pub fn isEnabled() bool {
+    return g_bulk_mode.load(.acquire);
+}
+
 /// The set of bulk-ingest shapes we know how to fast-path.  `none` means
 /// the statement is not in a fast-path form; callers must fall back to the
 /// regular executor.

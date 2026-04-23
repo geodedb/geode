@@ -697,6 +697,14 @@ pub fn main() !void {
         const mutation_timing = geode.mutation_timing;
         mutation_timing.init(null);
 
+        // Task 11 (throughput plan): initialise bulk-ingest opt-in gate.
+        // Reads GEODE_BULK_INGEST from the process environment; when any
+        // non-empty value is set, the QUIC handler routes simple
+        // `CREATE (n:L {...})` statements through `adapter.bulkInsertNode`
+        // instead of `executeProgramWithContext`.  Unset / empty keeps the
+        // regular executor path.
+        geode.bulk_ingest.initFromEnv();
+
         // S1: Initialize the global RLS filter engine for label-based row filtering.
         // The engine lives on the main thread's stack and is accessed by connection
         // handlers via the global singleton in rls_filter.zig.

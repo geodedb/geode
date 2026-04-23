@@ -275,6 +275,54 @@ fn runMergeSingle(
     row_counts[iter] = r.rows.len;
 }
 
+// Task 11 (enterprise-ingest-throughput): bulk-ingest fast path single-CREATE
+// scenario.  Skips `parseGqlCached` + `executeProgramWithContext` entirely and
+// drives `adapter.bulkInsertNode` directly — which is what the QUIC handler
+// does when `GEODE_BULK_INGEST` is set and the detector matches the shape.
+// The parse phase is measured as ~0ns (no parse happens), so the end-to-end
+// latency in the combined sample reflects the raw write cost.
+fn runBulkCreateSingle(
+    allocator: std.mem.Allocator,
+    ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
+    iter: usize,
+    parse_samples: []u64,
+    exec_samples: []u64,
+    row_counts: []u64,
+) anyerror!void {
+    _ = ctx;
+    _ = ast_cache;
+
+    const adapter = geode.graph_store.getGlobalAdapter() orelse return error.AdapterMissing;
+
+    // Ids baked per-iteration, kept in a distinct base range (4_000_000) so
+    // they never collide with the other scenarios.
+    const id = 4_000_000 + iter;
+    const id_str = try std.fmt.allocPrint(allocator, "bulk-{d}", .{id});
+    defer allocator.free(id_str);
+
+    const name_str = try std.fmt.allocPrint(allocator, "User{d}", .{id});
+    defer allocator.free(name_str);
+
+    const labels = [_][]const u8{"LT_Person"};
+    var props = [_]geode.graph_storage_adapter.StorageAdapter.PropKV{
+        .{ .key = "lt_id", .value = .{ .Int = @intCast(id) } },
+        .{ .key = "name", .value = .{ .String = name_str } },
+        .{ .key = "age", .value = .{ .Int = 30 } },
+    };
+
+    // Parse time is zero (the bulk path is a direct adapter call — there is
+    // no query text to parse).  Exec time is the whole measured interval.
+    const parse_start = nowNs();
+    const parse_end = nowNs();
+    _ = try adapter.bulkInsertNode("default", &labels, &props, null);
+    const exec_end = nowNs();
+
+    parse_samples[iter] = parse_end - parse_start;
+    exec_samples[iter] = exec_end - parse_end;
+    row_counts[iter] = 0; // no RETURN, no rows.
+}
+
 fn runCreateEdge(
     allocator: std.mem.Allocator,
     ctx: geode.execution.ExecutionContext,
@@ -343,6 +391,8 @@ const MUTATION_SCENARIOS = [_]MutationScenario{
     .{ .name = "delete_single", .iterations = 300, .warmup = 20, .setupFn = seedLargePersons, .runFn = runDeleteSingle },
     .{ .name = "merge_single", .iterations = 300, .warmup = 20, .setupFn = noopSetup, .runFn = runMergeSingle },
     .{ .name = "create_edge", .iterations = 300, .warmup = 20, .setupFn = seed500Persons, .runFn = runCreateEdge },
+    // Task 11: bulk-ingest fast path — direct adapter call, no parser / executor.
+    .{ .name = "bulk_create_single", .iterations = 300, .warmup = 20, .setupFn = noopSetup, .runFn = runBulkCreateSingle },
 };
 
 // --------------------------------------------------------------------------
