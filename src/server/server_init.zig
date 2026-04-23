@@ -48,14 +48,16 @@ pub const EnvironmentConfig = struct {
     inline_results_max_rows: usize = 1000,
     telemetry_paging: bool = false,
     // R2 (2026-04-22): per-request budget for acquiring the per-graph
-    // exclusive write lock.  The previous uncancelable acquire parked
-    // transport threads forever when one worker stalled inside a long-
-    // running mutation, producing the "thread-pool deinit timed out
-    // with 1 active tasks" shutdown warning under the 16-worker ingest
-    // workload.  Default 30 s matches the thread-pool deinit grace
-    // window so a stalled worker gives up before shutdown fires its
-    // watchdog.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
-    graph_write_lock_timeout_ms: u64 = 30_000,
+    // exclusive write lock.
+    //
+    // R7 follow-up (2026-04-22): raised from 30 s → 120 s. 30 s tripped
+    // the cascade failure mode on 16-worker contended ingest even though
+    // each worker was making forward progress (see R7 commit).  The
+    // 120 s value is also used as the `default_mutation_write_lock_timeout_ms`
+    // fallback in `quic_connection_handler.zig`; they MUST stay in sync
+    // because the handler prefers this env-config value over the file-
+    // scope default.  Override via `GEODE_GRAPH_WRITE_LOCK_TIMEOUT_MS`.
+    graph_write_lock_timeout_ms: u64 = 120_000,
 };
 
 /// Server initialization context containing all initialized resources

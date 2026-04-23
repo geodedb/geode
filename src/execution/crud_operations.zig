@@ -1599,6 +1599,28 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
 
+    // R8 (2026-04-22): open a per-statement engine transaction so every
+    // adapter sub-op (createNode + N × setNodeProperty + createEdge …)
+    // for this CREATE joins a single engine txn → ONE WAL fsync for the
+    // whole statement instead of one per sub-op.  Falls back silently
+    // if no per-graph adapter is registered (legacy test paths).
+    const gsa = @import("../storage/graph_storage_adapter.zig");
+    var stmt_txn: gsa.StatementTxn = undefined;
+    var stmt_txn_open = false;
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (ad.beginStatementTxn(target_graph, &stmt_txn)) |_| {
+            stmt_txn_open = true;
+        } else |err| switch (err) {
+            // GraphNotFound: the graph doesn't exist yet — the first
+            // createNode on this path will lazily create it and handle
+            // its own txn.  Nested: defensive (shouldn't happen given
+            // the per-graph write lock), fall through to legacy path.
+            error.GraphNotFound, error.NestedStatementTxn => {},
+            else => return err,
+        }
+    }
+    errdefer if (stmt_txn_open) stmt_txn.abort();
+
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
     defer created_nodes.deinit();
@@ -1765,6 +1787,7 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
                 var ret_row = try allocator.alloc(Value, 1);
                 ret_row[0] = Value{ .Int = created_entity_count };
                 rows[0] = ret_row;
+                if (stmt_txn_open) try stmt_txn.commit();
                 return ExecutionResult{
                     .columns = columns,
                     .rows = rows,
@@ -1808,9 +1831,12 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
         };
 
         // Execute RETURN with the created nodes and relationships in scope
-        return executeReturnClauseWithEnv(allocator, ret, env);
+        const ret_result = try executeReturnClauseWithEnv(allocator, ret, env);
+        if (stmt_txn_open) try stmt_txn.commit();
+        return ret_result;
     }
 
+    if (stmt_txn_open) try stmt_txn.commit();
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),
@@ -2021,6 +2047,23 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // Null means no filtering (default tenant or unset).
     const filter_tenant = tenantFilterFromContext(context);
 
+    // R8 (2026-04-22): open a per-statement engine txn so MERGE's
+    // createNode + on_create property SETs (or on_match property SETs)
+    // commit with a single WAL fsync instead of one per sub-op.  Same
+    // pattern as `executeCreate`.
+    const gsa = @import("../storage/graph_storage_adapter.zig");
+    var stmt_txn: gsa.StatementTxn = undefined;
+    var stmt_txn_open = false;
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (ad.beginStatementTxn(target_graph, &stmt_txn)) |_| {
+            stmt_txn_open = true;
+        } else |err| switch (err) {
+            error.GraphNotFound, error.NestedStatementTxn => {},
+            else => return err,
+        }
+    }
+    errdefer if (stmt_txn_open) stmt_txn.abort();
+
     // MERGE is like a CREATE but checks if the pattern already exists
     // For now, implement simplified version for single nodes
     if (m.pattern.chains.len > 0 and m.pattern.chains[0].head != null) {
@@ -2184,6 +2227,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
 
             rows[0] = row;
 
+            if (stmt_txn_open) try stmt_txn.commit();
             return ExecutionResult{
                 .columns = columns,
                 .rows = rows,
@@ -2278,6 +2322,7 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     }
 
     // Return empty result if no RETURN clause
+    if (stmt_txn_open) try stmt_txn.commit();
     return ExecutionResult{
         .columns = try allocator.alloc([]const u8, 0),
         .rows = try allocator.alloc([]Value, 0),

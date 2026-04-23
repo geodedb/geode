@@ -594,6 +594,71 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
 }
 
 // ============================================================================
+// R8 (2026-04-22): Per-statement engine-txn batching.
+//
+// After R7, each adapter mutation method (createNode, setNodeProperty, ...)
+// wraps its engine sub-ops in a single explicit engine transaction — so a
+// single adapter call is one WAL fsync.  That still means a GQL statement
+// like `CREATE (n:User {p1, p2, p3, p4, p5})` costs 1 (createNode) + 5
+// (setNodeProperty) = 6 fsyncs, because the executor calls the adapter
+// once per sub-step.
+//
+// R8 lets the caller open a *statement-scoped* engine transaction that
+// subsequent adapter mutations join (skipping their own beginTxn/commitTxn
+// pair) so the whole statement commits with a single fsync:
+//
+//   const txn = try adapter.beginStatementTxn(graph_name);
+//   errdefer txn.abort();
+//   // adapter.createNode / adapter.setNodeProperty etc. now join `txn`
+//   try txn.commit();                  // ONE WAL fsync
+//
+// Rules:
+//   - Uses a `threadlocal var` — only the thread that opened the txn sees
+//     it.  The per-graph exclusive write lock is held across the
+//     statement, so no other thread can concurrently mutate the same
+//     graph — the thread-local is safe.
+//   - Mutations on a DIFFERENT graph than the active StatementTxn fall
+//     back to the regular auto-commit path (per-sub-op fsync).
+//   - `abort()` / `commit()` clear the thread-local.  If neither is
+//     called before the guarded scope exits, the engine will keep the
+//     txn record as "begin without commit" until replay rolls it back,
+//     which is correct but wasteful — use `errdefer txn.abort()`.
+// ============================================================================
+
+/// Per-statement engine transaction handle returned by
+/// `StorageAdapter.beginStatementTxn`.
+pub const StatementTxn = struct {
+    mg: *ManagedGraph,
+    txn_id: gs.TxnId,
+    graph_name: []const u8, // non-owning — adapter's engines map owns the storage
+
+    /// Commit the statement txn → exactly one WAL fsync.
+    pub fn commit(self: *StatementTxn) !void {
+        t_current_statement_txn = null;
+        try self.mg.engine.commitTxn(self.txn_id);
+    }
+
+    /// Abort the statement txn (no fsync beyond the ABORT record append).
+    /// Safe to call from `errdefer`.
+    pub fn abort(self: *StatementTxn) void {
+        t_current_statement_txn = null;
+        self.mg.engine.abortTxn(self.txn_id) catch {};
+    }
+};
+
+threadlocal var t_current_statement_txn: ?*StatementTxn = null;
+
+/// Return the thread-local statement txn if it targets `graph_name`; else null.
+/// Adapter mutation methods consult this to decide whether to batch into an
+/// existing transaction or spin their own (the R7 behaviour).
+fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
+    if (t_current_statement_txn) |txn| {
+        if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
+    }
+    return null;
+}
+
+// ============================================================================
 // StorageAdapter — top-level adapter managing multiple named graphs
 // ============================================================================
 
@@ -867,21 +932,20 @@ pub const StorageAdapter = struct {
         // into a SINGLE storage-engine transaction so we incur exactly one
         // WAL fsync per CREATE, not one per sub-op.
         //
+        // R8 (2026-04-22): if the current thread already has an open
+        // `StatementTxn` on this graph, JOIN it instead of opening a fresh
+        // txn — the whole GQL statement (createNode + N setNodeProperty)
+        // will then commit with one fsync instead of N+1.
+        //
         // The engine's auto-commit variants (putNode, addLabel,
         // putProperty) each call `txn_manager.begin()` + `commit()`, and
         // `commit()` always ends with `wal.sync()` (fsync) — see
-        // `graph_storage/src/txn.zig:67-85`.  A CREATE (n:Label {prop: x})
-        // therefore incurs 1 putNode + 1 addLabel + 2 setNodeProperty
-        // fsyncs ≈ 40-60 ms on SSD, which was the dominant contributor to
-        // the 50 ms/CREATE median measured by
-        // `bench-query-executor-mutation` baseline (create_single scenario
-        // 2026-04-22).
-        //
-        // Wrapping the sub-ops in an explicit transaction collapses the
-        // fsync count to 1, dropping measured create_single latency
-        // dramatically (expected 5-10× speedup).
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
+        // `graph_storage/src/txn.zig:67-85`.
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
+        errdefer if (stmt_txn == null) {
+            mg.engine.abortTxn(txn) catch {};
+        };
 
         const node_id = try mg.engine.allocNode();
 
@@ -907,7 +971,7 @@ pub const StorageAdapter = struct {
             try mg.engine.addLabelTxn(node_id, label_id, txn);
         }
 
-        try mg.engine.commitTxn(txn);
+        if (stmt_txn == null) try mg.engine.commitTxn(txn);
         return node_id;
     }
 
@@ -1162,11 +1226,16 @@ pub const StorageAdapter = struct {
         }
 
         // R7 (2026-04-22): batch putProperty + putNode into one txn — see
-        // `createNode` for the fsync rationale.  Previously each auto-commit
-        // issued its own `wal.sync()`, making every setNodeProperty ≈ 10 ms
-        // on SSD.
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
+        // `createNode` for the fsync rationale.
+        //
+        // R8 (2026-04-22): join the current thread's StatementTxn when
+        // one is active on this graph, so the whole GQL statement
+        // commits with a single fsync.
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
+        errdefer if (stmt_txn == null) {
+            mg.engine.abortTxn(txn) catch {};
+        };
 
         const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, key, storage_val, txn);
 
@@ -1174,7 +1243,7 @@ pub const StorageAdapter = struct {
         rec.prop_head = new_prop_head;
         try mg.engine.putNodeTxn(node_id, rec, txn);
 
-        try mg.engine.commitTxn(txn);
+        if (stmt_txn == null) try mg.engine.commitTxn(txn);
 
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
@@ -2349,6 +2418,47 @@ pub const StorageAdapter = struct {
 
     pub fn releaseGraphWriteLock(_: *StorageAdapter, mg: *ManagedGraph) void {
         mg.rwlock.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// R8 (2026-04-22): begin a per-statement engine transaction on `graph_name`.
+    ///
+    /// After this call, the current thread's subsequent adapter mutation
+    /// calls on the same graph (createNode, setNodeProperty, createEdge,
+    /// deleteNode, etc.) JOIN this transaction instead of opening their
+    /// own engine txn.  The entire statement commits with a single WAL
+    /// fsync via `StatementTxn.commit`.
+    ///
+    /// Caller contract:
+    ///   const txn = try adapter.beginStatementTxn(graph_name);
+    ///   errdefer txn.abort();
+    ///   // …adapter mutation calls on `graph_name`…
+    ///   try txn.commit();
+    ///
+    /// It is a bug to call `beginStatementTxn` while another statement
+    /// txn is already active on the current thread — the per-graph
+    /// exclusive write lock is expected to serialise statements on a
+    /// given graph, so nested opens should be impossible in normal
+    /// operation.  We log and return `error.NestedStatementTxn` rather
+    /// than silently overwriting the thread-local.
+    pub fn beginStatementTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        if (t_current_statement_txn != null) {
+            log.err("adapter.beginStatementTxn called with an existing statement txn on this thread (graph={s})", .{graph_name});
+            return error.NestedStatementTxn;
+        }
+
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
+        };
+
+        const txn_id = try mg.engine.beginTxn();
+        out.* = .{
+            .mg = mg,
+            .txn_id = txn_id,
+            .graph_name = mg.name, // owned by ManagedGraph, stable while engines map keeps the entry
+        };
+        t_current_statement_txn = out;
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.
