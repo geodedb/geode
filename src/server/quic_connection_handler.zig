@@ -3088,27 +3088,23 @@ fn handleClientMessage(
             state.session_snapshot_ts = state.global_commit_ts;
             txn_undo_log.getGlobalUndoLog(gpa).begin();
 
-            // R9 (2026-04-22): open a session-scoped engine transaction on
-            // the current graph so every CREATE / MERGE in this Geode
-            // txn batches into a single WAL fsync at COMMIT time.  Fails
-            // closed (falls back to per-statement R8 batching) if the
-            // current graph doesn't yet exist or no per-graph adapter is
-            // registered — the test/legacy paths don't need this.
-            if (graph_store.getGlobalAdapter()) |ad| {
-                const session_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                state.session_engine_txn_storage = undefined;
-                ad.beginSessionTxn(session_graph, &state.session_engine_txn_storage) catch |err| switch (err) {
-                    error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {
-                        // Silent fallback — adapter falls back to R8
-                        // per-statement txns for this Geode txn.
-                    },
-                    else => {
-                        log.warn("failed to open session engine txn", &.{
-                            Attr.string("error", @errorName(err)),
-                        });
-                    },
-                };
-            }
+            // R9 (2026-04-22, updated): do NOT open a session engine txn
+            // eagerly here.  Under the msft-graph DSN graph-binding flow
+            // `state.current_graph` is null at BEGIN time — it gets
+            // populated by the subsequent USE GRAPH that the DSN parser
+            // emits OR by the first mutation statement's target_graph.
+            // Opening on `DEFAULT_GRAPH_NAME` here would either (a) fall
+            // back to per-statement R8 txns (graph mismatch) or (b) open
+            // a stale session txn that the stream-close teardown in R3
+            // has to roll back as an orphan (we saw this as the
+            // `orphan-txn rolled back on stream close (graph=default)`
+            // log-spam under the 16-worker ingest).
+            //
+            // Instead, the session engine txn is opened LAZILY on the
+            // first mutation inside the Geode txn via
+            // `ensureSessionEngineTxn` (see below + crud_operations.zig).
+            // That guarantees the session txn is pinned to the graph the
+            // first mutation actually targets.
 
             const tx_id_str = try std.fmt.allocPrint(gpa, "{d}", .{state.txn_id});
             try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, "sess"), .tx_id = tx_id_str } });

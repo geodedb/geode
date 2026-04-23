@@ -1610,16 +1610,39 @@ pub fn executeCreate(allocator: std.mem.Allocator, c: ast.CreateStatement, curre
     // current graph — skip opening our own per-statement txn and let
     // the session txn batch this statement's sub-ops with every OTHER
     // statement in the batch.  The whole Geode batch will commit with a
-    // single fsync in the COMMIT handler.  Falls back silently if no
-    // per-graph adapter is registered (legacy test paths).
+    // single fsync in the COMMIT handler.
+    //
+    // R9 (2026-04-22, fixed): the session engine txn is opened LAZILY
+    // here on the first mutation of a Geode txn, pinned to the actual
+    // `target_graph` the statement targets — earlier versions opened it
+    // eagerly in the QUIC BEGIN handler on `state.current_graph` which
+    // is null under DSN graph-binding and caused orphan "graph=default"
+    // txns to get rolled back on stream close.
+    //
+    // Falls back silently if no per-graph adapter is registered
+    // (legacy test paths).
     const gsa = @import("../storage/graph_storage_adapter.zig");
     var stmt_txn: gsa.StatementTxn = undefined;
     var stmt_txn_open = false;
-    const session_txn_graph = gsa.sessionEngineTxnGraph();
-    const session_txn_covers_us = session_txn_graph != null and
-        std.mem.eql(u8, session_txn_graph.?, target_graph);
-    if (!session_txn_covers_us) {
-        if (graph_store.getGlobalAdapter()) |ad| {
+    var session_txn_covers_us = false;
+
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (gsa.sessionEngineTxnGraph()) |g| {
+            session_txn_covers_us = std.mem.eql(u8, g, target_graph);
+        } else if (context.transaction_state == .Active) {
+            // R9 lazy open: Geode txn is active but no session engine
+            // txn is open yet — pin it to `target_graph`.  Backing
+            // storage is the adapter's own thread-local slot (one QUIC
+            // stream = one pool thread; the storage is automatically
+            // per-session).  Failure falls through to per-statement R8.
+            if (ad.beginSessionTxnLazy(target_graph)) |_| {
+                session_txn_covers_us = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        if (!session_txn_covers_us) {
             if (ad.beginStatementTxn(target_graph, &stmt_txn)) |_| {
                 stmt_txn_open = true;
             } else |err| switch (err) {
@@ -2063,15 +2086,24 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     // R8 (2026-04-22): open a per-statement engine txn so MERGE's
     // createNode + on_create property SETs (or on_match property SETs)
     // commit with a single WAL fsync instead of one per sub-op.  Same
-    // pattern as `executeCreate`, including the R9 session-txn shortcut.
+    // pattern as `executeCreate`, including the R9 lazy session-txn
+    // shortcut (pin to target_graph on first mutation in Geode txn).
     const gsa = @import("../storage/graph_storage_adapter.zig");
     var stmt_txn: gsa.StatementTxn = undefined;
     var stmt_txn_open = false;
-    const session_txn_graph = gsa.sessionEngineTxnGraph();
-    const session_txn_covers_us = session_txn_graph != null and
-        std.mem.eql(u8, session_txn_graph.?, target_graph);
-    if (!session_txn_covers_us) {
-        if (graph_store.getGlobalAdapter()) |ad| {
+    var session_txn_covers_us = false;
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (gsa.sessionEngineTxnGraph()) |g| {
+            session_txn_covers_us = std.mem.eql(u8, g, target_graph);
+        } else if (context.transaction_state == .Active) {
+            if (ad.beginSessionTxnLazy(target_graph)) |_| {
+                session_txn_covers_us = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        if (!session_txn_covers_us) {
             if (ad.beginStatementTxn(target_graph, &stmt_txn)) |_| {
                 stmt_txn_open = true;
             } else |err| switch (err) {

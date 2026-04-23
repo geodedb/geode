@@ -658,6 +658,15 @@ threadlocal var t_current_statement_txn: ?*StatementTxn = null;
 // per-statement slot first, then falls back to the session slot.
 threadlocal var t_session_engine_txn: ?*StatementTxn = null;
 
+// R9 (2026-04-22, lazy variant): backing storage for the session
+// engine txn when the executor opens it lazily (on the first mutation
+// inside a Geode txn) and therefore has no `ServerState.session_engine_txn_storage`
+// pointer in scope.  Lives in thread-local so the backing slot is
+// automatically per-session (one QUIC stream = one thread).  Populated
+// by `beginSessionTxnLazy`; cleared by `commitSessionTxn` /
+// `abortSessionTxn`.
+threadlocal var t_session_engine_txn_storage_lazy: StatementTxn = undefined;
+
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
 /// Adapter mutation methods consult this to decide whether to batch into an
 /// existing transaction or spin their own (the R7 behaviour).  Priority:
@@ -2564,6 +2573,17 @@ pub const StorageAdapter = struct {
         const txn = t_session_engine_txn orelse return;
         t_session_engine_txn = null;
         txn.mg.engine.abortTxn(txn.txn_id) catch {};
+    }
+
+    /// R9 (2026-04-22, lazy): open a session-scoped engine txn using the
+    /// thread-local `t_session_engine_txn_storage_lazy` backing slot.
+    /// Used by the executor when it encounters the first mutation in a
+    /// Geode BEGIN TX … COMMIT batch and has no direct pointer into
+    /// `ServerState.session_engine_txn_storage`.  The slot is
+    /// thread-local so it's naturally per-session (one QUIC stream handler
+    /// runs on one pool thread).
+    pub fn beginSessionTxnLazy(self: *StorageAdapter, graph_name: []const u8) !void {
+        try self.beginSessionTxn(graph_name, &t_session_engine_txn_storage_lazy);
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.
