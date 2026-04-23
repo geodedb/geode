@@ -558,6 +558,191 @@ fn executeBulkMatchCreateEdge(
     updateTxnStateFromProgram(state, program);
 }
 
+/// Fast-path dispatcher for the simple-MERGE pattern detected by
+/// `bulk_ingest.matchSimpleNodeMergeSpec`:
+///
+///     MERGE (n:L {merge_key: lit_or_param})
+///     [ON CREATE SET n.a = lit_or_param, n.b = ..., ...]
+///
+/// Skips `executeProgramWithContext`, the undo log, RLS filtering, and
+/// row materialization.  Sends the same wire response shape (schema 0
+/// cols + final data page + status 00000) the regular executor emits
+/// for a no-RETURN MERGE.
+///
+/// Lock protocol (two-phase, mirrors `executeBulkMatchCreateEdge`):
+/// Phase 1 runs the merge-index lookup under a SHARED read lock so N
+/// concurrent workers can probe in parallel for their hit-path (the
+/// msft-graph ingest workload's common case is repeated MERGEs where
+/// every call hits an existing node — those never need the write lock
+/// at all).  On miss, the read lock is released and the exclusive write
+/// lock is acquired for the insert phase; `bulkMergeNode` re-probes the
+/// index inside the write critical section to catch the narrow window
+/// where another writer inserted the same key between our Phase 1 miss
+/// and Phase 2 acquire.
+fn executeBulkSimpleMerge(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    program: *const gql_ast.Program,
+    spec: geode.bulk_ingest.SimpleNodeMergeSpec,
+    query_graph_name: []const u8,
+    ctx: execution.ExecutionContext,
+) !void {
+    const geode_eval = geode.eval;
+    const property_codec = geode.property_value_codec;
+
+    var eval_arena = std.heap.ArenaAllocator.init(gpa);
+    defer eval_arena.deinit();
+    const eval_allocator = eval_arena.allocator();
+
+    const env = geode.makeEnv(
+        eval_allocator,
+        &.{},
+        &.{},
+        .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
+    );
+
+    // Resolve the merge filter value (literal or parameter).  The detector
+    // already screened `isScalarPropExpr`, so eval must succeed for any
+    // pattern we accepted — a failure here is a programming error.
+    const merge_value_val = try geode_eval.evalExpr(eval_allocator, spec.merge_value.*, env);
+    const merge_value_pv = try property_codec.valueToPropertyValue(eval_allocator, merge_value_val);
+
+    // Evaluate all ON CREATE SET property values upfront.  The detector
+    // already guaranteed each is scalar.
+    var kvs_buf: [32]geode.graph_storage_adapter.StorageAdapter.PropKV = undefined;
+    var kvs: []geode.graph_storage_adapter.StorageAdapter.PropKV = if (spec.on_create_props.len <= kvs_buf.len)
+        kvs_buf[0..spec.on_create_props.len]
+    else
+        try eval_allocator.alloc(geode.graph_storage_adapter.StorageAdapter.PropKV, spec.on_create_props.len);
+    for (spec.on_create_props, 0..) |prop, i| {
+        const v = try geode_eval.evalExpr(eval_allocator, prop.value.*, env);
+        const pv = try property_codec.valueToPropertyValue(eval_allocator, v);
+        kvs[i] = .{ .key = prop.key, .value = pv };
+    }
+
+    var mut_sample = mutation_timing.begin();
+
+    const adapter_opt = graph_store.getGlobalAdapter();
+    if (adapter_opt == null) {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        return;
+    }
+    const adapter = adapter_opt.?;
+
+    // Phase 1: shared-read probe.  `lookupNodeByMergeKey` is a pure
+    // HashMap read against `merge_prop_index` + `nodes` — safe under a
+    // reader lock per the Phase 4 invariants.  If the node already
+    // exists, we're done: ON MATCH is a no-op (detector rejected
+    // `ON MATCH SET`) and we send back the same 0-row response shape
+    // the regular executor emits for a no-RETURN hit-path MERGE.
+    var found_in_phase1 = false;
+    {
+        const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
+        defer graph_store.releaseGraphLock(read_handle);
+        const res = adapter.lookupNodeByMergeKey(
+            query_graph_name,
+            spec.label,
+            spec.merge_key,
+            merge_value_pv,
+            error.MergeCandidateMissing,
+        );
+        if (res) |_| {
+            found_in_phase1 = true;
+        } else |err| switch (err) {
+            error.MergeCandidateMissing => {},
+            else => {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            },
+        }
+    }
+
+    if (!found_in_phase1) {
+        // Phase 2: exclusive write lock for the insert.  `bulkMergeNode`
+        // re-probes the index inside the write critical section so a
+        // concurrent writer that won the Phase 1 race is detected and
+        // we return their id without double-inserting.
+        const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+        const deadline = monoNanosNow() + write_lock_timeout_ns;
+        const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+            if (err == error.Deadline) {
+                log.warn("Write lock acquisition timed out (bulk merge path)", &.{
+                    Attr.string("graph", query_graph_name),
+                    Attr.uint("timeout_ns", write_lock_timeout_ns),
+                });
+                try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                return;
+            }
+            return err;
+        };
+        mut_sample.markLockAcquired();
+
+        const node_id_res = adapter.bulkMergeNode(
+            query_graph_name,
+            spec.label,
+            spec.merge_key,
+            merge_value_pv,
+            kvs,
+            null,
+        );
+        _ = node_id_res catch |err| {
+            graph_store.releaseGraphLock(lock_handle);
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+
+        mut_sample.markExecuteDone();
+        graph_store.releaseGraphLock(lock_handle);
+        mut_sample.markLockReleased();
+    } else {
+        // Phase 1 hit: the merge id is already in the store.  ON MATCH
+        // is a no-op (detector rejected `ON MATCH SET`), so there is
+        // nothing to do beyond closing out the timing sample — the
+        // caller sent no RETURN clause, so the wire response does not
+        // need to reference the matched id.
+        mut_sample.markExecuteDone();
+    }
+
+    // Wire response: identical shape to the other bulk fast-paths —
+    // schema with 0 columns + one page with 0 rows (final=true) + status
+    // 00000 — matches regular-executor output for a no-RETURN MERGE.
+    {
+        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+        defer schema_arena.deinit();
+        const sa = schema_arena.allocator();
+        const status = try proto_util.buildStatus(sa, "00000", &.{});
+        const schema_def = schema.SchemaDefinition{
+            .columns = std.ArrayList(schema.ColumnDefinition).empty,
+        };
+        const schema_resp = schema.ExecutionResponse{
+            .status = status,
+            .payload = .{ .schema = schema_def },
+        };
+        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+    }
+    {
+        var page_arena = std.heap.ArenaAllocator.init(gpa);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
+        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
+        const page_resp = schema.ExecutionResponse{
+            .status = page_status,
+            .payload = .{ .page = page },
+        };
+        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+    }
+
+    mut_sample.record("bulk_simple_merge");
+
+    auditQueryExecution(state, "bulk_simple_merge", true);
+    syncGraphFromSession(state);
+    updateTxnStateFromProgram(state, program);
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -2784,6 +2969,15 @@ fn handleClientMessage(
                     // If the spec helper disagrees with matchSingleStatement,
                     // fall through to the regular executor (programming error
                     // — noise not worth a dedicated error code).
+                }
+                if (bulk_shape == .simple_node_merge) {
+                    if (geode.bulk_ingest.matchSimpleNodeMergeSpec(&parse_result.program)) |merge_spec| {
+                        try executeBulkSimpleMerge(gpa, stream, state, &parse_result.program, merge_spec, query_graph_name, exec_context);
+                        return;
+                    }
+                    // Same fallthrough semantics as the edge path — if the
+                    // spec helper disagrees with `matchSingleStatement`,
+                    // defer to the general executor.
                 }
             }
 

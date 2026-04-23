@@ -147,9 +147,121 @@ test "rejects CREATE with two labels on the node" {
     );
 }
 
-test "rejects MERGE (not a CREATE)" {
+// ----------------------------------------------------------------------
+// Simple MERGE node (Task "MERGE-extend" of enterprise-ingest-throughput):
+// `MERGE (n:L {merge_key: lit_or_param}) [ON CREATE SET n.x = ...]`.
+// ----------------------------------------------------------------------
+
+test "detects simple MERGE with single merge key and no ON CREATE SET" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql("MERGE (n:User {node_id: 'abc'})", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("User", spec.label);
+    try testing.expectEqualStrings("node_id", spec.merge_key);
+    try testing.expectEqual(@as(usize, 0), spec.on_create_props.len);
+}
+
+test "detects simple MERGE with ON CREATE SET scalar properties" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:User {node_id: 'abc'}) ON CREATE SET n.name = 'Alice', n.email = 'a@b.c'",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("User", spec.label);
+    try testing.expectEqualStrings("node_id", spec.merge_key);
+    try testing.expectEqual(@as(usize, 2), spec.on_create_props.len);
+    try testing.expectEqualStrings("name", spec.on_create_props[0].key);
+    try testing.expectEqualStrings("email", spec.on_create_props[1].key);
+}
+
+test "detects simple MERGE with parameter merge value and parameter SET" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:User {node_id: $node_id}) ON CREATE SET n.name = $name",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.simple_node_merge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE with RETURN clause" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql("MERGE (n:User {node_id: 'abc'}) RETURN n", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE with ON MATCH SET clause" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:User {node_id: 'abc'}) ON MATCH SET n.updated = 1",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE with multi-property filter" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:User {a: 1, b: 2})",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE with multi-label node pattern" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql("MERGE (n:User:Admin {node_id: 'abc'})", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE without a label" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql("MERGE (n {node_id: 'abc'})", allocator);
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "rejects MERGE with ON CREATE SET non-scalar value" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MERGE (n:User {node_id: 'abc'}) ON CREATE SET n.name = toString(42)",
+        allocator,
+    );
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,

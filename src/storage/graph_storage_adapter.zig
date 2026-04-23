@@ -1332,6 +1332,135 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    /// Bulk-ingest MERGE fast path for simple single-label, single-merge-key
+    /// MERGE statements — counterpart to `bulkInsertNode` for the
+    /// msft-graph nodes_*.jsonl hot path (677/677 node-phase statements
+    /// were MERGEs per the Phase 1 trace).
+    ///
+    /// Semantics:
+    ///   1. Probe the merge-prop index for `(graph, label, merge_key, merge_value)`
+    ///      via `GraphStore.lookupMergeCandidate`.  If a node is found, return
+    ///      its id unchanged (this is the ON MATCH no-op — the caller has
+    ///      pre-screened that no `ON MATCH SET` clause is attached).
+    ///   2. If not found, insert a new node with `[label]` and properties
+    ///      `(merge_key, merge_value) ++ on_create_props`.  The merge key is
+    ///      written as a regular property on the node (msft-graph's
+    ///      `node_id` is both the merge key and a property in the output
+    ///      view of the node) so a subsequent MATCH + filter path can find
+    ///      it via either the merge-prop index or a property scan.
+    ///
+    /// Race handling: the two-phase QUIC dispatcher calls this helper after
+    /// taking the per-graph exclusive write lock.  In the tests (which call
+    /// the adapter directly, without an outer lock) a shared-read probe +
+    /// exclusive-write insert is encoded inside this single call: both the
+    /// probe and the insert go through the globally-held graph mutex via
+    /// the in-memory store, so a 16-way concurrent `MERGE (n:U {id:'X'})`
+    /// for the SAME id inserts exactly once (the lookup-then-insert is not
+    /// atomic per-call, but the graph-store mutex serialises the
+    /// `createNodeWithGraph` + `merge_prop_index.put` pair, and subsequent
+    /// threads re-probe the index inside this same helper and observe the
+    /// winning insertion).  The concurrent-MERGE-race test pins this
+    /// invariant.
+    ///
+    /// Undo-log contract: same as `bulkInsertNode` — SKIPS the undo log.
+    /// Callers must be running under `GEODE_BULK_INGEST=1` or equivalent
+    /// opt-in (the QUIC dispatcher gates the call, and tests call the
+    /// adapter directly to mirror that setup).
+    ///
+    /// Transaction semantics: joins the active session / statement engine
+    /// txn via the R8 / R9 thread-local slots, exactly like `bulkInsertNode`.
+    /// When no txn is open, opens a per-statement txn for the duration of
+    /// the insert so the createNode + N × setNodeProperty sub-ops commit
+    /// with ONE WAL fsync.
+    ///
+    /// Errors: propagates `createNodeWithGraph` / `setNodeProperty` errors
+    /// unchanged.  Never returns a sentinel "found" flag — the caller can
+    /// tell a creation from a match only by observing the node id
+    /// (`store.nodes.count()` delta) if it cares.
+    pub fn bulkMergeNode(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        merge_key: []const u8,
+        merge_value: graph_store.PropertyValue,
+        on_create_props: []const PropKV,
+        txn_id_opt: ?u64,
+    ) !u64 {
+        _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
+
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+        // Phase 1 (inline): merge-prop index probe.  `.not_indexable`
+        // means the value type (list / map) cannot use the index; the
+        // QUIC dispatcher pre-screens `isScalarPropExpr`, so hitting this
+        // branch is unexpected — surface a distinct error so a
+        // test / trace can differentiate "real miss" from "misclassified
+        // fast-path candidate".
+        var existing_id: u64 = undefined;
+        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
+            .found => return existing_id,
+            .not_found => {},
+            .not_indexable => return error.MergeValueNotIndexable,
+        }
+
+        // Phase 2: no node yet — insert.  Match the executor's R8/R9
+        // fsync batching: join an open session/statement txn or open one
+        // so the createNode + N × setNodeProperty commit with a single
+        // WAL fsync.  See `bulkInsertNode` for the full rationale.
+        var stmt_txn: StatementTxn = undefined;
+        var stmt_txn_open = false;
+        const session_covers = if (sessionEngineTxnGraph()) |g|
+            std.mem.eql(u8, g, graph_name)
+        else
+            false;
+        if (!session_covers and t_current_statement_txn == null) {
+            self.ensureGraphExistsForBulk(graph_name) catch |err| switch (err) {
+                error.GraphNotFound => {},
+                else => return err,
+            };
+            if (self.beginStatementTxn(graph_name, &stmt_txn)) |_| {
+                stmt_txn_open = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        errdefer if (stmt_txn_open) stmt_txn.abort();
+
+        // Concurrent-MERGE safety re-check: another thread that raced
+        // through Phase 1 with us may have committed the new node before
+        // we opened our statement txn.  Re-probe; if a peer won the
+        // race, return their id without inserting.  The graph-store
+        // mutex serialises the probe, so this double-check catches the
+        // narrow window between our own Phase 1 miss and createNodeWithGraph.
+        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
+            .found => {
+                if (stmt_txn_open) stmt_txn.abort();
+                return existing_id;
+            },
+            .not_found, .not_indexable => {},
+        }
+
+        const labels = [_][]const u8{label};
+        const node_id = try store.createNodeWithGraph(&labels, graph_name);
+
+        // Write the merge key as a regular property (msft-graph's node_id
+        // is both the merge key and a node property) and then all
+        // ON CREATE SET properties.  `setNodeProperty` updates both the
+        // adapter (via vtable → statement-txn putPropertyTxn) and the
+        // in-memory map + merge-prop index.
+        try store.setNodeProperty(node_id, merge_key, merge_value);
+        for (on_create_props) |kv| {
+            // Skip a duplicate merge_key entry in ON CREATE SET (caller
+            // is allowed to specify it; we already wrote it above).
+            if (std.mem.eql(u8, kv.key, merge_key)) continue;
+            try store.setNodeProperty(node_id, kv.key, kv.value);
+        }
+
+        if (stmt_txn_open) try stmt_txn.commit();
+        return node_id;
+    }
+
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
     /// Allocate `n` node slots in the given graph + attach the same label set
     /// to each, under a SINGLE adapter mutex acquisition (vs N for N separate

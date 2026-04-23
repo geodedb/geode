@@ -3395,6 +3395,25 @@ pub fn build(b: *std.Build) void {
     const two_phase_edge_step = b.step("test-two-phase-edge-lock", "Run Task 15/16 two-phase lock tests for the bulk MATCH+CREATE edge path");
     two_phase_edge_step.dependOn(&run_two_phase_edge_tests.step);
 
+    // Simple-MERGE fast-path (enterprise-ingest-throughput MERGE extension).
+    // Covers the msft-graph nodes_*.jsonl hot path `MERGE (n:L {key: v})
+    // [ON CREATE SET n.x = ..., ...]`: hit returns existing id, miss
+    // inserts exactly one node, bulk path parity with the executor, and
+    // 16-way concurrent MERGE on the same key inserts exactly once.
+    const simple_merge_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bulk_ingest/test_simple_merge_fastpath.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    simple_merge_test_mod.addImport("geode", root_mod);
+    const simple_merge_tests = b.addTest(.{ .root_module = simple_merge_test_mod });
+    const run_simple_merge_tests = b.addRunArtifact(simple_merge_tests);
+    test_step.dependOn(&run_simple_merge_tests.step);
+    test_perf_step.dependOn(&run_simple_merge_tests.step);
+    const simple_merge_step = b.step("test-simple-merge-fastpath", "Run simple MERGE node fast-path parity + concurrent race tests");
+    simple_merge_step.dependOn(&run_simple_merge_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression
