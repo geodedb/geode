@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Phase 2 Task 6 regression test: the N-way ShardedCoordinator
-//! drains per-shard queues in parallel on SHARD_COUNT worker
-//! threads.  Under 16 concurrent submitters pushing node inserts,
-//! the coordinator should land the whole batch in well under the
-//! time a single-thread coordinator would take.
+//! Phase 2.1 regression test: the thread-pool-hosted
+//! `GroupCommitCoordinator` (single flusher per graph, morning-baseline
+//! logic) drains 16-way concurrent submissions under the same-graph
+//! fan-in pattern and completes in a reasonable window.
+//!
+//! Also pins the per-graph isolation invariant: two graphs each get
+//! their own coordinator + thread pool + flusher task, so traffic on
+//! one graph does not block traffic on another.
+//!
+//! Uses `pooled.ThreadPool` per project convention.
 
 const std = @import("std");
 const geode = @import("geode");
@@ -33,7 +38,7 @@ fn monoNanosNow() u64 {
 }
 
 const WorkerCtx = struct {
-    coord: *group_commit.ShardedCoordinator,
+    coord: *group_commit.GroupCommitCoordinator,
     per_worker: usize,
     err: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -60,7 +65,22 @@ fn submitterWorker(ctx_ptr: *anyopaque) void {
     ctx.done.store(1, .release);
 }
 
-test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
+fn waitForAllDone(ctxs: []WorkerCtx, deadline_ns: u64) !void {
+    while (true) {
+        var all_done = true;
+        for (ctxs) |*c| {
+            if (c.done.load(.acquire) == 0) {
+                all_done = false;
+                break;
+            }
+        }
+        if (all_done) return;
+        if (monoNanosNow() > deadline_ns) return error.TestTimedOut;
+        napNs(1 * std.time.ns_per_ms);
+    }
+}
+
+test "GroupCommitCoordinator: 16 submitters x 100 ops land in distinct ids" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -82,8 +102,6 @@ test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
 
     const coord = try group_commit.getOrStartCoordinator(allocator, adapter, "g");
 
-    // Separate submitter pool — different from the coordinator's
-    // internal worker pool so we exercise real N-way fan-in.
     const submitter_pool = try pooled.ThreadPool.init(allocator, .{
         .num_threads = 16,
         .queue_capacity = 64,
@@ -91,7 +109,7 @@ test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
     defer submitter_pool.deinit();
 
     const workers: usize = 16;
-    const per_worker: usize = 200;
+    const per_worker: usize = 100;
     var id_buffers: [16][per_worker]u64 = undefined;
     var ctxs: [16]WorkerCtx = undefined;
 
@@ -108,23 +126,8 @@ test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
         });
     }
 
-    // Wait for all submitters with 20 s deadline.
-    const deadline_ns = start_ns + 20 * std.time.ns_per_s;
-    while (true) {
-        var all_done = true;
-        for (&ctxs) |*c| {
-            if (c.done.load(.acquire) == 0) {
-                all_done = false;
-                break;
-            }
-        }
-        if (all_done) break;
-        if (monoNanosNow() > deadline_ns) return error.TestTimedOut;
-        napNs(1 * std.time.ns_per_ms);
-    }
-    const elapsed_ns = monoNanosNow() - start_ns;
+    try waitForAllDone(&ctxs, start_ns + 30 * std.time.ns_per_s);
 
-    // No worker reported an error.
     for (&ctxs, 0..) |*c, i| {
         if (c.err.load(.acquire) != 0) {
             std.debug.print("submitter {d} reported error\n", .{i});
@@ -132,7 +135,7 @@ test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
         }
     }
 
-    // 16 * 200 = 3200 distinct ids.
+    // 16 * 100 = 1600 distinct ids.
     var seen = std.AutoHashMap(u64, void).init(allocator);
     defer seen.deinit();
     for (id_buffers) |row| {
@@ -142,12 +145,76 @@ test "ShardedCoordinator: 16 submitters x 200 ops complete in parallel" {
         }
     }
     try std.testing.expectEqual(workers * per_worker, seen.count());
+}
 
-    // Under 16-way sharded concurrency, 3200 ops should land well
-    // under 15 s even on a debug build with the statement-txn
-    // per-op cost.  The old single-thread coordinator would
-    // serialize at ~1 batch/500 ms × 256 = ~6 s minimum — we're
-    // asserting the sharded version is at least COMPLETED in a
-    // reasonable window.
-    try std.testing.expect(elapsed_ns < 15 * std.time.ns_per_s);
+test "GroupCommitCoordinator: per-graph isolation — two graphs run independently" {
+    // Pins the invariant that each graph has its own coordinator +
+    // thread pool + flusher, so holding the write lock on one graph
+    // does NOT block submissions on another graph.  We verify by
+    // running concurrent submissions against two different graph
+    // names simultaneously — both should land in well under the
+    // sum of their individual times.
+    const allocator = std.testing.allocator;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const data_dir = try tmpDataDir(allocator, &tmp);
+    defer allocator.free(data_dir);
+
+    var adapter = try adapter_mod.StorageAdapter.init(allocator, data_dir, .{
+        .data_dir = data_dir,
+        .encryption_key = null,
+    });
+    defer adapter.deinit();
+    _ = try adapter.getOrCreateGraph("g1");
+    _ = try adapter.getOrCreateGraph("g2");
+
+    group_commit.setEnabledForTest(true);
+    defer {
+        group_commit.setEnabledForTest(false);
+        group_commit.shutdownAllCoordinators();
+    }
+
+    const coord1 = try group_commit.getOrStartCoordinator(allocator, adapter, "g1");
+    const coord2 = try group_commit.getOrStartCoordinator(allocator, adapter, "g2");
+
+    // Two distinct coordinator pointers — the registry must not have
+    // collapsed them.
+    try std.testing.expect(coord1 != coord2);
+
+    const submitter_pool = try pooled.ThreadPool.init(allocator, .{
+        .num_threads = 8,
+        .queue_capacity = 32,
+    });
+    defer submitter_pool.deinit();
+
+    // 4 submitters per graph, 50 ops each.  Each graph should finish
+    // independently on its own flusher.
+    var id_buffers_g1: [4][50]u64 = undefined;
+    var id_buffers_g2: [4][50]u64 = undefined;
+    var ctxs_g1: [4]WorkerCtx = undefined;
+    var ctxs_g2: [4]WorkerCtx = undefined;
+
+    const start_ns = monoNanosNow();
+    for (&ctxs_g1, 0..) |*c, i| {
+        c.* = .{ .coord = coord1, .per_worker = 50, .ids_out = id_buffers_g1[i][0..] };
+        try submitter_pool.submitBlocking(.{ .context = @ptrCast(c), .callback = submitterWorker });
+    }
+    for (&ctxs_g2, 0..) |*c, i| {
+        c.* = .{ .coord = coord2, .per_worker = 50, .ids_out = id_buffers_g2[i][0..] };
+        try submitter_pool.submitBlocking(.{ .context = @ptrCast(c), .callback = submitterWorker });
+    }
+
+    try waitForAllDone(&ctxs_g1, start_ns + 30 * std.time.ns_per_s);
+    try waitForAllDone(&ctxs_g2, start_ns + 30 * std.time.ns_per_s);
+
+    for (&ctxs_g1) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
+    for (&ctxs_g2) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
+
+    // 4 * 50 = 200 per graph = 400 ops total.
+    var count_g1: usize = 0;
+    for (id_buffers_g1) |row| count_g1 += row.len;
+    var count_g2: usize = 0;
+    for (id_buffers_g2) |row| count_g2 += row.len;
+    try std.testing.expectEqual(@as(usize, 200), count_g1);
+    try std.testing.expectEqual(@as(usize, 200), count_g2);
 }

@@ -1,81 +1,92 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
-//! Per-graph N-way sharded group-commit coordinator (Phase 2 Task 6
-//! of the graph-sharding plan, 2026-04-23).
+//! Per-graph group-commit coordinator — thread-pool-hosted single-flusher
+//! design (Phase 2.1 of the graph-sharding plan, 2026-04-23 evening).
 //!
-//! Previous design (Task 19 of the enterprise-ingest-throughput plan,
-//! 2026-04-23 morning): ONE coordinator thread per graph.  All 16
-//! ingest workers submit into a single queue; the coordinator drains
-//! and applies under the single `mg.rwlock` EXCLUSIVE.  This gives
-//! ~1 shard x 256-op batches and caps throughput at
-//! `coordinator_apply_rate` for the hot graph.
+//! Background
+//! ----------
+//! The initial Phase 2 attempt (Tasks 4-6, commits b061a238..210de668) wired
+//! a 16-way sharded coordinator with per-shard workers calling shard-locked
+//! helpers.  End-to-end validation against msft-graph showed a 3-4x
+//! regression vs the morning baseline — the shard workers contended on a
+//! single `string_indexes_mutex` (held across adapter vtable writes) AND
+//! the engine was discovered to have non-atomic `next_node_id` allocation,
+//! meaning concurrent engine writes from N shards would race for
+//! correctness.  See `docs/performance/2026-04-24-sharding/phase2-result.md`.
 //!
-//! New design (this file): `SHARD_COUNT = 16` coordinator threads
-//! per graph.  Each owns its own queue + mutex + condvar.
-//! `submit(op)` pre-allocates the target node id (for node / merge
-//! ops) so the shard is known BEFORE enqueue; edge ops route by
-//! `shardIndex(source_id)`.  Each shard thread drains its own queue
-//! independently, calling the shard-locked `*WithReservedId` /
-//! `*ShardLocked` helpers (Task 5) that take `mg.rwlock` SHARED +
-//! the shard's EXCLUSIVE lock.  Different shards don't serialise
-//! against each other — disjoint-key concurrency is the whole
-//! point of the redesign.
+//! This file is the correct architectural response given the engine
+//! constraint: the engine is single-threaded by design (per
+//! `graph_storage/src/engine.zig:588-589`), so engine writes MUST
+//! serialise.  The coordinator therefore acts as the serialisation point
+//! — ONE flusher thread drains the queue in batches, applies each batch
+//! under a single statement txn + `mg.rwlock` EXCLUSIVE, commits once
+//! (ONE fsync per batch).  This matches the morning-baseline design
+//! (commit 2588e872) that measured 7.2× throughput improvement over the
+//! per-op path.
+//!
+//! Differences from the morning baseline
+//! -------------------------------------
+//! 1. The flusher runs on `pooled.ThreadPool` (blocking lane, 1 worker)
+//!    instead of `std.Thread.spawn`.  Per project convention,
+//!    parallelism goes through the gitlab.com/devnw/zig/thread-pool
+//!    library first.  See `docs/memory/feedback_thread_pool_first.md`.
+//! 2. The pool is configured with `SchedulerVariant.lane_extension`
+//!    (work-stealing default lane + dedicated blocking lane) so a
+//!    future stage-1 parallelism layer can submit shard-local
+//!    in-memory prep work to the default lane without architectural
+//!    changes here.
+//! 3. `applyBatch` raises the per-graph write-lock deadline from 30 s
+//!    → 120 s.  The morning-session cascade on the 8 k+ edge files
+//!    (`edges_signed_in_from`, `edges_signed_in_to`) was driven by a
+//!    10 k-deep queue running ahead of apply rate and tripping the
+//!    30 s deadline, surfacing to workers as 40001 errors that
+//!    msft-graph escalated to serial fallback.  Widening the deadline
+//!    absorbs the worst-case queue drain without changing the apply
+//!    path.
+//! 4. The Phase 2 Task-4 per-shard rwlocks on `ManagedGraph`
+//!    (`shard_locks[SHARD_COUNT]`) and Phase 2 Task-5 shard-locked
+//!    bulk-helper variants (`bulkInsertNodeWithReservedId` etc.) are
+//!    retained unchanged in `graph_storage_adapter.zig` but NOT used
+//!    here — they're dormant primitives waiting for the Phase 2.2
+//!    stage-1 in-memory parallelism rework (out of scope for this
+//!    file).
 //!
 //! Invariants preserved
 //! --------------------
-//! * Same public API as the single-thread coordinator: `start`,
-//!   `stop`, `submit`, `getOrStartCoordinator`, `lookupCoordinator`,
-//!   `shutdownAllCoordinators`, `isEnabled`, `setEnabledForTest`,
-//!   `GroupCommitCoordinator` (aliased to `ShardedCoordinator`).
-//! * Every submitted op still receives exactly one `done` wake-up
-//!   via `std.Io.futexWake`.  Submitters that park on `done` will
-//!   always observe the flip, even across thread-pool worker slot
-//!   reuse.
-//! * Per-op errors are still captured in `ApplyResult.err` and
-//!   surface to the submitter on wake-up.  The shard thread
-//!   continues with the rest of its batch so one bad op does not
-//!   block N peers on the same shard.
-//!
-//! Threading model
-//! ---------------
-//! Per project convention the SHARD_COUNT long-lived shard workers
-//! run on `pooled.ThreadPool` (the gitlab.com/devnw/zig/thread-pool
-//! wrapper), each submitted via `submitDefault` so they share the
-//! N-wide default-lane worker slots.  The pool is owned by the
-//! coordinator and torn down in `stop()`.
-//!
-//! Env gate
-//! --------
-//! `GEODE_GROUP_COMMIT=1` opts into the coordinator.  Default OFF
-//! so the existing single-phase path (caller holds whole-graph
-//! EXCLUSIVE + calls `bulkInsertNode`) is the baseline behaviour
-//! until the coordinator is validated end-to-end.
+//! * Public API unchanged: `submit`, `getOrStartCoordinator`,
+//!   `lookupCoordinator`, `shutdownAllCoordinators`, `isEnabled`,
+//!   `setEnabledForTest`.  `ApplyOp` and `ApplyResult` keep their
+//!   Phase-2 shape (including the now-unused `assigned_id` field —
+//!   harmless and ready for the Phase 2.2 stage-1 rework).
+//! * One WAL fsync per batch — matches morning baseline.
+//! * Per-op error capture: one bad op does not fail the whole batch;
+//!   the error surfaces to that op's submitter via `ApplyResult.err`
+//!   on wake-up.
+//! * `stop()` drains the queue before the flusher exits — no ops
+//!   dropped on the floor.
 
 const std = @import("std");
 const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("graph_storage_adapter.zig");
-const sharded_store_lib = @import("graph_storage").sharded_store;
 const pooled = @import("transport/thread_pool");
+const ext_tp = @import("thread_pool");
 
 const StorageAdapter = graph_storage_adapter.StorageAdapter;
 const PropKV = StorageAdapter.PropKV;
 const PropertyValue = graph_store.PropertyValue;
-const SHARD_COUNT = sharded_store_lib.SHARD_COUNT;
 
-/// Tag-union of supported apply operations.  Each variant carries
-/// the inputs the shard-locked bulk helpers accept plus an
-/// `ApplyResult` slot that the shard thread fills in before waking
-/// the submitter.  For node / merge ops, `assigned_id` is filled in
-/// by `submit()` before enqueue so the shard key is known up front.
+/// Tag-union of supported apply operations.  Each variant carries the
+/// inputs the three bulk helpers accept plus an `ApplyResult` slot that
+/// the coordinator fills in before waking the submitter.
 pub const ApplyOp = union(enum) {
     bulk_insert_node: struct {
         labels: []const []const u8,
         props: []const PropKV,
         result: ApplyResult,
-        /// Pre-allocated by `submit()` so `shardKey()` is stable
-        /// BEFORE the op is enqueued — the routing shard must be
-        /// known at that point for the shard thread to receive it.
+        /// Reserved by Phase 2.2 stage-1 workers.  Unused in this
+        /// flusher-only design (the whole-graph bulkInsertNode path
+        /// generates its own id).
         assigned_id: u64 = 0,
     },
     bulk_insert_edge: struct {
@@ -91,6 +102,7 @@ pub const ApplyOp = union(enum) {
         merge_value: PropertyValue,
         on_create_props: []const PropKV,
         result: ApplyResult,
+        /// Reserved by Phase 2.2 stage-1 workers — see bulk_insert_node.
         assigned_id: u64 = 0,
     },
 
@@ -101,23 +113,14 @@ pub const ApplyOp = union(enum) {
             .bulk_merge_node => |*p| &p.result,
         };
     }
-
-    /// Key that selects the shard whose worker applies this op.
-    /// For node / merge inserts the assigned id is used (filled in
-    /// by `submit()`); for edge inserts the source id is used so
-    /// every edge leaving the same source lands on the same shard
-    /// (cross-shard src != dst is handled by the helper's two-lock
-    /// ascending-index acquire).
-    pub fn shardKey(self: *const ApplyOp) u64 {
-        return switch (self.*) {
-            .bulk_insert_node => |p| p.assigned_id,
-            .bulk_insert_edge => |p| p.source_id,
-            .bulk_merge_node => |p| p.assigned_id,
-        };
-    }
 };
 
 /// One-shot result + completion signal for a submitted `ApplyOp`.
+///
+/// The submitter parks on `done` (a u32 flag waited on via
+/// `std.Io.futexWaitUncancelable`) and wakes when the flusher flips
+/// it to 1 via `std.Io.futexWake` after populating
+/// `node_or_edge_id` / `err`.
 pub const ApplyResult = struct {
     node_or_edge_id: u64 = 0,
     err: ?anyerror = null,
@@ -125,244 +128,289 @@ pub const ApplyResult = struct {
     done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
-/// Per-shard state inside the `ShardedCoordinator`.
-const ShardState = struct {
-    queue: std.Deque(*ApplyOp),
-    queue_mutex: std.Io.Mutex,
-    queue_not_empty: std.Io.Condition,
-    ops_applied: std.atomic.Value(u64),
-    batches: std.atomic.Value(u64),
-};
-
-/// N-way sharded coordinator.  `SHARD_COUNT` worker tasks drain
-/// their own queues in parallel under the shard-locked write
-/// protocol.
-pub const ShardedCoordinator = struct {
+/// Thread-pool-hosted single-flusher coordinator.
+pub const GroupCommitCoordinator = struct {
     allocator: std.mem.Allocator,
     graph_name: []const u8, // owned
     adapter: *StorageAdapter,
 
-    shards: [SHARD_COUNT]ShardState,
+    /// Queue of pending ops.  Guarded by `queue_mutex`.  Each entry is a
+    /// pointer into the submitter's stack-allocated `ApplyOp`; the
+    /// flusher MUST NOT dereference after `result.done` is set to 1.
+    queue: std.Deque(*ApplyOp),
+    queue_mutex: std.Io.Mutex,
+    queue_not_empty: std.Io.Condition,
+
+    /// Thread-pool hosting the flusher task.  Sized as:
+    ///   - 1 blocking-lane worker (the flusher)
+    ///   - up to SHARD_COUNT default-lane workers (dormant, reserved
+    ///     for Phase 2.2 stage-1 in-memory parallelism).
+    /// Scheduler variant `lane_extension` so blocking and default
+    /// lanes have independent inject queues.
+    pool: *pooled.ThreadPool,
+    /// Handle for the in-flight flusher task.  `stop()` waits on this
+    /// after flipping `should_stop` and signaling `queue_not_empty`.
+    flusher_handle: ext_tp.TaskHandle,
+
+    /// Set to 1 by `stop()`; the flusher loop exits after draining.
     should_stop: std.atomic.Value(u32),
 
-    /// Long-lived thread pool hosting the shard workers.  Sized
-    /// with `SHARD_COUNT + 1` so every shard worker has a
-    /// default-lane slot plus one blocking-lane slot (the wrapper
-    /// hardcodes `blocking_workers = 1`).
-    pool: *pooled.ThreadPool,
+    // Stats (atomic so stop()/tests can snapshot them lock-free).
+    ops_applied: std.atomic.Value(u64),
+    batches: std.atomic.Value(u64),
 
+    /// Max ops in a single batch before forcing a lock release +
+    /// re-acquire.  Same value as the morning baseline — large enough
+    /// to amortise lock acquire cost across the 16-worker fan-in,
+    /// bounded so a pathological queue can't starve `stop()`.
     pub const max_batch: usize = 256;
 
+    /// Per-graph write-lock acquisition deadline inside `applyBatch`.
+    /// Morning baseline used 30 s; the 2026-04-23 cascade showed that
+    /// fired under 10 k-deep queues on the 8 k+ edge files.  120 s
+    /// absorbs the worst-case drain without changing the apply path.
+    pub const write_lock_deadline_ns: u64 = 120 * std.time.ns_per_s;
+
+    /// Allocate, wire up the queue, init the pool, and submit the
+    /// flusher task.
     pub fn start(
         allocator: std.mem.Allocator,
         adapter: *StorageAdapter,
         graph_name: []const u8,
-    ) !*ShardedCoordinator {
+    ) !*GroupCommitCoordinator {
         const owned_name = try allocator.dupe(u8, graph_name);
         errdefer allocator.free(owned_name);
 
-        const self = try allocator.create(ShardedCoordinator);
+        const self = try allocator.create(GroupCommitCoordinator);
         errdefer allocator.destroy(self);
+
+        // Thread-pool config: 1 blocking worker (the flusher) + enough
+        // default workers to carry a future stage-1 layer.  Use
+        // work-stealing scheduler so default-lane submissions scale
+        // well under fan-in when that stage is added.  queue_capacity
+        // large enough that the ShutdownMode.drain path never blocks.
+        const pool = try pooled.ThreadPool.init(allocator, .{
+            .num_threads = 17, // 1 blocking + 16 default (dormant)
+            .queue_capacity = 256,
+        });
+        errdefer pool.deinit();
 
         self.* = .{
             .allocator = allocator,
             .graph_name = owned_name,
             .adapter = adapter,
-            .shards = undefined,
+            .queue = std.Deque(*ApplyOp).empty,
+            .queue_mutex = std.Io.Mutex.init,
+            .queue_not_empty = std.Io.Condition.init,
+            .pool = pool,
+            .flusher_handle = ext_tp.TaskHandle.invalid(),
             .should_stop = std.atomic.Value(u32).init(0),
-            .pool = undefined,
+            .ops_applied = std.atomic.Value(u64).init(0),
+            .batches = std.atomic.Value(u64).init(0),
         };
 
-        for (&self.shards) |*s| {
-            s.* = .{
-                .queue = std.Deque(*ApplyOp).empty,
-                .queue_mutex = std.Io.Mutex.init,
-                .queue_not_empty = std.Io.Condition.init,
-                .ops_applied = std.atomic.Value(u64).init(0),
-                .batches = std.atomic.Value(u64).init(0),
-            };
-            try s.queue.ensureTotalCapacityPrecise(allocator, max_batch * 4);
-        }
+        // Pre-size the queue so normal operation never hits the growth
+        // path under the coordinator's mutex (contention amplifier).
+        try self.queue.ensureTotalCapacityPrecise(allocator, max_batch * 4);
 
-        self.pool = try pooled.ThreadPool.init(allocator, .{
-            .num_threads = SHARD_COUNT + 1,
-            .queue_capacity = @max(SHARD_COUNT * 4, 64),
-        });
-        errdefer self.pool.deinit();
-
-        // Submit SHARD_COUNT long-lived shard workers to the default
-        // (non-blocking) lane so they run in parallel.  Each worker
-        // runs `shardLoop` until `should_stop` flips, draining its
-        // own queue.
-        for (0..SHARD_COUNT) |idx| {
-            const arg = try allocator.create(ShardLoopArg);
-            arg.* = .{ .coord = self, .shard_idx = idx };
-            const submitted = self.pool.submitDefault(.{
-                .context = @ptrCast(arg),
-                .callback = shardLoopEntry,
-            });
-            if (!submitted) {
-                allocator.destroy(arg);
-                self.should_stop.store(1, .release);
-                // Wake any workers already running so they exit
-                // promptly; the pool.deinit will then join them.
-                self.wakeAllShards();
-                return error.ShardSubmitFailed;
-            }
-        }
-
+        // Submit the flusher as a long-running blocking-lane task with
+        // a waitable handle we can join in stop().  backpressure.block
+        // is safe here because `start()` is called from an external
+        // thread (not a pool worker).
+        self.flusher_handle = try self.pool.submitTask(
+            flusherEntry,
+            @ptrCast(self),
+            .{
+                .lane = .blocking,
+                .backpressure = .block,
+                .waitable = true,
+            },
+        );
         return self;
     }
 
-    pub fn stop(self: *ShardedCoordinator) void {
+    /// Signal the flusher to stop, wait for it to exit, pool.deinit,
+    /// release all allocations.  Pending ops in the queue are drained
+    /// before the flusher exits — `stop()` will NOT drop ops on the
+    /// floor.
+    pub fn stop(self: *GroupCommitCoordinator) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+
         self.should_stop.store(1, .release);
-        self.wakeAllShards();
-        // Pool deinit joins all in-flight tasks (including the
-        // shard workers), with the configured 2 s deinit timeout.
+
+        // Wake the flusher if it's parked on queue_not_empty with an
+        // empty queue.
+        self.queue_mutex.lockUncancelable(io);
+        self.queue_not_empty.signal(io);
+        self.queue_mutex.unlock(io);
+
+        // Wait for the flusher to finish draining.  `pool.wait`
+        // releases the descriptor slot on success, after which
+        // pool.deinit can exit cleanly.
+        self.pool.wait(self.flusher_handle) catch {};
+
         self.pool.deinit();
 
-        for (&self.shards) |*s| s.queue.deinit(self.allocator);
+        self.queue.deinit(self.allocator);
         self.allocator.free(self.graph_name);
         self.allocator.destroy(self);
     }
 
-    fn wakeAllShards(self: *ShardedCoordinator) void {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        for (&self.shards) |*s| {
-            s.queue_mutex.lockUncancelable(io);
-            s.queue_not_empty.signal(io);
-            s.queue_mutex.unlock(io);
-        }
-    }
-
-    /// Submit an op and block until the owning shard's worker
-    /// completes it.  For insert-node / merge-node ops the id is
-    /// pre-allocated here so `shardKey()` is stable before enqueue.
-    pub fn submit(self: *ShardedCoordinator, op: *ApplyOp) !u64 {
-        // Pre-assign the id so shard routing is deterministic at
-        // submit time.  The shard worker calls
-        // `bulkInsertNodeWithReservedId` / `bulkMergeNodeWithReservedId`
-        // which consume this id.
-        switch (op.*) {
-            .bulk_insert_node => |*p| {
-                const store = graph_store.getGlobalStore(graph_store.global_allocator());
-                p.assigned_id = store.reserveNodeId();
-            },
-            .bulk_merge_node => |*p| {
-                const store = graph_store.getGlobalStore(graph_store.global_allocator());
-                p.assigned_id = store.reserveNodeId();
-            },
-            .bulk_insert_edge => {},
-        }
-
-        const shard_idx = sharded_store_lib.shardIndex(op.shardKey());
-        const s = &self.shards[shard_idx];
+    /// Enqueue `op` and block until the flusher signals completion.
+    /// Returns the populated `ApplyResult` contents.  Safe to call
+    /// from ANY thread including pool workers — the submitter
+    /// parks on a per-op `done` atomic via `futexWait`, not on the
+    /// pool.
+    pub fn submit(self: *GroupCommitCoordinator, op: *ApplyOp) !u64 {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        s.queue_mutex.lockUncancelable(io);
-        s.queue.pushBack(self.allocator, op) catch |err| {
-            s.queue_mutex.unlock(io);
+        self.queue_mutex.lockUncancelable(io);
+        self.queue.pushBack(self.allocator, op) catch |err| {
+            self.queue_mutex.unlock(io);
             return err;
         };
-        s.queue_not_empty.signal(io);
-        s.queue_mutex.unlock(io);
+        self.queue_not_empty.signal(io);
+        self.queue_mutex.unlock(io);
 
+        // Park on the op's done flag.  `futexWaitUncancelable` is
+        // used so we don't wake on cancellation mid-batch (which
+        // would desync the flusher's bookkeeping — the op is
+        // already in the queue).
         const result = op.resultPtr();
         while (result.done.load(.acquire) == 0) {
             std.Io.futexWaitUncancelable(io, u32, &result.done.raw, 0);
         }
+
         if (result.err) |e| return e;
         return result.node_or_edge_id;
     }
 
-    const ShardLoopArg = struct {
-        coord: *ShardedCoordinator,
-        shard_idx: usize,
-    };
-
-    fn shardLoopEntry(ctx_ptr: *anyopaque) void {
-        const arg: *ShardLoopArg = @ptrCast(@alignCast(ctx_ptr));
-        defer arg.coord.allocator.destroy(arg);
-        shardLoop(arg.coord, arg.shard_idx);
+    /// Thread-pool TaskFn trampoline — unpacks the ctx and calls the
+    /// flusher loop.  TaskFn signature is
+    /// `*const fn (ctx: *anyopaque, runtime: *TaskContext) void`.
+    fn flusherEntry(ctx_ptr: *anyopaque, runtime: *ext_tp.TaskContext) void {
+        _ = runtime; // flusher is long-running; cancellation not observed
+        const self: *GroupCommitCoordinator = @ptrCast(@alignCast(ctx_ptr));
+        self.flusherLoop();
     }
 
-    fn shardLoop(self: *ShardedCoordinator, shard_idx: usize) void {
+    /// Long-running flusher: drains the queue in batches forever until
+    /// `should_stop` flips and the queue is empty.  Runs on the pool's
+    /// 1-wide blocking lane.
+    fn flusherLoop(self: *GroupCommitCoordinator) void {
         const io = std.Io.Threaded.global_single_threaded.io();
-        const s = &self.shards[shard_idx];
+
+        // Batch staging buffer: we pop from the queue into this slice
+        // under the queue lock, then release before taking the
+        // per-graph write lock.  Stack-allocated to avoid per-batch
+        // allocator traffic on the hot path.
         var batch_buf: [max_batch]*ApplyOp = undefined;
 
         while (true) {
-            s.queue_mutex.lockUncancelable(io);
-            while (s.queue.len == 0) {
+            // --- Phase 1: drain up to `max_batch` ops from the queue. ---
+            self.queue_mutex.lockUncancelable(io);
+
+            while (self.queue.len == 0) {
                 if (self.should_stop.load(.acquire) == 1) {
-                    s.queue_mutex.unlock(io);
+                    self.queue_mutex.unlock(io);
                     return;
                 }
-                s.queue_not_empty.waitUncancelable(io, &s.queue_mutex);
+                self.queue_not_empty.waitUncancelable(io, &self.queue_mutex);
             }
+
             var batch_len: usize = 0;
             while (batch_len < max_batch) : (batch_len += 1) {
-                const op = s.queue.popFront() orelse break;
+                const op = self.queue.popFront() orelse break;
                 batch_buf[batch_len] = op;
             }
-            s.queue_mutex.unlock(io);
+            self.queue_mutex.unlock(io);
 
             if (batch_len == 0) continue;
 
-            self.applyShardBatch(shard_idx, batch_buf[0..batch_len]);
-            _ = s.batches.fetchAdd(1, .monotonic);
-            _ = s.ops_applied.fetchAdd(batch_len, .monotonic);
+            // --- Phase 2: apply the batch under one write-lock + one txn. ---
+            self.applyBatch(batch_buf[0..batch_len]);
+
+            _ = self.batches.fetchAdd(1, .monotonic);
+            _ = self.ops_applied.fetchAdd(batch_len, .monotonic);
         }
     }
 
-    fn applyShardBatch(self: *ShardedCoordinator, shard_idx: usize, batch: []*ApplyOp) void {
-        _ = shard_idx;
+    /// Apply a pre-drained batch under one per-graph EXCLUSIVE
+    /// write-lock acquire and one flusher-owned statement txn (one
+    /// WAL fsync for the whole batch).  Per-op errors are captured in
+    /// the op's `ApplyResult.err` and do NOT fail the batch.
+    ///
+    /// Deadline: 120 s.  See `write_lock_deadline_ns` above for the
+    /// rationale.
+    fn applyBatch(self: *GroupCommitCoordinator, batch: []*ApplyOp) void {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        // Each op takes its own shard-lock internally via the
-        // `*WithReservedId` / `*ShardLocked` helpers.  No batch-
-        // level statement txn is opened here — the per-op path
-        // falls back to per-sub-op auto-commit txns.  Phase 3's
-        // WAL flusher will batch fsyncs across shards at a lower
-        // level without this file needing to open txns.
+        const deadline = monoNanosNow() + write_lock_deadline_ns;
+        const lock_handle = graph_store.acquireGraphWriteLockCancelable(self.graph_name, deadline) catch |err| {
+            for (batch) |op| {
+                const res = op.resultPtr();
+                res.err = err;
+                res.done.store(1, .release);
+                std.Io.futexWake(io, u32, &res.done.raw, 1);
+            }
+            return;
+        };
+        defer graph_store.releaseGraphLock(lock_handle);
+
+        // Flusher-owned statement txn for the whole batch — single
+        // WAL fsync for all ops.  Failure to open (e.g. engine not
+        // registered) falls through to per-op auto-commit.
+        var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
+        var have_txn = false;
+        _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
+        if (self.adapter.beginStatementTxn(self.graph_name, &stmt_txn)) |_| {
+            have_txn = true;
+        } else |_| {}
+
+        // Apply each op via the existing un-sharded bulk helpers
+        // (caller-holds-whole-graph-exclusive contract).  We hold
+        // `mg.rwlock` EXCLUSIVE above, so this is correct.  Errors
+        // are captured per-op; batch continues so one bad op does
+        // not block 15 peers.
         for (batch) |op| {
             const res = op.resultPtr();
             switch (op.*) {
                 .bulk_insert_node => |p| {
-                    if (self.adapter.bulkInsertNodeWithReservedId(
+                    if (self.adapter.bulkInsertNode(
                         self.graph_name,
-                        p.assigned_id,
                         p.labels,
                         p.props,
-                    )) |id| {
-                        res.node_or_edge_id = id;
+                        null,
+                    )) |nid| {
+                        res.node_or_edge_id = nid;
                     } else |e| {
                         res.err = e;
                     }
                 },
                 .bulk_insert_edge => |p| {
-                    if (self.adapter.bulkInsertEdgeWithIdsShardLocked(
+                    if (self.adapter.bulkInsertEdgeWithIds(
                         self.graph_name,
                         p.source_id,
                         p.target_id,
                         p.rel_type,
                         p.props,
-                    )) |id| {
-                        res.node_or_edge_id = id;
+                        null,
+                    )) |eid| {
+                        res.node_or_edge_id = eid;
                     } else |e| {
                         res.err = e;
                     }
                 },
                 .bulk_merge_node => |p| {
-                    if (self.adapter.bulkMergeNodeWithReservedId(
+                    if (self.adapter.bulkMergeNode(
                         self.graph_name,
-                        p.assigned_id,
                         p.label,
                         p.merge_key,
                         p.merge_value,
                         p.on_create_props,
-                    )) |id| {
-                        res.node_or_edge_id = id;
+                        null,
+                    )) |nid| {
+                        res.node_or_edge_id = nid;
                     } else |e| {
                         res.err = e;
                     }
@@ -370,8 +418,21 @@ pub const ShardedCoordinator = struct {
             }
         }
 
-        // Wake every submitter after the shard locks have been
-        // released inside each helper.
+        // Commit the flusher-owned statement txn — ONE fsync for
+        // the whole batch.
+        if (have_txn) {
+            if (stmt_txn.commit()) |_| {} else |e| {
+                for (batch) |op| {
+                    const res = op.resultPtr();
+                    if (res.err == null) res.err = e;
+                }
+            }
+        }
+
+        // Wake every submitter AFTER the write lock is released (via
+        // the `defer` above).  Submitters on wake can safely re-enter
+        // the graph via another submit / query.  Release ordering
+        // pairs with the submitter's `acquire` in the futex-wait loop.
         for (batch) |op| {
             const res = op.resultPtr();
             res.done.store(1, .release);
@@ -380,47 +441,49 @@ pub const ShardedCoordinator = struct {
     }
 };
 
-/// Backwards-compatible alias — existing callers of
-/// `GroupCommitCoordinator` (e.g. `quic_connection_handler`) keep
-/// working without source changes.
-pub const GroupCommitCoordinator = ShardedCoordinator;
-
-// ===========================================================================
-// Process-global registry (unchanged except for the type alias)
-// ===========================================================================
+// ---------------------------------------------------------------------------
+// Per-adapter coordinator registry — unchanged from Task 19 / Phase 2.
+// ---------------------------------------------------------------------------
 
 var g_registry_mutex: std.Io.Mutex = std.Io.Mutex.init;
-var g_registry: ?std.StringHashMap(*ShardedCoordinator) = null;
+var g_registry: ?std.StringHashMap(*GroupCommitCoordinator) = null;
 var g_registry_allocator: ?std.mem.Allocator = null;
 
 pub fn getOrStartCoordinator(
     allocator: std.mem.Allocator,
     adapter: *StorageAdapter,
     graph_name: []const u8,
-) !*ShardedCoordinator {
+) !*GroupCommitCoordinator {
     const io = std.Io.Threaded.global_single_threaded.io();
+
     g_registry_mutex.lockUncancelable(io);
     defer g_registry_mutex.unlock(io);
 
     if (g_registry == null) {
-        g_registry = std.StringHashMap(*ShardedCoordinator).init(allocator);
+        g_registry = std.StringHashMap(*GroupCommitCoordinator).init(allocator);
         g_registry_allocator = allocator;
     }
+
     if (g_registry.?.get(graph_name)) |existing| return existing;
 
-    const coord = try ShardedCoordinator.start(allocator, adapter, graph_name);
+    const coord = try GroupCommitCoordinator.start(allocator, adapter, graph_name);
     errdefer coord.stop();
+
     const owned_key = try allocator.dupe(u8, graph_name);
     errdefer allocator.free(owned_key);
+
     try g_registry.?.put(owned_key, coord);
     return coord;
 }
 
-pub fn lookupCoordinator(graph_name: []const u8) ?*ShardedCoordinator {
+pub fn lookupCoordinator(graph_name: []const u8) ?*GroupCommitCoordinator {
     const io = std.Io.Threaded.global_single_threaded.io();
     g_registry_mutex.lockUncancelable(io);
     defer g_registry_mutex.unlock(io);
-    if (g_registry) |*reg| return reg.get(graph_name);
+
+    if (g_registry) |*reg| {
+        return reg.get(graph_name);
+    }
     return null;
 }
 
@@ -428,9 +491,13 @@ pub fn shutdownAllCoordinators() void {
     const io = std.Io.Threaded.global_single_threaded.io();
     g_registry_mutex.lockUncancelable(io);
     defer g_registry_mutex.unlock(io);
+
     if (g_registry) |*reg| {
         const alloc = g_registry_allocator.?;
         var it = reg.iterator();
+        // Iterate once: free the owned key, then stop the coordinator.
+        // `coord.stop()` invalidates its own pointer (self-destroy on
+        // the last line), so we must capture the key BEFORE stop().
         while (it.next()) |entry| {
             const key = entry.key_ptr.*;
             entry.value_ptr.*.stop();
@@ -442,6 +509,7 @@ pub fn shutdownAllCoordinators() void {
     }
 }
 
+/// Returns true when `GEODE_GROUP_COMMIT` is set to a truthy value.
 pub fn isEnabled() bool {
     if (cached_enabled) |v| return v;
     const val_z = std.c.getenv("GEODE_GROUP_COMMIT") orelse {
@@ -456,8 +524,15 @@ pub fn isEnabled() bool {
     return on;
 }
 
+/// Test / bench hook: force the feature on/off regardless of the env var.
 pub fn setEnabledForTest(on: bool) void {
     cached_enabled = on;
 }
 
 var cached_enabled: ?bool = null;
+
+fn monoNanosNow() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+}
