@@ -3331,6 +3331,19 @@ pub fn build(b: *std.Build) void {
     const bulk_shard_step = b.step("test-bulk-shard-concurrency", "Run Phase 2 shard-locked bulk-helper concurrency tests");
     bulk_shard_step.dependOn(&run_bulk_shard_tests.step);
 
+    // Phase 2 Task 6 (2026-04-23) — N-way ShardedCoordinator end-to-end.
+    //     Pins the invariant that 16 concurrent submitters pushing
+    //     node-insert ops land in well under 15 s via the sharded
+    //     coordinator (vs the 6+ s floor a single-thread coord
+    //     would hit at a 256-op batch cadence).
+    const sharded_coord_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sharded_coordinator.zig"), .target = target, .optimize = optimize });
+    sharded_coord_mod.addImport("geode", root_mod);
+    const sharded_coord_tests = b.addTest(.{ .root_module = sharded_coord_mod });
+    const run_sharded_coord_tests = b.addRunArtifact(sharded_coord_tests);
+    test_step.dependOn(&run_sharded_coord_tests.step);
+    const sharded_coord_step = b.step("test-sharded-coordinator", "Run ShardedCoordinator concurrency tests");
+    sharded_coord_step.dependOn(&run_sharded_coord_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

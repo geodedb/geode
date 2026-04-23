@@ -1305,7 +1305,7 @@ pub const StorageAdapter = struct {
         reserved_id: u64,
         label: []const u8,
         merge_key: []const u8,
-        merge_value: gs.PropertyValue,
+        merge_value: graph_store.PropertyValue,
         on_create_props: []const PropKV,
     ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
