@@ -1,21 +1,22 @@
-// bulk_ingest.zig — Task 10 / 11 of the enterprise-ingest-throughput plan.
+// bulk_ingest.zig — Task 10 / 11 / 12 of the enterprise-ingest-throughput plan.
 //
 // Pattern detection for the msft-graph hot-path CREATE / MATCH+CREATE forms
 // so the QUIC connection handler can short-circuit `executeProgramWithContext`
-// and call a direct adapter primitive (`bulkInsertNode`) for the simple shape:
+// and call a direct adapter primitive:
 //
 //     CREATE (n:User { node_id: 'abc-123', name: 'Alice', ... })
+//
+//         -> `graph_storage_adapter.bulkInsertNode` (Task 11).
+//
+//     MATCH (a:User {node_id: 'abc'}), (b:Device {node_id: 'def'})
+//     CREATE (a)-[r:OWNS {since: '2020'}]->(b)
+//
+//         -> `graph_storage_adapter.bulkInsertEdge` (Task 12).
 //
 // The detector is a pure AST predicate — it does NOT allocate, mutate, or
 // take any locks.  Callers (`src/server/quic_connection_handler.zig`) invoke
 // it after parse, before the write-lock branch, to decide whether to route
 // the statement through the fast path or the regular executor.
-//
-// Task 12 (a separate dispatch) will flesh out the `match_create_edge`
-// variant for the edges_*.jsonl files.  For now that variant is declared
-// here so callers can exhaustively match, but the matcher always returns
-// `.none` for MATCH+CREATE edge shapes — the real detection logic is
-// deferred.
 
 const std = @import("std");
 const ast = @import("../gql/ast.zig");
@@ -70,14 +71,45 @@ pub const BulkPattern = enum {
     simple_node_create,
 
     /// Single top-level `MATCH (a:L1 {...}),(b:L2 {...}) CREATE (a)-[:T]->(b)`
-    /// form — the edges_*.jsonl hot-path from msft-graph.  Declared here so
-    /// callers can exhaustively switch on `BulkPattern`; the matcher in
-    /// `matchSingleStatement` always returns `.none` for this shape today
-    /// (Task 12 will add the dispatch + detection together).
+    /// form — the edges_*.jsonl hot-path from msft-graph.  Matched by
+    /// `matchSingleStatement`; dispatchers should call `matchEdgeSpec`
+    /// on the same program to obtain the endpoint labels + node_id
+    /// values + rel_type + edge property pointers without re-walking
+    /// the AST.
     match_create_edge,
 
     /// Not a bulk-ingest shape; use the regular executor.
     none,
+};
+
+/// Endpoint identity captured by `matchEdgeSpec` for one of the two matched
+/// nodes in a MATCH+CREATE edge pattern.  Holds pointers into the AST — the
+/// AST's lifetime (the caller's ParseResult) must outlive the spec.
+pub const EdgeEndpointSpec = struct {
+    /// Variable name used by the CREATE clause to reference this endpoint
+    /// (e.g. `a` in `(a)-[:R]->(b)`).  Always set — the pattern requires
+    /// named variables to link MATCH and CREATE.
+    var_name: []const u8,
+    /// Exactly-one label from the node pattern, e.g. `User`.
+    label: []const u8,
+    /// The sole property filter expression (typically `node_id: 'abc'`).
+    /// The key is a string; the value is a literal or bound parameter that
+    /// the caller will evaluate before calling the adapter.
+    filter_key: []const u8,
+    filter_value: *const ast.Expr,
+};
+
+/// Spec describing a `MATCH ... CREATE edge` pattern discovered by
+/// `matchEdgeSpec`.  Holds pointers into the AST; the caller must keep the
+/// underlying ParseResult alive for the duration of the adapter call.
+pub const MatchCreateEdgeSpec = struct {
+    source: EdgeEndpointSpec,
+    target: EdgeEndpointSpec,
+    rel_type: []const u8,
+    /// Properties on the new edge (possibly empty).  Each property value
+    /// has already been screened via `isScalarPropExpr` — caller just
+    /// needs to eval + encode each.
+    props: []const ast.Property,
 };
 
 /// Inspect `program` and return the bulk-ingest shape we can fast-path, or
@@ -93,8 +125,23 @@ pub const BulkPattern = enum {
 ///   * Every property value is a literal scalar or a bound parameter — no
 ///     arithmetic, no function calls, no list/map, no subqueries.
 ///
-/// Any of these preconditions failing drops the statement back to the full
-/// executor.  The detector is O(number of properties) and does not allocate.
+/// Matching rules for `.match_create_edge` (see `matchEdgeSpec` for
+/// endpoint details):
+///   * Exactly ONE statement in the program, which must be a `Query` with
+///     a `create_pattern` set.
+///   * The MATCH clause has exactly two chains, each a single node pattern
+///     with exactly one label and exactly one property filter
+///     (literal/param value), no other filters.
+///   * No WHERE / filter / with / unwind / set / remove / delete / order /
+///     limit / return items / call / group_by / having / merge / chaining.
+///   * The CREATE pattern has exactly one chain with one hop, directed
+///     RIGHT (`(a)-[:T]->(b)`), single rel_type, scalar edge properties,
+///     and endpoints whose `name` matches the two MATCH variables.
+///   * The hop's left/right NodePatterns are bare refs (no new labels /
+///     props) to the matched variables.
+///
+/// Any precondition failing drops the statement back to the full executor.
+/// The detector is O(edge-prop count) and does not allocate.
 pub fn matchSingleStatement(program: *const ast.Program) BulkPattern {
     // Exactly one statement in the program.
     if (program.statements.len != 1) return .none;
@@ -102,8 +149,26 @@ pub fn matchSingleStatement(program: *const ast.Program) BulkPattern {
 
     switch (stmt.*) {
         .Create => |create_stmt| return classifyCreate(create_stmt),
+        .Query => |query| {
+            if (matchEdgeSpecFromQuery(query) != null) return .match_create_edge;
+            return .none;
+        },
         else => return .none,
     }
+}
+
+/// When `matchSingleStatement(program) == .match_create_edge`, return the
+/// detailed spec (endpoint labels + node_id filters + rel_type + edge
+/// props); otherwise returns null.  Pointer fields in the returned spec
+/// alias into the program's AST, so the caller must hold the ParseResult
+/// alive until the spec is consumed.
+pub fn matchEdgeSpec(program: *const ast.Program) ?MatchCreateEdgeSpec {
+    if (program.statements.len != 1) return null;
+    const stmt = &program.statements[0];
+    return switch (stmt.*) {
+        .Query => |query| matchEdgeSpecFromQuery(query),
+        else => null,
+    };
 }
 
 fn classifyCreate(c: ast.CreateStatement) BulkPattern {
@@ -129,6 +194,137 @@ fn classifyCreate(c: ast.CreateStatement) BulkPattern {
     }
 
     return .simple_node_create;
+}
+
+/// Classify a Query as a MATCH+CREATE edge if it matches the shape spelled
+/// out in `matchSingleStatement`'s doc comment.  Returns the spec pointing
+/// into the AST, or `null` when any precondition fails.
+fn matchEdgeSpecFromQuery(q: ast.Query) ?MatchCreateEdgeSpec {
+    // Must have a CREATE clause piggybacking on MATCH.
+    const create_pattern = q.create_pattern orelse return null;
+
+    // Disqualifying clauses — anything the full executor might mutate or
+    // materialize.  We want a bare `MATCH ... CREATE edge` with no extras.
+    if (q.where_clause != null) return null;
+    if (q.filter_clause != null) return null;
+    if (q.with_clause != null) return null;
+    if (q.unwind_clause != null) return null;
+    if (q.set_clauses.len != 0) return null;
+    if (q.remove_clauses.len != 0) return null;
+    if (q.delete_items.len != 0) return null;
+    if (q.group_by != null) return null;
+    if (q.having != null) return null;
+    if (q.order_by != null) return null;
+    if (q.limit != null or q.offset != null) return null;
+    if (q.call_clause != null) return null;
+    if (q.next_query != null) return null;
+    if (q.for_statement != null) return null;
+    if (q.initial_call_subquery != null) return null;
+    if (q.merge_statement != null) return null;
+    if (q.path_variable != null) return null;
+    if (q.optional_match) return null;
+    if (q.let_bindings.len != 0 or q.inline_let_bindings.len != 0) return null;
+    if (q.cte_list != null) return null;
+
+    // No RETURN items — RETURN materialisation requires the executor.
+    if (q.ret.items.len != 0) return null;
+    if (q.ret.distinct) return null;
+
+    // MATCH must be exactly two simple node-pattern chains.
+    const match_chains = q.match.chains;
+    if (match_chains.len != 2) return null;
+
+    const left_chain = match_chains[0];
+    const right_chain = match_chains[1];
+    if (left_chain.hops.len != 0 or right_chain.hops.len != 0) return null;
+    if (left_chain.is_optional or right_chain.is_optional) return null;
+    if (left_chain.is_shortest or right_chain.is_shortest) return null;
+
+    const src_np = left_chain.head orelse return null;
+    const dst_np = right_chain.head orelse return null;
+
+    const src_spec = extractEndpoint(src_np) orelse return null;
+    const dst_spec = extractEndpoint(dst_np) orelse return null;
+
+    // CREATE pattern must be exactly one chain with exactly one hop.
+    if (create_pattern.chains.len != 1) return null;
+    const c_chain = create_pattern.chains[0];
+    if (c_chain.hops.len != 1) return null;
+    if (c_chain.is_optional or c_chain.is_shortest) return null;
+
+    const hop = c_chain.hops[0];
+
+    // Edge must be directed RIGHT, exactly one rel type, all edge props scalar.
+    if (hop.rel.dir != .right) return null;
+    if (hop.rel.types.len != 1) return null;
+    if (hop.rel.min_len != null or hop.rel.max_len != null) return null;
+
+    if (hop.rel.props) |eprops| {
+        for (eprops) |ep| {
+            if (!isScalarPropExpr(ep.value.*)) return null;
+        }
+    }
+
+    // Both endpoints of the CREATE hop must be references to the matched
+    // variables — no new labels, no new property filters.
+    if (!isBareVarRef(hop.left, src_spec.var_name) and
+        !isBareVarRef(hop.left, dst_spec.var_name)) return null;
+    if (!isBareVarRef(hop.right, src_spec.var_name) and
+        !isBareVarRef(hop.right, dst_spec.var_name)) return null;
+
+    // Determine edge direction: `hop.left -> hop.right`.
+    // Figure out which matched endpoint is the source / target.
+    const left_name = hop.left.name orelse return null;
+    const right_name = hop.right.name orelse return null;
+    const edge_src = if (std.mem.eql(u8, left_name, src_spec.var_name))
+        src_spec
+    else if (std.mem.eql(u8, left_name, dst_spec.var_name))
+        dst_spec
+    else
+        return null;
+    const edge_dst = if (std.mem.eql(u8, right_name, src_spec.var_name))
+        src_spec
+    else if (std.mem.eql(u8, right_name, dst_spec.var_name))
+        dst_spec
+    else
+        return null;
+    // Src/dst must be distinct matched variables.
+    if (std.mem.eql(u8, edge_src.var_name, edge_dst.var_name)) return null;
+
+    return .{
+        .source = edge_src,
+        .target = edge_dst,
+        .rel_type = hop.rel.types[0],
+        .props = if (hop.rel.props) |p| p else &.{},
+    };
+}
+
+/// A matched endpoint must have a bound variable name, exactly one label,
+/// and exactly one scalar-valued property filter (typically `node_id`).
+fn extractEndpoint(np: ast.NodePattern) ?EdgeEndpointSpec {
+    const vname = np.name orelse return null;
+    if (np.labels.len != 1) return null;
+    const props = np.props orelse return null;
+    if (props.len != 1) return null;
+    const p = props[0];
+    if (!isScalarPropExpr(p.value.*)) return null;
+    return .{
+        .var_name = vname,
+        .label = np.labels[0],
+        .filter_key = p.key,
+        .filter_value = p.value,
+    };
+}
+
+/// True when `np` is a bare reference to `expected_var` — name matches and
+/// no labels / properties attached.  The CREATE clause endpoints in the
+/// fast-path pattern should be bare `(a)` / `(b)` references.
+fn isBareVarRef(np: ast.NodePattern, expected_var: []const u8) bool {
+    const n = np.name orelse return false;
+    if (!std.mem.eql(u8, n, expected_var)) return false;
+    if (np.labels.len != 0) return false;
+    if (np.props) |ps| if (ps.len != 0) return false;
+    return true;
 }
 
 /// True when `e` is a literal or bound parameter — safe to evaluate without

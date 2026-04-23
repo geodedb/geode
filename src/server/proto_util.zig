@@ -124,6 +124,12 @@ pub fn mapError(err: anyerror) ErrorInfo {
         error.UnionColumnCountMismatch => .{ .code = "42601", .message = "UNION column count mismatch" },
         error.DuplicateGraph => .{ .code = "42P07", .message = "Duplicate graph name" },
         error.GraphNotFound => .{ .code = "3F000", .message = "Graph does not exist" },
+        // Task 12 (enterprise-ingest-throughput): bulk-ingest MATCH+CREATE
+        // edge fast-path errors.  Map to GQL spec "graph node not found"
+        // class (09000) so clients get a meaningful status rather than
+        // the generic internal-error fallback.
+        error.SourceNodeNotFound => .{ .code = "09000", .message = "Source node not found" },
+        error.TargetNodeNotFound => .{ .code = "09000", .message = "Target node not found" },
         // CANARY: REQ=REQ-DSN-GRAPH-BIND-005; FEATURE="DSNGraphBinding"; ASPECT=GraphBoundError; STATUS=IMPL; OWNER=transport; UPDATED=2026-03-25
         error.GraphBound => .{ .code = "42000", .message = "USE GRAPH not allowed: session is bound to a graph via DSN connection string" },
         error.DuplicateSchema => .{ .code = "42P07", .message = "Duplicate schema name" },

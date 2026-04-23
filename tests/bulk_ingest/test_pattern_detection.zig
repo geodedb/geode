@@ -157,16 +157,98 @@ test "rejects MERGE (not a CREATE)" {
     );
 }
 
-test "rejects MATCH+CREATE edge (Task 12 dispatch, still .none)" {
+// ----------------------------------------------------------------------
+// MATCH+CREATE edge (Task 12) — positive + negative cases.
+// ----------------------------------------------------------------------
+
+test "detects MATCH+CREATE edge with node_id filters (msft-graph shape)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {id: 1}), (b:Device {id: 2}) CREATE (a)-[:OWNS]->(b)",
+        "MATCH (a:User {node_id: 'abc'}), (b:Device {node_id: 'def'}) CREATE (a)-[:OWNS]->(b)",
         allocator,
     );
     defer pr.deinit();
-    // Today Task 11 only dispatches simple_node_create; the match_create_edge
-    // enum variant exists for future Task 12 work.  The matcher must report
-    // `.none` for this shape until Task 12 wires up the full detection.
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.match_create_edge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchEdgeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqualStrings("a", spec.source.var_name);
+    try testing.expectEqualStrings("User", spec.source.label);
+    try testing.expectEqualStrings("node_id", spec.source.filter_key);
+    try testing.expectEqualStrings("b", spec.target.var_name);
+    try testing.expectEqualStrings("Device", spec.target.label);
+    try testing.expectEqualStrings("node_id", spec.target.filter_key);
+    try testing.expectEqualStrings("OWNS", spec.rel_type);
+    try testing.expectEqual(@as(usize, 0), spec.props.len);
+}
+
+test "detects MATCH+CREATE edge with scalar edge properties" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MATCH (a:User {node_id: 'abc'}), (b:Device {node_id: 'def'}) " ++
+            "CREATE (a)-[:OWNS {since: '2020', weight: 5}]->(b)",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.match_create_edge,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+    const spec = bulk_ingest.matchEdgeSpec(&pr.program) orelse
+        return error.SpecExpected;
+    try testing.expectEqual(@as(usize, 2), spec.props.len);
+    try testing.expectEqualStrings("since", spec.props[0].key);
+    try testing.expectEqualStrings("weight", spec.props[1].key);
+}
+
+test "MATCH+CREATE edge rejects WHERE clause" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MATCH (a:User {id: 1}), (b:Device {id: 2}) WHERE a.x = 1 CREATE (a)-[:R]->(b)",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "MATCH+CREATE edge rejects RETURN clause" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MATCH (a:User {id: 1}), (b:Device {id: 2}) CREATE (a)-[r:R]->(b) RETURN r",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "MATCH+CREATE edge rejects single-match (CREATE introduces new node)" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MATCH (a:User {id: 1}) CREATE (a)-[:R]->(b:Other)",
+        allocator,
+    );
+    defer pr.deinit();
+    try testing.expectEqual(
+        bulk_ingest.BulkPattern.none,
+        bulk_ingest.matchSingleStatement(&pr.program),
+    );
+}
+
+test "MATCH+CREATE edge rejects undirected edge" {
+    const allocator = testing.allocator;
+    var pr = try geode.parseGql(
+        "MATCH (a:User {id: 1}), (b:Device {id: 2}) CREATE (a)-[:R]-(b)",
+        allocator,
+    );
+    defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
         bulk_ingest.matchSingleStatement(&pr.program),

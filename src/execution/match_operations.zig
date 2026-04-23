@@ -1206,7 +1206,16 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         }
 
         // Execute CREATE with these bindings, tracking created entities (using current graph)
-        const result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+        var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+        defer {
+            // Task 12 (enterprise-ingest-throughput): the StringHashMaps
+            // inside `result` are built with `allocator`; previously only
+            // the merge into `all_created_nodes` / `all_created_relationships`
+            // happened and the per-call maps were leaked.  Release them
+            // after copy.
+            result.created_nodes.deinit();
+            result.created_relationships.deinit();
+        }
         total_created_count += result.created_count;
 
         // Merge created entities into all_created collections

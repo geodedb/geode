@@ -1119,6 +1119,113 @@ pub const StorageAdapter = struct {
         value: graph_store.PropertyValue,
     };
 
+    /// Task 12 (enterprise-ingest-throughput): MATCH+CREATE edge fast path.
+    ///
+    /// Resolves `(src_label, filter_key=src_node_id)` and
+    /// `(dst_label, filter_key=dst_node_id)` via `lookupMergeCandidate`
+    /// (O(1) merge-prop index probe against the in-memory store), then
+    /// creates the edge + writes each property under a single statement
+    /// engine txn so the whole operation commits with ONE WAL fsync.
+    ///
+    /// The caller must supply BOTH endpoints' label + filter key + filter
+    /// value — mirroring the msft-graph edges_*.jsonl hot-path pattern
+    /// `MATCH (a:L1 {node_id: 'x'}), (b:L2 {node_id: 'y'}) CREATE
+    /// (a)-[:T {props}]->(b)`.
+    ///
+    /// Errors:
+    ///   * `error.SourceNodeNotFound` — the (src_label, src_filter_key=value)
+    ///     probe returned null (or not-indexable, which means the caller
+    ///     cannot use the fast path — dispatcher should fall back).
+    ///   * `error.TargetNodeNotFound` — symmetric.
+    ///   * anything else — propagates the underlying graph-store /
+    ///     engine error.
+    ///
+    /// Undo-log contract: same as `bulkInsertNode` — SKIPS the undo log.
+    /// The operator opts into the bulk path via `GEODE_BULK_INGEST=1` and
+    /// commits or nukes the whole batch; individual-statement rollback is
+    /// not supported.
+    ///
+    /// In-memory store consistency: routes through
+    /// `GraphStore.createEdgeWithGraph` + `setEdgeProperty`, so the
+    /// in-memory edge map, adjacency index, and edge-type index stay in
+    /// sync with the persistent engine state.
+    pub fn bulkInsertEdge(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        src_label: []const u8,
+        src_node_id: graph_store.PropertyValue,
+        src_filter_key: []const u8,
+        dst_label: []const u8,
+        dst_node_id: graph_store.PropertyValue,
+        dst_filter_key: []const u8,
+        rel_type: []const u8,
+        props: []const PropKV,
+        txn_id_opt: ?u64,
+    ) !u64 {
+        _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
+
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+        // Endpoint resolution — both lookups MUST succeed for a fast-path
+        // edge.  `.not_indexable` means the value type (e.g. list / map)
+        // can't use the merge-prop index; dispatchers should treat that
+        // as "fall back to full executor" not a user-visible error, so
+        // we map it here to the same not-found error code — the caller
+        // can distinguish if needed.
+        var src_id: u64 = undefined;
+        switch (store.lookupMergeCandidate(graph_name, src_label, src_filter_key, src_node_id, &src_id)) {
+            .found => {},
+            .not_found => return error.SourceNodeNotFound,
+            .not_indexable => return error.SourceNodeNotFound,
+        }
+        var dst_id: u64 = undefined;
+        switch (store.lookupMergeCandidate(graph_name, dst_label, dst_filter_key, dst_node_id, &dst_id)) {
+            .found => {},
+            .not_found => return error.TargetNodeNotFound,
+            .not_indexable => return error.TargetNodeNotFound,
+        }
+
+        // Statement-txn batching: same pattern as `bulkInsertNode`.  Join
+        // an existing session/statement txn if one is active on this
+        // graph; otherwise open a per-statement txn so the addEdge +
+        // per-property putProperty sub-ops commit with ONE WAL fsync.
+        var stmt_txn: StatementTxn = undefined;
+        var stmt_txn_open = false;
+        const session_covers = if (sessionEngineTxnGraph()) |g|
+            std.mem.eql(u8, g, graph_name)
+        else
+            false;
+        if (!session_covers and t_current_statement_txn == null) {
+            self.ensureGraphExistsForBulk(graph_name) catch |err| switch (err) {
+                error.GraphNotFound => {},
+                else => return err,
+            };
+            if (self.beginStatementTxn(graph_name, &stmt_txn)) |_| {
+                stmt_txn_open = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        errdefer if (stmt_txn_open) stmt_txn.abort();
+
+        // Create the edge — `createEdgeWithGraph` routes through the
+        // adapter vtable (which joins the statement txn internally via
+        // `StorageAdapter.createEdge`) AND updates the in-memory
+        // `GraphStore.edges` map / adjacency index / edge-type index.
+        const edge_id = try store.createEdgeWithGraph(src_id, dst_id, rel_type, graph_name);
+
+        // Per-property: route through `GraphStore.setEdgeProperty` which
+        // hits the adapter (R12 patch keeps this inside our statement
+        // txn) plus the in-memory edge property map.
+        for (props) |kv| {
+            try store.setEdgeProperty(edge_id, kv.key, kv.value);
+        }
+
+        if (stmt_txn_open) try stmt_txn.commit();
+        return edge_id;
+    }
+
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
     /// Allocate `n` node slots in the given graph + attach the same label set
     /// to each, under a SINGLE adapter mutex acquisition (vs N for N separate

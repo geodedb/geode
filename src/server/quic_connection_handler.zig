@@ -371,6 +371,155 @@ fn executeBulkSimpleCreate(
     updateTxnStateFromProgram(state, program);
 }
 
+/// Task 12 (enterprise-ingest-throughput) fast-path dispatcher for the
+/// two-match-one-edge pattern detected by `bulk_ingest.matchEdgeSpec`:
+///
+///     MATCH (a:L1 {node_id: v1}), (b:L2 {node_id: v2})
+///     CREATE (a)-[r:T {props}]->(b)
+///
+/// Writes the edge directly through `adapter.bulkInsertEdge`, skipping
+/// `executeProgramWithContext`, the undo log, RLS filtering, match-pattern
+/// planning, and row materialization.  Sends the same wire response shape
+/// (schema 0 cols + final data page + status 00000) that a no-RETURN
+/// MATCH+CREATE emits from the regular executor.
+///
+/// Lock protocol: takes the per-graph exclusive writer lock for the
+/// duration of the write — matching the existing mutation path in
+/// `processMessage` until Task 16 introduces the two-phase split.  The
+/// session / statement engine txn is joined implicitly via the adapter's
+/// thread-local slots (R8 / R9).
+fn executeBulkMatchCreateEdge(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+    state: *ServerState,
+    program: *const gql_ast.Program,
+    spec: geode.bulk_ingest.MatchCreateEdgeSpec,
+    query_graph_name: []const u8,
+    ctx: execution.ExecutionContext,
+) !void {
+    const geode_eval = geode.eval;
+    const property_codec = geode.property_value_codec;
+
+    var eval_arena = std.heap.ArenaAllocator.init(gpa);
+    defer eval_arena.deinit();
+    const eval_allocator = eval_arena.allocator();
+
+    const env = geode.makeEnv(
+        eval_allocator,
+        &.{},
+        &.{},
+        .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
+    );
+
+    // Resolve the two endpoint filter values (typically string / int /
+    // parameter).  The detector already verified both are scalar literal
+    // or bound parameter expressions; any eval failure here is a bug
+    // (non-scalar slipped past the detector) — surface it as a server
+    // error rather than silently falling back.
+    const src_filter_val = try geode_eval.evalExpr(eval_allocator, spec.source.filter_value.*, env);
+    const dst_filter_val = try geode_eval.evalExpr(eval_allocator, spec.target.filter_value.*, env);
+    const src_filter_pv = try property_codec.valueToPropertyValue(eval_allocator, src_filter_val);
+    const dst_filter_pv = try property_codec.valueToPropertyValue(eval_allocator, dst_filter_val);
+
+    // Evaluate all edge properties upfront (detector guaranteed scalar).
+    var kvs_buf: [16]geode.graph_storage_adapter.StorageAdapter.PropKV = undefined;
+    var kvs: []geode.graph_storage_adapter.StorageAdapter.PropKV = if (spec.props.len <= kvs_buf.len)
+        kvs_buf[0..spec.props.len]
+    else
+        try eval_allocator.alloc(geode.graph_storage_adapter.StorageAdapter.PropKV, spec.props.len);
+    for (spec.props, 0..) |prop, i| {
+        const v = try geode_eval.evalExpr(eval_allocator, prop.value.*, env);
+        const pv = try property_codec.valueToPropertyValue(eval_allocator, v);
+        kvs[i] = .{ .key = prop.key, .value = pv };
+    }
+
+    // Acquire per-graph exclusive write lock with the per-request deadline
+    // policy (same as the regular mutation path — Task 16 will introduce
+    // the two-phase split).  Cancelable so a long queue doesn't pin the
+    // worker forever.
+    var mut_sample = mutation_timing.begin();
+    const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+    const deadline = monoNanosNow() + write_lock_timeout_ns;
+    const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+        if (err == error.Deadline) {
+            log.warn("Write lock acquisition timed out (bulk edge path)", &.{
+                Attr.string("graph", query_graph_name),
+                Attr.uint("timeout_ns", write_lock_timeout_ns),
+            });
+            try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+            return;
+        }
+        return err;
+    };
+    mut_sample.markLockAcquired();
+
+    const adapter_opt = graph_store.getGlobalAdapter();
+    if (adapter_opt) |adapter| {
+        const edge_id_res = adapter.bulkInsertEdge(
+            query_graph_name,
+            spec.source.label,
+            src_filter_pv,
+            spec.source.filter_key,
+            spec.target.label,
+            dst_filter_pv,
+            spec.target.filter_key,
+            spec.rel_type,
+            kvs,
+            null,
+        );
+        _ = edge_id_res catch |err| {
+            graph_store.releaseGraphLock(lock_handle);
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+    } else {
+        graph_store.releaseGraphLock(lock_handle);
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        return;
+    }
+
+    mut_sample.markExecuteDone();
+    graph_store.releaseGraphLock(lock_handle);
+    mut_sample.markLockReleased();
+
+    // Wire response: identical shape to `executeBulkSimpleCreate` — schema
+    // with 0 columns + one page with 0 rows final=true + status 00000 —
+    // matches regular-executor output for a no-RETURN MATCH+CREATE.
+    {
+        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+        defer schema_arena.deinit();
+        const sa = schema_arena.allocator();
+        const status = try proto_util.buildStatus(sa, "00000", &.{});
+        const schema_def = schema.SchemaDefinition{
+            .columns = std.ArrayList(schema.ColumnDefinition).empty,
+        };
+        const schema_resp = schema.ExecutionResponse{
+            .status = status,
+            .payload = .{ .schema = schema_def },
+        };
+        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+    }
+    {
+        var page_arena = std.heap.ArenaAllocator.init(gpa);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
+        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
+        const page_resp = schema.ExecutionResponse{
+            .status = page_status,
+            .payload = .{ .page = page },
+        };
+        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+    }
+
+    mut_sample.record("bulk_match_create_edge");
+
+    auditQueryExecution(state, "bulk_match_create_edge", true);
+    syncGraphFromSession(state);
+    updateTxnStateFromProgram(state, program);
+}
+
 /// Build a protobuf error response with status and error payload
 fn buildErrorResponse(
     allocator: std.mem.Allocator,
@@ -2589,7 +2738,15 @@ fn handleClientMessage(
                     try executeBulkSimpleCreate(gpa, stream, state, &parse_result.program, query_graph_name, exec_context);
                     return;
                 }
-                // .match_create_edge is reserved for Task 12 dispatch.
+                if (bulk_shape == .match_create_edge) {
+                    if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
+                        try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
+                        return;
+                    }
+                    // If the spec helper disagrees with matchSingleStatement,
+                    // fall through to the regular executor (programming error
+                    // — noise not worth a dedicated error code).
+                }
             }
 
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;

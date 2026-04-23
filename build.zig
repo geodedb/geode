@@ -3363,6 +3363,19 @@ pub fn build(b: *std.Build) void {
     const bulk_fastpath_step = b.step("test-simple-create-fastpath", "Run Task 11 bulk-ingest simple-CREATE fast-path parity tests");
     bulk_fastpath_step.dependOn(&run_bulk_fastpath_tests.step);
 
+    // Task 12 (enterprise-ingest-throughput) bulk-ingest MATCH+CREATE edge
+    // fast-path parity.  Runs `MATCH (a:L1 {node_id: v}), (b:L2 {node_id: v})
+    // CREATE (a)-[:T {props}]->(b)` through both the regular executor and
+    // the `bulkInsertEdge` fast path and asserts identical edge state.
+    const match_create_edge_test_mod = b.createModule(.{ .root_source_file = b.path("tests/bulk_ingest/test_match_create_edge_fastpath.zig"), .target = target, .optimize = optimize });
+    match_create_edge_test_mod.addImport("geode", root_mod);
+    const match_create_edge_tests = b.addTest(.{ .root_module = match_create_edge_test_mod });
+    const run_match_create_edge_tests = b.addRunArtifact(match_create_edge_tests);
+    test_step.dependOn(&run_match_create_edge_tests.step);
+    test_perf_step.dependOn(&run_match_create_edge_tests.step);
+    const match_create_edge_step = b.step("test-match-create-edge-fastpath", "Run Task 12 bulk-ingest MATCH+CREATE edge fast-path parity tests");
+    match_create_edge_step.dependOn(&run_match_create_edge_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression
