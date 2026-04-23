@@ -700,20 +700,21 @@ pub const GraphStore = struct {
         self.edge_type_index.deinit();
         self.edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
 
-        // Reset adjacency indexes
+        // Reset adjacency indexes — walk each list to free its inner
+        // ArrayList, then clearRetainingCapacity keeps the shard backing
+        // arrays live (cheaper than deinit+init, and importantly avoids
+        // allocating under any lock Phase 2 may be holding here).
         var out_iter = self.outgoing_edges.iterator();
         while (out_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.outgoing_edges.deinit();
-        self.outgoing_edges = sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator) catch @panic("OOM: failed to re-init outgoing_edges during clearNodes");
+        self.outgoing_edges.clearRetainingCapacity();
 
         var in_iter = self.incoming_edges.iterator();
         while (in_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.incoming_edges.deinit();
-        self.incoming_edges = sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator) catch @panic("OOM: failed to re-init incoming_edges during clearNodes");
+        self.incoming_edges.clearRetainingCapacity();
 
         // Reset per-graph IdMaps
         var id_map_iter = self.id_maps.iterator();

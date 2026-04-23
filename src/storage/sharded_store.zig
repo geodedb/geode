@@ -11,7 +11,7 @@
 //! the separation exists so tests can exercise the sharding logic
 //! without a thread runtime.
 //!
-//! CANARY: REQ=REQ-PERF-SHARDED-STORE-001; FEATURE="ShardedStore"; ASPECT=DataStructure; STATUS=TESTED; TEST=tests/test_sharded_store.zig; OWNER=storage; UPDATED=2026-04-24
+//! CANARY: REQ=REQ-PERF-SHARDED-STORE-001; FEATURE="ShardedStore"; ASPECT=DataStructure; STATUS=TESTED; TEST=tests/test_sharded_store.zig; OWNER=storage; UPDATED=2026-04-23
 
 const std = @import("std");
 
