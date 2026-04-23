@@ -3307,6 +3307,18 @@ pub fn build(b: *std.Build) void {
     const invariants_step = b.step("test-graph-store-sharded-invariants", "Run graph-store sharded-invariants tests");
     invariants_step.dependOn(&run_invariants_tests.step);
 
+    // Phase 2 Task 4 (2026-04-23) — per-shard rwlocks on ManagedGraph.
+    //     Pins the invariant that disjoint shards accept concurrent
+    //     EXCLUSIVE acquires without blocking, and that
+    //     acquireWholeGraphExclusive still fences new shard writers.
+    const shard_locks_mod = b.createModule(.{ .root_source_file = b.path("tests/test_shard_locks.zig"), .target = target, .optimize = optimize });
+    shard_locks_mod.addImport("geode", root_mod);
+    const shard_locks_tests = b.addTest(.{ .root_module = shard_locks_mod });
+    const run_shard_locks_tests = b.addRunArtifact(shard_locks_tests);
+    test_step.dependOn(&run_shard_locks_tests.step);
+    const shard_locks_step = b.step("test-shard-locks", "Run per-shard rwlock regression tests");
+    shard_locks_step.dependOn(&run_shard_locks_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

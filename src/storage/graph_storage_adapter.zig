@@ -10,6 +10,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const gs = @import("graph_storage");
+const sharded_store = gs.sharded_store;
 const uuid = @import("uuid");
 const graph_store = @import("../graph_store.zig");
 const property_codec = @import("../property_value_codec.zig");
@@ -474,6 +475,29 @@ pub const ManagedGraph = struct {
     /// Per-graph RwLock for concurrent read access. Queries acquire shared;
     /// mutations and persistence acquire exclusive. Part of P1 lock migration.
     rwlock: std.Io.RwLock = std.Io.RwLock.init,
+
+    /// Per-shard rwlocks covering the N partitions of
+    /// `GraphStore.nodes` / `GraphStore.edges` / adjacency.  Writers
+    /// take one of these in EXCLUSIVE mode for ops routed to a
+    /// specific node_id; full-graph exclusive ops
+    /// (`acquireWholeGraphExclusive`) take `rwlock` EXCLUSIVE which
+    /// blocks new shard writers (they take `rwlock` SHARED first).
+    /// Readers that need a consistent full-graph snapshot acquire
+    /// every entry in shard-index ascending order.
+    ///
+    /// Phase 2 of the graph-sharding plan
+    /// (docs/superpowers/plans/2026-04-24-graph-sharding-and-wal-
+    /// group-commit.md).  See `acquireShardWriteLock` below for the
+    /// full locking protocol including cross-shard lock ordering.
+    shard_locks: [sharded_store.SHARD_COUNT]std.Io.RwLock =
+        [_]std.Io.RwLock{std.Io.RwLock.init} ** sharded_store.SHARD_COUNT,
+
+    /// Dedicated lock for the `merge_prop_index` (which is keyed by a
+    /// composite string, not by node_id, and therefore cannot be
+    /// sharded by the same function as the other structures).  MERGE
+    /// probes acquire this SHARED for the fast-path lookup;
+    /// insert-if-absent takes it EXCLUSIVE.
+    merge_prop_index_lock: std.Io.RwLock = std.Io.RwLock.init,
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
@@ -3368,6 +3392,99 @@ test "StorageAdapter: create and query graph" {
 
     try std.testing.expect(adapter.graphExists("test_graph"));
     try std.testing.expect(!adapter.graphExists("nonexistent"));
+}
+
+// ===========================================================================
+// Per-shard lock helpers (Phase 2, graph-sharding plan)
+// ===========================================================================
+
+/// Acquire EXCLUSIVE mode on the single shard owning `key`.
+/// Protocol: take `mg.rwlock` SHARED (coexists with other shard
+/// writers; blocks whole-graph-exclusive ops), then take
+/// `shard_locks[shardIndex(key)]` EXCLUSIVE.
+///
+/// Use for bulk mutations keyed by a specific `node_id`.  For
+/// cross-shard ops (edge insert spanning two shards) see the
+/// ascending-index acquire pattern in `bulkInsertEdgeWithIds`.
+pub fn acquireShardWriteLock(mg: *ManagedGraph, key: u64) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mg.rwlock.lockSharedUncancelable(io);
+    const idx = sharded_store.shardIndex(key);
+    mg.shard_locks[idx].lockUncancelable(io);
+}
+
+/// Release the shard lock + whole-graph SHARED acquired by
+/// `acquireShardWriteLock`.
+pub fn releaseShardWriteLock(mg: *ManagedGraph, key: u64) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const idx = sharded_store.shardIndex(key);
+    mg.shard_locks[idx].unlock(io);
+    mg.rwlock.unlockShared(io);
+}
+
+/// Deadline-aware variant used by the coordinator's shard-apply
+/// loop.  `deadline_mono_ns` caps waiting on the shard-lock step
+/// only — the whole-graph SHARED rwlock is assumed fast because it
+/// only conflicts with whole-graph EXCLUSIVE ops (RESTORE, etc.)
+/// which are rare.
+pub fn acquireShardWriteLockCancelable(
+    mg: *ManagedGraph,
+    key: u64,
+    deadline_mono_ns: u64,
+) !void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mg.rwlock.lockSharedUncancelable(io);
+    errdefer mg.rwlock.unlockShared(io);
+    const idx = sharded_store.shardIndex(key);
+    if (mg.shard_locks[idx].tryLock(io)) return;
+    var sleep_ns: u64 = 200 * std.time.ns_per_us;
+    const max_sleep_ns: u64 = 4 * std.time.ns_per_ms;
+    while (true) {
+        const now = monoNanosNowLocal();
+        if (now >= deadline_mono_ns) return error.Deadline;
+        const remaining = deadline_mono_ns - now;
+        const nap_ns = @min(sleep_ns, remaining);
+        const req = std.os.linux.timespec{
+            .sec = @intCast(nap_ns / std.time.ns_per_s),
+            .nsec = @intCast(nap_ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+        if (mg.shard_locks[idx].tryLock(io)) return;
+        sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+    }
+}
+
+/// Acquire `mg.rwlock` EXCLUSIVE + every shard lock EXCLUSIVE in
+/// ascending index order.  Used by RESTORE, bulk DELETE-all, and
+/// other full-graph writes that need global isolation.  The rwlock
+/// EXCLUSIVE acquire blocks any new `acquireShardWriteLock` caller
+/// (they take `rwlock` SHARED first) and waits for in-flight shard
+/// writers to release their SHARED hold.
+pub fn acquireWholeGraphExclusive(mg: *ManagedGraph) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    mg.rwlock.lockUncancelable(io);
+    for (&mg.shard_locks) |*sl| sl.lockUncancelable(io);
+}
+
+/// Release the whole-graph EXCLUSIVE acquired by
+/// `acquireWholeGraphExclusive`.  Releases shard locks in reverse
+/// index order (symmetry with acquire; not strictly required by
+/// the rwlock contract, but keeps debug traces sane).
+pub fn releaseWholeGraphExclusive(mg: *ManagedGraph) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var i: usize = sharded_store.SHARD_COUNT;
+    while (i > 0) {
+        i -= 1;
+        mg.shard_locks[i].unlock(io);
+    }
+    mg.rwlock.unlock(io);
+}
+
+fn monoNanosNowLocal() u64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
 test "StorageAdapter: create node with labels" {
