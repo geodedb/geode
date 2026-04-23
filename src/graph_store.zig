@@ -21,6 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
+const sharded_store = @import("storage/sharded_store.zig");
 const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28
@@ -441,8 +442,8 @@ pub const LabelPosting = struct {
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
-    nodes: std.AutoHashMap(u64, Node),
-    edges: std.AutoHashMap(u64, Edge),
+    nodes: sharded_store.ShardedStore(u64, Node),
+    edges: sharded_store.ShardedStore(u64, Edge),
     next_node_id: u64,
     next_edge_id: u64,
     // DEPRECATED (GAP-0279): Process-wide tenant_id races under concurrent access.
@@ -497,8 +498,8 @@ pub const GraphStore = struct {
     pub fn initWithTenant(allocator: std.mem.Allocator, tenant_id: []const u8, schema_name: []const u8) error{OutOfMemory}!GraphStore {
         var store = GraphStore{
             .allocator = allocator,
-            .nodes = std.AutoHashMap(u64, Node).init(allocator),
-            .edges = std.AutoHashMap(u64, Edge).init(allocator),
+            .nodes = try sharded_store.ShardedStore(u64, Node).init(allocator),
+            .edges = try sharded_store.ShardedStore(u64, Edge).init(allocator),
             .next_node_id = 1,
             .next_edge_id = 1,
             .tenant_id = tenant_id,

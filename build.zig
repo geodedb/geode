@@ -3306,6 +3306,17 @@ pub fn build(b: *std.Build) void {
     const sharded_store_step = b.step("test-sharded-store", "Run sharded-store unit tests");
     sharded_store_step.dependOn(&run_sharded_store_tests.step);
 
+    // Graph-sharding Phase 1 Task 2 (2026-04-24) — invariant tests that pin
+    //     GraphStore.nodes / .edges as ShardedStore-backed fields, catching
+    //     an accidental revert to std.AutoHashMap in future refactors.
+    const invariants_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_store_sharded_invariants.zig"), .target = target, .optimize = optimize });
+    invariants_mod.addImport("geode", root_mod);
+    const invariants_tests = b.addTest(.{ .root_module = invariants_mod });
+    const run_invariants_tests = b.addRunArtifact(invariants_tests);
+    test_step.dependOn(&run_invariants_tests.step);
+    const invariants_step = b.step("test-graph-store-sharded-invariants", "Run graph-store sharded-invariants tests");
+    invariants_step.dependOn(&run_invariants_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

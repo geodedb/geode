@@ -77,7 +77,7 @@ pub fn ShardedStore(comptime K: type, comptime V: type) type {
             return self.shards[idx].get(key);
         }
 
-        pub fn getPtr(self: *Self, key: K) ?*V {
+        pub fn getPtr(self: *const Self, key: K) ?*V {
             const idx = shardIndex(@as(u64, key));
             return self.shards[idx].getPtr(key);
         }
@@ -143,23 +143,32 @@ pub fn ShardedStore(comptime K: type, comptime V: type) type {
             for (&self.shards) |*s| s.clearRetainingCapacity();
         }
 
+        /// Pre-reserve additional capacity proportionally across all
+        /// shards.  Each shard gets `ceil(additional / SHARD_COUNT)`
+        /// reserved.  Mirrors `AutoHashMap.ensureUnusedCapacity`.
+        pub fn ensureUnusedCapacity(self: *Self, additional: u32) !void {
+            const per_shard: u32 = (additional + @as(u32, @intCast(SHARD_COUNT)) - 1) /
+                @as(u32, @intCast(SHARD_COUNT));
+            for (&self.shards) |*s| try s.ensureUnusedCapacity(per_shard);
+        }
+
         /// Iterate every (k, v) pair across every shard, in shard
         /// order.  Used by persistence and full-scan reads.  Callers
         /// that need a consistent snapshot must take a read lock on
         /// EVERY shard before calling — see `ManagedGraph.scanRead`.
-        pub fn iterator(self: *Self) Iterator {
+        pub fn iterator(self: *const Self) Iterator {
             return .{ .owner = self, .shard_idx = 0, .inner = self.shards[0].iterator() };
         }
 
         /// Iterate every key across every shard, in shard order.
         /// Equivalent to `iterator()` but yields `*K` instead of full
         /// `Entry` structs.
-        pub fn keyIterator(self: *Self) KeyIterator {
+        pub fn keyIterator(self: *const Self) KeyIterator {
             return .{ .owner = self, .shard_idx = 0, .inner = self.shards[0].keyIterator() };
         }
 
         pub const Iterator = struct {
-            owner: *Self,
+            owner: *const Self,
             shard_idx: usize,
             inner: Shard.Iterator,
 
@@ -174,7 +183,7 @@ pub fn ShardedStore(comptime K: type, comptime V: type) type {
         };
 
         pub const KeyIterator = struct {
-            owner: *Self,
+            owner: *const Self,
             shard_idx: usize,
             inner: Shard.KeyIterator,
 
