@@ -1,0 +1,50 @@
+# Phase 1 timing breakdown (Task 2)
+
+Source: /tmp/geode-plan-phase1/server.log (60 s sample,
+        msft-graph seed --workers=16 --chunk-size=1000 vs R13 + Task 1 instrumentation)
+Date:   2026-04-23
+Build:  commit 63f8333f (Task 1 + R13)
+Samples: 723
+
+## Overall (all statements)
+
+                  min(µs)    p50(µs)    p95(µs)    max(µs)
+  lock_wait          0.66    1047.22   51321.52  1067536.69
+  execute           60.48    3134.61    6824.59   30765.32
+  release            0.50       0.79       2.15    2330.58
+
+## Per statement kind
+
+### CREATE_GRAPH (n=1)
+  lock_wait_ms  p50=   0.002  p95=   0.002  max=   0.002
+  execute_ms    p50=  30.765  p95=  30.765  max=  30.765
+  release_ms    p50=   0.006  p95=   0.006  max=   0.006
+
+### CREATE_INDEX (n=45)
+  lock_wait_ms  p50=   0.001  p95=   0.001  max=   0.001
+  execute_ms    p50=   0.107  p95=   0.179  max=   0.195
+  release_ms    p50=   0.001  p95=   0.001  max=   0.002
+
+### MERGE (n=677)
+  lock_wait_ms  p50=   1.058  p95=  60.204  max=1067.537
+  execute_ms    p50=   3.226  p95=   7.049  max=  27.260
+  release_ms    p50=   0.001  p95=   0.002  max=   2.331
+
+## Diagnosis
+
+1. **lock_wait dominates at p95**: p95 of 60.2 ms vs execute p95 of 7.05 ms.
+   Max lock_wait is 1.07 s (= R2 cancelable-lock backoff on contention).
+   Mitigation vector: shrink critical section and/or read-lock MATCH phase.
+
+2. **execute floor at 3.2 ms p50 for MERGE**: this is the per-statement
+   write-lock-hold time floor.  16 workers × 3.2 ms/stmt = 51 ms minimum per
+   round.  Over 677 users.jsonl MERGEs: 677 × 3.2 ms / 16 ≈ 135 ms ideal;
+   observed was ~32 s → lock-contention amplifies 200×.
+
+3. **release is negligible**: p50 0.001 ms, p95 0.002 ms — not a target.
+
+## Next step
+
+execute_ms p50 of 3.2 ms is the floor to attack.  Task 2 Step 2.4:
+add per-inner-phase instrumentation (parse / plan / audit / RLS / mutate / fsync)
+and re-measure to identify which sub-phase dominates that 3.2 ms.
