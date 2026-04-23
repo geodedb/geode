@@ -3088,6 +3088,28 @@ fn handleClientMessage(
             state.session_snapshot_ts = state.global_commit_ts;
             txn_undo_log.getGlobalUndoLog(gpa).begin();
 
+            // R9 (2026-04-22): open a session-scoped engine transaction on
+            // the current graph so every CREATE / MERGE in this Geode
+            // txn batches into a single WAL fsync at COMMIT time.  Fails
+            // closed (falls back to per-statement R8 batching) if the
+            // current graph doesn't yet exist or no per-graph adapter is
+            // registered — the test/legacy paths don't need this.
+            if (graph_store.getGlobalAdapter()) |ad| {
+                const session_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
+                state.session_engine_txn_storage = undefined;
+                ad.beginSessionTxn(session_graph, &state.session_engine_txn_storage) catch |err| switch (err) {
+                    error.GraphNotFound, error.NestedSessionTxn, error.NestedStatementTxn => {
+                        // Silent fallback — adapter falls back to R8
+                        // per-statement txns for this Geode txn.
+                    },
+                    else => {
+                        log.warn("failed to open session engine txn", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                    },
+                };
+            }
+
             const tx_id_str = try std.fmt.allocPrint(gpa, "{d}", .{state.txn_id});
             try sendQuicMessage(gpa, stream, .{ .begin = .{ .session_id = try gpa.dupe(u8, "sess"), .tx_id = tx_id_str } });
         },
@@ -3109,6 +3131,18 @@ fn handleClientMessage(
                     const commit_lock = graph_store.acquireGraphWriteLock(commit_graph);
                     defer graph_store.releaseGraphLock(commit_lock);
                     undo.commitDeferRebuilds();
+
+                    // R9 (2026-04-22): commit the session-scoped engine
+                    // txn that R8's per-statement shortcut joined during
+                    // this batch — ONE fsync for the whole Geode txn.
+                    if (graph_store.getGlobalAdapter()) |ad| {
+                        ad.commitSessionTxn() catch |err| switch (err) {
+                            error.NoActiveSessionTxn => {},
+                            else => log.warn("session engine txn commit failed", &.{
+                                Attr.string("error", @errorName(err)),
+                            }),
+                        };
+                    }
                 }
                 // Flush deferred index rebuilds outside the write lock.
                 const store = graph_store.getGlobalStore(gpa);
@@ -3136,6 +3170,14 @@ fn handleClientMessage(
                 const rb_graph = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
                 const rb_lock = graph_store.acquireGraphWriteLock(rb_graph);
                 defer graph_store.releaseGraphLock(rb_lock);
+
+                // R9 (2026-04-22): abort the session-scoped engine txn
+                // first so any pending WAL page records are discarded
+                // before the undo-log replay re-mutates the store.
+                if (graph_store.getGlobalAdapter()) |ad| {
+                    ad.abortSessionTxn();
+                }
+
                 const store = graph_store.getGlobalStore(gpa);
                 txn_undo_log.getGlobalUndoLog(gpa).rollback(store) catch |err| {
                     log.err("Rollback failed", &.{Attr.string("error", @errorName(err))});

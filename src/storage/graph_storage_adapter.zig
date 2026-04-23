@@ -648,13 +648,40 @@ pub const StatementTxn = struct {
 
 threadlocal var t_current_statement_txn: ?*StatementTxn = null;
 
+// R9 (2026-04-22): session-scoped engine txn — spans an entire Geode
+// BEGIN TX / COMMIT block.  The msft-graph client sends batches of the
+// form `BEGIN; CREATE ... (×38); COMMIT`.  Before R9 each CREATE opened
+// its own engine txn + fsync; after R9 the whole batch commits with a
+// SINGLE fsync.  Separate thread-local from the per-statement slot so
+// a nested per-statement txn (e.g. DDL during a Geode txn) can still
+// take precedence.  `currentStatementTxnForGraph` checks the
+// per-statement slot first, then falls back to the session slot.
+threadlocal var t_session_engine_txn: ?*StatementTxn = null;
+
 /// Return the thread-local statement txn if it targets `graph_name`; else null.
 /// Adapter mutation methods consult this to decide whether to batch into an
-/// existing transaction or spin their own (the R7 behaviour).
-fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
+/// existing transaction or spin their own (the R7 behaviour).  Priority:
+/// 1. per-statement txn (R8), 2. session txn (R9).
+pub fn currentStatementTxnForGraph(graph_name: []const u8) ?*StatementTxn {
     if (t_current_statement_txn) |txn| {
         if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
     }
+    if (t_session_engine_txn) |txn| {
+        if (std.mem.eql(u8, txn.graph_name, graph_name)) return txn;
+    }
+    return null;
+}
+
+/// True when an R9 session-scoped engine txn is active on this thread.
+/// Callers use this to decide whether to open a per-statement txn (no —
+/// the session txn covers us) or not.
+pub fn hasSessionEngineTxn() bool {
+    return t_session_engine_txn != null;
+}
+
+/// Return the graph name of the active session-scoped engine txn, if any.
+pub fn sessionEngineTxnGraph() ?[]const u8 {
+    if (t_session_engine_txn) |txn| return txn.graph_name;
     return null;
 }
 
@@ -1117,6 +1144,17 @@ pub const StorageAdapter = struct {
     pub fn createEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
         const rel_type = try mg.label_dict.getOrCreate(label);
+
+        // R10 (2026-04-22): join the active session/statement engine txn
+        // when one exists on this graph so a whole edges_*.jsonl batch of
+        // N CREATE edge statements commits with a single WAL fsync.  The
+        // engine's `addEdge` auto-commit variant costs ~10 ms on SSD —
+        // dominant in workloads with thousands of edges per batch (msft-
+        // graph edges_signed_in_to / located_at have 8K+ rows each).
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        if (stmt_txn) |s| {
+            return mg.engine.addEdgeTxn(from_id, to_id, rel_type, s.txn_id);
+        }
         return mg.engine.addEdge(from_id, to_id, rel_type);
     }
 
@@ -1127,6 +1165,12 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
+        // R10 (2026-04-22): join active session/statement engine txn when
+        // present — keeps DELETE ... edge batches at one fsync per batch.
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            try mg.engine.removeEdgeTxn(from_id, to_id, edge_id, s.txn_id);
+            return;
+        }
         try mg.engine.removeEdge(from_id, to_id, edge_id);
     }
 
@@ -2263,7 +2307,12 @@ pub const StorageAdapter = struct {
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = try mg.label_dict.getOrCreate(label);
-        try mg.engine.addLabel(node_id, label_id);
+        // R10 (2026-04-22): join active session/statement engine txn.
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            try mg.engine.addLabelTxn(node_id, label_id, s.txn_id);
+        } else {
+            try mg.engine.addLabel(node_id, label_id);
+        }
         try addNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
     }
 
@@ -2278,7 +2327,12 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
-        try mg.engine.removeLabel(node_id, label_id);
+        // R10 (2026-04-22): join active session/statement engine txn.
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            try mg.engine.removeLabelTxn(node_id, label_id, s.txn_id);
+        } else {
+            try mg.engine.removeLabel(node_id, label_id);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2459,6 +2513,57 @@ pub const StorageAdapter = struct {
             .graph_name = mg.name, // owned by ManagedGraph, stable while engines map keeps the entry
         };
         t_current_statement_txn = out;
+    }
+
+    /// R9 (2026-04-22): open an engine transaction that lives for the
+    /// lifetime of a Geode-level logical transaction (BEGIN TX … COMMIT).
+    /// All subsequent mutation calls from this thread on `graph_name`
+    /// join this engine txn, so the whole Geode batch commits with a
+    /// SINGLE WAL fsync.
+    ///
+    /// Restriction: only one session engine txn per thread at a time.
+    /// If a Geode txn touches multiple graphs, the caller opens additional
+    /// per-statement txns via `beginStatementTxn` (preferred) or simply
+    /// lets the adapter's auto-batch (R7) path handle those sub-ops.
+    pub fn beginSessionTxn(self: *StorageAdapter, graph_name: []const u8, out: *StatementTxn) !void {
+        if (t_session_engine_txn != null) {
+            log.err("adapter.beginSessionTxn called with an existing session txn on this thread (graph={s})", .{graph_name});
+            return error.NestedSessionTxn;
+        }
+        if (t_current_statement_txn != null) {
+            log.err("adapter.beginSessionTxn called while a per-statement txn is already open (graph={s})", .{graph_name});
+            return error.NestedStatementTxn;
+        }
+
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
+        };
+
+        const txn_id = try mg.engine.beginTxn();
+        out.* = .{
+            .mg = mg,
+            .txn_id = txn_id,
+            .graph_name = mg.name,
+        };
+        t_session_engine_txn = out;
+    }
+
+    /// R9: commit the session-scoped engine txn → ONE WAL fsync.
+    pub fn commitSessionTxn(self: *StorageAdapter) !void {
+        _ = self;
+        const txn = t_session_engine_txn orelse return error.NoActiveSessionTxn;
+        t_session_engine_txn = null;
+        try txn.mg.engine.commitTxn(txn.txn_id);
+    }
+
+    /// R9: abort the session-scoped engine txn (no data-durability fsync).
+    pub fn abortSessionTxn(self: *StorageAdapter) void {
+        _ = self;
+        const txn = t_session_engine_txn orelse return;
+        t_session_engine_txn = null;
+        txn.mg.engine.abortTxn(txn.txn_id) catch {};
     }
 
     /// Acquire shared (read) locks on multiple named graphs simultaneously.

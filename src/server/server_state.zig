@@ -268,6 +268,15 @@ pub const ServerState = struct {
     // Transaction session state: single active txn baseline
     in_txn: bool = false,
     txn_id: u64 = 0,
+    // R9 (2026-04-22): per-connection storage for the session-scoped
+    // engine transaction opened on Geode BEGIN TX.  Lives on the
+    // ServerState because the adapter's thread-local holds a pointer
+    // into this struct (which must outlive every statement in the
+    // Geode txn).  The field is populated in the BEGIN TX handler and
+    // cleared on COMMIT / ROLLBACK; holding a spare copy when no txn
+    // is active is harmless — the adapter checks `t_session_engine_txn`
+    // (not this field) to decide whether a session txn is open.
+    session_engine_txn_storage: @import("../storage/graph_storage_adapter.zig").StatementTxn = undefined,
     allocator: std.mem.Allocator,
     // Storage corruption state flags captured at startup (e.g. checksum mismatch on persisted page load).
     storage_checksum_error: bool = false,
