@@ -1611,6 +1611,8 @@ pub fn build(b: *std.Build) void {
     compare_bench_test.root_module.addImport("compare_bench", compare_bench_mod);
     const run_compare_bench_test = b.addRunArtifact(compare_bench_test);
     test_perf_step.dependOn(&run_compare_bench_test.step);
+    // Task 1: per-mutation timing phase unit test.
+    test_perf_step.dependOn(&run_mutation_timing_test.step);
     // GAP-0810 regression reproducer — pins the parse-cache reuse envelope.
     test_perf_step.dependOn(&run_gap0810_regression_tests.step);
 

@@ -20,6 +20,9 @@
 /// `lastSampleForTest()`.
 const std = @import("std");
 const builtin = @import("builtin");
+const logging = @import("logging");
+const log = logging.scoped("mutation_timing");
+const Attr = logging.Attr;
 
 // ---------------------------------------------------------------------------
 // Internal monotonic clock helper (Zig 0.16 compat — no std.time.Timer).
@@ -62,7 +65,6 @@ pub fn init(override: ?[:0]const u8) void {
 
 pub const Sample = struct {
     // Raw timestamps (nanoseconds since an arbitrary epoch).
-    stage_start_ns: u64,
     lock_acquire_start_ns: u64 = 0,
     lock_acquired_ns: u64 = 0,
     execute_done_ns: u64 = 0,
@@ -112,15 +114,12 @@ pub const Sample = struct {
 
         if (!enabled.load(.acquire)) return;
 
-        std.debug.print(
-            "MUT_TIMING lock_wait_ns={d} execute_ns={d} release_ns={d} stmt=\"{s}\"\n",
-            .{
-                self.lock_wait_ns,
-                self.execute_ns,
-                self.release_ns,
-                stmt_preview,
-            },
-        );
+        log.info("mutation phase timing", &.{
+            Attr.uint("lock_wait_ns", self.lock_wait_ns),
+            Attr.uint("execute_ns", self.execute_ns),
+            Attr.uint("release_ns", self.release_ns),
+            Attr.string("stmt", stmt_preview),
+        });
     }
 };
 
@@ -135,10 +134,8 @@ threadlocal var t_last_sample: ?Sample = null;
 /// Start a new timing sample.  Records `lock_acquire_start_ns` at the point
 /// where the caller is about to attempt write lock acquisition.
 pub fn begin() Sample {
-    const now = monoNanos();
     return .{
-        .stage_start_ns = now,
-        .lock_acquire_start_ns = now,
+        .lock_acquire_start_ns = monoNanos(),
     };
 }
 
@@ -155,4 +152,9 @@ pub fn setEnabledForTest(v: bool) void {
 /// Returns the last sample recorded on this thread, or null if none.
 pub fn lastSampleForTest() ?Sample {
     return t_last_sample;
+}
+
+/// Reset thread-local sample state between tests so each test starts clean.
+pub fn clearLastSampleForTest() void {
+    t_last_sample = null;
 }

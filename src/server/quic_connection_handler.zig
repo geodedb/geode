@@ -2428,11 +2428,16 @@ fn handleClientMessage(
             var point_read_view: ?graph_store.PointReadView = null;
             var prev_active_read_store: ?*graph_store.GraphStore = null;
             // Task 1 (throughput plan): start per-mutation timing sample.
-            // Records the instant we begin waiting for the write lock so that
-            // lock_wait_ns, execute_ns, and release_ns can be computed in record().
-            var mut_sample = mutation_timing.begin();
+            // Scope note: only mutations go through the write-lock branch and
+            // then the executeProgramWithContext path in `.rows`; read queries
+            // take `.explain`, `.profile`, or the node_scan_stream fast path
+            // and never reach markExecuteDone()/record(). The sample is
+            // therefore only started (and only costs a clock_gettime) on the
+            // mutation path.
+            var mut_sample: ?mutation_timing.Sample = null;
             if (needs_store_lock) {
                 if (is_mutation) {
+                    mut_sample = mutation_timing.begin();
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     //
@@ -2446,7 +2451,7 @@ fn handleClientMessage(
                     const deadline = monoNanosNow() + write_lock_timeout_ns;
                     if (graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline)) |h| {
                         graph_lock_handle = h;
-                        mut_sample.markLockAcquired();
+                        if (mut_sample) |*s| s.markLockAcquired();
                     } else |err| {
                         if (err == error.Deadline) {
                             log.warn("Write lock acquisition timed out", &.{
@@ -2826,7 +2831,7 @@ fn handleClientMessage(
                         return;
                     };
                     // Task 1: mark execute phase complete (before lock release).
-                    mut_sample.markExecuteDone();
+                    if (mut_sample) |*s| s.markExecuteDone();
                     defer exec_result.deinit(gpa);
                     const store = graph_store.getGlobalStore(gpa);
 
@@ -2854,8 +2859,10 @@ fn handleClientMessage(
                         lock_released = true;
                     }
                     // Task 1: mark lock-released and emit timing record.
-                    mut_sample.markLockReleased();
-                    mut_sample.record(query_text[0..@min(query_text.len, 80)]);
+                    if (mut_sample) |*s| {
+                        s.markLockReleased();
+                        s.record(query_text[0..@min(query_text.len, 80)]);
+                    }
 
                     // S1: Apply label-based RLS filtering AFTER lock release and BEFORE
                     // response serialization.  This removes rows whose Node/Edge labels
