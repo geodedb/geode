@@ -371,6 +371,43 @@ fn executeBulkSimpleCreate(
     updateTxnStateFromProgram(state, program);
 }
 
+/// Shared helper: send the "0 rows affected, success" wire response that
+/// both successful bulk edge inserts and silently-skipped orphan edges
+/// use.  Matches the shape of a no-RETURN MATCH+CREATE coming out of the
+/// regular executor: one schema (0 cols) + one page (0 rows, final=true)
+/// + status 00000.
+fn sendBulkEdgeSuccessResponse(
+    gpa: std.mem.Allocator,
+    stream: *quic_transport.QuicStream,
+) !void {
+    {
+        var schema_arena = std.heap.ArenaAllocator.init(gpa);
+        defer schema_arena.deinit();
+        const sa = schema_arena.allocator();
+        const status = try proto_util.buildStatus(sa, "00000", &.{});
+        const schema_def = schema.SchemaDefinition{
+            .columns = std.ArrayList(schema.ColumnDefinition).empty,
+        };
+        const schema_resp = schema.ExecutionResponse{
+            .status = status,
+            .payload = .{ .schema = schema_def },
+        };
+        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
+    }
+    {
+        var page_arena = std.heap.ArenaAllocator.init(gpa);
+        defer page_arena.deinit();
+        const pa = page_arena.allocator();
+        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
+        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
+        const page_resp = schema.ExecutionResponse{
+            .status = page_status,
+            .payload = .{ .page = page },
+        };
+        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
+    }
+}
+
 /// Task 12 (enterprise-ingest-throughput) fast-path dispatcher for the
 /// two-match-one-edge pattern detected by `bulk_ingest.matchEdgeSpec`:
 ///
@@ -454,7 +491,17 @@ fn executeBulkMatchCreateEdge(
     // into `merge_prop_index` + `nodes` — safe under a reader lock per
     // the Phase 4 invariants audit.  16 concurrent workers can run this
     // step in parallel, which was the whole motivation for the split.
-    const source_id: u64, const target_id: u64 = blk: {
+    //
+    // Orphan-edge semantics (2026-04-23 fix): the regular executor's
+    // MATCH+CREATE silently produces a zero-row result set when either
+    // MATCH endpoint is missing (MATCH returns 0 rows → no CREATE fires).
+    // Clients like msft-graph rely on that to skip orphan edges in
+    // imperfect datasets without aborting the whole ingest.  The bulk
+    // fast-path therefore MUST match that contract: a missing source or
+    // target endpoint returns a 0-rows success, not a 09000 error.  A
+    // strict error code is only appropriate if/when the caller asked for
+    // it via RETURN — which the bulk detector already filters out.
+    const resolved = blk: {
         const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
         defer graph_store.releaseGraphLock(read_handle);
         const s = adapter.lookupNodeByMergeKey(
@@ -463,10 +510,9 @@ fn executeBulkMatchCreateEdge(
             spec.source.filter_key,
             src_filter_pv,
             error.SourceNodeNotFound,
-        ) catch |err| {
-            const info = proto_util.mapError(err);
-            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+        ) catch |err| switch (err) {
+            error.SourceNodeNotFound => break :blk null,
+            else => return err,
         };
         const t = adapter.lookupNodeByMergeKey(
             query_graph_name,
@@ -474,13 +520,26 @@ fn executeBulkMatchCreateEdge(
             spec.target.filter_key,
             dst_filter_pv,
             error.TargetNodeNotFound,
-        ) catch |err| {
-            const info = proto_util.mapError(err);
-            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
+        ) catch |err| switch (err) {
+            error.TargetNodeNotFound => break :blk null,
+            else => return err,
         };
-        break :blk .{ s, t };
+        break :blk @as(?struct { src: u64, dst: u64 }, .{ .src = s, .dst = t });
     };
+
+    if (resolved == null) {
+        // Orphan edge: msft-graph-compatible silent skip — emit the
+        // same schema+page wire shape as a successful no-RETURN edge
+        // create so the client sees "0 rows affected, status OK".
+        try sendBulkEdgeSuccessResponse(gpa, stream);
+        mut_sample.record("bulk_match_create_edge_skipped");
+        auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+        syncGraphFromSession(state);
+        updateTxnStateFromProgram(state, program);
+        return;
+    }
+    const source_id: u64 = resolved.?.src;
+    const target_id: u64 = resolved.?.dst;
 
     // Phase 2: acquire the per-graph exclusive write lock with the
     // per-request deadline policy.  Cancelable so a long queue doesn't
@@ -512,9 +571,27 @@ fn executeBulkMatchCreateEdge(
     );
     _ = edge_id_res catch |err| {
         graph_store.releaseGraphLock(lock_handle);
-        const info = proto_util.mapError(err);
-        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-        return;
+        // Race semantics (2026-04-23): if another writer deleted an
+        // endpoint between our Phase-1 read-lock release and Phase-2
+        // write-lock acquire, `bulkInsertEdgeWithIds` re-checks under
+        // the write lock and returns SourceNodeNotFound/TargetNodeNotFound.
+        // Treat identically to the Phase-1 orphan case: send a 0-rows
+        // success so msft-graph-style ingests don't abort their batch.
+        switch (err) {
+            error.SourceNodeNotFound, error.TargetNodeNotFound => {
+                try sendBulkEdgeSuccessResponse(gpa, stream);
+                mut_sample.record("bulk_match_create_edge_skipped_race");
+                auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
+                syncGraphFromSession(state);
+                updateTxnStateFromProgram(state, program);
+                return;
+            },
+            else => {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            },
+        }
     };
 
     mut_sample.markExecuteDone();
@@ -524,32 +601,7 @@ fn executeBulkMatchCreateEdge(
     // Wire response: identical shape to `executeBulkSimpleCreate` — schema
     // with 0 columns + one page with 0 rows final=true + status 00000 —
     // matches regular-executor output for a no-RETURN MATCH+CREATE.
-    {
-        var schema_arena = std.heap.ArenaAllocator.init(gpa);
-        defer schema_arena.deinit();
-        const sa = schema_arena.allocator();
-        const status = try proto_util.buildStatus(sa, "00000", &.{});
-        const schema_def = schema.SchemaDefinition{
-            .columns = std.ArrayList(schema.ColumnDefinition).empty,
-        };
-        const schema_resp = schema.ExecutionResponse{
-            .status = status,
-            .payload = .{ .schema = schema_def },
-        };
-        try sendQuicMessage(sa, stream, .{ .execute = schema_resp });
-    }
-    {
-        var page_arena = std.heap.ArenaAllocator.init(gpa);
-        defer page_arena.deinit();
-        const pa = page_arena.allocator();
-        const page = try proto_util.buildDataPageFromRows(pa, &.{}, true, false, &.{});
-        const page_status = try proto_util.buildStatus(pa, "00000", &.{});
-        const page_resp = schema.ExecutionResponse{
-            .status = page_status,
-            .payload = .{ .page = page },
-        };
-        try sendQuicMessage(pa, stream, .{ .execute = page_resp });
-    }
+    try sendBulkEdgeSuccessResponse(gpa, stream);
 
     mut_sample.record("bulk_match_create_edge");
 
