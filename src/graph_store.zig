@@ -1082,6 +1082,97 @@ pub const GraphStore = struct {
         return self.createNodeWithGraphAndTenant(labels, graph_name, tenant);
     }
 
+    /// Phase 2 of the graph-sharding plan: pre-allocate a node id
+    /// for use by the `ShardedCoordinator`.  Returns a fresh UUIDv7-
+    /// truncated-to-u64 id without touching any graph state.  The
+    /// caller is expected to (a) route an `ApplyOp` to
+    /// `shardIndex(id)` and (b) call `createNodeWithReservedIdAndGraph`
+    /// inside the shard's write lock to complete the insert.
+    ///
+    /// Time-based ids are monotonically increasing and globally
+    /// unique without further synchronisation — UUIDv7's time + seq
+    /// bits guarantee no collision under a single process.
+    pub fn reserveNodeId(self: *GraphStore) u64 {
+        _ = self;
+        return generateTimeBasedId();
+    }
+
+    /// Phase 2 variant of `createNodeWithGraphAndTenant` that accepts
+    /// a pre-allocated id (usually via `reserveNodeId`) instead of
+    /// generating one.  Used by the `ShardedCoordinator` to route an
+    /// op to its shard BEFORE the id is populated into the store —
+    /// the coordinator holds `shard_locks[shardIndex(id)]` EXCLUSIVE
+    /// and `mg.string_indexes_mutex` for the label_index update.
+    ///
+    /// Apart from accepting the id as a parameter, behaviour is
+    /// identical to `createNodeWithGraphAndTenant` (adapter
+    /// persistence, IdMap registration, label index, mutation
+    /// notify, dirty flag).
+    pub fn createNodeWithReservedIdAndGraph(
+        self: *GraphStore,
+        reserved_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+    ) !void {
+        const tenant = fle_integration.getCurrentTenantId();
+        return self.createNodeWithReservedIdGraphAndTenant(reserved_id, labels, graph_name, tenant);
+    }
+
+    /// Tenant-aware variant — see `createNodeWithReservedIdAndGraph`.
+    pub fn createNodeWithReservedIdGraphAndTenant(
+        self: *GraphStore,
+        reserved_id: u64,
+        labels: []const []const u8,
+        graph_name: []const u8,
+        tenant: []const u8,
+    ) !void {
+        const adapter_node: ?struct {
+            vt: AdapterVTable,
+            slot_id: u64,
+        } = if (global_vtable) |vt|
+            .{
+                .vt = vt,
+                .slot_id = try vt.createNodeFn(vt.ctx, graph_name, labels),
+            }
+        else
+            null;
+        try self.ensureGraph(graph_name);
+
+        if (adapter_node) |persisted_node| {
+            persistNodePublicId(persisted_node.vt, graph_name, persisted_node.slot_id, reserved_id) catch |err| {
+                persisted_node.vt.deleteNodeFn(persisted_node.vt.ctx, graph_name, persisted_node.slot_id) catch {};
+                return err;
+            };
+            const im = try self.getOrCreateIdMap(graph_name);
+            try im.insertNodeWithSlot(@as(u128, reserved_id), persisted_node.slot_id);
+        }
+
+        const labels_copy = try self.allocator.alloc([]const u8, labels.len);
+        for (labels, 0..) |label, i| {
+            labels_copy[i] = try self.allocator.dupe(u8, label);
+        }
+
+        const graph_name_copy = try self.allocator.dupe(u8, graph_name);
+        const tenant_id_copy = try self.allocator.dupe(u8, tenant);
+
+        const node = Node{
+            .id = reserved_id,
+            .labels = labels_copy,
+            .properties = std.StringHashMap(PropertyValue).init(self.allocator),
+            .graph_name = graph_name_copy,
+            .tenant_id = tenant_id_copy,
+        };
+
+        try self.nodes.put(reserved_id, node);
+        for (labels) |label| {
+            try self.addToLabelIndex(graph_name, label, reserved_id);
+        }
+
+        self.dirty.store(true, .release);
+        incrementMutationEpoch();
+        notifyMutation(.create_node, reserved_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
+    }
+
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {

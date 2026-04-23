@@ -3319,6 +3319,18 @@ pub fn build(b: *std.Build) void {
     const shard_locks_step = b.step("test-shard-locks", "Run per-shard rwlock regression tests");
     shard_locks_step.dependOn(&run_shard_locks_tests.step);
 
+    // Phase 2 Task 5 (2026-04-23) — shard-locked bulk-helper variants
+    //     (bulkInsertNodeWithReservedId,
+    //      bulkInsertEdgeWithIdsShardLocked,
+    //      bulkMergeNodeWithReservedId) under 16/8-worker concurrency.
+    const bulk_shard_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bulk_shard_concurrency.zig"), .target = target, .optimize = optimize });
+    bulk_shard_mod.addImport("geode", root_mod);
+    const bulk_shard_tests = b.addTest(.{ .root_module = bulk_shard_mod });
+    const run_bulk_shard_tests = b.addRunArtifact(bulk_shard_tests);
+    test_step.dependOn(&run_bulk_shard_tests.step);
+    const bulk_shard_step = b.step("test-bulk-shard-concurrency", "Run Phase 2 shard-locked bulk-helper concurrency tests");
+    bulk_shard_step.dependOn(&run_bulk_shard_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

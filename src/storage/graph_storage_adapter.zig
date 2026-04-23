@@ -499,6 +499,25 @@ pub const ManagedGraph = struct {
     /// insert-if-absent takes it EXCLUSIVE.
     merge_prop_index_lock: std.Io.RwLock = std.Io.RwLock.init,
 
+    /// Brief-hold mutex covering the other outer-StringHashMap
+    /// metadata operations that shard writers touch indirectly
+    /// (label_index getOrPut, graphs put, id_maps init,
+    /// edge_type_index getOrPut).  Holds are microseconds — the
+    /// outer StringHashMap operation is a single bucket probe +
+    /// optional rehash, not the per-label posting-list mutation
+    /// which is already guarded by its own `LabelPosting.mutex`.
+    ///
+    /// Under the shard-locked write protocol (Phase 2), a shard
+    /// writer holds `mg.rwlock` SHARED + `shard_locks[idx]`
+    /// EXCLUSIVE for the duration of the op.  Inside that scope
+    /// the writer briefly takes this mutex for the single moment
+    /// it touches a string-keyed outer map.  Release before the
+    /// shard lock so the mutex is always held strictly inside the
+    /// shard lock scope — prevents a future consumer from taking
+    /// shard lock + string_indexes_mutex in a different order and
+    /// deadlocking.
+    string_indexes_mutex: std.Io.Mutex = std.Io.Mutex.init,
+
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
     pub fn storage(self: *ManagedGraph) gs.GraphStorage {
@@ -1133,6 +1152,207 @@ pub const StorageAdapter = struct {
     /// case it populates the engines map and returns successfully.
     fn ensureGraphExistsForBulk(self: *StorageAdapter, graph_name: []const u8) !void {
         _ = try self.getOrCreateGraph(graph_name);
+    }
+
+    /// Phase 2 variant of `bulkInsertNode` that consumes a
+    /// pre-allocated id (via `GraphStore.reserveNodeId`) and
+    /// self-locks under the shard-locked write protocol:
+    ///
+    ///   1. Take `mg.rwlock` SHARED (fences whole-graph-exclusive
+    ///      ops like RESTORE).
+    ///   2. Take `shard_locks[shardIndex(reserved_id)]` EXCLUSIVE
+    ///      (serialises writes to this shard's state).
+    ///   3. Take `mg.string_indexes_mutex` briefly for the outer
+    ///      StringHashMap operations (graph registration, label
+    ///      index getOrPut).  Held only around the
+    ///      `createNodeWithReservedIdAndGraph` call.
+    ///   4. Write properties via `setNodeProperty` under the shard
+    ///      lock only (the property chain is sharded because the
+    ///      node_id keys into the sharded store).
+    ///
+    /// Called by `ShardedCoordinator.applyShardBatch` in Task 6.
+    /// Does NOT open a statement txn on its own — the coordinator
+    /// wraps the whole batch in one statement txn for WAL fsync
+    /// amortisation across every op in the shard batch.
+    ///
+    /// Same undo-log + in-memory-store contracts as `bulkInsertNode`.
+    pub fn bulkInsertNodeWithReservedId(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        labels: []const []const u8,
+        props: []const PropKV,
+    ) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        mg.rwlock.lockSharedUncancelable(io);
+        defer mg.rwlock.unlockShared(io);
+
+        const idx = sharded_store.shardIndex(reserved_id);
+        mg.shard_locks[idx].lockUncancelable(io);
+        defer mg.shard_locks[idx].unlock(io);
+
+        mg.string_indexes_mutex.lockUncancelable(io);
+        const create_result = store.createNodeWithReservedIdAndGraph(reserved_id, labels, graph_name);
+        mg.string_indexes_mutex.unlock(io);
+        try create_result;
+
+        // Property writes touch the sharded store only; no further
+        // string-index lock needed (setNodeProperty operates on the
+        // per-node properties map, not any outer StringHashMap).
+        for (props) |kv| {
+            try store.setNodeProperty(reserved_id, kv.key, kv.value);
+        }
+        return reserved_id;
+    }
+
+    /// Phase 2 shard-locked edge-insert variant.  Both endpoint ids
+    /// are known to the caller, so the helper routes writes to the
+    /// owning shards for source and target.
+    ///
+    /// Locking protocol:
+    ///   1. Take `mg.rwlock` SHARED.
+    ///   2. If `shardIndex(source_id) == shardIndex(target_id)`,
+    ///      take that one shard's EXCLUSIVE lock.
+    ///   3. Otherwise, take the lower-index shard's EXCLUSIVE lock
+    ///      first, then the higher-index shard's — ascending order
+    ///      to prevent deadlock with any other cross-shard op.
+    ///   4. Take `mg.string_indexes_mutex` briefly for the
+    ///      edge_type_index getOrPut inside `createEdgeWithGraph`.
+    ///   5. Write properties via `setEdgeProperty` under the shard
+    ///      locks.
+    ///
+    /// Race handling: re-checks source/target existence under the
+    /// held locks and surfaces `SourceNodeNotFound` / `TargetNodeNotFound`
+    /// if either was deleted in a prior batch.  Matches the
+    /// `bulkInsertEdgeWithIds` semantics so the coordinator's
+    /// orphan-edge silent-skip path still works.
+    pub fn bulkInsertEdgeWithIdsShardLocked(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+    ) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        const src_shard = sharded_store.shardIndex(source_id);
+        const dst_shard = sharded_store.shardIndex(target_id);
+
+        mg.rwlock.lockSharedUncancelable(io);
+        defer mg.rwlock.unlockShared(io);
+
+        if (src_shard == dst_shard) {
+            mg.shard_locks[src_shard].lockUncancelable(io);
+            defer mg.shard_locks[src_shard].unlock(io);
+            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props);
+        } else {
+            const first = @min(src_shard, dst_shard);
+            const second = @max(src_shard, dst_shard);
+            mg.shard_locks[first].lockUncancelable(io);
+            mg.shard_locks[second].lockUncancelable(io);
+            defer {
+                mg.shard_locks[second].unlock(io);
+                mg.shard_locks[first].unlock(io);
+            }
+            return self.bulkInsertEdgeInnerShardLocked(mg, store, graph_name, source_id, target_id, rel_type, props);
+        }
+    }
+
+    fn bulkInsertEdgeInnerShardLocked(
+        self: *StorageAdapter,
+        mg: *ManagedGraph,
+        store: *graph_store.GraphStore,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+    ) !u64 {
+        _ = self;
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
+        if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
+
+        mg.string_indexes_mutex.lockUncancelable(io);
+        const create_result = store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
+        mg.string_indexes_mutex.unlock(io);
+        const edge_id = try create_result;
+
+        for (props) |kv| {
+            try store.setEdgeProperty(edge_id, kv.key, kv.value);
+        }
+        return edge_id;
+    }
+
+    /// Phase 2 shard-locked MERGE variant.  Probe under
+    /// `merge_prop_index_lock` SHARED for the fast path; on miss,
+    /// acquire the shard lock for `reserved_id` + the merge-index
+    /// lock EXCLUSIVE and re-probe before inserting.
+    ///
+    /// The `reserved_id` may be abandoned if the probe discovers an
+    /// existing candidate (id-space leak is bounded by ingest size;
+    /// same behaviour as the pre-sharding coordinator under race).
+    pub fn bulkMergeNodeWithReservedId(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        reserved_id: u64,
+        label: []const u8,
+        merge_key: []const u8,
+        merge_value: gs.PropertyValue,
+        on_create_props: []const PropKV,
+    ) !u64 {
+        const mg = try self.getOrCreateGraph(graph_name);
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        mg.rwlock.lockSharedUncancelable(io);
+        defer mg.rwlock.unlockShared(io);
+
+        // Probe phase: shared lock on merge-index, fast return on hit.
+        mg.merge_prop_index_lock.lockSharedUncancelable(io);
+        var probe_id: u64 = 0;
+        const probe = store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id);
+        mg.merge_prop_index_lock.unlockShared(io);
+        if (probe == .found) return probe_id;
+
+        // Insert phase: take the shard lock for the reserved id plus
+        // the merge-index lock EXCLUSIVE.  Re-probe under the
+        // exclusive lock so concurrent MERGEs for the same key
+        // serialise correctly.
+        const idx = sharded_store.shardIndex(reserved_id);
+        mg.shard_locks[idx].lockUncancelable(io);
+        defer mg.shard_locks[idx].unlock(io);
+
+        mg.merge_prop_index_lock.lockUncancelable(io);
+        defer mg.merge_prop_index_lock.unlock(io);
+
+        var reprobe_id: u64 = 0;
+        if (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &reprobe_id) == .found) {
+            return reprobe_id;
+        }
+
+        mg.string_indexes_mutex.lockUncancelable(io);
+        const labels_slice = [_][]const u8{label};
+        const create_result = store.createNodeWithReservedIdAndGraph(reserved_id, &labels_slice, graph_name);
+        mg.string_indexes_mutex.unlock(io);
+        try create_result;
+
+        // Property writes under the shard lock — setNodeProperty will
+        // update the merge_prop_index (which is protected by the
+        // merge_prop_index_lock we already hold EXCLUSIVE above).
+        try store.setNodeProperty(reserved_id, merge_key, merge_value);
+        for (on_create_props) |kv| {
+            try store.setNodeProperty(reserved_id, kv.key, kv.value);
+        }
+
+        return reserved_id;
     }
 
     /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
