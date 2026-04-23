@@ -3293,6 +3293,19 @@ pub fn build(b: *std.Build) void {
     const r6_parallel_ingest_step = b.step("test-r6-parallel-ingest", "Parallel-ingest R6: throughput regression — cross-graph + same-graph contention bounds");
     r6_parallel_ingest_step.dependOn(&run_r6_parallel_ingest_tests.step);
 
+    // Graph-sharding Phase 1 Task 1 (2026-04-24) — ShardedStore unit tests.
+    //     Pins the N-way sharded HashMap wrapper used as the foundation for
+    //     per-shard locking in Phase 2.  See
+    //     `src/storage/sharded_store.zig` and
+    //     `docs/superpowers/plans/2026-04-24-graph-sharding-and-wal-group-commit.md`.
+    const sharded_store_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sharded_store.zig"), .target = target, .optimize = optimize });
+    sharded_store_mod.addImport("geode", root_mod);
+    const sharded_store_tests = b.addTest(.{ .root_module = sharded_store_mod });
+    const run_sharded_store_tests = b.addRunArtifact(sharded_store_tests);
+    test_step.dependOn(&run_sharded_store_tests.step);
+    const sharded_store_step = b.step("test-sharded-store", "Run sharded-store unit tests");
+    sharded_store_step.dependOn(&run_sharded_store_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport

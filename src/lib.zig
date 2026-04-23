@@ -140,6 +140,9 @@ pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
 // Task 19: per-graph group-commit coordinator.
 pub const group_commit = @import("storage/group_commit.zig");
+// Graph-sharding Phase 1: N-way sharded HashMap wrapper (foundation for
+// per-shard locking in Phase 2).
+pub const sharded_store = @import("storage/sharded_store.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
