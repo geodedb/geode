@@ -1530,9 +1530,17 @@ pub const StorageAdapter = struct {
     // Edge property operations
     // ------------------------------------------------------------------
 
-    /// Set a property on an edge. Delegates to the engine's
-    /// `setEdgeProperty` which handles prop_head updates in both
-    /// adjacency lists automatically.
+    /// Set a property on an edge.
+    ///
+    /// R12 (2026-04-22): when a session/statement engine txn is active
+    /// on this graph, replicate the engine's `setEdgeProperty` logic
+    /// using `putPropertyTxn` + adjacency-list updates so the whole
+    /// operation joins the active txn and incurs NO extra WAL fsync.
+    /// Without this branch, the engine's auto-commit variant runs
+    /// `txn_manager.begin()` + `commit()` (and thus one `wal.sync()`)
+    /// per edge property — for a msft-graph edge with 5 properties and
+    /// 2186 edges per batch that's >10K fsyncs per batch, overwhelming
+    /// the 120 s `acquireGraphWriteLockCancelable` budget.
     pub fn setEdgeProperty(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -1549,6 +1557,37 @@ pub const StorageAdapter = struct {
         };
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
+
+        if (currentStatementTxnForGraph(graph_name)) |s| {
+            // R12: manual setEdgeProperty using Txn variants.  Mirrors the
+            // upstream engine_edge_props.setEdgeProperty logic 1:1, just
+            // threading our session/statement txn through `putPropertyTxn`.
+            const edge_entry = mg.engine.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+            if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
+
+            const from_rec = (try mg.engine.node_store.getNode(from_id)) orelse return error.NodeNotFound;
+            const found_prop_head = edge_entry.prop_head;
+
+            const new_head_u64 = try mg.engine.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, s.txn_id);
+            const new_head: u32 = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+
+            if (new_head != found_prop_head) {
+                _ = try mg.engine.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
+                const to_rec = (try mg.engine.node_store.getNode(to_id)) orelse return error.NodeNotFound;
+                _ = try mg.engine.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
+
+                if (mg.engine.edge_index.getPtr(edge_id)) |idx_entry| {
+                    idx_entry.prop_head = new_head;
+                }
+            }
+
+            // Keep the property-chain index in sync (same as upstream does).
+            if (found_prop_head != 0 and found_prop_head != new_head) {
+                mg.engine.property_index.removeChain(found_prop_head);
+            }
+            try mg.engine.refreshPropertyChainIndex(new_head_u64);
+            return;
+        }
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
     }
 

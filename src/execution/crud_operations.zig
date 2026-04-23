@@ -717,6 +717,32 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
     var created_relationships_count: i64 = 0;
     var created_nodes_count: i64 = 0;
 
+    // R12 (2026-04-22): hook `executeCreateForBatchWithTracking` into the
+    // R11 lazy session-txn infrastructure.  This path is hit for MATCH
+    // + CREATE statements (the msft-graph edge-creation pattern), which
+    // were not covered by the `executeCreate` / `executeMerge` hooks.
+    // Without this, every per-property adapter call on a batch-created
+    // edge auto-commits one WAL fsync, overwhelming the 120 s lock
+    // budget on large edge files.
+    const gsa = @import("../storage/graph_storage_adapter.zig");
+    var batch_stmt_txn: gsa.StatementTxn = undefined;
+    var batch_stmt_txn_open = false;
+    if (graph_store.getGlobalAdapter()) |ad| {
+        if (gsa.sessionEngineTxnGraph() == null) {
+            // No session txn (we can't see `context` from here, so open a
+            // per-statement txn unconditionally when the thread has no
+            // pre-existing txn).  This is safe: the adapter's per-graph
+            // exclusive write lock serialises callers.
+            if (ad.beginStatementTxn(target_graph, &batch_stmt_txn)) |_| {
+                batch_stmt_txn_open = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+    }
+    errdefer if (batch_stmt_txn_open) batch_stmt_txn.abort();
+
     // Track created nodes by variable name
     var created_nodes = std.StringHashMap(u64).init(allocator);
     errdefer created_nodes.deinit();
@@ -844,6 +870,7 @@ pub fn executeCreateForBatchWithTracking(allocator: std.mem.Allocator, create_pa
         }
     }
 
+    if (batch_stmt_txn_open) try batch_stmt_txn.commit();
     return CreateBatchResult{
         .created_count = created_nodes_count + created_relationships_count,
         .created_nodes = created_nodes,
