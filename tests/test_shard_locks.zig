@@ -6,11 +6,18 @@
 //! this change, every writer serialised through the single
 //! `mg.rwlock`.  After this change, writers routed to disjoint
 //! shards should not block each other.
+//!
+//! Uses the geode `pooled.ThreadPool` wrapper (backed by the
+//! gitlab.com/devnw/zig/thread-pool dep) for all worker dispatch —
+//! per project convention, parallelism goes through thread-pool
+//! first, std.Thread.spawn only when thread-pool can't express the
+//! need.
 
 const std = @import("std");
 const geode = @import("geode");
 const adapter_mod = geode.graph_storage_adapter;
 const sharded = geode.sharded_store;
+const pooled = @import("geode").pooled;
 
 fn tmpDataDir(allocator: std.mem.Allocator, tmp: *std.testing.TmpDir) ![]u8 {
     return std.fmt.allocPrint(allocator, ".zig-cache/tmp/{s}", .{&tmp.sub_path});
@@ -31,18 +38,29 @@ fn monoNanosNow() u64 {
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
-const BgArgs = struct {
+const HoldCtx = struct {
     mg: *adapter_mod.ManagedGraph,
     key: u64,
-    ready: *std.atomic.Value(u32),
-    release: *std.atomic.Value(u32),
+    ready: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    release: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
 };
 
-fn holdShardLock(ctx: BgArgs) void {
+fn holdShardLock(ctx_ptr: *anyopaque) void {
+    const ctx: *HoldCtx = @ptrCast(@alignCast(ctx_ptr));
     adapter_mod.acquireShardWriteLock(ctx.mg, ctx.key);
     ctx.ready.store(1, .release);
     while (ctx.release.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
     adapter_mod.releaseShardWriteLock(ctx.mg, ctx.key);
+    ctx.done.store(1, .release);
+}
+
+fn waitReady(ctx: *HoldCtx) void {
+    while (ctx.ready.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
+}
+
+fn waitDone(ctx: *HoldCtx) void {
+    while (ctx.done.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
 }
 
 test "acquireShardWriteLock permits concurrent access to different shards" {
@@ -69,16 +87,15 @@ test "acquireShardWriteLock permits concurrent access to different shards" {
     defer adapter.deinit();
     const mg = try adapter.getOrCreateGraph("g");
 
-    var ready = std.atomic.Value(u32).init(0);
-    var release = std.atomic.Value(u32).init(0);
-    const thread = try std.Thread.spawn(.{}, holdShardLock, .{BgArgs{
-        .mg = mg,
-        .key = id_shard0,
-        .ready = &ready,
-        .release = &release,
-    }});
+    const pool = try pooled.ThreadPool.init(allocator, .{ .num_threads = 2, .queue_capacity = 4 });
+    defer pool.deinit();
 
-    while (ready.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
+    var ctx = HoldCtx{ .mg = mg, .key = id_shard0 };
+    try pool.submitBlocking(.{
+        .context = @ptrCast(&ctx),
+        .callback = holdShardLock,
+    });
+    waitReady(&ctx);
 
     // Foreground: acquire shard 1 within 200 ms.  If the impl were
     // still a single rwlock this would block forever.
@@ -88,8 +105,8 @@ test "acquireShardWriteLock permits concurrent access to different shards" {
     adapter_mod.releaseShardWriteLock(mg, id_shard1);
     try std.testing.expect(elapsed_ns < 200 * std.time.ns_per_ms);
 
-    release.store(1, .release);
-    thread.join();
+    ctx.release.store(1, .release);
+    waitDone(&ctx);
 }
 
 test "acquireShardWriteLockCancelable honors deadline when contended" {
@@ -106,15 +123,15 @@ test "acquireShardWriteLockCancelable honors deadline when contended" {
     defer adapter.deinit();
     const mg = try adapter.getOrCreateGraph("g");
 
-    var ready = std.atomic.Value(u32).init(0);
-    var release = std.atomic.Value(u32).init(0);
-    const thread = try std.Thread.spawn(.{}, holdShardLock, .{BgArgs{
-        .mg = mg,
-        .key = 1,
-        .ready = &ready,
-        .release = &release,
-    }});
-    while (ready.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
+    const pool = try pooled.ThreadPool.init(allocator, .{ .num_threads = 2, .queue_capacity = 4 });
+    defer pool.deinit();
+
+    var ctx = HoldCtx{ .mg = mg, .key = 1 };
+    try pool.submitBlocking(.{
+        .context = @ptrCast(&ctx),
+        .callback = holdShardLock,
+    });
+    waitReady(&ctx);
 
     // Attempt to acquire the SAME key — should deadline in ~100 ms.
     const start_ns = monoNanosNow();
@@ -126,8 +143,8 @@ test "acquireShardWriteLockCancelable honors deadline when contended" {
     try std.testing.expect(elapsed_ns >= 80 * std.time.ns_per_ms);
     try std.testing.expect(elapsed_ns <= 300 * std.time.ns_per_ms);
 
-    release.store(1, .release);
-    thread.join();
+    ctx.release.store(1, .release);
+    waitDone(&ctx);
 }
 
 test "acquireWholeGraphExclusive blocks new shard writers" {
@@ -144,33 +161,40 @@ test "acquireWholeGraphExclusive blocks new shard writers" {
     defer adapter.deinit();
     const mg = try adapter.getOrCreateGraph("g");
 
+    const pool = try pooled.ThreadPool.init(allocator, .{ .num_threads = 2, .queue_capacity = 4 });
+    defer pool.deinit();
+
     // Foreground: hold the whole-graph EXCLUSIVE.
     adapter_mod.acquireWholeGraphExclusive(mg);
 
     // Background tries to take shard 3 write lock — should block
     // until we release the whole-graph EXCLUSIVE.
-    const AcqArgs = struct {
+    const AcqCtx = struct {
         mg: *adapter_mod.ManagedGraph,
-        acquired_at_ns: *std.atomic.Value(u64),
+        acquired_at_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+        done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     };
     const tryAcquireShard = struct {
-        fn run(a: AcqArgs) void {
+        fn run(ctx_ptr: *anyopaque) void {
+            const a: *AcqCtx = @ptrCast(@alignCast(ctx_ptr));
             adapter_mod.acquireShardWriteLock(a.mg, 42);
             a.acquired_at_ns.store(monoNanosNow(), .release);
             adapter_mod.releaseShardWriteLock(a.mg, 42);
+            a.done.store(1, .release);
         }
     }.run;
-    var acquired_at = std.atomic.Value(u64).init(0);
-    const thread = try std.Thread.spawn(.{}, tryAcquireShard, .{AcqArgs{
-        .mg = mg,
-        .acquired_at_ns = &acquired_at,
-    }});
+
+    var acq_ctx = AcqCtx{ .mg = mg };
+    try pool.submitBlocking(.{
+        .context = @ptrCast(&acq_ctx),
+        .callback = tryAcquireShard,
+    });
 
     const held_until_ns = monoNanosNow() + 100 * std.time.ns_per_ms;
     while (monoNanosNow() < held_until_ns) napNs(1 * std.time.ns_per_ms);
     adapter_mod.releaseWholeGraphExclusive(mg);
 
-    thread.join();
-    const bg_ns = acquired_at.load(.acquire);
+    while (acq_ctx.done.load(.acquire) == 0) napNs(100 * std.time.ns_per_us);
+    const bg_ns = acq_ctx.acquired_at_ns.load(.acquire);
     try std.testing.expect(bg_ns >= held_until_ns);
 }

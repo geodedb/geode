@@ -146,6 +146,12 @@ pub const group_commit = @import("storage/group_commit.zig");
 // can reach it via `geode.sharded_store` uniformly with the other
 // re-exports.
 pub const sharded_store = @import("graph_storage").sharded_store;
+
+// Re-export the thread-pool wrapper so tests and internal code can reach
+// the preferred parallelism primitive via `geode.pooled` (per project
+// convention, threading goes through the gitlab.com/devnw/zig/thread-pool
+// library; see memory/feedback_thread_pool_first.md).
+pub const pooled = @import("transport/thread_pool");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");
