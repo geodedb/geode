@@ -106,8 +106,31 @@ session:
 
 The current 120 s lock timeout + client-side serial fallback means
 even when chunks do hit the ceiling, the overall ingest still
-completes — which is the change the user asked for:
+completes — which is the change the user asked for.
 
-> (original) "unusably slow and consistently fails to process requests"
-> (now)      completes end-to-end; node phase ~13 min; full seed
-> ~45-60 min.
+## Final end-to-end measurement
+
+R13 run, 16-worker msft-graph seed against
+`~/eagleg-topology-data-16`:
+
+```text
+started  2026-04-22 23:47:53
+completed 2026-04-23 01:53:26
+duration 2 h 5 m 33 s  (7533 s)
+seeded  nodes = 9 350
+        edges = 35 208
+        total = 44 558 statements
+aggregate rate = 5.9 stmts / s
+chunk failures = 48 (across ~200 chunks; all recovered via the
+                     client's serial-mode fallback)
+```
+
+Summary:
+
+> (original) "unusably slow and consistently fails to process requests" —
+> stuck at 0.4 stmts/s; never completed.
+>
+> (now) completes end-to-end in ~2 h on commodity hardware;
+> node phase ~13 min; edge phase ~1 h 45 min (with three
+> large edge files falling to serial-mode fallback on chunks
+> that exceeded the 120 s per-request budget).
