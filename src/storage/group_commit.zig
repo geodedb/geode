@@ -96,6 +96,32 @@ pub const ApplyOp = union(enum) {
         props: []const PropKV,
         result: ApplyResult,
     },
+    /// MATCH+CREATE edge variant — the coordinator resolves endpoints
+    /// under its already-held EXCLUSIVE write lock, eliminating the
+    /// reader/writer contention that forced msft-graph to serial-
+    /// fallback on the morning-baseline and Phase 2.1/2.2 designs.
+    ///
+    /// Workers submit WITHOUT taking any lock, so the 16-way pipeline
+    /// proceeds without serialising on the flusher's EXCLUSIVE.  The
+    /// endpoint lookup + edge create both happen under the single
+    /// EXCLUSIVE hold the flusher already has for the batch.
+    ///
+    /// Orphan-edge semantics (matches the regular MATCH+CREATE
+    /// executor): if either endpoint is missing, the op silently
+    /// succeeds with `result.node_or_edge_id = 0` — NOT an error.
+    /// Callers that need to distinguish "created" from "silently
+    /// skipped" can check `== 0` on the returned id.
+    bulk_match_create_edge: struct {
+        src_label: []const u8,
+        src_filter_key: []const u8,
+        src_filter_value: PropertyValue,
+        dst_label: []const u8,
+        dst_filter_key: []const u8,
+        dst_filter_value: PropertyValue,
+        rel_type: []const u8,
+        props: []const PropKV,
+        result: ApplyResult,
+    },
     bulk_merge_node: struct {
         label: []const u8,
         merge_key: []const u8,
@@ -110,6 +136,7 @@ pub const ApplyOp = union(enum) {
         return switch (self.*) {
             .bulk_insert_node => |*p| &p.result,
             .bulk_insert_edge => |*p| &p.result,
+            .bulk_match_create_edge => |*p| &p.result,
             .bulk_merge_node => |*p| &p.result,
         };
     }
@@ -405,6 +432,62 @@ pub const GroupCommitCoordinator = struct {
                         res.node_or_edge_id = eid;
                     } else |e| {
                         res.err = e;
+                    }
+                },
+                .bulk_match_create_edge => |p| {
+                    // Phase 2.3: endpoint lookup happens here, under the
+                    // coordinator's already-held EXCLUSIVE lock.  This
+                    // eliminates the reader/writer contention that was
+                    // forcing msft-graph into serial fallback — workers
+                    // no longer need a SHARED read lock just to resolve
+                    // endpoints.
+                    const src_id = self.adapter.lookupNodeByMergeKey(
+                        self.graph_name,
+                        p.src_label,
+                        p.src_filter_key,
+                        p.src_filter_value,
+                        error.SourceNodeNotFound,
+                    ) catch |err| switch (err) {
+                        // Orphan-edge silent skip: result.node_or_edge_id
+                        // stays 0 and err stays null, signaling the
+                        // submitter that the edge was silently skipped
+                        // (matches the regular MATCH+CREATE executor
+                        // which emits an empty result set when MATCH
+                        // finds nothing).
+                        error.SourceNodeNotFound => continue,
+                        else => {
+                            res.err = err;
+                            continue;
+                        },
+                    };
+                    const dst_id = self.adapter.lookupNodeByMergeKey(
+                        self.graph_name,
+                        p.dst_label,
+                        p.dst_filter_key,
+                        p.dst_filter_value,
+                        error.TargetNodeNotFound,
+                    ) catch |err| switch (err) {
+                        error.TargetNodeNotFound => continue,
+                        else => {
+                            res.err = err;
+                            continue;
+                        },
+                    };
+                    if (self.adapter.bulkInsertEdgeWithIds(
+                        self.graph_name,
+                        src_id,
+                        dst_id,
+                        p.rel_type,
+                        p.props,
+                        null,
+                    )) |eid| {
+                        res.node_or_edge_id = eid;
+                    } else |e| switch (e) {
+                        // Another writer deleted one of the endpoints
+                        // between the lookup above and the insert here
+                        // — treat as silent skip same as orphan.
+                        error.SourceNodeNotFound, error.TargetNodeNotFound => {},
+                        else => res.err = e,
                     }
                 },
                 .bulk_merge_node => |p| {

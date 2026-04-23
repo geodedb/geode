@@ -520,21 +520,63 @@ fn executeBulkMatchCreateEdge(
     }
     const adapter = adapter_opt.?;
 
-    // Phase 1 (Task 15/16): resolve the two endpoint node IDs under a
-    // SHARED read lock.  `lookupNodeByMergeKey` is a pure HashMap-read
-    // into `merge_prop_index` + `nodes` — safe under a reader lock per
-    // the Phase 4 invariants audit.  16 concurrent workers can run this
-    // step in parallel, which was the whole motivation for the split.
+    // Phase 2.3 (2026-04-23): when the group-commit coordinator is
+    // enabled, the endpoint lookup happens INSIDE the coordinator under
+    // its already-held EXCLUSIVE lock — NO shared read lock needed
+    // here.  This eliminates the reader/writer serialization that was
+    // forcing msft-graph to serial-fallback on the morning-baseline
+    // and Phase 2.1/2.2 designs.
     //
-    // Orphan-edge semantics (2026-04-23 fix): the regular executor's
-    // MATCH+CREATE silently produces a zero-row result set when either
-    // MATCH endpoint is missing (MATCH returns 0 rows → no CREATE fires).
-    // Clients like msft-graph rely on that to skip orphan edges in
-    // imperfect datasets without aborting the whole ingest.  The bulk
-    // fast-path therefore MUST match that contract: a missing source or
-    // target endpoint returns a 0-rows success, not a 09000 error.  A
-    // strict error code is only appropriate if/when the caller asked for
-    // it via RETURN — which the bulk detector already filters out.
+    // Orphan-edge semantics (matches the regular MATCH+CREATE
+    // executor): missing endpoint → silent skip (0-rows success), not
+    // an error code.  The coordinator signals "orphan skip" by
+    // returning `result.node_or_edge_id = 0` with no err.
+    if (group_commit.isEnabled()) {
+        const coord = group_commit.getOrStartCoordinator(
+            graph_store.global_allocator(),
+            adapter,
+            query_graph_name,
+        ) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        mut_sample.markLockAcquired();
+
+        var op = group_commit.ApplyOp{ .bulk_match_create_edge = .{
+            .src_label = spec.source.label,
+            .src_filter_key = spec.source.filter_key,
+            .src_filter_value = src_filter_pv,
+            .dst_label = spec.target.label,
+            .dst_filter_key = spec.target.filter_key,
+            .dst_filter_value = dst_filter_pv,
+            .rel_type = spec.rel_type,
+            .props = kvs,
+            .result = .{},
+        } };
+        const result_id = coord.submit(&op) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        mut_sample.markExecuteDone();
+        mut_sample.markLockReleased();
+
+        try sendBulkEdgeSuccessResponse(gpa, stream);
+        if (result_id == 0) {
+            mut_sample.record("bulk_match_create_edge_skipped");
+            auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
+        } else {
+            mut_sample.record("bulk_match_create_edge");
+            auditQueryExecution(state, "bulk_match_create_edge", true);
+        }
+        syncGraphFromSession(state);
+        updateTxnStateFromProgram(state, program);
+        return;
+    }
+
+    // Non-coordinator path: use the legacy SHARED-lock endpoint
+    // resolve + per-op write lock.  Used only when GEODE_GROUP_COMMIT=0.
     const resolved = blk: {
         const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
         defer graph_store.releaseGraphLock(read_handle);
@@ -562,9 +604,6 @@ fn executeBulkMatchCreateEdge(
     };
 
     if (resolved == null) {
-        // Orphan edge: msft-graph-compatible silent skip — emit the
-        // same schema+page wire shape as a successful no-RETURN edge
-        // create so the client sees "0 rows affected, status OK".
         try sendBulkEdgeSuccessResponse(gpa, stream);
         mut_sample.record("bulk_match_create_edge_skipped");
         auditQueryExecution(state, "bulk_match_create_edge_skipped", true);
@@ -575,50 +614,7 @@ fn executeBulkMatchCreateEdge(
     const source_id: u64 = resolved.?.src;
     const target_id: u64 = resolved.?.dst;
 
-    // Phase 2: apply — either via the group-commit coordinator (Task 19,
-    // 2026-04-23) when enabled, or via a direct write-lock acquire.
-    // Both paths go through the same `bulkInsertEdgeWithIds` helper and
-    // preserve the race semantics (delete-between-phases ⇒
-    // `Source/TargetNodeNotFound` ⇒ silent skip).
-    if (group_commit.isEnabled()) {
-        const coord = group_commit.getOrStartCoordinator(
-            graph_store.global_allocator(),
-            adapter,
-            query_graph_name,
-        ) catch |err| {
-            const info = proto_util.mapError(err);
-            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
-        };
-        mut_sample.markLockAcquired();
-
-        var op = group_commit.ApplyOp{ .bulk_insert_edge = .{
-            .source_id = source_id,
-            .target_id = target_id,
-            .rel_type = spec.rel_type,
-            .props = kvs,
-            .result = .{},
-        } };
-        _ = coord.submit(&op) catch |err| {
-            switch (err) {
-                error.SourceNodeNotFound, error.TargetNodeNotFound => {
-                    try sendBulkEdgeSuccessResponse(gpa, stream);
-                    mut_sample.record("bulk_match_create_edge_skipped_race");
-                    auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
-                    syncGraphFromSession(state);
-                    updateTxnStateFromProgram(state, program);
-                    return;
-                },
-                else => {
-                    const info = proto_util.mapError(err);
-                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                    return;
-                },
-            }
-        };
-        mut_sample.markExecuteDone();
-        mut_sample.markLockReleased();
-    } else {
+    {
         // Single-phase path: acquire the per-graph exclusive write lock
         // with the per-request deadline policy.  Cancelable so a long
         // queue doesn't pin the worker forever.  The write critical
