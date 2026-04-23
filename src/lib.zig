@@ -138,6 +138,8 @@ pub const temporal = @import("temporal.zig");
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
+// Task 19: per-graph group-commit coordinator.
+pub const group_commit = @import("storage/group_commit.zig");
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");

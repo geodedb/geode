@@ -5428,6 +5428,13 @@ pub fn initGlobalAdapter(allocator: std.mem.Allocator, data_dir: []const u8) !*g
 }
 
 pub fn deinitGlobalAdapter() void {
+    // Task 19 (2026-04-23): stop per-graph group-commit coordinators BEFORE
+    // the adapter goes away — the coordinator threads call into the adapter
+    // on every apply, so they MUST stop first.  Safe to call when no
+    // coordinator was ever started (the registry is initialised lazily).
+    const group_commit = @import("storage/group_commit.zig");
+    group_commit.shutdownAllCoordinators();
+
     if (global_vtable) |vt| {
         vt.deinitFn(vt.ctx);
         global_vtable = null;

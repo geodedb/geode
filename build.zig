@@ -3414,6 +3414,46 @@ pub fn build(b: *std.Build) void {
     const simple_merge_step = b.step("test-simple-merge-fastpath", "Run simple MERGE node fast-path parity + concurrent race tests");
     simple_merge_step.dependOn(&run_simple_merge_tests.step);
 
+    // Task 19 (enterprise-ingest-throughput): per-graph group-commit
+    // coordinator bench — baseline vs 16-way with/without coordinator.
+    const bench_group_commit_exe = b.addExecutable(.{
+        .name = "bench-group-commit",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench_group_commit.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    bench_group_commit_exe.root_module.addImport("geode", root_mod);
+    const run_bench_group_commit = b.addRunArtifact(bench_group_commit_exe);
+    if (b.args) |args| run_bench_group_commit.addArgs(args);
+    const bench_group_commit_step = b.step(
+        "bench-group-commit",
+        "Task 19 group-commit coordinator: single-thread baseline + 16-way contended with/without coordinator",
+    );
+    bench_group_commit_step.dependOn(&run_bench_group_commit.step);
+
+    // Task 19 (enterprise-ingest-throughput): per-graph group-commit
+    // coordinator — smoke / shutdown / concurrent submit / error propagation /
+    // batch coalescing + env-gated fallback when the feature is off.
+    const group_commit_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/perf/test_group_commit_coordinator.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    group_commit_test_mod.addImport("geode", root_mod);
+    const group_commit_tests = b.addTest(.{ .root_module = group_commit_test_mod });
+    const run_group_commit_tests = b.addRunArtifact(group_commit_tests);
+    test_step.dependOn(&run_group_commit_tests.step);
+    test_perf_step.dependOn(&run_group_commit_tests.step);
+    const group_commit_step = b.step(
+        "test-group-commit-coordinator",
+        "Run Task 19 group-commit coordinator tests (smoke, shutdown, concurrent submit, batch coalescing, error propagation)",
+    );
+    group_commit_step.dependOn(&run_group_commit_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression

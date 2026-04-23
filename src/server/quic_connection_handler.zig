@@ -87,6 +87,7 @@ const node_scan_stream = geode.node_scan_stream;
 const pooled = @import("transport/thread_pool");
 // Issue #444: Import AST cache to wire into parse hot path
 const query_ast_cache = @import("query_ast_cache");
+const group_commit = geode.group_commit;
 // CANARY: REQ=REQ-ABAC-WIRE-012; FEATURE="ABAC Enforcement"; ASPECT=QUICImport; STATUS=TESTED; TEST=src/server/test_abac_enforcement.zig; OWNER=security; UPDATED=2026-01-15
 // GAP-0165: Import geode_auth for SecurityManager type in QUIC connection handling
 const geode_auth = @import("geode_auth");
@@ -285,31 +286,68 @@ fn executeBulkSimpleCreate(
         kvs[i] = .{ .key = prop.key, .value = pv };
     }
 
-    // Acquire per-graph exclusive write lock with the per-request deadline
-    // policy (same as the regular mutation path — Task 16 will introduce
-    // the two-phase split).  Cancelable so a long queue doesn't pin the
-    // worker forever.
     var mut_sample = mutation_timing.begin();
-    const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
-    const deadline = monoNanosNow() + write_lock_timeout_ns;
-    const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
-        if (err == error.Deadline) {
-            log.warn("Write lock acquisition timed out (bulk path)", &.{
-                Attr.string("graph", query_graph_name),
-                Attr.uint("timeout_ns", write_lock_timeout_ns),
-            });
-            try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
-            return;
-        }
-        return err;
-    };
-    mut_sample.markLockAcquired();
 
-    // Perform the write.  Adapter is required; on stores without one we
-    // fall back to the regular executor at dispatch time, so this error
-    // shouldn't fire under the bulk opt-in flag.
+    // Task 19 (2026-04-23): group-commit coordinator path.
+    //
+    // When `GEODE_GROUP_COMMIT=1` is set, route the apply through a
+    // per-graph coordinator thread that batches 16-way concurrent
+    // submits under a single exclusive write-lock acquire + one
+    // statement txn (one WAL fsync per batch instead of per worker).
+    // Falls back to the direct single-phase path when the feature is
+    // off or the adapter is missing (legacy tests).
     const adapter_opt = graph_store.getGlobalAdapter();
-    if (adapter_opt) |adapter| {
+    if (adapter_opt == null) {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        return;
+    }
+    const adapter = adapter_opt.?;
+
+    if (group_commit.isEnabled()) {
+        // Lazily start the coordinator on first mutation against this graph.
+        const coord = group_commit.getOrStartCoordinator(
+            graph_store.global_allocator(),
+            adapter,
+            query_graph_name,
+        ) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+
+        // Submit + wait.  The coordinator thread owns the write lock for
+        // the batch, so we do NOT take `mg.rwlock` here.
+        mut_sample.markLockAcquired();
+        var op = group_commit.ApplyOp{ .bulk_insert_node = .{
+            .labels = node_pattern.labels,
+            .props = kvs,
+            .result = .{},
+        } };
+        _ = coord.submit(&op) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        mut_sample.markExecuteDone();
+        mut_sample.markLockReleased();
+    } else {
+        // Single-phase path: acquire per-graph exclusive write lock with
+        // the per-request deadline policy and apply directly.
+        const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+        const deadline = monoNanosNow() + write_lock_timeout_ns;
+        const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+            if (err == error.Deadline) {
+                log.warn("Write lock acquisition timed out (bulk path)", &.{
+                    Attr.string("graph", query_graph_name),
+                    Attr.uint("timeout_ns", write_lock_timeout_ns),
+                });
+                try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                return;
+            }
+            return err;
+        };
+        mut_sample.markLockAcquired();
+
         const node_id_res = adapter.bulkInsertNode(
             query_graph_name,
             node_pattern.labels,
@@ -322,15 +360,11 @@ fn executeBulkSimpleCreate(
             try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return;
         };
-    } else {
-        graph_store.releaseGraphLock(lock_handle);
-        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
-        return;
-    }
 
-    mut_sample.markExecuteDone();
-    graph_store.releaseGraphLock(lock_handle);
-    mut_sample.markLockReleased();
+        mut_sample.markExecuteDone();
+        graph_store.releaseGraphLock(lock_handle);
+        mut_sample.markLockReleased();
+    }
 
     // Wire response: schema with 0 columns + one page with 0 rows
     // final=true + status 00000 — identical to the regular executor
@@ -541,62 +575,101 @@ fn executeBulkMatchCreateEdge(
     const source_id: u64 = resolved.?.src;
     const target_id: u64 = resolved.?.dst;
 
-    // Phase 2: acquire the per-graph exclusive write lock with the
-    // per-request deadline policy.  Cancelable so a long queue doesn't
-    // pin the worker forever.  The write critical section below is just
-    // the `createEdgeWithGraph` + per-property apply — tens of µs, not
-    // the 60 ms p95 we saw under the old single-phase path.
-    const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
-    const deadline = monoNanosNow() + write_lock_timeout_ns;
-    const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
-        if (err == error.Deadline) {
-            log.warn("Write lock acquisition timed out (bulk edge path)", &.{
-                Attr.string("graph", query_graph_name),
-                Attr.uint("timeout_ns", write_lock_timeout_ns),
-            });
-            try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+    // Phase 2: apply — either via the group-commit coordinator (Task 19,
+    // 2026-04-23) when enabled, or via a direct write-lock acquire.
+    // Both paths go through the same `bulkInsertEdgeWithIds` helper and
+    // preserve the race semantics (delete-between-phases ⇒
+    // `Source/TargetNodeNotFound` ⇒ silent skip).
+    if (group_commit.isEnabled()) {
+        const coord = group_commit.getOrStartCoordinator(
+            graph_store.global_allocator(),
+            adapter,
+            query_graph_name,
+        ) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
             return;
-        }
-        return err;
-    };
-    mut_sample.markLockAcquired();
+        };
+        mut_sample.markLockAcquired();
 
-    const edge_id_res = adapter.bulkInsertEdgeWithIds(
-        query_graph_name,
-        source_id,
-        target_id,
-        spec.rel_type,
-        kvs,
-        null,
-    );
-    _ = edge_id_res catch |err| {
+        var op = group_commit.ApplyOp{ .bulk_insert_edge = .{
+            .source_id = source_id,
+            .target_id = target_id,
+            .rel_type = spec.rel_type,
+            .props = kvs,
+            .result = .{},
+        } };
+        _ = coord.submit(&op) catch |err| {
+            switch (err) {
+                error.SourceNodeNotFound, error.TargetNodeNotFound => {
+                    try sendBulkEdgeSuccessResponse(gpa, stream);
+                    mut_sample.record("bulk_match_create_edge_skipped_race");
+                    auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
+                    syncGraphFromSession(state);
+                    updateTxnStateFromProgram(state, program);
+                    return;
+                },
+                else => {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                },
+            }
+        };
+        mut_sample.markExecuteDone();
+        mut_sample.markLockReleased();
+    } else {
+        // Single-phase path: acquire the per-graph exclusive write lock
+        // with the per-request deadline policy.  Cancelable so a long
+        // queue doesn't pin the worker forever.  The write critical
+        // section below is just the `createEdgeWithGraph` + per-property
+        // apply — tens of µs.
+        const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+        const deadline = monoNanosNow() + write_lock_timeout_ns;
+        const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+            if (err == error.Deadline) {
+                log.warn("Write lock acquisition timed out (bulk edge path)", &.{
+                    Attr.string("graph", query_graph_name),
+                    Attr.uint("timeout_ns", write_lock_timeout_ns),
+                });
+                try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                return;
+            }
+            return err;
+        };
+        mut_sample.markLockAcquired();
+
+        const edge_id_res = adapter.bulkInsertEdgeWithIds(
+            query_graph_name,
+            source_id,
+            target_id,
+            spec.rel_type,
+            kvs,
+            null,
+        );
+        _ = edge_id_res catch |err| {
+            graph_store.releaseGraphLock(lock_handle);
+            switch (err) {
+                error.SourceNodeNotFound, error.TargetNodeNotFound => {
+                    try sendBulkEdgeSuccessResponse(gpa, stream);
+                    mut_sample.record("bulk_match_create_edge_skipped_race");
+                    auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
+                    syncGraphFromSession(state);
+                    updateTxnStateFromProgram(state, program);
+                    return;
+                },
+                else => {
+                    const info = proto_util.mapError(err);
+                    try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                    return;
+                },
+            }
+        };
+
+        mut_sample.markExecuteDone();
         graph_store.releaseGraphLock(lock_handle);
-        // Race semantics (2026-04-23): if another writer deleted an
-        // endpoint between our Phase-1 read-lock release and Phase-2
-        // write-lock acquire, `bulkInsertEdgeWithIds` re-checks under
-        // the write lock and returns SourceNodeNotFound/TargetNodeNotFound.
-        // Treat identically to the Phase-1 orphan case: send a 0-rows
-        // success so msft-graph-style ingests don't abort their batch.
-        switch (err) {
-            error.SourceNodeNotFound, error.TargetNodeNotFound => {
-                try sendBulkEdgeSuccessResponse(gpa, stream);
-                mut_sample.record("bulk_match_create_edge_skipped_race");
-                auditQueryExecution(state, "bulk_match_create_edge_skipped_race", true);
-                syncGraphFromSession(state);
-                updateTxnStateFromProgram(state, program);
-                return;
-            },
-            else => {
-                const info = proto_util.mapError(err);
-                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-                return;
-            },
-        }
-    };
-
-    mut_sample.markExecuteDone();
-    graph_store.releaseGraphLock(lock_handle);
-    mut_sample.markLockReleased();
+        mut_sample.markLockReleased();
+    }
 
     // Wire response: identical shape to `executeBulkSimpleCreate` — schema
     // with 0 columns + one page with 0 rows final=true + status 00000 —
@@ -712,43 +785,72 @@ fn executeBulkSimpleMerge(
     }
 
     if (!found_in_phase1) {
-        // Phase 2: exclusive write lock for the insert.  `bulkMergeNode`
-        // re-probes the index inside the write critical section so a
-        // concurrent writer that won the Phase 1 race is detected and
-        // we return their id without double-inserting.
-        const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
-        const deadline = monoNanosNow() + write_lock_timeout_ns;
-        const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
-            if (err == error.Deadline) {
-                log.warn("Write lock acquisition timed out (bulk merge path)", &.{
-                    Attr.string("graph", query_graph_name),
-                    Attr.uint("timeout_ns", write_lock_timeout_ns),
-                });
-                try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+        // Phase 2: apply — either via the group-commit coordinator (Task 19,
+        // 2026-04-23) or direct write-lock acquire.  `bulkMergeNode`
+        // re-probes the index inside the write critical section in both
+        // paths so a concurrent writer that won the Phase 1 race is
+        // detected and we return their id without double-inserting.
+        if (group_commit.isEnabled()) {
+            const coord = group_commit.getOrStartCoordinator(
+                graph_store.global_allocator(),
+                adapter,
+                query_graph_name,
+            ) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                 return;
-            }
-            return err;
-        };
-        mut_sample.markLockAcquired();
+            };
+            mut_sample.markLockAcquired();
 
-        const node_id_res = adapter.bulkMergeNode(
-            query_graph_name,
-            spec.label,
-            spec.merge_key,
-            merge_value_pv,
-            kvs,
-            null,
-        );
-        _ = node_id_res catch |err| {
+            var op = group_commit.ApplyOp{ .bulk_merge_node = .{
+                .label = spec.label,
+                .merge_key = spec.merge_key,
+                .merge_value = merge_value_pv,
+                .on_create_props = kvs,
+                .result = .{},
+            } };
+            _ = coord.submit(&op) catch |err| {
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
+            mut_sample.markExecuteDone();
+            mut_sample.markLockReleased();
+        } else {
+            const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
+            const deadline = monoNanosNow() + write_lock_timeout_ns;
+            const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
+                if (err == error.Deadline) {
+                    log.warn("Write lock acquisition timed out (bulk merge path)", &.{
+                        Attr.string("graph", query_graph_name),
+                        Attr.uint("timeout_ns", write_lock_timeout_ns),
+                    });
+                    try sendExecuteError(gpa, stream, "40001", "Write lock acquisition timed out", &.{}, &.{});
+                    return;
+                }
+                return err;
+            };
+            mut_sample.markLockAcquired();
+
+            const node_id_res = adapter.bulkMergeNode(
+                query_graph_name,
+                spec.label,
+                spec.merge_key,
+                merge_value_pv,
+                kvs,
+                null,
+            );
+            _ = node_id_res catch |err| {
+                graph_store.releaseGraphLock(lock_handle);
+                const info = proto_util.mapError(err);
+                try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+                return;
+            };
+
+            mut_sample.markExecuteDone();
             graph_store.releaseGraphLock(lock_handle);
-            const info = proto_util.mapError(err);
-            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
-        };
-
-        mut_sample.markExecuteDone();
-        graph_store.releaseGraphLock(lock_handle);
-        mut_sample.markLockReleased();
+            mut_sample.markLockReleased();
+        }
     } else {
         // Phase 1 hit: the merge id is already in the store.  ON MATCH
         // is a no-op (detector rejected `ON MATCH SET`), so there is
@@ -2006,23 +2108,36 @@ pub fn handleQuicConnection(
 }
 
 /// Resolve the audit logger for the current query context.
-/// Prefers the per-graph audit logger colocated with the graph's data directory;
-/// falls back to the global audit logger when the per-graph logger is unavailable
-/// or the current graph is unknown.
+///
+/// Returns the per-graph audit logger iff the graph has auditing
+/// explicitly enabled (i.e. `StorageAdapter.getAuditLogger(graph_name)`
+/// returned a non-null logger during graph init).  Returns null when
+/// the graph has no per-graph logger — the global fallback is
+/// intentionally removed so audit ONLY fires when the specific graph
+/// has opted in (user requirement, 2026-04-23).
+///
+/// Rationale: under 16-way ingest workloads, a global-fallback audit
+/// would emit one event per mutation across every graph the server
+/// hosts, producing tens of thousands of useless events/sec on graphs
+/// the operator never configured for auditing.  Opt-in per graph
+/// aligns audit with the other per-graph security features (FLE, TDE,
+/// KMS) and drops a measurable write-path overhead on the msft-graph
+/// hot path.
 fn resolveAuditLogger(state: *const ServerState) ?*audit_mod.AuditLogger {
     const graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-    if (graph_store.getGlobalAdapter()) |adapter| {
-        if (adapter.getAuditLogger(graph_name)) |al| return al;
-    }
-    // Fallback to global audit logger.
-    audit_mod.global_audit_logger_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer audit_mod.global_audit_logger_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-    return audit_mod.global_audit_logger;
+    const adapter = graph_store.getGlobalAdapter() orelse return null;
+    return adapter.getAuditLogger(graph_name);
 }
 
-/// Log a query execution audit event to the resolved (per-graph or global) logger.
-/// The per-thread tenant_id is already set earlier in the request flow via
-/// `audit_mod.setCurrentAuditTenantId`, so we do not pass it explicitly here.
+/// Log a query execution audit event — only when the specific graph has
+/// auditing enabled (see `resolveAuditLogger`).  Returns before any
+/// allocation / clock / event-building work when the graph has no
+/// per-graph audit logger, which is the common case on non-security
+/// graphs under the msft-graph ingest workload.
+///
+/// The per-thread tenant_id is already set earlier in the request flow
+/// via `audit_mod.setCurrentAuditTenantId`, so we do not pass it
+/// explicitly here.
 fn auditQueryExecution(state: *const ServerState, query_text: []const u8, is_mutation: bool) void {
     const logger = resolveAuditLogger(state) orelse return;
     const event_type: audit_mod.AuditEventType = if (is_mutation) .data_modification else .data_access;
