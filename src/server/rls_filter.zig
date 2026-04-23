@@ -527,19 +527,19 @@ test "RLSFilterEngine: hasPoliciesForGraph per-graph fast path" {
 
     // Empty engine → no graph has policies.
     try std.testing.expect(!engine.hasPoliciesForGraph("default"));
-    try std.testing.expect(!engine.hasPoliciesForGraph("abs_eagleg"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("graph_a"));
 
-    try engine.addDenyPolicy("abs_eagleg", "Secret", "alice");
+    try engine.addDenyPolicy("graph_a", "Secret", "alice");
 
-    // Only abs_eagleg now has a policy — default must still short-circuit.
-    try std.testing.expect(engine.hasPoliciesForGraph("abs_eagleg"));
+    // Only graph_a now has a policy — default must still short-circuit.
+    try std.testing.expect(engine.hasPoliciesForGraph("graph_a"));
     try std.testing.expect(!engine.hasPoliciesForGraph("default"));
-    try std.testing.expect(!engine.hasPoliciesForGraph("__geode_security"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("graph_b"));
 
     // Second policy on different graph — both hit, others still miss.
-    try engine.addDenyPolicy("__geode_security", "PII", "");
-    try std.testing.expect(engine.hasPoliciesForGraph("abs_eagleg"));
-    try std.testing.expect(engine.hasPoliciesForGraph("__geode_security"));
+    try engine.addDenyPolicy("graph_b", "PII", "");
+    try std.testing.expect(engine.hasPoliciesForGraph("graph_a"));
+    try std.testing.expect(engine.hasPoliciesForGraph("graph_b"));
     try std.testing.expect(!engine.hasPoliciesForGraph("default"));
 }
 

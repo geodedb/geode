@@ -130,9 +130,9 @@ test "bulkInsertEdge creates edge between existing endpoints" {
     // Seed two endpoint nodes via MERGE (creates + indexes them through
     // the full executor).  Bulk path will then resolve them by
     // (label, node_id) via the merge-prop index.
-    var r1 = try h.runQuery("MERGE (n:User {node_id: 'user-alice'})");
+    var r1 = try h.runQuery("MERGE (n:Widget {node_id: 'widget-alpha'})");
     r1.deinit(testing.allocator);
-    var r2 = try h.runQuery("MERGE (n:Device {node_id: 'device-laptop'})");
+    var r2 = try h.runQuery("MERGE (n:Gadget {node_id: 'gadget-one'})");
     r2.deinit(testing.allocator);
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
@@ -142,28 +142,28 @@ test "bulkInsertEdge creates edge between existing endpoints" {
     };
     const edge_id = try adapter.bulkInsertEdge(
         "default",
-        "User",
-        .{ .String = "user-alice" },
+        "Widget",
+        .{ .String = "widget-alpha" },
         "node_id",
-        "Device",
-        .{ .String = "device-laptop" },
+        "Gadget",
+        .{ .String = "gadget-one" },
         "node_id",
-        "OWNS",
+        "LINKS_TO",
         &eprops,
         null,
     );
     try testing.expect(edge_id != 0);
 
     const store = graph_store.getGlobalStore(testing.allocator);
-    const src = findNodeByProperty(store, "node_id", "user-alice") orelse
+    const src = findNodeByProperty(store, "node_id", "widget-alpha") orelse
         return error.SourceNodeMissing;
-    const dst = findNodeByProperty(store, "node_id", "device-laptop") orelse
+    const dst = findNodeByProperty(store, "node_id", "gadget-one") orelse
         return error.TargetNodeMissing;
 
-    const edge = findEdgeBetween(store, src.id, dst.id, "OWNS") orelse
+    const edge = findEdgeBetween(store, src.id, dst.id, "LINKS_TO") orelse
         return error.EdgeMissing;
     try testing.expectEqual(edge_id, edge.id);
-    try testing.expectEqualStrings("OWNS", edge.label);
+    try testing.expectEqualStrings("LINKS_TO", edge.label);
 
     const since_prop = edge.properties.get("since") orelse return error.MissingSince;
     try testing.expectEqualStrings("2020", since_prop.String);
@@ -180,19 +180,19 @@ test "bulkInsertEdge parity with executor path — labels/props/direction" {
     defer h.deinit();
 
     // Seed four endpoint nodes — two pairs, one per path.
-    var r1 = try h.runQuery("MERGE (n:User {node_id: 'exec-src'})");
+    var r1 = try h.runQuery("MERGE (n:Widget {node_id: 'exec-src'})");
     r1.deinit(testing.allocator);
-    var r2 = try h.runQuery("MERGE (n:Device {node_id: 'exec-dst'})");
+    var r2 = try h.runQuery("MERGE (n:Gadget {node_id: 'exec-dst'})");
     r2.deinit(testing.allocator);
-    var r3 = try h.runQuery("MERGE (n:User {node_id: 'bulk-src'})");
+    var r3 = try h.runQuery("MERGE (n:Widget {node_id: 'bulk-src'})");
     r3.deinit(testing.allocator);
-    var r4 = try h.runQuery("MERGE (n:Device {node_id: 'bulk-dst'})");
+    var r4 = try h.runQuery("MERGE (n:Gadget {node_id: 'bulk-dst'})");
     r4.deinit(testing.allocator);
 
     // Path A: executor.
     var exec_r = try h.runQuery(
-        "MATCH (a:User {node_id: 'exec-src'}), (b:Device {node_id: 'exec-dst'}) " ++
-            "CREATE (a)-[:OWNS {since: '2020'}]->(b)",
+        "MATCH (a:Widget {node_id: 'exec-src'}), (b:Gadget {node_id: 'exec-dst'}) " ++
+            "CREATE (a)-[:LINKS_TO {since: '2020'}]->(b)",
     );
     exec_r.deinit(testing.allocator);
 
@@ -203,13 +203,13 @@ test "bulkInsertEdge parity with executor path — labels/props/direction" {
     };
     _ = try adapter.bulkInsertEdge(
         "default",
-        "User",
+        "Widget",
         .{ .String = "bulk-src" },
         "node_id",
-        "Device",
+        "Gadget",
         .{ .String = "bulk-dst" },
         "node_id",
-        "OWNS",
+        "LINKS_TO",
         &bulk_props,
         null,
     );
@@ -221,14 +221,14 @@ test "bulkInsertEdge parity with executor path — labels/props/direction" {
     const bulk_src = findNodeByProperty(store, "node_id", "bulk-src") orelse return error.BulkSrcMissing;
     const bulk_dst = findNodeByProperty(store, "node_id", "bulk-dst") orelse return error.BulkDstMissing;
 
-    const exec_edge = findEdgeBetween(store, exec_src.id, exec_dst.id, "OWNS") orelse
+    const exec_edge = findEdgeBetween(store, exec_src.id, exec_dst.id, "LINKS_TO") orelse
         return error.ExecEdgeMissing;
-    const bulk_edge = findEdgeBetween(store, bulk_src.id, bulk_dst.id, "OWNS") orelse
+    const bulk_edge = findEdgeBetween(store, bulk_src.id, bulk_dst.id, "LINKS_TO") orelse
         return error.BulkEdgeMissing;
 
     // Labels identical.
-    try testing.expectEqualStrings("OWNS", exec_edge.label);
-    try testing.expectEqualStrings("OWNS", bulk_edge.label);
+    try testing.expectEqualStrings("LINKS_TO", exec_edge.label);
+    try testing.expectEqualStrings("LINKS_TO", bulk_edge.label);
 
     // Property parity: both must have `since = '2020'`.
     const exec_since = exec_edge.properties.get("since") orelse return error.ExecMissingSince;
@@ -252,7 +252,7 @@ test "bulkInsertEdge returns SourceNodeNotFound when source is missing" {
     defer h.deinit();
 
     // Only seed the target — source is absent.
-    var r = try h.runQuery("MERGE (n:Device {node_id: 'only-target'})");
+    var r = try h.runQuery("MERGE (n:Gadget {node_id: 'only-target'})");
     r.deinit(testing.allocator);
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -262,13 +262,13 @@ test "bulkInsertEdge returns SourceNodeNotFound when source is missing" {
     var eprops = [_]adapter_mod.StorageAdapter.PropKV{};
     const res = adapter.bulkInsertEdge(
         "default",
-        "User",
+        "Widget",
         .{ .String = "missing-user" },
         "node_id",
-        "Device",
+        "Gadget",
         .{ .String = "only-target" },
         "node_id",
-        "OWNS",
+        "LINKS_TO",
         &eprops,
         null,
     );
@@ -284,7 +284,7 @@ test "bulkInsertEdge returns TargetNodeNotFound when target is missing" {
     defer h.deinit();
 
     // Only seed the source.
-    var r = try h.runQuery("MERGE (n:User {node_id: 'only-source'})");
+    var r = try h.runQuery("MERGE (n:Widget {node_id: 'only-source'})");
     r.deinit(testing.allocator);
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -294,13 +294,13 @@ test "bulkInsertEdge returns TargetNodeNotFound when target is missing" {
     var eprops = [_]adapter_mod.StorageAdapter.PropKV{};
     const res = adapter.bulkInsertEdge(
         "default",
-        "User",
+        "Widget",
         .{ .String = "only-source" },
         "node_id",
-        "Device",
+        "Gadget",
         .{ .String = "missing-device" },
         "node_id",
-        "OWNS",
+        "LINKS_TO",
         &eprops,
         null,
     );

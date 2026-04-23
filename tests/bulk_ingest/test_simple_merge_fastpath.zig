@@ -121,23 +121,23 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
     // First call: fresh insert.
     const first_id = try adapter.bulkMergeNode(
         "default",
-        "User",
+        "Widget",
         "node_id",
         .{ .String = "alpha" },
         &.{
-            .{ .key = "name", .value = .{ .String = "Alice" } },
+            .{ .key = "name", .value = .{ .String = "alpha" } },
         },
         null,
     );
 
     const store = graph_store.getGlobalStore(testing.allocator);
-    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
+    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
 
     // Second call with the same merge key: MUST return the same id and
     // must NOT grow the label-posting list.
     const second_id = try adapter.bulkMergeNode(
         "default",
-        "User",
+        "Widget",
         "node_id",
         .{ .String = "alpha" },
         &.{
@@ -147,12 +147,12 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
         null,
     );
     try testing.expectEqual(first_id, second_id);
-    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
+    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
 
     // On-match is a no-op: the name stays as it was on first insert.
     const node = store.nodes.getPtr(first_id) orelse return error.NodeMissing;
     const name_pv = node.properties.get("name") orelse return error.MissingName;
-    try testing.expectEqualStrings("Alice", name_pv.String);
+    try testing.expectEqualStrings("alpha", name_pv.String);
 }
 
 // ----------------------------------------------------------------------
@@ -166,11 +166,11 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
     const node_id = try adapter.bulkMergeNode(
         "default",
-        "User",
+        "Widget",
         "node_id",
         .{ .String = "beta" },
         &.{
-            .{ .key = "name", .value = .{ .String = "Alice" } },
+            .{ .key = "name", .value = .{ .String = "alpha" } },
             .{ .key = "email", .value = .{ .String = "a@b.c" } },
             .{ .key = "age", .value = .{ .Int = 30 } },
         },
@@ -182,7 +182,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
 
     // Label exists.
     try testing.expectEqual(@as(usize, 1), node.labels.len);
-    try testing.expectEqualStrings("User", node.labels[0]);
+    try testing.expectEqualStrings("Widget", node.labels[0]);
 
     // Merge key was written as a node property.
     const node_id_prop = node.properties.get("node_id") orelse return error.MissingNodeId;
@@ -190,7 +190,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
 
     // All ON CREATE SET values landed.
     const name_prop = node.properties.get("name") orelse return error.MissingName;
-    try testing.expectEqualStrings("Alice", name_prop.String);
+    try testing.expectEqualStrings("alpha", name_prop.String);
     const email_prop = node.properties.get("email") orelse return error.MissingEmail;
     try testing.expectEqualStrings("a@b.c", email_prop.String);
     const age_prop = node.properties.get("age") orelse return error.MissingAge;
@@ -200,7 +200,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
     try testing.expect(store.isDirty());
 
     // Label posting has exactly one entry.
-    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
+    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
 }
 
 // ----------------------------------------------------------------------
@@ -214,7 +214,7 @@ test "bulkMergeNode parity with executor path" {
 
     // Path A: executor path.
     var r = try h.runQuery(
-        "MERGE (n:User {node_id: 'exec-abc'}) ON CREATE SET n.name = 'Alice', n.age = 30",
+        "MERGE (n:Widget {node_id: 'exec-abc'}) ON CREATE SET n.name = 'alpha', n.age = 30",
     );
     r.deinit(testing.allocator);
 
@@ -222,11 +222,11 @@ test "bulkMergeNode parity with executor path" {
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
     _ = try adapter.bulkMergeNode(
         "default",
-        "User",
+        "Widget",
         "node_id",
         .{ .String = "bulk-xyz" },
         &.{
-            .{ .key = "name", .value = .{ .String = "Alice" } },
+            .{ .key = "name", .value = .{ .String = "alpha" } },
             .{ .key = "age", .value = .{ .Int = 30 } },
         },
         null,
@@ -241,8 +241,8 @@ test "bulkMergeNode parity with executor path" {
     // Labels identical.
     try testing.expectEqual(@as(usize, 1), exec_node.labels.len);
     try testing.expectEqual(@as(usize, 1), bulk_node.labels.len);
-    try testing.expectEqualStrings("User", exec_node.labels[0]);
-    try testing.expectEqualStrings("User", bulk_node.labels[0]);
+    try testing.expectEqualStrings("Widget", exec_node.labels[0]);
+    try testing.expectEqualStrings("Widget", bulk_node.labels[0]);
 
     // Properties identical.
     const exec_name = exec_node.properties.get("name") orelse return error.MissingExecName;
@@ -253,8 +253,8 @@ test "bulkMergeNode parity with executor path" {
     const bulk_age = bulk_node.properties.get("age") orelse return error.MissingBulkAge;
     try testing.expectEqual(exec_age.Int, bulk_age.Int);
 
-    // Both nodes are indexed under the "User" label.
-    try testing.expectEqual(@as(usize, 2), labelPostingLen(store, "default", "User"));
+    // Both nodes are indexed under the "Widget" label.
+    try testing.expectEqual(@as(usize, 2), labelPostingLen(store, "default", "Widget"));
 }
 
 // ----------------------------------------------------------------------

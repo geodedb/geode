@@ -19,7 +19,7 @@ const bulk_ingest = geode.bulk_ingest;
 
 test "detects simple CREATE with single string property" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {node_id: 'abc-123'})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {node_id: 'abc-123'})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.simple_node_create,
@@ -30,7 +30,7 @@ test "detects simple CREATE with single string property" {
 test "detects simple CREATE with multiple scalar properties" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "CREATE (n:User {node_id: 'abc-123', name: 'Alice', age: 30, active: true})",
+        "CREATE (n:Widget {node_id: 'abc-123', name: 'alpha', age: 30, active: true})",
         allocator,
     );
     defer pr.deinit();
@@ -42,7 +42,7 @@ test "detects simple CREATE with multiple scalar properties" {
 
 test "detects simple CREATE with no properties (label only)" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User)", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget)", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.simple_node_create,
@@ -52,7 +52,7 @@ test "detects simple CREATE with no properties (label only)" {
 
 test "detects simple CREATE with a parameter-valued property" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {node_id: $node_id})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {node_id: $node_id})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.simple_node_create,
@@ -62,7 +62,7 @@ test "detects simple CREATE with a parameter-valued property" {
 
 test "detects simple CREATE with anonymous node pattern" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (:User {node_id: 'abc-123'})", allocator);
+    var pr = try geode.parseGql("CREATE (:Widget {node_id: 'abc-123'})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.simple_node_create,
@@ -76,7 +76,7 @@ test "detects simple CREATE with anonymous node pattern" {
 
 test "rejects CREATE with RETURN clause" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {node_id: 'abc-123'}) RETURN n", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {node_id: 'abc-123'}) RETURN n", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -86,7 +86,7 @@ test "rejects CREATE with RETURN clause" {
 
 test "rejects CREATE with arithmetic expression property value" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {node_id: 1 + 2})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {node_id: 1 + 2})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -96,7 +96,7 @@ test "rejects CREATE with arithmetic expression property value" {
 
 test "rejects CREATE with function-call property value" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {node_id: toString(42)})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {node_id: toString(42)})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -106,7 +106,7 @@ test "rejects CREATE with function-call property value" {
 
 test "rejects CREATE with list-literal property value" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User {tags: ['a', 'b']})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget {tags: ['a', 'b']})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -116,7 +116,7 @@ test "rejects CREATE with list-literal property value" {
 
 test "rejects CREATE with two node patterns" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (a:User), (b:Device)", allocator);
+    var pr = try geode.parseGql("CREATE (a:Widget), (b:Gadget)", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -127,7 +127,7 @@ test "rejects CREATE with two node patterns" {
 test "rejects CREATE with relationship hop (two-node path)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "CREATE (a:User {id: 1})-[:KNOWS]->(b:User {id: 2})",
+        "CREATE (a:Widget {id: 1})-[:LINKS_TO]->(b:Widget {id: 2})",
         allocator,
     );
     defer pr.deinit();
@@ -139,7 +139,7 @@ test "rejects CREATE with relationship hop (two-node path)" {
 
 test "rejects CREATE with two labels on the node" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("CREATE (n:User:Admin {node_id: 'abc'})", allocator);
+    var pr = try geode.parseGql("CREATE (n:Widget:Elite {node_id: 'abc'})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -154,7 +154,7 @@ test "rejects CREATE with two labels on the node" {
 
 test "detects simple MERGE with single merge key and no ON CREATE SET" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("MERGE (n:User {node_id: 'abc'})", allocator);
+    var pr = try geode.parseGql("MERGE (n:Widget {node_id: 'abc'})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.simple_node_merge,
@@ -162,7 +162,7 @@ test "detects simple MERGE with single merge key and no ON CREATE SET" {
     );
     const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
         return error.SpecExpected;
-    try testing.expectEqualStrings("User", spec.label);
+    try testing.expectEqualStrings("Widget", spec.label);
     try testing.expectEqualStrings("node_id", spec.merge_key);
     try testing.expectEqual(@as(usize, 0), spec.on_create_props.len);
 }
@@ -170,7 +170,7 @@ test "detects simple MERGE with single merge key and no ON CREATE SET" {
 test "detects simple MERGE with ON CREATE SET scalar properties" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MERGE (n:User {node_id: 'abc'}) ON CREATE SET n.name = 'Alice', n.email = 'a@b.c'",
+        "MERGE (n:Widget {node_id: 'abc'}) ON CREATE SET n.name = 'alpha', n.email = 'a@b.c'",
         allocator,
     );
     defer pr.deinit();
@@ -180,7 +180,7 @@ test "detects simple MERGE with ON CREATE SET scalar properties" {
     );
     const spec = bulk_ingest.matchSimpleNodeMergeSpec(&pr.program) orelse
         return error.SpecExpected;
-    try testing.expectEqualStrings("User", spec.label);
+    try testing.expectEqualStrings("Widget", spec.label);
     try testing.expectEqualStrings("node_id", spec.merge_key);
     try testing.expectEqual(@as(usize, 2), spec.on_create_props.len);
     try testing.expectEqualStrings("name", spec.on_create_props[0].key);
@@ -190,7 +190,7 @@ test "detects simple MERGE with ON CREATE SET scalar properties" {
 test "detects simple MERGE with parameter merge value and parameter SET" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MERGE (n:User {node_id: $node_id}) ON CREATE SET n.name = $name",
+        "MERGE (n:Widget {node_id: $node_id}) ON CREATE SET n.name = $name",
         allocator,
     );
     defer pr.deinit();
@@ -202,7 +202,7 @@ test "detects simple MERGE with parameter merge value and parameter SET" {
 
 test "rejects MERGE with RETURN clause" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("MERGE (n:User {node_id: 'abc'}) RETURN n", allocator);
+    var pr = try geode.parseGql("MERGE (n:Widget {node_id: 'abc'}) RETURN n", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -213,7 +213,7 @@ test "rejects MERGE with RETURN clause" {
 test "rejects MERGE with ON MATCH SET clause" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MERGE (n:User {node_id: 'abc'}) ON MATCH SET n.updated = 1",
+        "MERGE (n:Widget {node_id: 'abc'}) ON MATCH SET n.updated = 1",
         allocator,
     );
     defer pr.deinit();
@@ -226,7 +226,7 @@ test "rejects MERGE with ON MATCH SET clause" {
 test "rejects MERGE with multi-property filter" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MERGE (n:User {a: 1, b: 2})",
+        "MERGE (n:Widget {a: 1, b: 2})",
         allocator,
     );
     defer pr.deinit();
@@ -238,7 +238,7 @@ test "rejects MERGE with multi-property filter" {
 
 test "rejects MERGE with multi-label node pattern" {
     const allocator = testing.allocator;
-    var pr = try geode.parseGql("MERGE (n:User:Admin {node_id: 'abc'})", allocator);
+    var pr = try geode.parseGql("MERGE (n:Widget:Elite {node_id: 'abc'})", allocator);
     defer pr.deinit();
     try testing.expectEqual(
         bulk_ingest.BulkPattern.none,
@@ -259,7 +259,7 @@ test "rejects MERGE without a label" {
 test "rejects MERGE with ON CREATE SET non-scalar value" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MERGE (n:User {node_id: 'abc'}) ON CREATE SET n.name = toString(42)",
+        "MERGE (n:Widget {node_id: 'abc'}) ON CREATE SET n.name = toString(42)",
         allocator,
     );
     defer pr.deinit();
@@ -276,7 +276,7 @@ test "rejects MERGE with ON CREATE SET non-scalar value" {
 test "detects MATCH+CREATE edge with node_id filters (msft-graph shape)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {node_id: 'abc'}), (b:Device {node_id: 'def'}) CREATE (a)-[:OWNS]->(b)",
+        "MATCH (a:Widget {node_id: 'abc'}), (b:Gadget {node_id: 'def'}) CREATE (a)-[:LINKS_TO]->(b)",
         allocator,
     );
     defer pr.deinit();
@@ -287,20 +287,20 @@ test "detects MATCH+CREATE edge with node_id filters (msft-graph shape)" {
     const spec = bulk_ingest.matchEdgeSpec(&pr.program) orelse
         return error.SpecExpected;
     try testing.expectEqualStrings("a", spec.source.var_name);
-    try testing.expectEqualStrings("User", spec.source.label);
+    try testing.expectEqualStrings("Widget", spec.source.label);
     try testing.expectEqualStrings("node_id", spec.source.filter_key);
     try testing.expectEqualStrings("b", spec.target.var_name);
-    try testing.expectEqualStrings("Device", spec.target.label);
+    try testing.expectEqualStrings("Gadget", spec.target.label);
     try testing.expectEqualStrings("node_id", spec.target.filter_key);
-    try testing.expectEqualStrings("OWNS", spec.rel_type);
+    try testing.expectEqualStrings("LINKS_TO", spec.rel_type);
     try testing.expectEqual(@as(usize, 0), spec.props.len);
 }
 
 test "detects MATCH+CREATE edge with scalar edge properties" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {node_id: 'abc'}), (b:Device {node_id: 'def'}) " ++
-            "CREATE (a)-[:OWNS {since: '2020', weight: 5}]->(b)",
+        "MATCH (a:Widget {node_id: 'abc'}), (b:Gadget {node_id: 'def'}) " ++
+            "CREATE (a)-[:LINKS_TO {since: '2020', weight: 5}]->(b)",
         allocator,
     );
     defer pr.deinit();
@@ -318,7 +318,7 @@ test "detects MATCH+CREATE edge with scalar edge properties" {
 test "MATCH+CREATE edge rejects WHERE clause" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {id: 1}), (b:Device {id: 2}) WHERE a.x = 1 CREATE (a)-[:R]->(b)",
+        "MATCH (a:Widget {id: 1}), (b:Gadget {id: 2}) WHERE a.x = 1 CREATE (a)-[:R]->(b)",
         allocator,
     );
     defer pr.deinit();
@@ -331,7 +331,7 @@ test "MATCH+CREATE edge rejects WHERE clause" {
 test "MATCH+CREATE edge rejects RETURN clause" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {id: 1}), (b:Device {id: 2}) CREATE (a)-[r:R]->(b) RETURN r",
+        "MATCH (a:Widget {id: 1}), (b:Gadget {id: 2}) CREATE (a)-[r:R]->(b) RETURN r",
         allocator,
     );
     defer pr.deinit();
@@ -344,7 +344,7 @@ test "MATCH+CREATE edge rejects RETURN clause" {
 test "MATCH+CREATE edge rejects single-match (CREATE introduces new node)" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {id: 1}) CREATE (a)-[:R]->(b:Other)",
+        "MATCH (a:Widget {id: 1}) CREATE (a)-[:R]->(b:Other)",
         allocator,
     );
     defer pr.deinit();
@@ -357,7 +357,7 @@ test "MATCH+CREATE edge rejects single-match (CREATE introduces new node)" {
 test "MATCH+CREATE edge rejects undirected edge" {
     const allocator = testing.allocator;
     var pr = try geode.parseGql(
-        "MATCH (a:User {id: 1}), (b:Device {id: 2}) CREATE (a)-[:R]-(b)",
+        "MATCH (a:Widget {id: 1}), (b:Gadget {id: 2}) CREATE (a)-[:R]-(b)",
         allocator,
     );
     defer pr.deinit();

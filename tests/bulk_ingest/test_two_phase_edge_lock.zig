@@ -181,13 +181,13 @@ fn concurrentWorker(ctx: *WorkerCtx) !void {
         _ = try twoPhaseInsertEdge(
             ctx.adapter,
             "default",
-            "User",
+            "Widget",
             "node_id",
             .{ .String = "U0" },
-            "Device",
+            "Gadget",
             "node_id",
             .{ .String = dev },
-            "OWNS",
+            "LINKS_TO",
             &props,
         );
         _ = ctx.edges_done.fetchAdd(1, .monotonic);
@@ -200,7 +200,7 @@ test "two-phase lock: 16 threads beat single-thread by >= 4x" {
 
     // Seed one User + 16 Devices via MERGE so the merge-prop index is
     // populated for Phase 1 lookups.
-    var r0 = try h.runQuery("MERGE (n:User {node_id: 'U0'})");
+    var r0 = try h.runQuery("MERGE (n:Widget {node_id: 'U0'})");
     r0.deinit(testing.allocator);
     var device_ids: [thread_count][]u8 = undefined;
     for (0..thread_count) |i| {
@@ -211,7 +211,7 @@ test "two-phase lock: 16 threads beat single-thread by >= 4x" {
     for (device_ids) |dev_id| {
         const q = try std.fmt.allocPrint(
             testing.allocator,
-            "MERGE (n:Device {{node_id: '{s}'}})",
+            "MERGE (n:Gadget {{node_id: '{s}'}})",
             .{dev_id},
         );
         defer testing.allocator.free(q);
@@ -236,10 +236,10 @@ test "two-phase lock: 16 threads beat single-thread by >= 4x" {
                 _ = try twoPhaseInsertEdge(
                     adapter,
                     "default",
-                    "User",
+                    "Widget",
                     "node_id",
                     .{ .String = "U0" },
-                    "Device",
+                    "Gadget",
                     "node_id",
                     .{ .String = device_ids[t] },
                     "BASELINE",
@@ -335,14 +335,14 @@ fn raceWriter(ctx: *RaceCtx) void {
         defer graph_store.releaseGraphLock(read_handle);
         const s = ctx.adapter.lookupNodeByMergeKey(
             graph_name,
-            "User",
+            "Widget",
             "node_id",
             .{ .String = "RaceSrc" },
             error.SourceNodeNotFound,
         ) catch return;
         const t = ctx.adapter.lookupNodeByMergeKey(
             graph_name,
-            "Device",
+            "Gadget",
             "node_id",
             .{ .String = "RaceDst" },
             error.TargetNodeNotFound,
@@ -371,7 +371,7 @@ fn raceWriter(ctx: *RaceCtx) void {
         graph_name,
         source_id,
         target_id,
-        "OWNS",
+        "LINKS_TO",
         &props,
         null,
     );
@@ -387,9 +387,9 @@ test "two-phase lock: target deleted between Phase 1 and Phase 2 yields TargetNo
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
-    var r1 = try h.runQuery("MERGE (n:User {node_id: 'RaceSrc'})");
+    var r1 = try h.runQuery("MERGE (n:Widget {node_id: 'RaceSrc'})");
     r1.deinit(testing.allocator);
-    var r2 = try h.runQuery("MERGE (n:Device {node_id: 'RaceDst'})");
+    var r2 = try h.runQuery("MERGE (n:Gadget {node_id: 'RaceDst'})");
     r2.deinit(testing.allocator);
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -451,13 +451,13 @@ test "two-phase lock: parity with single-phase bulkInsertEdge" {
     defer h.deinit();
 
     // Seed two endpoint pairs, one per path.
-    var r1 = try h.runQuery("MERGE (n:User {node_id: 'sp-src'})");
+    var r1 = try h.runQuery("MERGE (n:Widget {node_id: 'sp-src'})");
     r1.deinit(testing.allocator);
-    var r2 = try h.runQuery("MERGE (n:Device {node_id: 'sp-dst'})");
+    var r2 = try h.runQuery("MERGE (n:Gadget {node_id: 'sp-dst'})");
     r2.deinit(testing.allocator);
-    var r3 = try h.runQuery("MERGE (n:User {node_id: 'tp-src'})");
+    var r3 = try h.runQuery("MERGE (n:Widget {node_id: 'tp-src'})");
     r3.deinit(testing.allocator);
-    var r4 = try h.runQuery("MERGE (n:Device {node_id: 'tp-dst'})");
+    var r4 = try h.runQuery("MERGE (n:Gadget {node_id: 'tp-dst'})");
     r4.deinit(testing.allocator);
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
@@ -475,13 +475,13 @@ test "two-phase lock: parity with single-phase bulkInsertEdge" {
         defer graph_store.releaseGraphLock(h_sp);
         _ = try adapter.bulkInsertEdge(
             "default",
-            "User",
+            "Widget",
             .{ .String = "sp-src" },
             "node_id",
-            "Device",
+            "Gadget",
             .{ .String = "sp-dst" },
             "node_id",
-            "OWNS",
+            "LINKS_TO",
             &sp_props,
             null,
         );
@@ -495,13 +495,13 @@ test "two-phase lock: parity with single-phase bulkInsertEdge" {
     _ = try twoPhaseInsertEdge(
         adapter,
         "default",
-        "User",
+        "Widget",
         "node_id",
         .{ .String = "tp-src" },
-        "Device",
+        "Gadget",
         "node_id",
         .{ .String = "tp-dst" },
-        "OWNS",
+        "LINKS_TO",
         &tp_props,
     );
 

@@ -103,7 +103,7 @@ test "bulkInsertNode parity with executor path — labels + scalar properties" {
 
     // Path A: executor path — full AST traversal, undo log, row materialisation.
     var r = try h.runQuery(
-        "CREATE (n:User {node_id: 'exec-abc', name: 'Alice', age: 30})",
+        "CREATE (n:Widget {node_id: 'exec-abc', name: 'alpha', age: 30})",
     );
     r.deinit(testing.allocator);
 
@@ -111,10 +111,10 @@ test "bulkInsertNode parity with executor path — labels + scalar properties" {
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
     var props = [_]adapter_mod.StorageAdapter.PropKV{
         .{ .key = "node_id", .value = .{ .String = "bulk-xyz" } },
-        .{ .key = "name", .value = .{ .String = "Alice" } },
+        .{ .key = "name", .value = .{ .String = "alpha" } },
         .{ .key = "age", .value = .{ .Int = 30 } },
     };
-    const labels = [_][]const u8{"User"};
+    const labels = [_][]const u8{"Widget"};
     _ = try adapter.bulkInsertNode("default", &labels, &props, null);
 
     // Both nodes must now exist in the in-memory store.
@@ -126,17 +126,17 @@ test "bulkInsertNode parity with executor path — labels + scalar properties" {
     const bulk_node = findNodeByProperty(store, "node_id", "bulk-xyz") orelse
         return error.BulkNodeMissing;
 
-    // Labels identical (exactly one, value "User").
+    // Labels identical (exactly one, value "Widget").
     try testing.expectEqual(@as(usize, 1), exec_node.labels.len);
     try testing.expectEqual(@as(usize, 1), bulk_node.labels.len);
-    try testing.expectEqualStrings("User", exec_node.labels[0]);
-    try testing.expectEqualStrings("User", bulk_node.labels[0]);
+    try testing.expectEqualStrings("Widget", exec_node.labels[0]);
+    try testing.expectEqualStrings("Widget", bulk_node.labels[0]);
 
     // Scalar property parity: `name` (String), `age` (Int).
     const exec_name = exec_node.properties.get("name") orelse return error.MissingName;
     const bulk_name = bulk_node.properties.get("name") orelse return error.MissingName;
-    try testing.expectEqualStrings("Alice", exec_name.String);
-    try testing.expectEqualStrings("Alice", bulk_name.String);
+    try testing.expectEqualStrings("alpha", exec_name.String);
+    try testing.expectEqualStrings("alpha", bulk_name.String);
 
     const exec_age = exec_node.properties.get("age") orelse return error.MissingAge;
     const bulk_age = bulk_node.properties.get("age") orelse return error.MissingAge;
@@ -152,14 +152,14 @@ test "bulkInsertNode creates node with no properties (label-only)" {
     defer h.deinit();
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
-    const labels = [_][]const u8{"Device"};
+    const labels = [_][]const u8{"Gadget"};
     const props: []const adapter_mod.StorageAdapter.PropKV = &.{};
     const id = try adapter.bulkInsertNode("default", &labels, props, null);
 
     const store = graph_store.getGlobalStore(testing.allocator);
     const node = store.nodes.getPtr(id) orelse return error.NodeMissing;
     try testing.expectEqual(@as(usize, 1), node.labels.len);
-    try testing.expectEqualStrings("Device", node.labels[0]);
+    try testing.expectEqualStrings("Gadget", node.labels[0]);
     try testing.expectEqual(@as(u32, 0), node.properties.count());
 }
 
@@ -168,7 +168,7 @@ test "bulkInsertNode repeated calls assign distinct node ids" {
     defer h.deinit();
 
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
-    const labels = [_][]const u8{"User"};
+    const labels = [_][]const u8{"Widget"};
     var props_a = [_]adapter_mod.StorageAdapter.PropKV{.{ .key = "node_id", .value = .{ .String = "a" } }};
     var props_b = [_]adapter_mod.StorageAdapter.PropKV{.{ .key = "node_id", .value = .{ .String = "b" } }};
 
