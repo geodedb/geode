@@ -229,6 +229,10 @@ pub const mutation_timing = @import("server/mutation_timing.zig");
 // Bulk-ingest pattern detection for the msft-graph hot-path CREATE / MATCH+CREATE
 // forms (Task 10 + Task 11 of the enterprise-ingest-throughput plan).
 pub const bulk_ingest = @import("execution/bulk_ingest.zig");
+// Re-exported so the server's bulk fast-path can reach the property codec via
+// the 'geode' module (avoids putting the file in two modules at once — see
+// Zig-0.16 "file exists in modules" error).
+pub const property_value_codec = @import("property_value_codec.zig");
 // Re-export heap for test_integration and other modules
 pub const heap = @import("storage/heap.zig");
 // Re-export catalog for tests
@@ -420,12 +424,21 @@ pub const ParamBindings = struct {
     values: []const eval.Value,
 };
 
-/// Construct an eval.Env from identifier bindings and optional ParamBindings
-pub fn makeEnv(id_names: []const []const u8, id_values: []const eval.Value, params: ?ParamBindings) eval.Env {
+/// Construct an eval.Env from identifier bindings and optional ParamBindings.
+/// Requires an allocator for the Env's memory-management hooks (value_types.Env
+/// added a `.allocator` field for GAP / C4 ownership tracking — see
+/// src/value_types.zig:147).
+pub fn makeEnv(allocator: std.mem.Allocator, id_names: []const []const u8, id_values: []const eval.Value, params: ?ParamBindings) eval.Env {
     if (params) |p| {
-        return .{ .names = id_names, .values = id_values, .param_names = p.names, .param_values = p.values };
+        return .{
+            .names = id_names,
+            .values = id_values,
+            .param_names = p.names,
+            .param_values = p.values,
+            .allocator = allocator,
+        };
     }
-    return .{ .names = id_names, .values = id_values };
+    return .{ .names = id_names, .values = id_values, .allocator = allocator };
 }
 
 /// Server functionality for library mode embedding

@@ -256,12 +256,17 @@ fn executeBulkSimpleCreate(
     // handle those two cases — any other expression variant would have
     // been rejected by `bulk_ingest.isScalarPropExpr`.
     const geode_eval = geode.eval;
-    const property_codec = @import("../property_value_codec.zig");
+    // Import via the `geode` module (not a relative path) so the file
+    // stays in the 'geode' module only — relative imports pull it into
+    // the 'root' module too, which Zig 0.16 rejects with a "file exists
+    // in modules 'root' and 'geode'" error.
+    const property_codec = geode.property_value_codec;
     var eval_arena = std.heap.ArenaAllocator.init(gpa);
     defer eval_arena.deinit();
     const eval_allocator = eval_arena.allocator();
 
     const env = geode.makeEnv(
+        eval_allocator,
         &.{},
         &.{},
         .{ .names = ctx.query_param_names, .values = ctx.query_param_values },
