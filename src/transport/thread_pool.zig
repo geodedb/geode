@@ -141,6 +141,16 @@ pub const ThreadPoolConfig = struct {
     /// signal path with zero added latency, but idle workers no longer
     /// burn cycles.
     idle_park_after_ns: u64 = 10_000_000,
+    /// How long `deinit` waits for in-flight tasks to drain before
+    /// giving up and logging a warning.  Upstream default is 30 s —
+    /// way too long for per-connection pools on a server where the
+    /// connection may be torn down between files (see the 30 s/file
+    /// floor discovered on 2026-04-23 under the msft-graph workload).
+    /// Default 2 s here: still enough for any in-flight fast-path
+    /// mutation to complete (those finish in milliseconds post Task
+    /// 16 + Task 19), but short enough that connection teardown
+    /// doesn't stall the next file's worker startup.
+    deinit_timeout_ns: u64 = 2 * std.time.ns_per_s,
 };
 
 /// Thread pool statistics.
@@ -199,6 +209,9 @@ pub const ThreadPool = struct {
             // GAP-0807: raise default idle park from the upstream 250 µs
             // to this caller's config (default 10 ms). See config doc.
             .idle_park_after_ns = config.idle_park_after_ns,
+            // 2026-04-23: propagate the caller's deinit timeout through
+            // to the upstream pool (default 2 s, was 30 s upstream).
+            .deinit_timeout_ns = config.deinit_timeout_ns,
             .allow_blocking_lane = true,
             .blocking_workers = 1,
         });
