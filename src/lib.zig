@@ -141,8 +141,11 @@ pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
 // Task 19: per-graph group-commit coordinator.
 pub const group_commit = @import("storage/group_commit.zig");
 // Graph-sharding Phase 1: N-way sharded HashMap wrapper (foundation for
-// per-shard locking in Phase 2).
-pub const sharded_store = @import("storage/sharded_store.zig");
+// per-shard locking in Phase 2).  Lives in the graph_storage library
+// (v0.2.0+) as a reusable primitive; re-exported here so Geode callers
+// can reach it via `geode.sharded_store` uniformly with the other
+// re-exports.
+pub const sharded_store = @import("graph_storage").sharded_store;
 // Re-export evaluator for expression tests and demos
 pub const eval = @import("eval.zig");
 pub const diagnostics = @import("diagnostics.zig");

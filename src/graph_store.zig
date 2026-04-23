@@ -21,7 +21,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 
 const fle_integration = @import("fle_integration.zig");
 const id_map_mod = @import("storage/id_map.zig");
-const sharded_store = @import("storage/sharded_store.zig");
+const sharded_store = @import("graph_storage").sharded_store;
 const pooled = @import("transport/thread_pool");
 
 // CANARY: REQ=REQ-TDE-GRAPHSTORE-001; FEATURE="TDEFileLevelEncryption"; ASPECT=GraphStorePersistence; STATUS=EXEMPT; OWNER=security; UPDATED=2026-03-28
