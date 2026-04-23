@@ -2001,6 +2001,20 @@ pub fn handleQuicConnection(
         // Queue capacity scales with pool size so bursty clients don't
         // spuriously trip backpressure on a wider pool.
         .queue_capacity = stream_pool_size * 16,
+        // 2026-04-23: the thread-pool default deinit_timeout is 30 s.
+        // msft-graph's per-file reconnect pattern closes the QUIC
+        // connection after each file, which triggers this pool's
+        // `defer stream_pool.deinit()` — and if ANY task is still
+        // active (e.g. a worker parked on the cancelable-write-lock
+        // backoff, or mid-apply in the coordinator), deinit blocks
+        // up to 30 s.  That's the 30 s/file floor we've been
+        // attributing to client-side pipeline overhead.  Post Task 16
+        // + Task 19 + the R2 backoff-tuning commit, every mutation
+        // completes in milliseconds under the exclusive lock, so a
+        // 2 s ceiling is ample — if a task isn't done in 2 s it's
+        // almost certainly stuck on something we'd want to see a
+        // warning about anyway.
+        .deinit_timeout_ns = 2 * std.time.ns_per_s,
     }) catch |err| {
         log.warn("Failed to initialize stream worker pool, single-stream mode", &.{
             Attr.string("error", @errorName(err)),
@@ -2014,6 +2028,10 @@ pub fn handleQuicConnection(
     const acceptor_pool = pooled.ThreadPool.init(gpa, .{
         .num_threads = 1,
         .queue_capacity = 4,
+        // 2 s deinit ceiling for the same reason as stream_pool above
+        // — the connection closes sooner than the 30 s default allows
+        // under msft-graph's per-file reconnect pattern.
+        .deinit_timeout_ns = 2 * std.time.ns_per_s,
     }) catch |err| {
         // If we can't spawn the acceptor, fall back to single-stream mode.
         // The first stream still works fine — just no multiplexing.
