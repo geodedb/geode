@@ -3339,6 +3339,30 @@ pub fn build(b: *std.Build) void {
     const handler_point_read_step = b.step("test-handler-point-read-zero-copy", "Run GAP-0805 handler point-read zero-copy regression tests");
     handler_point_read_step.dependOn(&run_handler_point_read_tests.step);
 
+    // Task 10 (enterprise-ingest-throughput) bulk-ingest pattern detection.
+    // Exercises `bulk_ingest.matchSingleStatement` against the msft-graph
+    // node-file CREATE shapes — asserts that we only fast-path the simple
+    // single-label single-statement CREATE form with scalar property values.
+    const bulk_pattern_test_mod = b.createModule(.{ .root_source_file = b.path("tests/bulk_ingest/test_pattern_detection.zig"), .target = target, .optimize = optimize });
+    bulk_pattern_test_mod.addImport("geode", root_mod);
+    const bulk_pattern_tests = b.addTest(.{ .root_module = bulk_pattern_test_mod });
+    const run_bulk_pattern_tests = b.addRunArtifact(bulk_pattern_tests);
+    test_step.dependOn(&run_bulk_pattern_tests.step);
+    const bulk_pattern_step = b.step("test-bulk-pattern-detection", "Run Task 10 bulk-ingest pattern detection unit tests");
+    bulk_pattern_step.dependOn(&run_bulk_pattern_tests.step);
+
+    // Task 11 (enterprise-ingest-throughput) bulk-ingest simple-CREATE fast
+    // path parity.  Runs `CREATE (:L {k: v, ...})` through both the regular
+    // executor and the `bulkInsertNode` fast path and asserts the GraphStore
+    // ends up with semantically identical node state (labels + properties).
+    const bulk_fastpath_test_mod = b.createModule(.{ .root_source_file = b.path("tests/bulk_ingest/test_simple_create_fastpath.zig"), .target = target, .optimize = optimize });
+    bulk_fastpath_test_mod.addImport("geode", root_mod);
+    const bulk_fastpath_tests = b.addTest(.{ .root_module = bulk_fastpath_test_mod });
+    const run_bulk_fastpath_tests = b.addRunArtifact(bulk_fastpath_tests);
+    test_step.dependOn(&run_bulk_fastpath_tests.step);
+    const bulk_fastpath_step = b.step("test-simple-create-fastpath", "Run Task 11 bulk-ingest simple-CREATE fast-path parity tests");
+    bulk_fastpath_step.dependOn(&run_bulk_fastpath_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression

@@ -226,6 +226,9 @@ pub const explain_payload = @import("server/explain_payload.zig");
 pub const profile_payload = @import("server/profile_payload.zig");
 // Per-mutation wall-clock timing instrumentation (opt-in via GEODE_MUTATION_TIMING_LOG=1).
 pub const mutation_timing = @import("server/mutation_timing.zig");
+// Bulk-ingest pattern detection for the msft-graph hot-path CREATE / MATCH+CREATE
+// forms (Task 10 + Task 11 of the enterprise-ingest-throughput plan).
+pub const bulk_ingest = @import("execution/bulk_ingest.zig");
 // Re-export heap for test_integration and other modules
 pub const heap = @import("storage/heap.zig");
 // Re-export catalog for tests
