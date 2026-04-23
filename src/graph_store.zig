@@ -706,14 +706,14 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.outgoing_edges.deinit();
-        self.outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
+        self.outgoing_edges = sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator) catch @panic("OOM: failed to re-init outgoing_edges during clearNodes");
 
         var in_iter = self.incoming_edges.iterator();
         while (in_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.incoming_edges.deinit();
-        self.incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
+        self.incoming_edges = sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator) catch @panic("OOM: failed to re-init incoming_edges during clearNodes");
 
         // Reset per-graph IdMaps
         var id_map_iter = self.id_maps.iterator();
