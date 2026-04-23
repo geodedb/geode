@@ -132,6 +132,21 @@ pub const RLSFilterEngine = struct {
         defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.policies.items.len;
     }
+
+    /// Return true iff at least one policy applies to `graph`.  Used as
+    /// a fast-path gate: callers skip the filter entirely when this
+    /// graph has no RLS policies attached, avoiding the snapshot /
+    /// row-scan work for the common msft-graph-ingest case where most
+    /// graphs have zero RLS config (user requirement, 2026-04-23).
+    pub fn hasPoliciesForGraph(self: *Self, graph: []const u8) bool {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+        for (self.policies.items) |p| {
+            if (!p.deny) continue;
+            if (std.mem.eql(u8, p.graph, graph)) return true;
+        }
+        return false;
+    }
 };
 
 /// Global singleton — set once at server startup, read by every connection handler.
@@ -162,8 +177,17 @@ pub fn applyRLSFilter(
     username: []const u8,
     graph_name: []const u8,
 ) usize {
-    // Fast path: no policies → nothing to filter.
+    // Fast path: no rows → nothing to filter, even if policies exist.
+    if (result.rows.len == 0) return 0;
+
+    // Fast path: no policies anywhere → nothing to filter.
     if (engine.policyCount() == 0) return 0;
+
+    // Fast path (user requirement 2026-04-23): skip the filter entirely
+    // when this graph has no RLS policies attached.  Avoids the
+    // snapshot allocation + row scan for the common case where most
+    // graphs have zero RLS config.
+    if (!engine.hasPoliciesForGraph(graph_name)) return 0;
 
     // Snapshot denied labels once (single lock acquisition) instead of
     // acquiring the mutex per-label per-row — O(1) lock instead of O(R*L).
@@ -247,6 +271,12 @@ pub fn applyAlgorithmRLSFilter(
 
     // Fast path: no columns or no rows.
     if (result.columns.len == 0 or result.rows.len == 0) return 0;
+
+    // Fast path (user requirement 2026-04-23): skip the filter entirely
+    // when this graph has no RLS policies attached.  Avoids the
+    // snapshot allocation + per-row node lookup for the common case
+    // where most graphs have zero RLS config.
+    if (!engine.hasPoliciesForGraph(graph_name)) return 0;
 
     // Determine which column indices contain nodeIds that must be checked.
     // Algorithm results use "nodeId" in column 0; bridges use "sourceId"/"targetId".
@@ -396,6 +426,10 @@ pub fn applyRLSToFederatedResults(
     // Fast path: no policies configured.
     if (engine.policyCount() == 0) return 0;
 
+    // Fast path (user requirement 2026-04-23): skip when this graph
+    // has no RLS policies attached.
+    if (!engine.hasPoliciesForGraph(graph_name)) return 0;
+
     // Snapshot denied labels once (single lock acquisition).
     var denied = engine.snapshotDeniedLabels(allocator, graph_name, username) catch return 0;
     defer denied.deinit();
@@ -484,6 +518,29 @@ test "RLSFilterEngine: policyCount" {
     try std.testing.expectEqual(@as(usize, 1), engine.policyCount());
     try engine.addDenyPolicy("g1", "L2", "u1");
     try std.testing.expectEqual(@as(usize, 2), engine.policyCount());
+}
+
+test "RLSFilterEngine: hasPoliciesForGraph per-graph fast path" {
+    const allocator = std.testing.allocator;
+    var engine = RLSFilterEngine.init(allocator);
+    defer engine.deinit();
+
+    // Empty engine → no graph has policies.
+    try std.testing.expect(!engine.hasPoliciesForGraph("default"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("abs_eagleg"));
+
+    try engine.addDenyPolicy("abs_eagleg", "Secret", "alice");
+
+    // Only abs_eagleg now has a policy — default must still short-circuit.
+    try std.testing.expect(engine.hasPoliciesForGraph("abs_eagleg"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("default"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("__geode_security"));
+
+    // Second policy on different graph — both hit, others still miss.
+    try engine.addDenyPolicy("__geode_security", "PII", "");
+    try std.testing.expect(engine.hasPoliciesForGraph("abs_eagleg"));
+    try std.testing.expect(engine.hasPoliciesForGraph("__geode_security"));
+    try std.testing.expect(!engine.hasPoliciesForGraph("default"));
 }
 
 test "global RLS filter engine getter/setter" {
