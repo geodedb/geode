@@ -2936,20 +2936,28 @@ pub const StorageAdapter = struct {
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) return mg;
 
-        // R6 (2026-04-22): contended path.  Backoff starts at 1 ms (was
-        // 100 µs) and caps at 20 ms.  Under the 16-worker ingest workload
-        // the old 100 µs starting backoff made every waiter thrash the
-        // rwlock's cache line ~10 000 times/second — 16 × 10k = 160 k
-        // atomic CAS per second across the contention region, enough to
-        // stall forward progress and inflate critical-section duration.
+        // 2026-04-23: contended path.  Starts at 200 µs and caps at 4 ms
+        // (previously 1 ms → 20 ms under R6).  R6's wider ladder was
+        // calibrated for the pre-Task-16 critical section (~60 ms p95,
+        // ~1 s max lock_wait).  Post-Task-16 + Task-19, the write
+        // critical section is <= ~3 ms worst-case (coordinator batch
+        // apply) and typically ~100 µs (single fast-path apply), so the
+        // old 20 ms ceiling leaves every contending worker idle ~15 ms
+        // past the point the lock is free — a 5-10× amplifier we no
+        // longer need.
         //
-        // 1 ms → 20 ms cap still honours the R2 test's 100 ms deadline
-        // (`tests/test_graph_write_lock_cancelable.zig`) — the contender
-        // spins at most ~5 tries (1+2+4+8+16 ≈ 31 ms worst-case) before
-        // falling out on the deadline check.  Real workloads with 30 s
-        // deadlines see orders of magnitude less CPU spent on retries.
-        var sleep_ns: u64 = 1 * std.time.ns_per_ms;
-        const max_sleep_ns: u64 = 20 * std.time.ns_per_ms;
+        // New ladder 200 µs → 400 µs → 800 µs → 1.6 ms → 3.2 ms → cap
+        // at 4 ms.  Worst-case contender sleep before first tryLock
+        // check is 200 µs, well matched to the common ~100 µs apply
+        // window.  R2 test's 100 ms deadline still honoured: contender
+        // spins up to ~100/0.2 = 500 iterations cheaply, far more than
+        // the deadline check granularity requires.  CAS-thrash
+        // concern from R6 (10 k attempts/s/waiter) remains bounded:
+        // 16 × 5 k = 80 k CAS/s at the lower bound — comparable to
+        // the `std.Thread.Mutex` contended path and well inside
+        // cache-line bandwidth limits on any modern x86.
+        var sleep_ns: u64 = 200 * std.time.ns_per_us;
+        const max_sleep_ns: u64 = 4 * std.time.ns_per_ms;
         while (true) {
             const now = monoNanosNow();
             if (now >= deadline_mono_ns) return error.Deadline;

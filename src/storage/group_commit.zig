@@ -119,9 +119,17 @@ pub const GroupCommitCoordinator = struct {
 
     /// Tunable: max ops in a single batch before forcing a lock release +
     /// re-acquire.  Large enough to amortise lock acquire cost across the
-    /// 16-worker fan-in, small enough to bound tail latency of any single
-    /// submitter.
-    pub const max_batch: usize = 32;
+    /// 16-worker fan-in; bounded so a pathologically long queue can't
+    /// starve `stop()` or cause a single submitter's tail latency to run
+    /// away.
+    ///
+    /// 2026-04-23: raised 32 → 256 to absorb msft-graph's full 136-op
+    /// per-worker chunk in a single batch under 16-way fan-in.  Each
+    /// bulk op is ~20 µs of engine-txn work under the exclusive lock,
+    /// so 256 × 20 µs = ~5 ms worst-case batch wall-time — still well
+    /// under the 120 s write-lock deadline and within any reasonable
+    /// tail-latency budget.
+    pub const max_batch: usize = 256;
 
     /// Poll timeout before re-checking `should_stop`.  Short enough that
     /// `stop()` converges within ~1 ms of the signal.
