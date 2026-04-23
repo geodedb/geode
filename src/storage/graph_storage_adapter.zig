@@ -1054,21 +1054,61 @@ pub const StorageAdapter = struct {
         props: []const PropKV,
         txn_id_opt: ?u64,
     ) !u64 {
-        _ = self;
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
+
+        // Match the executor's R8/R9 fsync batching: if a session or
+        // per-statement engine txn is already active on this thread for
+        // `graph_name`, the adapter's `createNode` / `setNodeProperty`
+        // will join it automatically.  Otherwise, open a per-statement
+        // txn so the createNode + N×setNodeProperty sub-ops commit with
+        // ONE WAL fsync instead of N+1.  Without this step the bulk
+        // path regresses vs `executeCreate` because each sub-op would
+        // open its own auto-commit engine txn.
+        var stmt_txn: StatementTxn = undefined;
+        var stmt_txn_open = false;
+        const session_covers = if (sessionEngineTxnGraph()) |g|
+            std.mem.eql(u8, g, graph_name)
+        else
+            false;
+        if (!session_covers and t_current_statement_txn == null) {
+            self.ensureGraphExistsForBulk(graph_name) catch |err| switch (err) {
+                // Graph might not exist yet — fall through to per-sub-op
+                // auto-commit; `createNode` lazily creates the graph.
+                error.GraphNotFound => {},
+                else => return err,
+            };
+            if (self.beginStatementTxn(graph_name, &stmt_txn)) |_| {
+                stmt_txn_open = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        errdefer if (stmt_txn_open) stmt_txn.abort();
 
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const node_id = try store.createNodeWithGraph(labels, graph_name);
 
         // Set properties directly on the store — this writes to both the
-        // adapter (via vtable → setNodeProperty → putPropertyTxn) and the
-        // in-memory map.  The statement / session engine txn batches all
-        // sub-ops into a single WAL fsync (R8/R9).
+        // adapter (via vtable → setNodeProperty → putPropertyTxn) and
+        // the in-memory map.  All sub-ops join the statement / session
+        // engine txn opened above (or pre-existing), so the whole CREATE
+        // commits with a SINGLE WAL fsync.
         for (props) |kv| {
             try store.setNodeProperty(node_id, kv.key, kv.value);
         }
 
+        if (stmt_txn_open) try stmt_txn.commit();
         return node_id;
+    }
+
+    /// Helper for `bulkInsertNode`: ensure the graph engine is registered
+    /// before we call `beginStatementTxn` (which requires an existing
+    /// graph and returns GraphNotFound otherwise).  Returns
+    /// `GraphNotFound` only if `getOrCreateGraph` fails — in the normal
+    /// case it populates the engines map and returns successfully.
+    fn ensureGraphExistsForBulk(self: *StorageAdapter, graph_name: []const u8) !void {
+        _ = try self.getOrCreateGraph(graph_name);
     }
 
     /// Key + value pair accepted by `bulkInsertNode`.  The caller owns both
