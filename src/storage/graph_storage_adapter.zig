@@ -1226,6 +1226,112 @@ pub const StorageAdapter = struct {
         return edge_id;
     }
 
+    /// Task 15/16 (enterprise-ingest-throughput): pure MATCH-side resolver for
+    /// the two-phase lock split on the bulk edge path.
+    ///
+    /// Returns the node id of the single node in `graph_name` that matches
+    /// `(label, prop_key = prop_value)` via the merge-prop index.  On miss,
+    /// returns `missing_err` — the caller passes `error.SourceNodeNotFound`
+    /// or `error.TargetNodeNotFound` to keep wire-level error mapping
+    /// consistent with `bulkInsertEdge`.
+    ///
+    /// This function is a PURE READ: it consults `merge_prop_index.get` +
+    /// `nodes.get` only (see Phase 4 invariants in
+    /// `docs/performance/2026-04-23-enterprise-ingest/phase4-invariants.md`),
+    /// so it is safe to call under `acquireGraphReadLock`.
+    ///
+    /// `.not_indexable` results are mapped to `missing_err` for the same
+    /// reason as `bulkInsertEdge` — the fast path cannot handle
+    /// non-indexable values and must treat them as a not-found for the
+    /// caller's purposes.
+    pub fn lookupNodeByMergeKey(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: graph_store.PropertyValue,
+        missing_err: anyerror,
+    ) !u64 {
+        _ = self;
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+        var id: u64 = undefined;
+        switch (store.lookupMergeCandidate(graph_name, label, prop_key, prop_value, &id)) {
+            .found => return id,
+            .not_found, .not_indexable => return missing_err,
+        }
+    }
+
+    /// Task 15/16 (enterprise-ingest-throughput): write-phase counterpart of
+    /// `bulkInsertEdge` that skips the MATCH lookups.
+    ///
+    /// Caller must have resolved `source_id` + `target_id` via
+    /// `lookupNodeByMergeKey` under a shared read lock BEFORE calling this
+    /// method, and must hold the exclusive per-graph write lock for the
+    /// duration of this call.
+    ///
+    /// Race handling: between the caller's Phase 1 read-lock lookup and
+    /// this Phase 2 write-lock apply, another writer could have deleted one
+    /// of the endpoint nodes.  In that case `createEdgeWithGraph` stores
+    /// the edge record but the adapter-side `nodeSlot` lookup yields null
+    /// and the persisted-edge branch is skipped — the in-memory edge will
+    /// point at a vanished endpoint.  To surface this cleanly, we re-check
+    /// `nodes.get` for both endpoints under the write lock before writing.
+    /// A miss returns `error.SourceNodeNotFound` / `error.TargetNodeNotFound`
+    /// — the same errors the single-phase `bulkInsertEdge` raises for a
+    /// missing endpoint, so callers need no new wire mapping.
+    ///
+    /// Other invariants (undo-log skip, statement-txn batching, in-memory
+    /// index maintenance) match `bulkInsertEdge`.
+    pub fn bulkInsertEdgeWithIds(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        source_id: u64,
+        target_id: u64,
+        rel_type: []const u8,
+        props: []const PropKV,
+        txn_id_opt: ?u64,
+    ) !u64 {
+        _ = txn_id_opt; // thread-local statement-txn slots are source of truth.
+
+        const store = graph_store.getGlobalStore(graph_store.global_allocator());
+
+        // Race re-check: the caller resolved the endpoints under the shared
+        // read lock, then released it before acquiring the write lock we
+        // now hold.  A concurrent writer could have deleted either node in
+        // the gap.  Surface that cleanly before mutating any state.
+        if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
+        if (store.nodes.getPtr(target_id) == null) return error.TargetNodeNotFound;
+
+        // Statement-txn batching: same pattern as `bulkInsertEdge`.
+        var stmt_txn: StatementTxn = undefined;
+        var stmt_txn_open = false;
+        const session_covers = if (sessionEngineTxnGraph()) |g|
+            std.mem.eql(u8, g, graph_name)
+        else
+            false;
+        if (!session_covers and t_current_statement_txn == null) {
+            self.ensureGraphExistsForBulk(graph_name) catch |err| switch (err) {
+                error.GraphNotFound => {},
+                else => return err,
+            };
+            if (self.beginStatementTxn(graph_name, &stmt_txn)) |_| {
+                stmt_txn_open = true;
+            } else |err| switch (err) {
+                error.GraphNotFound, error.NestedStatementTxn => {},
+                else => return err,
+            }
+        }
+        errdefer if (stmt_txn_open) stmt_txn.abort();
+
+        const edge_id = try store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
+        for (props) |kv| {
+            try store.setEdgeProperty(edge_id, kv.key, kv.value);
+        }
+
+        if (stmt_txn_open) try stmt_txn.commit();
+        return edge_id;
+    }
+
     // CANARY: REQ=REQ-PERF-QPS-0815; FEATURE="BatchCreate"; ASPECT=AdapterBulkSlots; STATUS=TESTED; TEST=tests/test_gap0815_deep_bulk_create.zig; OWNER=performance; UPDATED=2026-04-20
     /// Allocate `n` node slots in the given graph + attach the same label set
     /// to each, under a SINGLE adapter mutex acquisition (vs N for N separate

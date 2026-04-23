@@ -377,17 +377,24 @@ fn executeBulkSimpleCreate(
 ///     MATCH (a:L1 {node_id: v1}), (b:L2 {node_id: v2})
 ///     CREATE (a)-[r:T {props}]->(b)
 ///
-/// Writes the edge directly through `adapter.bulkInsertEdge`, skipping
-/// `executeProgramWithContext`, the undo log, RLS filtering, match-pattern
-/// planning, and row materialization.  Sends the same wire response shape
-/// (schema 0 cols + final data page + status 00000) that a no-RETURN
-/// MATCH+CREATE emits from the regular executor.
+/// Writes the edge directly through `adapter.bulkInsertEdgeWithIds`,
+/// skipping `executeProgramWithContext`, the undo log, RLS filtering,
+/// match-pattern planning, and row materialization.  Sends the same wire
+/// response shape (schema 0 cols + final data page + status 00000) that a
+/// no-RETURN MATCH+CREATE emits from the regular executor.
 ///
-/// Lock protocol: takes the per-graph exclusive writer lock for the
-/// duration of the write — matching the existing mutation path in
-/// `processMessage` until Task 16 introduces the two-phase split.  The
-/// session / statement engine txn is joined implicitly via the adapter's
-/// thread-local slots (R8 / R9).
+/// Lock protocol (Task 15/16, 2026-04-23): two-phase split.  The MATCH
+/// endpoint lookups run under a SHARED read lock so 16 concurrent workers
+/// can resolve their source/target node IDs in parallel.  Once both IDs
+/// are captured on the stack, the read lock is released and the exclusive
+/// write lock is acquired for the `createEdgeWithGraph` + per-property
+/// apply step (the write critical section is now ~tens of µs instead of
+/// 60+ ms of lookup-and-apply).  Between the two phases another writer
+/// could delete an endpoint; `bulkInsertEdgeWithIds` re-checks under the
+/// write lock and surfaces `SourceNodeNotFound` / `TargetNodeNotFound` so
+/// the wire response is the same as the single-phase pre-Task-16 path.
+/// The session / statement engine txn is joined implicitly via the
+/// adapter's thread-local slots (R8 / R9).
 fn executeBulkMatchCreateEdge(
     gpa: std.mem.Allocator,
     stream: *quic_transport.QuicStream,
@@ -433,11 +440,53 @@ fn executeBulkMatchCreateEdge(
         kvs[i] = .{ .key = prop.key, .value = pv };
     }
 
-    // Acquire per-graph exclusive write lock with the per-request deadline
-    // policy (same as the regular mutation path — Task 16 will introduce
-    // the two-phase split).  Cancelable so a long queue doesn't pin the
-    // worker forever.
     var mut_sample = mutation_timing.begin();
+
+    const adapter_opt = graph_store.getGlobalAdapter();
+    if (adapter_opt == null) {
+        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        return;
+    }
+    const adapter = adapter_opt.?;
+
+    // Phase 1 (Task 15/16): resolve the two endpoint node IDs under a
+    // SHARED read lock.  `lookupNodeByMergeKey` is a pure HashMap-read
+    // into `merge_prop_index` + `nodes` — safe under a reader lock per
+    // the Phase 4 invariants audit.  16 concurrent workers can run this
+    // step in parallel, which was the whole motivation for the split.
+    const source_id: u64, const target_id: u64 = blk: {
+        const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
+        defer graph_store.releaseGraphLock(read_handle);
+        const s = adapter.lookupNodeByMergeKey(
+            query_graph_name,
+            spec.source.label,
+            spec.source.filter_key,
+            src_filter_pv,
+            error.SourceNodeNotFound,
+        ) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        const t = adapter.lookupNodeByMergeKey(
+            query_graph_name,
+            spec.target.label,
+            spec.target.filter_key,
+            dst_filter_pv,
+            error.TargetNodeNotFound,
+        ) catch |err| {
+            const info = proto_util.mapError(err);
+            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
+            return;
+        };
+        break :blk .{ s, t };
+    };
+
+    // Phase 2: acquire the per-graph exclusive write lock with the
+    // per-request deadline policy.  Cancelable so a long queue doesn't
+    // pin the worker forever.  The write critical section below is just
+    // the `createEdgeWithGraph` + per-property apply — tens of µs, not
+    // the 60 ms p95 we saw under the old single-phase path.
     const write_lock_timeout_ns = mutationWriteLockTimeoutNs(state);
     const deadline = monoNanosNow() + write_lock_timeout_ns;
     const lock_handle = graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline) catch |err| {
@@ -453,31 +502,20 @@ fn executeBulkMatchCreateEdge(
     };
     mut_sample.markLockAcquired();
 
-    const adapter_opt = graph_store.getGlobalAdapter();
-    if (adapter_opt) |adapter| {
-        const edge_id_res = adapter.bulkInsertEdge(
-            query_graph_name,
-            spec.source.label,
-            src_filter_pv,
-            spec.source.filter_key,
-            spec.target.label,
-            dst_filter_pv,
-            spec.target.filter_key,
-            spec.rel_type,
-            kvs,
-            null,
-        );
-        _ = edge_id_res catch |err| {
-            graph_store.releaseGraphLock(lock_handle);
-            const info = proto_util.mapError(err);
-            try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
-            return;
-        };
-    } else {
+    const edge_id_res = adapter.bulkInsertEdgeWithIds(
+        query_graph_name,
+        source_id,
+        target_id,
+        spec.rel_type,
+        kvs,
+        null,
+    );
+    _ = edge_id_res catch |err| {
         graph_store.releaseGraphLock(lock_handle);
-        try sendExecuteError(gpa, stream, "XX000", "bulk fast-path: no adapter registered", &.{}, &.{});
+        const info = proto_util.mapError(err);
+        try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
         return;
-    }
+    };
 
     mut_sample.markExecuteDone();
     graph_store.releaseGraphLock(lock_handle);

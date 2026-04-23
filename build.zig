@@ -3376,6 +3376,25 @@ pub fn build(b: *std.Build) void {
     const match_create_edge_step = b.step("test-match-create-edge-fastpath", "Run Task 12 bulk-ingest MATCH+CREATE edge fast-path parity tests");
     match_create_edge_step.dependOn(&run_match_create_edge_tests.step);
 
+    // Task 15/16 (enterprise-ingest-throughput) two-phase lock for the bulk
+    // MATCH+CREATE edge path.  Validates concurrency (16 workers beat single
+    // thread by ≥ 4×), race safety (delete between Phase 1 + Phase 2 surfaces
+    // TargetNodeNotFound with no partial state), and parity with the
+    // single-phase `bulkInsertEdge` helper.
+    const two_phase_edge_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bulk_ingest/test_two_phase_edge_lock.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    two_phase_edge_test_mod.addImport("geode", root_mod);
+    const two_phase_edge_tests = b.addTest(.{ .root_module = two_phase_edge_test_mod });
+    const run_two_phase_edge_tests = b.addRunArtifact(two_phase_edge_tests);
+    test_step.dependOn(&run_two_phase_edge_tests.step);
+    test_perf_step.dependOn(&run_two_phase_edge_tests.step);
+    const two_phase_edge_step = b.step("test-two-phase-edge-lock", "Run Task 15/16 two-phase lock tests for the bulk MATCH+CREATE edge path");
+    two_phase_edge_step.dependOn(&run_two_phase_edge_tests.step);
+
     // GAP-0754 graph_store global allocator regression:
     // pins the contract that `graph_store.global_allocator()` returns
     // `std.heap.smp_allocator` (per-core, thread-local fast path). A regression
