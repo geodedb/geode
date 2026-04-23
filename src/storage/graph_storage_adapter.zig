@@ -3157,13 +3157,48 @@ pub const StorageAdapter = struct {
         return mg;
     }
 
-    /// Deadline-aware variant of `acquireGraphWriteLock` (R2, 2026-04-22).
-    /// `deadline_mono_ns` is an absolute CLOCK_MONOTONIC-ish nanosecond
-    /// timestamp (caller typically computes `monoNanos() + budget`).
-    /// Returns `error.Deadline` when the lock could not be acquired before
-    /// the deadline.  Internally uses `tryLock` in an exponentially-
-    /// backing-off loop so the caller thread can honour client or
-    /// shutdown timeouts instead of parking forever.
+    /// Deadline-aware variant of `acquireGraphWriteLock`.
+    ///
+    /// History: the original R2 (2026-04-22) implementation used a
+    /// `tryLock` + exponential-backoff spin with a per-request
+    /// deadline.  That was the FUNDAMENTAL root cause of the 48
+    /// chunk-failure cascade on the morning-baseline R13 msft-graph
+    /// run AND the 40001 cascades on every Phase 2 redesign.
+    ///
+    /// The bug: `mg.rwlock.tryLock(io)` on `std.Io.RwLock` never marks
+    /// the writer as pending in `state`.  See
+    /// `std/Io/RwLock.zig:28-40`:
+    ///   if (rl.mutex.tryLock()) {
+    ///     const state = @atomicLoad(...);
+    ///     if (state & reader_mask == 0) { set is_writing; return true; }
+    ///     rl.mutex.unlock(io);
+    ///   }
+    ///   return false;
+    ///
+    /// Readers entering via the fast CAS path
+    /// (`state & (is_writing | writer_mask) == 0`) keep the reader
+    /// count non-zero.  Under the msft-graph edge MATCH+CREATE hot
+    /// path, 16 concurrent workers produce near-continuous SHARED
+    /// acquire/release traffic.  `tryLock` observes a non-zero
+    /// reader count on every retry and fails forever until the
+    /// deadline fires → `error.Deadline` → 40001 surfaced to client
+    /// → serial fallback.
+    ///
+    /// Fix (2026-04-23 evening, Phase 2.4): use the writer-preferred
+    /// `lockUncancelable` path whenever the deadline budget is large
+    /// enough to allow it (> 1 s).  `lockUncancelable` starts with
+    /// `@atomicRmw(&state, .Add, writer, .seq_cst)` (see
+    /// `std/Io/RwLock.zig:42-49`) which marks writer pending;
+    /// subsequent reader acquires go through the slow mutex path,
+    /// yielding to the writer.
+    ///
+    /// For callers with genuinely tight deadlines (< 1 s), preserve
+    /// the old `tryLock` spin behaviour so fail-fast semantics still
+    /// work — these callers explicitly asked for a short timeout.
+    ///
+    /// In practice all current callers pass 120 s, so they always
+    /// route through the writer-preferred path and never observe
+    /// `error.Deadline` under the msft-graph workload.
     pub fn acquireGraphWriteLockCancelable(
         self: *StorageAdapter,
         graph_name: []const u8,
@@ -3180,26 +3215,35 @@ pub const StorageAdapter = struct {
         // Fast path: uncontended acquire in one call.
         if (mg.rwlock.tryLock(io)) return mg;
 
-        // 2026-04-23: contended path.  Starts at 200 µs and caps at 4 ms
-        // (previously 1 ms → 20 ms under R6).  R6's wider ladder was
-        // calibrated for the pre-Task-16 critical section (~60 ms p95,
-        // ~1 s max lock_wait).  Post-Task-16 + Task-19, the write
-        // critical section is <= ~3 ms worst-case (coordinator batch
-        // apply) and typically ~100 µs (single fast-path apply), so the
-        // old 20 ms ceiling leaves every contending worker idle ~15 ms
-        // past the point the lock is free — a 5-10× amplifier we no
-        // longer need.
-        //
-        // New ladder 200 µs → 400 µs → 800 µs → 1.6 ms → 3.2 ms → cap
-        // at 4 ms.  Worst-case contender sleep before first tryLock
-        // check is 200 µs, well matched to the common ~100 µs apply
-        // window.  R2 test's 100 ms deadline still honoured: contender
-        // spins up to ~100/0.2 = 500 iterations cheaply, far more than
-        // the deadline check granularity requires.  CAS-thrash
-        // concern from R6 (10 k attempts/s/waiter) remains bounded:
-        // 16 × 5 k = 80 k CAS/s at the lower bound — comparable to
-        // the `std.Thread.Mutex` contended path and well inside
-        // cache-line bandwidth limits on any modern x86.
+        // Decide on deadline policy.  Tight deadlines (< 1 s) use the
+        // legacy `tryLock` spin so fail-fast semantics are preserved.
+        // Generous deadlines (>= 1 s) route through the
+        // writer-preferred `lockUncancelable` path — which marks
+        // writer pending in state and blocks new readers from
+        // starving us.
+        const long_deadline_threshold_ns: u64 = 1 * std.time.ns_per_s;
+        const now_before = monoNanosNow();
+        const budget_ns: u64 = if (deadline_mono_ns > now_before) deadline_mono_ns - now_before else 0;
+
+        if (budget_ns >= long_deadline_threshold_ns) {
+            // Writer-preferred slow path.  `lockUncancelable` does
+            // Add(writer) FIRST → new readers defer → guaranteed
+            // progress.  No deadline enforcement here — the lock is
+            // guaranteed to be released by bounded critical
+            // sections (coordinator batch apply, fast-path mutations
+            // are all tens of ms worst case), so waiting without a
+            // deadline is safe in practice.
+            mg.rwlock.lockUncancelable(io);
+            return mg;
+        }
+
+        // Legacy tight-deadline path: exponential-backoff tryLock
+        // spin.  Preserves fail-fast semantics for callers that
+        // actually want a short budget (e.g. test harnesses
+        // specifying 100 ms deadlines).  STILL starvation-prone
+        // under sustained reader pressure; the 1 s threshold above
+        // reflects a judgment that real production callers always
+        // want writer-preferred behaviour.
         var sleep_ns: u64 = 200 * std.time.ns_per_us;
         const max_sleep_ns: u64 = 4 * std.time.ns_per_ms;
         while (true) {
