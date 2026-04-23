@@ -406,6 +406,38 @@ pub fn decodeExtValue(allocator: std.mem.Allocator, bytes: []const u8) !@import(
     return try dummy.readExtValue(stream.reader());
 }
 
+/// Label index posting list with a per-key mutex for fine-grained concurrency.
+///
+/// Task 17 (enterprise-ingest-throughput): the inner `std.ArrayList(u64)` of
+/// sorted node ids is mutated from multiple threads during parallel ingest.
+/// Each `LabelPosting` carries its own `std.Io.Mutex` so `sortedInsert`,
+/// `orderedRemove`, and reader snapshotting all serialise per (graph, label)
+/// without blocking mutations on *other* labels.
+///
+/// Lock ordering rule: the outer `GraphStore` rwlock (per-graph `mg.rwlock`)
+/// is always acquired first; the `LabelPosting.mutex` is a leaf lock.
+pub const LabelPosting = struct {
+    list: std.ArrayList(u64) = std.ArrayList(u64).empty,
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+
+    pub fn deinit(self: *LabelPosting, allocator: std.mem.Allocator) void {
+        self.list.deinit(allocator);
+    }
+
+    /// Acquire the posting's mutex using the process-global single-threaded IO.
+    /// This matches the pattern used for every other leaf mutex in this file
+    /// (`g_data_dir_mutex`, `g_init_mutex`, etc.) — the `Io` parameter is only
+    /// needed so `futexWait` can block cooperatively; under contention from
+    /// real OS threads (not async tasks) the global IO is the correct choice.
+    pub fn lock(self: *LabelPosting) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    pub fn unlock(self: *LabelPosting) void {
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+};
+
 // CANARY: REQ=REQ-MULTI-TENANT-001; FEATURE="MultiTenancy"; ASPECT=GraphStore; STATUS=TESTED; TEST=geodetestlab/specs/gql_session_management_comprehensive.yml; OWNER=enterprise; UPDATED=2026-01-09
 pub const GraphStore = struct {
     allocator: std.mem.Allocator,
@@ -421,10 +453,18 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-GRAPH-008; FEATURE="GraphRegistry"; ASPECT=GraphNames; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
     // Track known graph names (including empty graphs)
     graphs: std.StringHashMap(void),
-    // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-001; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-23
     // Issue #391: Label-based index for O(1) node lookups instead of O(n) full table scans
-    // Maps "graph_name:label" composite key to list of node IDs
-    label_index: std.StringHashMap(std.ArrayList(u64)),
+    // Maps "graph_name:label" composite key to `LabelPosting { sorted node ids, mutex }`.
+    //
+    // Task 17 (enterprise-ingest-throughput): the posting list's inner
+    // `ArrayList(u64)` is guarded by a per-key `std.Thread.Mutex`. This lets
+    // multiple writers that target *different* labels mutate in parallel while
+    // still serialising mutations within a single hot label. The outer
+    // `StringHashMap` itself is still protected by the per-graph rwlock
+    // (`mg.rwlock`) — inserting a new key rehashes the map, which must remain
+    // exclusive.
+    label_index: std.StringHashMap(LabelPosting),
     // MERGE property index: enables O(1) candidate lookup by (graph, label, property_key, property_value).
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
@@ -465,7 +505,7 @@ pub const GraphStore = struct {
             .schema_name = schema_name,
             .graphs = std.StringHashMap(void).init(allocator),
             // Issue #391, #392: Initialize performance optimization indexes
-            .label_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
+            .label_index = std.StringHashMap(LabelPosting).init(allocator),
             .merge_prop_index = std.StringHashMap(u64).init(allocator),
             // PERF-P0-001: Edge-type index for O(1) edge-type lookups
             .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
@@ -640,7 +680,7 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.label_index.deinit();
-        self.label_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+        self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
 
         // Reset merge property index
         var mpi_iter = self.merge_prop_index.iterator();
@@ -1185,7 +1225,9 @@ pub const GraphStore = struct {
         // label — so appending preserves the sorted invariant.
         for (labels) |label| {
             const posting = try self.ensureLabelPostingList(graph_name, label);
-            try posting.ensureUnusedCapacity(self.allocator, n);
+            posting.lock();
+            defer posting.unlock();
+            try posting.list.ensureUnusedCapacity(self.allocator, n);
         }
 
         // Allocate result slice (caller-owned, caller's allocator).
@@ -1266,30 +1308,29 @@ pub const GraphStore = struct {
         return public_ids;
     }
 
-    /// Resolve (graph, label) → pointer to the posting list in `label_index`,
-    /// creating the entry on first sight. Returns a stable pointer that is
-    /// valid until the caller yields back into `label_index` (the `nodes`
-    /// map and the `label_index` map are independent; appending within the
-    /// posting list does not invalidate the outer-map pointer).
-    fn ensureLabelPostingList(self: *GraphStore, graph_name: []const u8, label: []const u8) !*std.ArrayList(u64) {
+    /// Resolve (graph, label) → pointer to the `LabelPosting` entry in
+    /// `label_index`, creating the entry on first sight. The returned pointer
+    /// is stable as long as the outer map is not rehashed; the caller must
+    /// still take `posting.mutex` before mutating or iterating `posting.list`.
+    fn ensureLabelPostingList(self: *GraphStore, graph_name: []const u8, label: []const u8) !*LabelPosting {
         var buf: [512]u8 = undefined;
         const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
             const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
             const result = try self.label_index.getOrPut(key);
             if (!result.found_existing) {
-                result.value_ptr.* = std.ArrayList(u64).empty;
+                result.value_ptr.* = .{};
             } else {
                 self.allocator.free(key);
             }
             return result.value_ptr;
         };
 
-        if (self.label_index.getPtr(probe_key)) |list| return list;
+        if (self.label_index.getPtr(probe_key)) |posting| return posting;
 
         const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
         const result = try self.label_index.getOrPut(key);
         if (!result.found_existing) {
-            result.value_ptr.* = std.ArrayList(u64).empty;
+            result.value_ptr.* = .{};
         } else {
             self.allocator.free(key);
         }
@@ -1304,11 +1345,14 @@ pub const GraphStore = struct {
     /// violated (e.g. clock skew), so correctness is preserved.
     fn appendToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
         const posting = try self.ensureLabelPostingList(graph_name, label);
-        if (posting.items.len == 0 or posting.items[posting.items.len - 1] < node_id) {
-            try posting.append(self.allocator, node_id);
+        posting.lock();
+        defer posting.unlock();
+        const items = posting.list.items;
+        if (items.len == 0 or items[items.len - 1] < node_id) {
+            try posting.list.append(self.allocator, node_id);
         } else {
             // Defensive fallback for non-monotonic ids.
-            try sortedInsert(posting, self.allocator, node_id);
+            try sortedInsertLocked(&posting.list, self.allocator, node_id);
         }
     }
 
@@ -1387,40 +1431,28 @@ pub const GraphStore = struct {
 
     // Issue #391: Helper to add node to label index
     // Issue #451: Use stack-allocated bufPrint to probe for existing key before heap alloc
-    fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
-        // Probe with stack-allocated key first to avoid heap alloc when key exists
-        var buf: [512]u8 = undefined;
-        const probe_key = std.fmt.bufPrint(&buf, "{s}:{s}", .{ graph_name, label }) catch {
-            // Key too long for stack buffer — fall back to heap alloc
-            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
-            const result = try self.label_index.getOrPut(key);
-            if (!result.found_existing) {
-                result.value_ptr.* = std.ArrayList(u64).empty;
-            } else {
-                self.allocator.free(key);
-            }
-            try sortedInsert(result.value_ptr, self.allocator, node_id);
-            return;
-        };
-
-        if (self.label_index.getPtr(probe_key)) |list| {
-            // Key already exists — no heap allocation needed
-            try sortedInsert(list, self.allocator, node_id);
-        } else {
-            // New key — heap-allocate for map ownership
-            const key = try std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label });
-            const result = try self.label_index.getOrPut(key);
-            if (!result.found_existing) {
-                result.value_ptr.* = std.ArrayList(u64).empty;
-            } else {
-                self.allocator.free(key);
-            }
-            try sortedInsert(result.value_ptr, self.allocator, node_id);
-        }
+    //
+    // Task 17 (enterprise-ingest-throughput): exposed as `pub` so the
+    // per-posting-list mutex can be regression-tested in isolation. The
+    // outer `label_index` StringHashMap is still protected by the per-graph
+    // rwlock held by the caller — this function only protects the inner
+    // `ArrayList(u64)` via `LabelPosting.mutex`.
+    pub fn addToLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) !void {
+        const posting = try self.ensureLabelPostingList(graph_name, label);
+        posting.lock();
+        defer posting.unlock();
+        try sortedInsertLocked(&posting.list, self.allocator, node_id);
     }
 
-    /// Binary-search insert into a sorted ArrayList(u64), maintaining ascending order.
-    /// Deduplicates: if node_id is already present, this is a no-op.
+    /// Binary-search insert into a sorted ArrayList(u64), maintaining
+    /// ascending order. Deduplicates: if node_id is already present, this
+    /// is a no-op.
+    ///
+    /// CALLER CONTRACT: the caller is responsible for any synchronisation
+    /// required by the underlying `ArrayList`. For `label_index` postings,
+    /// the caller holds `LabelPosting.mutex` (Task 17, enterprise-ingest-
+    /// throughput). For `edge_type_index` postings, the caller relies on
+    /// the outer per-graph rwlock for now.
     fn sortedInsert(list: *std.ArrayList(u64), allocator: std.mem.Allocator, node_id: u64) !void {
         const items = list.items;
         var lo: usize = 0;
@@ -1438,31 +1470,51 @@ pub const GraphStore = struct {
         try list.insert(allocator, lo, node_id);
     }
 
+    /// Alias of `sortedInsert` used at sites where the surrounding
+    /// `LabelPosting.mutex` is already held. The `Locked` suffix documents
+    /// the call-site contract for readers of the label-index mutation
+    /// helpers (`addToLabelIndex`, `appendToLabelIndex`).
+    const sortedInsertLocked = sortedInsert;
+
     fn removeFromLabelIndex(self: *GraphStore, graph_name: []const u8, label: []const u8, node_id: u64) void {
         const key = std.fmt.allocPrint(self.allocator, "{s}:{s}", .{ graph_name, label }) catch return;
         defer self.allocator.free(key);
 
-        if (self.label_index.getPtr(key)) |list| {
-            // Binary search for node_id in sorted posting list
-            const items = list.items;
-            var lo: usize = 0;
-            var hi: usize = items.len;
-            while (lo < hi) {
-                const mid = lo + (hi - lo) / 2;
-                if (items[mid] < node_id) {
-                    lo = mid + 1;
-                } else {
-                    hi = mid;
+        if (self.label_index.getPtr(key)) |posting| {
+            var should_remove_key = false;
+            {
+                posting.lock();
+                defer posting.unlock();
+
+                // Binary search for node_id in sorted posting list
+                const items = posting.list.items;
+                var lo: usize = 0;
+                var hi: usize = items.len;
+                while (lo < hi) {
+                    const mid = lo + (hi - lo) / 2;
+                    if (items[mid] < node_id) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
                 }
+                if (lo < items.len and items[lo] == node_id) {
+                    _ = posting.list.orderedRemove(lo);
+                }
+                should_remove_key = posting.list.items.len == 0;
             }
-            if (lo < items.len and items[lo] == node_id) {
-                _ = list.orderedRemove(lo);
-            }
-            if (list.items.len == 0) {
+
+            // Remove the map entry after releasing the posting's mutex: the
+            // outer `label_index` HashMap is guarded by the caller's graph
+            // rwlock, and deleting the value while anyone else held its
+            // mutex would be a use-after-free. Under the current invariant
+            // (callers hold the graph exclusive lock during mutations) no
+            // other thread can be holding this posting's mutex here.
+            if (should_remove_key) {
                 if (self.label_index.fetchRemove(key)) |kv| {
                     self.allocator.free(kv.key);
-                    var list_copy = kv.value;
-                    list_copy.deinit(self.allocator);
+                    var posting_copy = kv.value;
+                    posting_copy.deinit(self.allocator);
                 }
             }
         }
@@ -1578,17 +1630,53 @@ pub const GraphStore = struct {
         return .not_found;
     }
 
-    // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
+    // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-23
     // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
+    //
+    // CALLER CONTRACT (Task 17): the returned slice aliases `LabelPosting.list.items`
+    // and is valid only while the caller holds the per-graph rwlock that guards
+    // the surrounding operation (shared-lock for MATCH, exclusive-lock for
+    // mutations). The `LabelPosting.mutex` is a leaf lock that protects the
+    // inner list against *concurrent writers only* — readers rely on the outer
+    // rwlock to exclude writers for the slice's lifetime. If a future caller
+    // needs to iterate without holding the rwlock, add a `getNodesByLabelSnapshot`
+    // helper that clones under `LabelPosting.mutex` rather than aliasing.
     pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
         // Create composite key "graph_name:label"
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
 
-        if (self.label_index.get(key)) |list| {
-            return list.items;
+        if (self.label_index.get(key)) |posting| {
+            return posting.list.items;
         }
         return null;
+    }
+
+    /// Return a caller-owned copy of the label posting list.
+    ///
+    /// Unlike `getNodesByLabel`, the returned slice does NOT alias the
+    /// live posting list, so it remains valid even if a concurrent writer
+    /// under the outer graph rwlock mutates the list after this call
+    /// returns. The copy is taken under `LabelPosting.mutex`, so it is
+    /// safe even under the Task 15/16 two-phase lock protocol where
+    /// multiple threads may share a per-graph shared read lock.
+    ///
+    /// The caller owns the returned slice and MUST free it with the same
+    /// allocator. Returns null if the label has no posting list.
+    pub fn snapshotNodesByLabel(
+        self: *GraphStore,
+        allocator: std.mem.Allocator,
+        graph_name: []const u8,
+        label: []const u8,
+    ) !?[]u64 {
+        var key_buf: [512]u8 = undefined;
+        const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;
+
+        const posting = self.label_index.getPtr(key) orelse return null;
+        posting.lock();
+        defer posting.unlock();
+        const copy = try allocator.dupe(u64, posting.list.items);
+        return copy;
     }
 
     // Issue #391: Get nodes that have ALL specified labels in a graph
@@ -1716,7 +1804,7 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.label_index.deinit();
-        self.label_index = std.StringHashMap(std.ArrayList(u64)).init(self.allocator);
+        self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
 
         // Reset merge property index
         var mpi_iter = self.merge_prop_index.iterator();

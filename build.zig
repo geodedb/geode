@@ -1567,6 +1567,26 @@ pub fn build(b: *std.Build) void {
     const mutation_timing_step = b.step("test-mutation-timing", "Run per-mutation timing phase unit test");
     mutation_timing_step.dependOn(&run_mutation_timing_test.step);
 
+    // Task 17 (enterprise-ingest-throughput): per-posting-list mutex regression.
+    // 16 threads each append 1000 IDs to the same label posting list; before
+    // the fix they race on `sortedInsert` and entries are dropped / corrupted.
+    // After the fix all 16 000 IDs are present, sorted, and unique.
+    const label_posting_concurrent_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_label_posting_concurrent_insert.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    label_posting_concurrent_test.root_module.addImport("geode", root_mod);
+    const run_label_posting_concurrent_test = b.addRunArtifact(label_posting_concurrent_test);
+    const label_posting_concurrent_step = b.step(
+        "test-label-posting-concurrent-insert",
+        "Parallel-ingest Task 17: per-posting-list mutex regression for label index",
+    );
+    label_posting_concurrent_step.dependOn(&run_label_posting_concurrent_test.step);
+
     // M4.1: bench-query-all aggregate — runs parser + planner + executor-match
     // + executor-mutation in sequence. Argv is forwarded to every sub-step, so
     // `-- --output <path>` would have all four benches overwrite the same file
@@ -1613,6 +1633,8 @@ pub fn build(b: *std.Build) void {
     test_perf_step.dependOn(&run_compare_bench_test.step);
     // Task 1: per-mutation timing phase unit test.
     test_perf_step.dependOn(&run_mutation_timing_test.step);
+    // Task 17: per-posting-list mutex concurrency regression.
+    test_perf_step.dependOn(&run_label_posting_concurrent_test.step);
     // GAP-0810 regression reproducer — pins the parse-cache reuse envelope.
     test_perf_step.dependOn(&run_gap0810_regression_tests.step);
 

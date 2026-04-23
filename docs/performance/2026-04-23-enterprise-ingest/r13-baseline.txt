@@ -1,0 +1,25 @@
+R13 baseline — captured last night (same hardware, 2026-04-22/23)
+
+Command:
+    GEODE_DSN="quic://127.0.0.1:3142/abs_eagleg?user=geode&pass=Geode1234Abc&insecure=true" \
+        msft-graph seed --input /home/benji/eagleg-topology-data-16 \
+        --parallel --workers 16 --chunk-size 1000
+
+Server: zig-out/bin/geode built at 22 Apr 23:47 via `zig build -Doptimize=ReleaseFast install`
+        with commit f1dd1dc7 (R13) + 604fa82e (120s default lock timeout).
+        Env: default (no GEODE_BULK_INGEST, no GEODE_MUTATION_TIMING_LOG).
+
+Start:    2026-04-22 23:47:53
+End:      2026-04-23 01:53:26
+Duration: 2 h 5 m 33 s (7533 s wall)
+
+Dataset:
+    9 350 nodes across 25 node kinds
+   35 208 edges across 14 edge files
+  44 558 total CREATE / MATCH+CREATE statements
+
+Aggregate rate: 5.9 stmts / s
+Chunk failures: 48 (all recovered via client serial-mode fallback on
+                    three largest edge files)
+
+Target for this plan:  < 60 s  (~125x speedup).
