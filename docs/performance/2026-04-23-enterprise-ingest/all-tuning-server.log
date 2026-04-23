@@ -1,0 +1,118 @@
+[startup] user store initialized (0ms)
+Generated self-signed certificates at /tmp/geode-final2/server.crt and /tmp/geode-final2/server.key
+[startup] certificates ready (6ms)
+warning: Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.
+warning: Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.
+info(graph_storage_adapter): created graph '__geode_security'
+[startup] server initialized (245ms)
+[startup] auth cache configured (0ms)
+{"component":"transport","transport":"quic","tls":"true","port":3148,"library":"vendor/quic","api":"native-endpoint","status":"listening"}
+[startup] QUIC transport listening (0ms)
+[startup] thread pool initialized (3ms, 16 workers)
+[startup] server ready (256ms total)
+info(graph_storage_adapter): created graph 'abs_eagleg'
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 2 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: orphan-txn rolled back on stream close (txn_id=1776968293735, graph=default)
+warning: orphan-txn rolled back on stream close (txn_id=1776968172059, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968172059, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968172367, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968172324, graph=abs_eagleg)
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 1 queued
+warning: orphan-txn rolled back on stream close (txn_id=1776968203241, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968203203, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968414078, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1776968504941, graph=default)
+warning: orphan-txn rolled back on stream close (txn_id=1776968172241, graph=abs_eagleg)
+warning: thread-pool deinit timed out after 2000ms with 1 active tasks and 0 queued
