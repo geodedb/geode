@@ -1551,6 +1551,22 @@ pub fn build(b: *std.Build) void {
     const run_bench_executor_mutation_test = b.addRunArtifact(bench_executor_mutation_test);
     test_perf_step.dependOn(&run_bench_executor_mutation_test.step);
 
+    // Task 1 (perf/throughput plan): mutation timing phases unit test.
+    // Tests that mutation_timing.begin()/markLockAcquired()/markExecuteDone()/
+    // markLockReleased()/record() capture correct phase durations when enabled.
+    const mutation_timing_test = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/perf/test_mutation_timing_phases.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    mutation_timing_test.root_module.addImport("geode", root_mod);
+    const run_mutation_timing_test = b.addRunArtifact(mutation_timing_test);
+    const mutation_timing_step = b.step("test-mutation-timing", "Run per-mutation timing phase unit test");
+    mutation_timing_step.dependOn(&run_mutation_timing_test.step);
+
     // M4.1: bench-query-all aggregate — runs parser + planner + executor-match
     // + executor-mutation in sequence. Argv is forwarded to every sub-step, so
     // `-- --output <path>` would have all four benches overwrite the same file

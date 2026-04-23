@@ -691,6 +691,12 @@ pub fn main() !void {
         auth_rate_limiter_mod.setGlobalRateLimiter(&ip_rate_limiter);
         defer auth_rate_limiter_mod.setGlobalRateLimiter(null);
 
+        // Task 1 (throughput plan): initialise per-mutation timing instrumentation.
+        // Reads GEODE_MUTATION_TIMING_LOG from the process environment; no-op
+        // when the variable is unset or set to "0".
+        const mutation_timing = geode.mutation_timing;
+        mutation_timing.init(null);
+
         // S1: Initialize the global RLS filter engine for label-based row filtering.
         // The engine lives on the main thread's stack and is accessed by connection
         // handlers via the global singleton in rls_filter.zig.

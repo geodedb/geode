@@ -60,6 +60,8 @@ const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
 const query_plan_cache = geode.query_plan_cache;
+// Per-mutation wall-clock timing instrumentation (Task 1, throughput plan).
+const mutation_timing = geode.mutation_timing;
 // GAP-0755: Per-query arena pool for executor scratch.
 const query_arena = geode.query_arena;
 const query_traits = geode.query_traits;
@@ -2425,6 +2427,10 @@ fn handleClientMessage(
             var read_session: ?graph_store.QueryReadSession = null;
             var point_read_view: ?graph_store.PointReadView = null;
             var prev_active_read_store: ?*graph_store.GraphStore = null;
+            // Task 1 (throughput plan): start per-mutation timing sample.
+            // Records the instant we begin waiting for the write lock so that
+            // lock_wait_ns, execute_ns, and release_ns can be computed in record().
+            var mut_sample = mutation_timing.begin();
             if (needs_store_lock) {
                 if (is_mutation) {
                     // Mutations: exclusive writer lock held across execute to
@@ -2440,6 +2446,7 @@ fn handleClientMessage(
                     const deadline = monoNanosNow() + write_lock_timeout_ns;
                     if (graph_store.acquireGraphWriteLockCancelable(query_graph_name, deadline)) |h| {
                         graph_lock_handle = h;
+                        mut_sample.markLockAcquired();
                     } else |err| {
                         if (err == error.Deadline) {
                             log.warn("Write lock acquisition timed out", &.{
@@ -2818,6 +2825,8 @@ fn handleClientMessage(
                         try sendExecuteError(gpa, stream, info.code, info.message, &.{}, &.{});
                         return;
                     };
+                    // Task 1: mark execute phase complete (before lock release).
+                    mut_sample.markExecuteDone();
                     defer exec_result.deinit(gpa);
                     const store = graph_store.getGlobalStore(gpa);
 
@@ -2844,6 +2853,9 @@ fn handleClientMessage(
                         }
                         lock_released = true;
                     }
+                    // Task 1: mark lock-released and emit timing record.
+                    mut_sample.markLockReleased();
+                    mut_sample.record(query_text[0..@min(query_text.len, 80)]);
 
                     // S1: Apply label-based RLS filtering AFTER lock release and BEFORE
                     // response serialization.  This removes rows whose Node/Edge labels
