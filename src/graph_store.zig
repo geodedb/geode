@@ -476,8 +476,8 @@ pub const GraphStore = struct {
     edge_type_index: std.StringHashMap(std.ArrayList(u64)),
     // CANARY: REQ=REQ-PERF-EDGE-ADJ-001; FEATURE="EdgeAdjacencyIndex"; ASPECT=EdgeLookup; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=perf; UPDATED=2026-04-11
     // Issue #392: Adjacency lists for fast edge lookups during DELETE DETACH
-    outgoing_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
-    incoming_edges: std.AutoHashMap(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
+    outgoing_edges: sharded_store.ShardedStore(u64, std.ArrayList(u64)), // from_node_id -> edge_ids
+    incoming_edges: sharded_store.ShardedStore(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
     /// Per-graph IdMaps for UUIDv7 ↔ engine slot_id translation.
     id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
@@ -510,8 +510,8 @@ pub const GraphStore = struct {
             .merge_prop_index = std.StringHashMap(u64).init(allocator),
             // PERF-P0-001: Edge-type index for O(1) edge-type lookups
             .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
-            .outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
-            .incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(allocator),
+            .outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(allocator),
+            .incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(allocator),
             .id_maps = std.StringHashMap(id_map_mod.IdMap).init(allocator),
         };
         // Register default graph name
@@ -706,14 +706,14 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.outgoing_edges.deinit();
-        self.outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
+        self.outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
 
         var in_iter = self.incoming_edges.iterator();
         while (in_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.incoming_edges.deinit();
-        self.incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
+        self.incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
 
         // Reset per-graph IdMaps
         var id_map_iter = self.id_maps.iterator();
@@ -1830,14 +1830,14 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.outgoing_edges.deinit();
-        self.outgoing_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
+        self.outgoing_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
 
         var in_iter = self.incoming_edges.iterator();
         while (in_iter.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
         self.incoming_edges.deinit();
-        self.incoming_edges = std.AutoHashMap(u64, std.ArrayList(u64)).init(self.allocator);
+        self.incoming_edges = try sharded_store.ShardedStore(u64, std.ArrayList(u64)).init(self.allocator);
 
         // Rebuild label index, merge property index, and ensure graph registry entries for nodes
         var node_iter = self.nodes.iterator();

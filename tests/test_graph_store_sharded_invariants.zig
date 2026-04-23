@@ -19,6 +19,30 @@ test "GraphStore.edges is a ShardedStore" {
     try testing.expectEqual(expected, FieldType);
 }
 
+test "GraphStore.outgoing_edges is a ShardedStore" {
+    const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).outgoing_edges);
+    const expected = sharded.ShardedStore(u64, std.ArrayList(u64));
+    try testing.expectEqual(expected, FieldType);
+}
+
+test "GraphStore.incoming_edges is a ShardedStore" {
+    const FieldType = @TypeOf(@as(graph_store.GraphStore, undefined).incoming_edges);
+    const expected = sharded.ShardedStore(u64, std.ArrayList(u64));
+    try testing.expectEqual(expected, FieldType);
+}
+
+test "createEdgeWithGraph populates outgoing + incoming shards" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+    const labels = [_][]const u8{"L"};
+    const a = try store.createNode(&labels);
+    const b = try store.createNode(&labels);
+    const e = try store.createEdgeWithGraph(a, b, "T", "default");
+    try testing.expect(store.outgoing_edges.get(a) != null);
+    try testing.expect(store.incoming_edges.get(b) != null);
+    try testing.expect(store.edges.get(e) != null);
+}
+
 test "GraphStore create/get/remove round-trip after sharding" {
     var store = try graph_store.GraphStore.init(testing.allocator);
     defer store.deinit();
