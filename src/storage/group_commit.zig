@@ -165,11 +165,22 @@ pub const GroupCommitCoordinator = struct {
     /// bounded so a pathological queue can't starve `stop()`.
     pub const max_batch: usize = 256;
 
-    /// Per-graph write-lock acquisition deadline inside `applyBatch`.
-    /// Morning baseline used 30 s; the 2026-04-23 cascade showed that
-    /// fired under 10 k-deep queues on the 8 k+ edge files.  120 s
-    /// absorbs the worst-case drain without changing the apply path.
-    pub const write_lock_deadline_ns: u64 = 120 * std.time.ns_per_s;
+    // (Removed: per-graph write-lock deadline.  Morning baseline used 30 s
+    //  with `acquireGraphWriteLockCancelable` which has a tryLock-spin loop
+    //  that NEVER marks the writer as pending in std.Io.RwLock's state —
+    //  under sustained SHARED-reader pressure (the edge MATCH+CREATE fast
+    //  path at quic_connection_handler.zig:539 takes acquireGraphReadLock
+    //  to resolve endpoints) new readers keep the fast CAS path and the
+    //  writer's tryLock never wins the race.  See
+    //  std/Io/RwLock.zig lines 28-40 (tryLock) vs 42-50 (lockUncancelable:
+    //  `@atomicRmw(&state, .Add, writer)` FIRST blocks new readers).
+    //
+    //  Fix: flusher uses `acquireGraphWriteLock` (no deadline, uses
+    //  lockUncancelable internally) — writer-preferred, starvation-proof.
+    //  The flusher's apply is well-bounded; no-deadline is acceptable.
+    //  This was the root cause of the 48 chunk-failure cascade in the
+    //  morning-baseline R13 run and the 40001 error observed in the
+    //  2026-04-23 evening Phase 2.1 validation.)
 
     /// Allocate, wire up the queue, init the pool, and submit the
     /// flusher task.
@@ -340,21 +351,16 @@ pub const GroupCommitCoordinator = struct {
     /// WAL fsync for the whole batch).  Per-op errors are captured in
     /// the op's `ApplyResult.err` and do NOT fail the batch.
     ///
-    /// Deadline: 120 s.  See `write_lock_deadline_ns` above for the
-    /// rationale.
+    /// Lock acquisition uses `acquireGraphWriteLock` (no deadline) —
+    /// NOT `acquireGraphWriteLockCancelable` which is starvation-prone
+    /// under the edge MATCH+CREATE fast path's sustained SHARED-reader
+    /// pressure.  The internal `std.Io.RwLock.lockUncancelable` marks
+    /// the writer as pending in state, which blocks new readers via
+    /// the fast CAS path — writer-preferred by construction.
     fn applyBatch(self: *GroupCommitCoordinator, batch: []*ApplyOp) void {
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        const deadline = monoNanosNow() + write_lock_deadline_ns;
-        const lock_handle = graph_store.acquireGraphWriteLockCancelable(self.graph_name, deadline) catch |err| {
-            for (batch) |op| {
-                const res = op.resultPtr();
-                res.err = err;
-                res.done.store(1, .release);
-                std.Io.futexWake(io, u32, &res.done.raw, 1);
-            }
-            return;
-        };
+        const lock_handle = graph_store.acquireGraphWriteLock(self.graph_name);
         defer graph_store.releaseGraphLock(lock_handle);
 
         // Flusher-owned statement txn for the whole batch — single
