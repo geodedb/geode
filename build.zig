@@ -2246,6 +2246,17 @@ pub fn build(b: *std.Build) void {
     thread_pool_lane_test_step.dependOn(&run_thread_pool_lane_tests.step);
     test_step.dependOn(&thread_pool_lane_tests.step);
 
+    // Task #31: QUIC stream multiplex hang — per-connection stream pool
+    // must run 4 concurrent streams, not 2.  Root cause: `submit()` routes
+    // every task to the 1-wide blocking lane.  See
+    // docs/performance/2026-04-24-sharding/TASK-31-TRIAGE.md.
+    const stream_pool_lane_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_stream_pool_concurrent_lanes.zig"), .target = target, .optimize = optimize }) });
+    stream_pool_lane_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    const run_stream_pool_lane_tests = b.addRunArtifact(stream_pool_lane_tests);
+    const stream_pool_lane_test_step = b.step("test-stream-pool-concurrent-lanes", "Run per-connection stream-pool concurrent-lane regression (Task #31)");
+    stream_pool_lane_test_step.dependOn(&run_stream_pool_lane_tests.step);
+    test_step.dependOn(&stream_pool_lane_tests.step);
+
     // GitLab #749: MetricsServer HTTP listener lifecycle regression — pins
     // the contract that `start()` actually binds a TCP listen socket (the
     // Zig 0.16 migration stubbed it out), `stop()` closes it, and the pair
