@@ -129,9 +129,56 @@ f01c36de fix(storage): correct release() memory barrier + add preconditions (Tas
 - `benchmarks/merge_prop_snapshot_lookup/main.zig` (new, ~90 lines — throughput bench)
 - `build.zig` (registrations for the new test and bench)
 
+## End-to-end bench: bulk MERGE hot path (`bench-merge`)
+
+Run `zig build bench-merge -Doptimize=ReleaseFast` against two commits:
+
+- **Baseline** — `39bfcc23` (after Task 5, BEFORE Task 6 wired RCU into `lookupMergeCandidate`). Tasks 1-5 landed but the lookup still uses the plain `merge_prop_index.get` path.
+- **RCU** — `be09c67c` (branch HEAD, after Tasks 1-9).
+
+Both were run single-threaded on the same machine, same Zig 0.16.0, `-Doptimize=ReleaseFast`.
+
+| Benchmark | Baseline ns/op | RCU ns/op | Delta |
+|---|---|---|---|
+| bulk_merge_insert (2000 new nodes) | 3184 | 3064 | -3.8% (wash) |
+| bulk_merge_update (2000 existing-node MERGEs) | 96 | 123 | **+28%** |
+
+**Single-threaded verdict:** the update path pays ~27ns/op extra — roughly the cost of two atomic refcount RMWs + the strong-verify (`nodes.get` + label scan + `node.properties.get` + `propertyValuesEqual`). The insert path is a wash because CREATE-side work (node alloc + property write + engine txn) dominates any lookup-side delta.
+
+**Multi-threaded verdict:** UNMEASURED. The microbench earlier in this doc isolates
+`lookupMergeCandidate` at 16 threads and shows the RCU refcount becoming a cache-line
+bottleneck, but that microbench does not model the contention the RCU design was
+meant to eliminate (callers' `mg.rwlock.lockShared()` around endpoint resolution
+while a flusher holds `mg.rwlock.lockExclusive()`). A proper concurrent bench
+would need either:
+
+1. A two-thread test that pits readers against a writer holding
+   `mg.rwlock.lockExclusive()`, OR
+2. Caller-side updates (e.g. dropping `acquireGraphReadLock` around the
+   endpoint-resolution path in `bulk_match_create_edge`) + a re-run of the
+   `msft-graph seed --parallel --workers 16` workload from
+   `docs/performance/2026-04-24-sharding/PHASE2-SUMMARY.md`.
+
+Neither was done in this plan. The RCU foundation is laid; the caller
+update + concurrent validation is the scoped follow-up.
+
+## Honest bottom line
+
+- **Correct:** yes, proven by stress test.
+- **Foundation ready:** yes, can be consumed by Task 10 (caller updates).
+- **Net win in this branch today:** **no** — single-thread workloads pay ~28%
+  more per MERGE-update, with unmeasured multi-thread upside.
+
+If this were the last commit of a sprint, we would not merge without
+either (a) a concurrent bench proving the crossover point or (b) at least
+one caller-site update removing the outer `mg.rwlock.lockShared` around
+endpoint resolution to show the win materialising end-to-end.
+
 ## Residual work (out of scope for this plan)
 
+- **Caller updates (Task 10, NOT done):** update `bulk_match_create_edge` op in `group_commit.zig` and/or `bulkInsertEdge`/`lookupNodeByMergeKey` in `graph_storage_adapter.zig` to drop `acquireGraphReadLock` around endpoint resolution, relying on the RCU fast path + strong-verify. Requires careful analysis of `nodes.get` safety during concurrent `nodes.put` (ShardedStore rehash race — likely still requires SOME lock unless a separate nodes-map RCU is layered on top).
+- **Concurrent end-to-end bench:** add a dedicated `bench-merge-prop-contended` that runs 1 writer (holding `mg.rwlock.lockExclusive` for ~100μs at a time) against N readers doing `lookupMergeCandidate`, measuring reader throughput. Without this, the multi-thread claim is hypothesis, not evidence.
 - Cross-graph writer race on the global `GraphStore.merge_prop_index` (pre-existing, not made worse; tracked for a future `store_mutex` at tier 1).
 - Per-shard coordinator wiring (Item 2 of the original roadmap) — needs root-cause of the Phase 2 Task 6 regression before planning.
 - Engine thread-safety in `graph-storage` repo (Item 1) — weeks of upstream work.
-- Refcount scalability: if profiling ever shows the refcount cache line becoming the bottleneck under production load, swap the single refcount for epoch-based reclamation or per-thread hazard pointers. The microbench in this doc isolates and confirms the refcount contention shape; production traffic has not yet demonstrated a need.
+- Refcount scalability: the 16-thread microbench shows the single refcount cache line becoming the bottleneck. If caller updates land and the production bench confirms the contention, swap for epoch-based reclamation or per-thread hazard pointers.
