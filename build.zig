@@ -3360,6 +3360,21 @@ pub fn build(b: *std.Build) void {
     const sharded_coord_step = b.step("test-sharded-coordinator", "Run ShardedCoordinator concurrency tests");
     sharded_coord_step.dependOn(&run_sharded_coord_tests.step);
 
+    // RCU merge_prop_index Task 8 (2026-04-24) — N-reader, 1-writer stress
+    //     test. 16 reader threads probe `lookupMergeCandidate` while a
+    //     writer thread inserts 5000 User nodes with unique `name`
+    //     properties. Asserts that no reader ever observes a `.found`
+    //     response carrying a node_id the writer never created (false
+    //     positive), proving the RCU snapshot + strong-verify path is
+    //     race-free.
+    const merge_prop_rcu_mod = b.createModule(.{ .root_source_file = b.path("tests/test_merge_prop_snapshot_concurrency.zig"), .target = target, .optimize = optimize });
+    merge_prop_rcu_mod.addImport("geode", root_mod);
+    const merge_prop_rcu_tests = b.addTest(.{ .root_module = merge_prop_rcu_mod });
+    const run_merge_prop_rcu_tests = b.addRunArtifact(merge_prop_rcu_tests);
+    test_step.dependOn(&run_merge_prop_rcu_tests.step);
+    const merge_prop_rcu_step = b.step("test-merge-prop-rcu", "Run merge_prop_index RCU N-reader/1-writer stress tests");
+    merge_prop_rcu_step.dependOn(&run_merge_prop_rcu_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
