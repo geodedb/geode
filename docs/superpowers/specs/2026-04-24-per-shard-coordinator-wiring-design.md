@@ -1,6 +1,6 @@
 # Per-Shard Coordinator Wiring — Design Spec
 
-> Status: **draft** · Date: 2026-04-24 · Item 2 of the "dramatic-ingest-perf" pair (depends on `2026-04-24-sharded-graph-engine-design.md`)
+> Status: **draft** · Date: 2026-04-24 · Item 2 of the "dramatic-ingest-perf" pair (depends on the sharded-engine design living in `gitlab.com/devnw/zig/graph-storage` branch `perf/sharded-engine`, file `docs/superpowers/specs/2026-04-24-sharded-graph-engine-design.md`)
 
 ## Goal
 
@@ -150,7 +150,7 @@ The concrete task breakdown is produced by `superpowers:writing-plans` from this
 
 ## Dependencies and sequencing
 
-- **Hard dependency on Item 1** (`2026-04-24-sharded-graph-engine-design.md`): this spec's core premise is that each shard's engine is single-threaded-correct.
+- **Hard dependency on Item 1** (sharded-engine design in `gitlab.com/devnw/zig/graph-storage` branch `perf/sharded-engine`): this spec's core premise is that each shard's engine is single-threaded-correct.
 - **Soft dependency on the RCU merge snapshot** (`2026-04-24-lock-free-merge-prop-index-snapshot.md`, already in flight on `main`): improves read-path perf for `lookupMergeCandidate` but isn't required for the 60s target.
 - **Independent of** the msft-graph client-side pipelining (Phase 4 of the sharding plan); each can land on its own.
 
