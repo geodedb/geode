@@ -1132,13 +1132,33 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const node_id = try store.createNodeWithGraph(labels, graph_name);
 
-        // Set properties directly on the store — this writes to both the
-        // adapter (via vtable → setNodeProperty → putPropertyTxn) and
-        // the in-memory map.  All sub-ops join the statement / session
-        // engine txn opened above (or pre-existing), so the whole CREATE
-        // commits with a SINGLE WAL fsync.
-        for (props) |kv| {
-            try store.setNodeProperty(node_id, kv.key, kv.value);
+        // Task #33 (2026-04-24): route N properties through
+        // `setNodePropertiesBatch` instead of calling `setNodeProperty` in
+        // a loop.  The batch path (graph_store.zig:2058,
+        // graph_storage_adapter.zig:2011) acquires the adapter mutex once,
+        // allocates `label_ids` once, joins the active StatementTxn
+        // (parity added in the same commit), and writes the node record
+        // once after all property mutations instead of N times.  Under
+        // the msft-graph 16-way parallel seed, the loop version spent
+        // ~4 ms/property × 10-23 props/node on per-call overhead (label
+        // lookup, N × putNodeTxn, N × adapter vtable dispatch).  The
+        // batch version collapses that to one adapter call per node.
+        //
+        // For props.len == 0 we must still create the node — the caller
+        // relies on `bulkInsertNode` returning a valid node_id for label-
+        // only nodes.  Skip the batch call in that case.
+        if (props.len > 0) {
+            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+                entries_buf[0..props.len]
+            else
+                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+            defer if (props.len > entries_buf.len) self.allocator.free(entries);
+
+            for (props, 0..) |kv, i| {
+                entries[i] = .{ .key = kv.key, .value = kv.value };
+            }
+            try store.setNodePropertiesBatch(node_id, entries);
         }
 
         if (stmt_txn_open) try stmt_txn.commit();
@@ -2023,8 +2043,21 @@ pub const StorageAdapter = struct {
         // of one per property.  Caller invokes this specifically to amortise
         // per-property overhead, so collapsing N fsyncs → 1 fsync is the
         // whole point.
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
+        //
+        // R8-parity (2026-04-24, Task #33): join the current thread's
+        // StatementTxn when one is active on this graph, mirroring the
+        // logic in `setNodeProperty` at line 1981.  Without this, calling
+        // `setNodePropertiesBatch` from inside a bulk-ingest code path
+        // (e.g. `bulkInsertNode`) would open a separate engine txn and
+        // commit with its own fsync, negating the whole-statement
+        // one-fsync-per-batch design.  The new bulk-insert wiring
+        // (`bulkInsertNode`'s batch-path switch in the same commit)
+        // makes this join load-bearing.
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
+        errdefer if (stmt_txn == null) {
+            mg.engine.abortTxn(txn) catch {};
+        };
 
         for (entries) |entry| {
             const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, entry.key, self.allocator) else null;
@@ -2061,9 +2094,10 @@ pub const StorageAdapter = struct {
 
         // Write the node record once after all property mutations — still
         // inside the same transaction so the whole batch commits atomically
-        // with a single fsync.
+        // with a single fsync (or, when joining a StatementTxn, with the
+        // caller's eventual commit).
         try mg.engine.putNodeTxn(node_id, rec, txn);
-        try mg.engine.commitTxn(txn);
+        if (stmt_txn == null) try mg.engine.commitTxn(txn);
     }
 
     /// Remove a property from a node by writing a null tombstone.
