@@ -1740,6 +1740,8 @@ pub const GraphStore = struct {
                 try self.merge_prop_index.put(key_copy, node_id);
             }
         }
+        _ = self.merge_prop_dirty_count.fetchAdd(@as(u32, @intCast(labels.len)), .monotonic);
+        self.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
     }
 
     /// Remove entries from the merge property index for each label on the node.
@@ -1751,6 +1753,8 @@ pub const GraphStore = struct {
                 self.allocator.free(kv.key);
             }
         }
+        _ = self.merge_prop_dirty_count.fetchAdd(@as(u32, @intCast(labels.len)), .monotonic);
+        self.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
     }
 
     /// Remove ALL merge property index entries for a node (used during node deletion).
@@ -1765,6 +1769,10 @@ pub const GraphStore = struct {
                 }
             }
         }
+        const n_props = node.properties.count();
+        const n_labels = node.labels.len;
+        _ = self.merge_prop_dirty_count.fetchAdd(@as(u32, @intCast(n_props * n_labels)), .monotonic);
+        self.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
     }
 
     /// Result of a merge candidate lookup.
@@ -7790,4 +7798,20 @@ test "lookupMergeCandidate behaves identically without snapshot" {
     try std.testing.expectEqual(node_id, out);
 
     try std.testing.expectEqual(GraphStore.MergeLookupResult.not_found, store.lookupMergeCandidate("default", "User", "name", .{ .String = "bob" }, &out));
+}
+
+test "addToMergePropertyIndex triggers publish after threshold" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    // Create many nodes with unique properties so dirty_count crosses the threshold.
+    var i: u64 = 0;
+    while (i < MERGE_PROP_PUBLISH_THRESHOLD + 10) : (i += 1) {
+        const nid = try store.createNode(&.{"User"});
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "user{d}", .{nid});
+        try store.setNodeProperty(nid, "name", .{ .String = name });
+    }
+
+    try std.testing.expect(store.merge_prop_snapshot.load(.acquire) != null);
 }
