@@ -1294,7 +1294,6 @@ pub const StorageAdapter = struct {
         rel_type: []const u8,
         props: []const PropKV,
     ) !u64 {
-        _ = self;
         const io = std.Io.Threaded.global_single_threaded.io();
 
         if (store.nodes.getPtr(source_id) == null) return error.SourceNodeNotFound;
@@ -1305,8 +1304,21 @@ pub const StorageAdapter = struct {
         mg.string_indexes_mutex.unlock(io);
         const edge_id = try create_result;
 
-        for (props) |kv| {
-            try store.setEdgeProperty(edge_id, kv.key, kv.value);
+        // Task #34 (2026-04-24): route N properties through the batch
+        // helper — same motivation as the change in `bulkInsertEdgeWithIds`
+        // above.  See that comment for details.
+        if (props.len > 0) {
+            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+                entries_buf[0..props.len]
+            else
+                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+            defer if (props.len > entries_buf.len) self.allocator.free(entries);
+
+            for (props, 0..) |kv, i| {
+                entries[i] = .{ .key = kv.key, .value = kv.value };
+            }
+            try store.setEdgePropertiesBatch(edge_id, entries);
         }
         return edge_id;
     }
@@ -1588,8 +1600,28 @@ pub const StorageAdapter = struct {
         errdefer if (stmt_txn_open) stmt_txn.abort();
 
         const edge_id = try store.createEdgeWithGraph(source_id, target_id, rel_type, graph_name);
-        for (props) |kv| {
-            try store.setEdgeProperty(edge_id, kv.key, kv.value);
+
+        // Task #34 (2026-04-24): route N properties through
+        // `setEdgePropertiesBatch` instead of calling `setEdgeProperty` in
+        // a loop.  The batch path acquires the adapter mutex once, does
+        // exactly one `updateEdgePropHead` per direction at the end (for
+        // the terminal `prop_head`), and runs `refreshPropertyChainIndex`
+        // exactly once — collapsing the prior O(K²) cost to O(K).  Mirrors
+        // the Task #33 conversion of `bulkInsertNode` at line 1140.  For
+        // props.len == 0 we still return a valid edge_id without a no-op
+        // batch call.
+        if (props.len > 0) {
+            var entries_buf: [16]graph_store.GraphStore.BatchPropertyEntry = undefined;
+            const entries: []graph_store.GraphStore.BatchPropertyEntry = if (props.len <= entries_buf.len)
+                entries_buf[0..props.len]
+            else
+                try self.allocator.alloc(graph_store.GraphStore.BatchPropertyEntry, props.len);
+            defer if (props.len > entries_buf.len) self.allocator.free(entries);
+
+            for (props, 0..) |kv, i| {
+                entries[i] = .{ .key = kv.key, .value = kv.value };
+            }
+            try store.setEdgePropertiesBatch(edge_id, entries);
         }
 
         if (stmt_txn_open) try stmt_txn.commit();
@@ -2317,6 +2349,103 @@ pub const StorageAdapter = struct {
             return;
         }
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
+    }
+
+    /// Set or remove multiple properties on an edge under a single mutex
+    /// acquisition.  Edge counterpart to `setNodePropertiesBatch`
+    /// (line 2031).
+    ///
+    /// Task #34 (2026-04-24): avoid the O(K²) cost of the per-property
+    /// `setEdgeProperty` loop in bulk-ingest.  Each property in the
+    /// old loop did:
+    ///   * one adapter mutex acquire → `requireExistingGraphLocked`,
+    ///   * one linear `adj_out.updateEdgePropHead` scan,
+    ///   * one linear `adj_in.updateEdgePropHead` scan,
+    ///   * one `refreshPropertyChainIndex` walking all previously-written
+    ///     properties — the O(K²)/edge amplifier.
+    ///
+    /// The batch collapses all of that to:
+    ///   * one adapter mutex acquire,
+    ///   * N `putPropertyTxn` calls (each unavoidable),
+    ///   * exactly one `updateEdgePropHead(adj_out)` + one
+    ///     `updateEdgePropHead(adj_in)` at the end for the terminal
+    ///     `prop_head` (intermediate heads are never read),
+    ///   * exactly one `refreshPropertyChainIndex` at the end.
+    ///
+    /// Joins an active `StatementTxn` on this graph (parity with
+    /// `setNodePropertiesBatch` + `setEdgeProperty`) so the whole batch
+    /// commits with the caller's single WAL fsync.
+    pub fn setEdgePropertiesBatch(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        edge_id: u64,
+        entries: []const BatchPropertyEntry,
+    ) !void {
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk try self.requireExistingGraphLocked(graph_name);
+        };
+
+        const edge_entry = mg.engine.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        const from_id = edge_entry.from;
+        const to_id = edge_entry.neighbor;
+        const from_rec = (try mg.engine.node_store.getNode(from_id)) orelse return error.NodeNotFound;
+        const orig_prop_head: u32 = edge_entry.prop_head;
+
+        // R8/R12 parity: join the active StatementTxn when one is live on
+        // this graph so the whole batch commits with the caller's single
+        // WAL fsync.  Without this, the batch would open + commit its own
+        // engine txn and produce a separate fsync inside the caller's
+        // statement window — the exact overhead this batch exists to
+        // eliminate.  `setEdgeProperty` at line 2289 applies the same logic.
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
+        errdefer if (stmt_txn == null) {
+            mg.engine.abortTxn(txn) catch {};
+        };
+
+        // Thread the prop_head through all N property writes.  Each
+        // `putPropertyTxn` returns a new chain head we pass into the next
+        // call.  We never refresh the chain index or update adjacency for
+        // intermediate heads — the adjacency lists only need the terminal
+        // head, and the chain index needs exactly one refresh over the
+        // final chain.
+        var running_prop_head: u32 = orig_prop_head;
+        var last_new_head_u64: u64 = @as(u64, orig_prop_head);
+        for (entries) |entry| {
+            const storage_val: gs.PropertyValue = if (entry.value) |val|
+                try toStorageProperty(self.allocator, val)
+            else
+                .null;
+            defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
+
+            const new_head_u64 = try mg.engine.putPropertyTxn(@as(u64, running_prop_head), entry.key, storage_val, txn);
+            running_prop_head = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
+            last_new_head_u64 = new_head_u64;
+        }
+
+        // Terminal adjacency + index updates — exactly once, with the
+        // final `prop_head`.  Skip when nothing changed (empty batch or
+        // no-op rewrite).
+        if (running_prop_head != orig_prop_head) {
+            _ = try mg.engine.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, running_prop_head);
+            const to_rec = (try mg.engine.node_store.getNode(to_id)) orelse return error.NodeNotFound;
+            _ = try mg.engine.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
+
+            if (mg.engine.edge_index.getPtr(edge_id)) |idx_entry| {
+                idx_entry.prop_head = running_prop_head;
+            }
+        }
+
+        // Single property-chain index refresh — sweeps the whole final
+        // chain once instead of K times as the per-property loop did.
+        if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
+            mg.engine.property_index.removeChain(orig_prop_head);
+        }
+        try mg.engine.refreshPropertyChainIndex(last_new_head_u64);
+
+        if (stmt_txn == null) try mg.engine.commitTxn(txn);
     }
 
     /// Get a property from an edge. Delegates to the engine's

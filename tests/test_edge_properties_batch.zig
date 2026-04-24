@@ -154,10 +154,15 @@ test "task34_regression: setEdgePropertiesBatch round-trips 5 properties in one 
 
     const ids = try seedEdgePair(&h);
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
 
     // Five heterogeneous entries — strings, ints, bools — to cover the
     // cases edges_app_role_assignment.jsonl actually writes.
-    const entries = [_]adapter_mod.StorageAdapter.BatchPropertyEntry{
+    // Uses the public graph_store.GraphStore.BatchPropertyEntry type
+    // (uppercase `PropertyValue` variants); `store.setEdgePropertiesBatch`
+    // performs slot resolution and FLE encryption before dispatching to
+    // the adapter-level batch helper.
+    const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
         .{ .key = "role", .value = .{ .String = "admin" } },
         .{ .key = "scope", .value = .{ .String = "tenant-1" } },
         .{ .key = "granted_at", .value = .{ .String = "2026-04-24T00:00:00Z" } },
@@ -171,18 +176,39 @@ test "task34_regression: setEdgePropertiesBatch round-trips 5 properties in one 
     const write_handle = try graph_store.acquireGraphWriteLockCancelable("default", deadline);
     defer graph_store.releaseGraphLock(write_handle);
 
-    try adapter.setEdgePropertiesBatch("default", ids.edge, &entries);
+    try store.setEdgePropertiesBatch(ids.edge, &entries);
 
-    // Verify each property round-tripped.  The adapter's getEdgeProperty
-    // returns an allocator-owned copy, so we free each read.
+    // Verify each property round-tripped via the in-memory store, which
+    // the batch must update in lock-step with the adapter engine writes.
+    // `store.edges.getPtr(public_id).properties` is keyed by `graph_store
+    // .PropertyValue` (uppercase tags).  Also assert via the adapter's
+    // engine-space `getEdgeProperty` (slot-id space) to prove both layers
+    // agree.
     const aa = h.arena.allocator();
+    const edge = store.edges.get(ids.edge) orelse return error.EdgeMissing;
     for (entries) |entry| {
-        const got = try adapter.getEdgeProperty("default", ids.from, ids.edge, entry.key, aa);
+        const mem_prop = edge.properties.get(entry.key) orelse return error.PropertyMissing;
+        switch (entry.value.?) {
+            .String => |expected| try testing.expectEqualStrings(expected, mem_prop.String),
+            .Int => |expected| try testing.expectEqual(expected, mem_prop.Int),
+            .Bool => |expected| try testing.expectEqual(expected, mem_prop.Bool),
+            else => unreachable,
+        }
+    }
+
+    // Engine layer agreement — resolve slot ids via the same helpers
+    // `store.setEdgeProperty` uses (lines 3375 / 3363 in graph_store.zig)
+    // so we exercise the real slot-mapping path.
+    const id_map = try store.getOrCreateIdMap("default");
+    const slot_from = id_map.nodeSlot(@as(u128, ids.from)) orelse return error.SlotMissing;
+    const slot_edge = id_map.edgeSlot(@as(u128, ids.edge)) orelse return error.SlotMissing;
+    for (entries) |entry| {
+        const got = try adapter.getEdgeProperty("default", slot_from, slot_edge, entry.key, aa);
         try testing.expect(got != null);
         switch (entry.value.?) {
-            .String => |expected| try testing.expectEqualStrings(expected, got.?.String),
-            .Int => |expected| try testing.expectEqual(expected, got.?.Int),
-            .Bool => |expected| try testing.expectEqual(expected, got.?.Bool),
+            .String => |expected| try testing.expectEqualStrings(expected, got.?.string),
+            .Int => |expected| try testing.expectEqual(expected, got.?.int),
+            .Bool => |expected| try testing.expectEqual(expected, got.?.bool),
             else => unreachable,
         }
     }
@@ -208,6 +234,7 @@ test "task34_regression: setEdgePropertiesBatch joins active StatementTxn instea
 
     const ids = try seedEdgePair(&h);
     const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
 
     const deadline = monoNanosNow() + 30 * std.time.ns_per_s;
     const write_handle = try graph_store.acquireGraphWriteLockCancelable("default", deadline);
@@ -219,7 +246,7 @@ test "task34_regression: setEdgePropertiesBatch joins active StatementTxn instea
     var committed = false;
     errdefer if (!committed) stmt_txn.abort();
 
-    const entries = [_]adapter_mod.StorageAdapter.BatchPropertyEntry{
+    const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
         .{ .key = "k1", .value = .{ .String = "v1" } },
         .{ .key = "k2", .value = .{ .String = "v2" } },
         .{ .key = "k3", .value = .{ .Int = 7 } },
@@ -231,14 +258,20 @@ test "task34_regression: setEdgePropertiesBatch joins active StatementTxn instea
     // that error and this test will fail with it.  The CORRECT post-fix
     // behaviour is to reuse the active stmt_txn (as `setNodePropertiesBatch`
     // does via `currentStatementTxnForGraph`) and return success.
-    try adapter.setEdgePropertiesBatch("default", ids.edge, &entries);
+    try store.setEdgePropertiesBatch(ids.edge, &entries);
 
     // Properties must be visible under the live statement txn — we can
-    // read them back through the same adapter.
+    // read them back through the adapter (slot-space) and the in-memory
+    // store simultaneously.  Engine-space `PropertyValue` uses lowercase
+    // tags; `store.edges.get(...).properties` uses uppercase.
     const aa = h.arena.allocator();
-    const got_k1 = try adapter.getEdgeProperty("default", ids.from, ids.edge, "k1", aa);
+    const id_map = try store.getOrCreateIdMap("default");
+    const slot_from = id_map.nodeSlot(@as(u128, ids.from)) orelse return error.SlotMissing;
+    const slot_edge = id_map.edgeSlot(@as(u128, ids.edge)) orelse return error.SlotMissing;
+
+    const got_k1 = try adapter.getEdgeProperty("default", slot_from, slot_edge, "k1", aa);
     try testing.expect(got_k1 != null);
-    try testing.expectEqualStrings("v1", got_k1.?.String);
+    try testing.expectEqualStrings("v1", got_k1.?.string);
 
     // Now commit the caller's statement txn.  This is the ONE fsync that
     // the batch optimisation guarantees — if the batch had auto-committed
@@ -249,13 +282,13 @@ test "task34_regression: setEdgePropertiesBatch joins active StatementTxn instea
     committed = true;
 
     // Post-commit: values still readable (now durably persisted).
-    const got_k2 = try adapter.getEdgeProperty("default", ids.from, ids.edge, "k2", aa);
+    const got_k2 = try adapter.getEdgeProperty("default", slot_from, slot_edge, "k2", aa);
     try testing.expect(got_k2 != null);
-    try testing.expectEqualStrings("v2", got_k2.?.String);
+    try testing.expectEqualStrings("v2", got_k2.?.string);
 
-    const got_k3 = try adapter.getEdgeProperty("default", ids.from, ids.edge, "k3", aa);
+    const got_k3 = try adapter.getEdgeProperty("default", slot_from, slot_edge, "k3", aa);
     try testing.expect(got_k3 != null);
-    try testing.expectEqual(@as(i64, 7), got_k3.?.Int);
+    try testing.expectEqual(@as(i64, 7), got_k3.?.int);
 }
 
 // ----------------------------------------------------------------------
@@ -329,12 +362,12 @@ test "task34_unit: setEdgePropertiesBatch parity with per-property setEdgeProper
     );
 
     // Batch path.
-    const entries = [_]adapter_mod.StorageAdapter.BatchPropertyEntry{
+    const entries = [_]graph_store.GraphStore.BatchPropertyEntry{
         .{ .key = "role", .value = .{ .String = "admin" } },
         .{ .key = "scope", .value = .{ .String = "t1" } },
         .{ .key = "weight", .value = .{ .Int = 5 } },
     };
-    try adapter.setEdgePropertiesBatch("default", batch_edge, &entries);
+    try store.setEdgePropertiesBatch(batch_edge, &entries);
 
     // Loop path — mirror the slow per-property flow through
     // GraphStore.setEdgeProperty (what today's `bulkInsertEdgeWithIds`
@@ -344,18 +377,25 @@ test "task34_unit: setEdgePropertiesBatch parity with per-property setEdgeProper
     try store.setEdgeProperty(loop_edge, "scope", .{ .String = "t1" });
     try store.setEdgeProperty(loop_edge, "weight", .{ .Int = 5 });
 
-    // Parity assertions.
+    // Parity assertions — engine-space PropertyValue (lowercase tags).
+    // Resolve slot ids for both edges via the id_map, same as the real
+    // per-property code path at graph_store.zig:3375.
     const aa = h.arena.allocator();
+    const id_map = try store.getOrCreateIdMap("default");
+    const batch_from_slot = id_map.nodeSlot(@as(u128, batch_from)) orelse return error.SlotMissing;
+    const batch_edge_slot = id_map.edgeSlot(@as(u128, batch_edge)) orelse return error.SlotMissing;
+    const loop_from_slot = id_map.nodeSlot(@as(u128, loop_from)) orelse return error.SlotMissing;
+    const loop_edge_slot = id_map.edgeSlot(@as(u128, loop_edge)) orelse return error.SlotMissing;
     inline for (.{ "role", "scope" }) |key| {
-        const b = try adapter.getEdgeProperty("default", batch_from, batch_edge, key, aa);
-        const l = try adapter.getEdgeProperty("default", loop_from, loop_edge, key, aa);
+        const b = try adapter.getEdgeProperty("default", batch_from_slot, batch_edge_slot, key, aa);
+        const l = try adapter.getEdgeProperty("default", loop_from_slot, loop_edge_slot, key, aa);
         try testing.expect(b != null);
         try testing.expect(l != null);
-        try testing.expectEqualStrings(l.?.String, b.?.String);
+        try testing.expectEqualStrings(l.?.string, b.?.string);
     }
-    const b_w = try adapter.getEdgeProperty("default", batch_from, batch_edge, "weight", aa);
-    const l_w = try adapter.getEdgeProperty("default", loop_from, loop_edge, "weight", aa);
+    const b_w = try adapter.getEdgeProperty("default", batch_from_slot, batch_edge_slot, "weight", aa);
+    const l_w = try adapter.getEdgeProperty("default", loop_from_slot, loop_edge_slot, "weight", aa);
     try testing.expect(b_w != null);
     try testing.expect(l_w != null);
-    try testing.expectEqual(l_w.?.Int, b_w.?.Int);
+    try testing.expectEqual(l_w.?.int, b_w.?.int);
 }

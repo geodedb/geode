@@ -3408,6 +3408,123 @@ pub const GraphStore = struct {
         }
     }
 
+    /// Set multiple properties on an edge under a single adapter call.
+    ///
+    /// Task #34 (2026-04-24): edge counterpart to `setNodePropertiesBatch`
+    /// (see line 2058).  The pre-fix bulk-ingest hot path called
+    /// `setEdgeProperty` in a loop — each iteration re-acquired the
+    /// adapter mutex, did two O(D) adjacency-chain linear scans in
+    /// `updateEdgePropHead`, and ran `refreshPropertyChainIndex` over
+    /// all K previously-written properties, yielding O(K²) per edge.
+    /// At K=5 props × 400 edges × 16-way parallel seed this stalled the
+    /// flusher for ~138 s on `edges_app_role_assignment.jsonl`.  See
+    /// `docs/performance/2026-04-24-sharding/TASK-34-TRIAGE.md`.
+    ///
+    /// The batch path runs all property puts under one adapter call with
+    /// a single mutex acquisition, one `updateEdgePropHead` per direction
+    /// (applied to the terminal `prop_head` — intermediate heads are
+    /// never read), and one `refreshPropertyChainIndex` at the end.
+    /// Intended for internal bulk-ingest callers; regular per-property
+    /// callers keep using `setEdgeProperty`.
+    pub fn setEdgePropertiesBatch(self: *GraphStore, edge_id: u64, entries: []const BatchPropertyEntry) !void {
+        const edge = self.edges.get(edge_id) orelse return error.EdgeNotFound;
+
+        // --- Adapter path: single lock acquisition for all properties ---
+        if (global_adapter) |adapter| {
+            const slot_edge = try self.requireEdgeSlot(edge.graph_name, edge_id);
+
+            // Build adapter-level batch entries, applying FLE encryption per
+            // entry (mirrors the per-property encryption in `setEdgeProperty`
+            // above).
+            var adapter_entries = try self.allocator.alloc(graph_storage_adapter.StorageAdapter.BatchPropertyEntry, entries.len);
+            defer self.allocator.free(adapter_entries);
+
+            for (entries, 0..) |entry, i| {
+                if (entry.value) |val| {
+                    const effective = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    adapter_entries[i] = .{ .key = entry.key, .value = effective };
+                } else {
+                    adapter_entries[i] = .{ .key = entry.key, .value = null };
+                }
+            }
+
+            try adapter.setEdgePropertiesBatch(edge.graph_name, slot_edge, adapter_entries);
+        }
+
+        // --- In-memory store update (always, regardless of adapter) ---
+        if (self.edges.getPtr(edge_id)) |edge_ptr| {
+            for (entries) |entry| {
+                if (isInternalPersistedPropertyKey(entry.key)) continue;
+
+                if (entry.value) |val| {
+                    const effective = self.applyFleEncryptionForEdge(edge_id, entry.key, val);
+                    const value_copy = try copyPropertyValue(self, effective);
+                    errdefer freePropertyValue(self, value_copy);
+
+                    const result = try edge_ptr.properties.getOrPut(entry.key);
+                    if (!result.found_existing) {
+                        result.key_ptr.* = try self.allocator.dupe(u8, entry.key);
+                    } else {
+                        freePropertyValue(self, result.value_ptr.*);
+                    }
+                    result.value_ptr.* = value_copy;
+
+                    notifyMutation(.set_edge_property, edge_id, 0, 0, null, entry.key, effective, null);
+                } else {
+                    // Remove
+                    if (edge_ptr.properties.fetchRemove(entry.key)) |kv| {
+                        self.allocator.free(kv.key);
+                        freePropertyValue(self, kv.value);
+                        notifyMutation(.remove_edge_property, edge_id, 0, 0, null, entry.key, null, null);
+                    }
+                }
+            }
+            self.dirty.store(true, .release);
+            incrementMutationEpoch();
+        }
+    }
+
+    /// Apply FLE encryption to an edge property value if required.  Factored
+    /// out so both `setEdgeProperty` and `setEdgePropertiesBatch` share the
+    /// same logic.  Mirrors `applyFleEncryption` (the node variant) at line
+    /// 2132.
+    fn applyFleEncryptionForEdge(self: *GraphStore, edge_id: u64, key: []const u8, value: PropertyValue) PropertyValue {
+        switch (value) {
+            .String => |s| {
+                if (fle_integration.hasEncryptedFields() and !isLikelyFleEnvelope(s)) {
+                    const edge_type: []const u8 = if (self.edges.get(edge_id)) |e| e.label else "Unknown";
+                    if (fle_integration.fieldRequiresEncryption(edge_type, key)) {
+                        const fle_ctx = fle_integration.EncryptionContext{
+                            .tenant_id = self.tenant_id,
+                            .schema_name = self.schema_name,
+                            .allocator = self.allocator,
+                            .current_user_role = fle_integration.getCurrentUserRole(),
+                        };
+                        // Stack-formatted record ID — see setNodeProperty comment.
+                        var id_buf: [32]u8 = undefined;
+                        const record_id = std.fmt.bufPrint(&id_buf, "edge_{d}", .{edge_id}) catch {
+                            return value;
+                        };
+                        const encrypted = fle_integration.encryptFieldIfNeeded(
+                            fle_ctx,
+                            edge_type,
+                            key,
+                            s,
+                            record_id,
+                        ) catch {
+                            return value;
+                        };
+                        if (!std.mem.eql(u8, encrypted, s)) {
+                            return PropertyValue{ .String = encrypted };
+                        }
+                    }
+                }
+                return value;
+            },
+            else => return value,
+        }
+    }
+
     pub fn removeEdgeProperty(self: *GraphStore, edge_id: u64, key: []const u8) void {
         if (isInternalPersistedPropertyKey(key)) return;
         if (global_vtable) |vt| {
