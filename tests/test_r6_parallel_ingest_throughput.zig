@@ -237,26 +237,45 @@ test "R6: 16 writers on 16 different graphs do NOT serialise globally" {
     try testing.expectEqual(@as(u64, 0), total_failures);
     try testing.expectEqual(@as(u64, num_workers * iterations), total_mutations);
 
-    // Cross-graph parallelism invariant: the 16-way cross-graph run
-    // must be at least 2× faster than the 16-way same-graph run on
-    // the same host. Pre-R6 made them indistinguishable (global lock
-    // forced serialisation regardless of graph); post-R6 separates
-    // them by a large factor. Host load shifts BOTH measurements
-    // equally — the ratio still holds. A 0.5× threshold cleanly
-    // rejects the pre-R6 "cross ≈ same" pathology while absorbing
-    // jitter on contended hosts.
-    const upper_bound_ns: u64 = contended_ns / 2;
-    if (wall_ns > upper_bound_ns) {
+    // Lock-wait invariant. Wall-clock comparison between cross-graph
+    // and same-graph is pathological under CPU oversubscription: both
+    // runs saturate the same thread budget on the same host, so wall-
+    // clock collapses to "CPU-bound time" regardless of lock scope.
+    //
+    // Instead, compare the *lock-contention* signal directly: each
+    // worker records `total_lock_wait_ns` (the window from before the
+    // acquire call to after it returns) across all its iterations.
+    // Under per-graph locking, cross-graph workers wait only for
+    // themselves = essentially zero. Under same-graph contention, wait
+    // time scales with `(N-1) × work_time / 2 × iterations` per worker.
+    // CPU oversubscription inflates both, but the CONTENTION component
+    // is additive only for the same-graph case — the ratio holds.
+    var cross_sum_wait: u64 = 0;
+    for (results) |r| cross_sum_wait += r.total_lock_wait_ns;
+    var same_sum_wait: u64 = 0;
+    for (contended_results) |r| same_sum_wait += r.total_lock_wait_ns;
+
+    // Cross-graph aggregate wait must be at most 1/4 of same-graph.
+    // Same-graph is genuinely contended; cross-graph is contention-free
+    // by design. Pre-R6 (global exclusive) would make them comparable;
+    // post-R6 keeps them orders of magnitude apart. 4× separator handles
+    // honest scheduler preemption noise on loaded hosts.
+    const upper_bound_ns: u64 = same_sum_wait / 4;
+    if (cross_sum_wait > upper_bound_ns) {
         std.debug.print(
-            "R6 cross-graph: 16 workers on 16 graphs took {d:.3} ms " ++
-                "(same-graph 16-way contended baseline {d:.3} ms; " ++
-                "bound = 0.5× contended = {d:.3} ms). Cross-graph is " ++
-                "NOT beating same-graph — global lock is still " ++
-                "serialising or per-graph lock scope regressed.\n",
+            "R6 cross-graph: 16 workers on 16 graphs accumulated " ++
+                "{d:.3} ms total lock-wait (same-graph 16-way " ++
+                "contended baseline {d:.3} ms; bound = 0.25× = " ++
+                "{d:.3} ms). Cross-graph wait is NOT dominated by " ++
+                "same-graph — global lock is still serialising or " ++
+                "per-graph lock scope regressed. (Wall-clock: cross " ++
+                "{d:.3} ms vs same {d:.3} ms.)\n",
             .{
+                @as(f64, @floatFromInt(cross_sum_wait)) / 1_000_000.0,
+                @as(f64, @floatFromInt(same_sum_wait)) / 1_000_000.0,
+                @as(f64, @floatFromInt(upper_bound_ns)) / 1_000_000.0,
                 @as(f64, @floatFromInt(wall_ns)) / 1_000_000.0,
                 @as(f64, @floatFromInt(contended_ns)) / 1_000_000.0,
-                @as(f64, @floatFromInt(upper_bound_ns)) / 1_000_000.0,
             },
         );
         return error.CrossGraphSerialised;
