@@ -3462,6 +3462,28 @@ pub fn build(b: *std.Build) void {
     const two_phase_edge_step = b.step("test-two-phase-edge-lock", "Run Task 15/16 two-phase lock tests for the bulk MATCH+CREATE edge path");
     two_phase_edge_step.dependOn(&run_two_phase_edge_tests.step);
 
+    // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
+    // Level 1 regression — contract tests for the future
+    // `StorageAdapter.setEdgePropertiesBatch` helper.  See
+    // docs/performance/2026-04-24-sharding/TASK-34-TRIAGE.md.  Pre-fix the
+    // tests fail to compile (no such function); post-fix they round-trip 5
+    // properties in one call, join an active StatementTxn without opening
+    // a nested one, and match the per-property `setEdgeProperty` loop's
+    // final edge state.
+    const edge_props_batch_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_edge_properties_batch.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    edge_props_batch_test_mod.addImport("geode", root_mod);
+    const edge_props_batch_tests = b.addTest(.{ .root_module = edge_props_batch_test_mod });
+    const run_edge_props_batch_tests = b.addRunArtifact(edge_props_batch_tests);
+    test_step.dependOn(&run_edge_props_batch_tests.step);
+    test_perf_step.dependOn(&run_edge_props_batch_tests.step);
+    const edge_props_batch_step = b.step("test-edge-properties-batch", "Run Task #34 setEdgePropertiesBatch contract tests");
+    edge_props_batch_step.dependOn(&run_edge_props_batch_tests.step);
+
     // Simple-MERGE fast-path (enterprise-ingest-throughput MERGE extension).
     // Covers the msft-graph nodes_*.jsonl hot path `MERGE (n:L {key: v})
     // [ON CREATE SET n.x = ..., ...]`: hit returns existing id, miss
