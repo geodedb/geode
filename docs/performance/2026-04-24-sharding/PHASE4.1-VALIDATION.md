@@ -1,33 +1,50 @@
-# Phase 4.1 validation — hang reproduced under concurrency (2026-04-24)
+# Phase 4.1 validation — REVERTED (2026-04-24)
 
 ## TL;DR
 
-**Phase 4.1 + default group_commit fails the ≤ 60 s target.**  The
-seed hangs indefinitely in every parallel configuration tested,
-with workers blocked in `QUICTransport.ReceiveProto` waiting for a
-`BeginTx` response that never arrives.
+**Phase 4.1 reverted.**  Client-side seed-top-level conn pinning
+triggers a server hang in every parallel configuration tested.
+Root cause: **the geode Go driver's `DefaultQUICPoolSize = 4`**
+multiplexes logical sql.Conns via streams on only 4 underlying
+QUIC connections — so pinning 16 conns actually pins 4 QUIC
+conns with 4 streams each, and the geode server has a bug
+handling 4+ concurrent streams per QUIC conn.
 
-Serial mode completes successfully.  The hang is specific to
-pinned-conn reuse under concurrent load, and reproduces with or
-without `GEODE_GROUP_COMMIT`.
+Even worker counts below the QUIC pool size eventually hit the
+hang on larger data sets (w=4 hung on `audit_events` 2414 nodes).
+The revert restores Phase 2.4 behavior (slow, retries, but
+forward progress).
 
 ## Test matrix
 
-| Config | Result | Where it hung |
+| Config | Pinned | Result |
 | --- | --- | --- |
-| `--parallel --workers 16` | HANG | `users.jsonl` at 317/621 nodes (~51%) |
-| `--parallel --workers 16` + `GEODE_GROUP_COMMIT=0` | HANG | `users.jsonl` at 317/621 nodes |
-| `--parallel --workers 8` | WORKS through node phase | no hang observed before kill |
-| `--parallel --workers 2` | node phase OK, edges hang | `edges_app_role_assignment.jsonl` (2nd edge file) at 0/400 — both workers stuck |
-| `--parallel=false` (serial) | WORKS | completed all 25 node files in ~3 min, edges progressing |
+| `--parallel --workers 16` | YES (4.1) | HANG at 317/621 nodes |
+| `--parallel --workers 16` + `GC=0` | YES | HANG same point |
+| `--parallel --workers 8` | YES | node phase progressing, not run to edges |
+| `--parallel --workers 4` | YES | node phase OK, HANG on `audit_events` (2414 nodes) |
+| `--parallel --workers 2` | YES | nodes OK, HANG on 2nd edge file |
+| `--parallel=false` (serial) | — | WORKS cleanly |
+| `--parallel --workers 16` post-revert | NO | progressing at Phase-2.4 speed (slow retries but no hang) |
 
-All runs used geode `24db46c5` (default `group_commit` ON) + msft-graph
-`467021f` (Phase 4.1 pinned conns).
+## Root cause: QUIC pool stream multiplexing
 
-## Goroutine dump evidence
+From `/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/quic_pool.go`:
 
-`kill -QUIT <pid>` on the `w=16` hang produced identical stack
-traces for all 8 stuck workers (saved as
+```go
+const DefaultQUICPoolSize = 4
+
+// QUICPool manages a small pool of persistent QUIC connections.
+// Each database/sql Conn gets a new QUIC stream on a pooled connection,
+// amortizing the TLS handshake cost across many logical connections.
+```
+
+So a `*sql.Conn` is NOT a unique QUIC connection — it's a logical
+connection multiplexed onto one of 4 underlying QUIC conns via
+streams.  Pinning 16 sql.Conns keeps them alive long-term on 4
+QUIC conns, accumulating 4 active streams each.
+
+Goroutine dump from the w=16 hang (saved as
 `phase4.1-validation/w16-hang-with-goroutine-dump.log`):
 
 ```
@@ -41,100 +58,92 @@ database/sql.ctxDriverBegin
 database/sql.(*DB).beginDC.func1
 database/sql.(*Conn).BeginTx
 main.batchExecTxOnConn
-    geodeutil.go:308
-main.batchExecPinned
-    geodeutil.go:564
-main.pipelineExec.func1
-    geodeutil.go:718
 ```
 
-Every stuck goroutine is on `conn.BeginTx → QUICTransport.ReceiveProto
-→ io.ReadFull`, waiting for a `BeginTx` response.  The server is
-idle (all threads in `S` state per `/proc/<pid>/task/*/wchan`:
-82 futex_do_wait, 15 hrtimer_nanosleep).
+Every stuck worker is waiting for a `BeginTx` response that
+never arrives.  Server remains alive (fresh conns work fine) —
+but BeginTx on existing multiplexed streams is silently dropped.
 
-## Server responsiveness check
+## Server-side stream handling (for follow-up investigation)
 
-While the seed was hung, `geode query --server 127.0.0.1:3151
-"RETURN 1"` on a FRESH conn returned successfully.  So the server
-is alive and the QUIC transport is functional — but BeginTx on
-pre-existing pinned conns never returns.
+The server's stream dispatch (in
+`src/server/quic_connection_handler.zig:1488`
+`streamAcceptorLoop`) spawns a new OS thread per accepted
+stream via `stream_pool.submit`.  Per-conn limit:
+`max_total_streams_per_connection = 65` (from
+`src/server/active_stream_registry.zig:7`), global throttle
+`default_max_global_stream_threads = 256`.  These are not
+exceeded by our workload (~40 streams per tx × ~4 txs in flight
+per QUIC conn).
 
-## Hypothesis
+Candidate root causes, untested:
 
-Per-conn server-side state gets into a bad state after some
-threshold of sequential transactions on a single QUIC connection:
+1. **Stream-dispatch race**: `streamAcceptorLoop` uses
+   `conn.tryAcceptStream` in a hot loop.  Under sustained stream
+   submission (many tx.ExecContext calls on pinned conns), maybe
+   some streams get accepted but the handler thread never sees
+   the first message (FIN-before-data or similar).
+2. **Orphan-txn reaper**: `orphan-txn rolled back on stream
+   close` (server_state.zig:469) — could fire incorrectly on a
+   pinned conn's active stream, poisoning subsequent BeginTx?
+3. **Stream ID reuse** in the Zig QUIC library under load.
+4. **Per-conn serialization** for writes — multiple response
+   frames on the same QUIC conn serialize through a mutex;
+   under 4 concurrent streams this could deadlock if any stream's
+   handler blocks on adjacent stream I/O.
 
-- Serial path (fresh conn per chunk) never reuses a conn long
-  enough to trigger — no hang.
-- Parallel `w=16` triggers fast — first 8 chunks complete, next 8
-  hang immediately.
-- Parallel `w=2` takes longer to accumulate — node phase
-  completes (25 files' worth of chunks), but the second edge file's
-  MATCH+CREATE pattern trips the bad state.
+Investigation needed: strace/perf on the server while a hang
+is in progress (required CAP_SYS_PTRACE — not available in
+this session).
 
-The common factor is pinned-conn reuse: once the trigger
-condition is hit on a pinned conn, every subsequent BeginTx on
-THAT conn is silently dropped by the server.
+## Decision: REVERT msft-graph Phase 4.1
 
-## What we know it ISN'T
+Committed as msft-graph `90a1227` — reverts `467021f`.
 
-- **Not group_commit**: reproduces with `GEODE_GROUP_COMMIT=0`
-  forcing the single-phase path.
-- **Not slog observability loss**: hang is directly reproducible
-  and verifiable via goroutine dump.
-- **Not client-side batchExecPinned retry loop**: workers are
-  stuck in the FIRST attempt, not looping.
-- **Not pool exhaustion**: `MaxOpenConns = workers*2 = 32` with
-  16 pinned; 16 slots free for fresh conns.
-- **Not QUIC stream-limit**: default 1000 bidi streams per conn;
-  each chunk uses ~40 streams, 8 completed chunks = 320 streams
-  per conn, well below limit.
+msft-graph now runs the Phase 4.0 primitives
+(`batchExecTxOnConn`, `ConnMaxIdleTime=10min`) on top of the
+pre-Phase-4.1 pool-based per-chunk acquire pattern.  This is
+the Phase 2.4 baseline which is known to complete (slowly,
+with retries).
 
-## Recovery options
+## Server-side changes retained
 
-**A. Revert Phase 4.1**, keep the `batchExecTxOnConn` primitive
-   and the `ConnMaxIdleTime=10min` tune.  Restore
-   `pipelineExec`'s per-chunk `pool.DB().Conn` pattern.  Loses
-   the per-file warm-conn benefit but eliminates the hang.
-   Phase 4.0's HELLO storm becomes the new floor (~30 s/file
-   QUIC reconnect).
-
-**B. Cap pinned conn transaction count**.  After N transactions
-   (say 5) per pinned conn, explicitly close-and-replace via
-   `pinned.Replace`.  Trades a small amount of HELLO overhead
-   for reliability.  Exact N needs empirical tuning.
-
-**C. Server-side fix**.  Identify WHY the server drops BeginTx
-   on long-lived QUIC conns.  Candidate areas:
-
-- QUIC stream ID recycling / reuse in the Zig library
-- Per-conn session state in `src/server/quic_connection_handler.zig`
-- Auth cache TTL on session tokens (auth re-check deadlocks?)
-- Orphan-txn reaper (`orphan-txn rolled back on stream close`
-     — could this fire incorrectly on pinned conns?)
-
-Recommended: **B** first (client-side tactical), then pursue **C**
-in parallel as the real fix.
+Geode commits `24db46c5` (default `group_commit` ON +
+`build.zig` thread_pool dep fix) and `a86b634b` (PHASE4-STATUS
+doc) remain — they're not implicated in the stream-multiplex
+hang and eliminate the 40001 cascade path independently.
 
 ## Artifacts
 
-- `phase4.1-validation/w16-hang.log` — seed log showing 317/621
-  then silence.
-- `phase4.1-validation/w16-hang-with-goroutine-dump.log` — full
-  `SIGQUIT` goroutine dump showing 8 workers stuck in BeginTx.
-- `phase4.1-validation/w8-node-phase.log` — workers=8 progress
-  through node phase (no hang observed in first file).
-- `phase4.1-validation/w2-edge-hang.log` — workers=2 completing
-  node phase then hanging on `edges_app_role_assignment`
-  (`BeginTx` stuck).
-- `phase4.1-validation/serial-works.log` — `--parallel=false`
-  progressing cleanly through node + edge phases.
+Under `phase4.1-validation/`:
 
-## Commits tested
+- `w16-hang.log` — 317/621 hang on users.jsonl.
+- `w16-hang-with-goroutine-dump.log` — SIGQUIT dump showing 8
+  workers stuck in `BeginTx`.
+- `w8-node-phase.log` — workers=8 progressing.
+- `w4-hang.log` — workers=4 hang on audit_events (2414 nodes).
+- `w2-edge-hang.log` — workers=2 hang on 2nd edge file.
+- `serial-works.log` — `--parallel=false` working.
+- `revert-post-phase4.1.log` — post-revert w=16 restored to
+  Phase-2.4 behavior (slow retries, forward progress, no hang).
 
-- geode `a86b634b` (Phase 4.1 status doc + Phase 2.4 base).
-- geode `24db46c5` (group_commit default-on + build.zig thread_pool
-  dep fix).
-- msft-graph `467021f` (Phase 4.1 seed-top-level pinned-conn
-  pipelining with keepalive).
+## Next steps
+
+Task #31 (open): server-side investigation of QUIC stream
+multiplex hang.  The fix is deep — probably days of work in
+`src/server/quic_connection_handler.zig` +
+`src/transport/quic.zig` + possibly the Zig QUIC library.
+
+Without the server-side fix, the ≤ 60 s target is
+unreachable — msft-graph is capped at the Phase 2.4 baseline
+(~40 min for a good run, up to 2 h 5 m for a bad one) until
+the QUIC multiplex hang is fixed.
+
+## Commits
+
+- geode `24db46c5` — `group_commit` default ON + build.zig.
+- geode `a86b634b` — Phase 4.1 status.
+- geode `7b3edf2b` — Phase 4.1 validation v1 (initial findings).
+- geode `<THIS>` — Phase 4.1 validation v2 + revert notice.
+- msft-graph `467021f` — Phase 4.1 (reverted).
+- msft-graph `90a1227` — **revert Phase 4.1**.
