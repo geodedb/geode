@@ -1682,6 +1682,50 @@ pub const GraphStore = struct {
         return buf[0 .. pos + val_len];
     }
 
+    /// Publish a fresh snapshot of the merge-prop index if the live map
+    /// has drifted by at least `threshold` mutations since the last
+    /// publish. Uses a non-blocking CAS to serialise concurrent
+    /// publishers — losers bail and retry on the next write.
+    ///
+    /// Callers MUST hold whatever lock currently protects the live
+    /// `merge_prop_index` against mutation (today that is `mg.rwlock`
+    /// EXCLUSIVE at the graph level, or `merge_prop_index_lock`
+    /// EXCLUSIVE in the bulk-merge shard path). The snapshot is built
+    /// under the same lock to guarantee a consistent copy — see the
+    /// correctness argument in
+    /// docs/superpowers/plans/2026-04-24-lock-free-merge-prop-index-snapshot.md.
+    pub fn publishMergePropSnapshotIfDirty(self: *GraphStore, threshold: u32) void {
+        const merge_snapshot = @import("graph_store_merge_snapshot.zig");
+
+        if (self.merge_prop_dirty_count.load(.monotonic) < threshold) return;
+        // CAS false→true to claim the rebuild. On failure another
+        // publisher is already running; we bail and dirty_count will
+        // re-trigger on the next write.
+        if (self.merge_prop_rebuild_in_progress.cmpxchgStrong(false, true, .acquire, .monotonic) != null) return;
+        defer self.merge_prop_rebuild_in_progress.store(false, .release);
+
+        // Re-check under the claim.
+        if (self.merge_prop_dirty_count.load(.monotonic) < threshold) return;
+
+        const new_snap = merge_snapshot.MergePropSnapshot.create(self.allocator) catch |err| {
+            log.warn("merge-prop snapshot publish failed (create)", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            return;
+        };
+        new_snap.populateFromLive(&self.merge_prop_index) catch |err| {
+            log.warn("merge-prop snapshot publish failed (populate)", &.{
+                Attr.string("error", @errorName(err)),
+            });
+            new_snap.release();
+            return;
+        };
+
+        const old = self.merge_prop_snapshot.swap(new_snap, .acq_rel);
+        self.merge_prop_dirty_count.store(0, .monotonic);
+        if (old) |o| o.release();
+    }
+
     /// Insert an entry into the merge property index for each label on the node.
     fn addToMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64) !void {
         var buf: [1024]u8 = undefined;
@@ -7435,4 +7479,67 @@ test "GraphStore.clearNodes drops snapshot" {
     store.clearNodes();
 
     try std.testing.expect(store.merge_prop_snapshot.load(.monotonic) == null);
+}
+
+test "publishMergePropSnapshotIfDirty rebuilds when dirty >= threshold" {
+    const merge_snapshot = @import("graph_store_merge_snapshot.zig");
+
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    // Seed the live map with two entries (simulate what addToMergePropertyIndex
+    // would do — copy keys so deinit frees them).
+    const k1 = try std.testing.allocator.dupe(u8, "default\x00User\x00name\x00alice");
+    try store.merge_prop_index.put(k1, 1);
+    const k2 = try std.testing.allocator.dupe(u8, "default\x00User\x00name\x00bob");
+    try store.merge_prop_index.put(k2, 2);
+
+    store.merge_prop_dirty_count.store(2048, .monotonic); // exceed threshold
+
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    const snap_opt = store.merge_prop_snapshot.load(.acquire);
+    try std.testing.expect(snap_opt != null);
+    const snap: *merge_snapshot.MergePropSnapshot = snap_opt.?;
+    try std.testing.expectEqual(@as(u32, 2), snap.map.count());
+    try std.testing.expectEqual(@as(?u64, 1), snap.map.get("default\x00User\x00name\x00alice"));
+    try std.testing.expectEqual(@as(?u64, 2), snap.map.get("default\x00User\x00name\x00bob"));
+    try std.testing.expectEqual(@as(u32, 0), store.merge_prop_dirty_count.load(.monotonic));
+}
+
+test "publishMergePropSnapshotIfDirty skips below threshold" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    store.merge_prop_dirty_count.store(100, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    try std.testing.expect(store.merge_prop_snapshot.load(.monotonic) == null);
+    try std.testing.expectEqual(@as(u32, 100), store.merge_prop_dirty_count.load(.monotonic));
+}
+
+test "publishMergePropSnapshotIfDirty replaces old snapshot and releases it" {
+    const merge_snapshot = @import("graph_store_merge_snapshot.zig");
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const k1 = try std.testing.allocator.dupe(u8, "default\x00User\x00id\x00a");
+    try store.merge_prop_index.put(k1, 1);
+
+    store.merge_prop_dirty_count.store(2048, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+    const first_snap = store.merge_prop_snapshot.load(.acquire).?;
+    const first_alias = first_snap.acquire(); // pin so we can inspect post-swap
+    defer first_alias.release();
+
+    // Second publish with updated live map.
+    const k2 = try std.testing.allocator.dupe(u8, "default\x00User\x00id\x00b");
+    try store.merge_prop_index.put(k2, 2);
+    store.merge_prop_dirty_count.store(2048, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+    const second_snap = store.merge_prop_snapshot.load(.acquire).?;
+
+    try std.testing.expect(first_snap != second_snap);
+    try std.testing.expectEqual(@as(u32, 2), second_snap.map.count());
+    _ = merge_snapshot; // silence unused
 }
