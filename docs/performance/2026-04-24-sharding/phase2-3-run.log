@@ -1,0 +1,783 @@
+=== start 2026-04-23T19:23:31-04:00 ===
+time=2026-04-23T19:23:31.585-04:00 level=INFO msg="seed mode: parallel pipeline" workers=16 chunk_size=1000 serial_fallback=true
+time=2026-04-23T19:23:31.875-04:00 level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-23T19:23:31.916-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=38 geode.total=621 geode.workers=16
+time=2026-04-23T19:23:31.916-04:00 level=INFO msg="pipeline exec start" geode.total=621 geode.chunks=17 geode.chunk_size=38 geode.workers=16
+time=2026-04-23T19:23:32.125-04:00 level=INFO msg="pipeline progress" geode.flushed=38 geode.total=621
+time=2026-04-23T19:23:32.222-04:00 level=INFO msg="pipeline progress" geode.flushed=51 geode.total=621
+time=2026-04-23T19:23:32.569-04:00 level=INFO msg="pipeline progress" geode.flushed=89 geode.total=621
+time=2026-04-23T19:23:32.761-04:00 level=INFO msg="pipeline progress" geode.flushed=127 geode.total=621
+time=2026-04-23T19:23:32.889-04:00 level=INFO msg="pipeline progress" geode.flushed=165 geode.total=621
+time=2026-04-23T19:23:32.906-04:00 level=INFO msg="pipeline progress" geode.flushed=203 geode.total=621
+time=2026-04-23T19:23:33.302-04:00 level=INFO msg="pipeline progress" geode.flushed=241 geode.total=621
+time=2026-04-23T19:23:33.652-04:00 level=INFO msg="pipeline progress" geode.flushed=279 geode.total=621
+time=2026-04-23T19:23:33.696-04:00 level=INFO msg="pipeline progress" geode.flushed=317 geode.total=621
+time=2026-04-23T19:24:00.053-04:00 level=INFO msg="pipeline progress" geode.flushed=355 geode.total=621
+time=2026-04-23T19:24:00.150-04:00 level=INFO msg="pipeline progress" geode.flushed=393 geode.total=621
+time=2026-04-23T19:24:00.213-04:00 level=INFO msg="pipeline progress" geode.flushed=431 geode.total=621
+time=2026-04-23T19:24:00.529-04:00 level=INFO msg="pipeline progress" geode.flushed=469 geode.total=621
+time=2026-04-23T19:24:01.917-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:24:02.521-04:00 level=INFO msg="pipeline progress" geode.flushed=507 geode.total=621
+time=2026-04-23T19:24:02.532-04:00 level=INFO msg="pipeline progress" geode.flushed=545 geode.total=621
+time=2026-04-23T19:24:02.595-04:00 level=INFO msg="pipeline progress" geode.flushed=583 geode.total=621
+time=2026-04-23T19:24:03.214-04:00 level=INFO msg="pipeline progress" geode.flushed=621 geode.total=621
+time=2026-04-23T19:24:03.214-04:00 level=INFO msg="pipeline exec complete" geode.statements=621
+time=2026-04-23T19:24:03.214-04:00 level=INFO msg="seeded nodes" kind=user count=621
+time=2026-04-23T19:24:03.215-04:00 level=INFO msg="seeding nodes" kind=device file=devices.jsonl
+time=2026-04-23T19:24:03.220-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=4 geode.total=73 geode.workers=16
+time=2026-04-23T19:24:03.220-04:00 level=INFO msg="pipeline exec start" geode.total=73 geode.chunks=19 geode.chunk_size=4 geode.workers=16
+time=2026-04-23T19:24:03.284-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=73
+time=2026-04-23T19:24:03.289-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=73
+time=2026-04-23T19:24:03.319-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=73
+time=2026-04-23T19:24:03.334-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=73
+time=2026-04-23T19:24:03.340-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=73
+time=2026-04-23T19:24:03.362-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=73
+time=2026-04-23T19:24:03.397-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=73
+time=2026-04-23T19:24:03.476-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=73
+time=2026-04-23T19:24:28.340-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.341-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.341-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.343-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:24:28.412-04:00 level=INFO msg="pipeline progress" geode.flushed=33 geode.total=73
+time=2026-04-23T19:24:28.412-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=8 geode.statements=4 geode.elapsed=25s geode.stmts_per_sec=0.16 geode.suggested_workers=8
+time=2026-04-23T19:24:29.636-04:00 level=INFO msg="pipeline progress" geode.flushed=37 geode.total=73
+time=2026-04-23T19:24:29.642-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=73
+time=2026-04-23T19:24:29.679-04:00 level=INFO msg="pipeline progress" geode.flushed=45 geode.total=73
+time=2026-04-23T19:24:29.693-04:00 level=INFO msg="pipeline progress" geode.flushed=49 geode.total=73
+time=2026-04-23T19:24:29.722-04:00 level=INFO msg="pipeline progress" geode.flushed=53 geode.total=73
+time=2026-04-23T19:24:29.752-04:00 level=INFO msg="pipeline progress" geode.flushed=57 geode.total=73
+time=2026-04-23T19:24:29.787-04:00 level=INFO msg="pipeline progress" geode.flushed=61 geode.total=73
+time=2026-04-23T19:24:33.223-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:24:33.248-04:00 level=INFO msg="pipeline progress" geode.flushed=65 geode.total=73
+time=2026-04-23T19:24:33.261-04:00 level=WARN msg="batch retry" geode.attempt=2 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=2s
+time=2026-04-23T19:24:34.417-04:00 level=INFO msg="pipeline progress" geode.flushed=69 geode.total=73
+time=2026-04-23T19:24:35.295-04:00 level=INFO msg="pipeline progress" geode.flushed=73 geode.total=73
+time=2026-04-23T19:24:35.295-04:00 level=INFO msg="pipeline exec complete" geode.statements=73
+time=2026-04-23T19:24:35.295-04:00 level=INFO msg="seeded nodes" kind=device count=73
+time=2026-04-23T19:24:35.295-04:00 level=INFO msg="seeding nodes" kind=application file=applications.jsonl
+time=2026-04-23T19:24:35.299-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=9 geode.total=156 geode.workers=16
+time=2026-04-23T19:24:35.299-04:00 level=INFO msg="pipeline exec start" geode.total=156 geode.chunks=18 geode.chunk_size=9 geode.workers=16
+time=2026-04-23T19:24:35.337-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=156
+time=2026-04-23T19:24:35.379-04:00 level=INFO msg="pipeline progress" geode.flushed=18 geode.total=156
+time=2026-04-23T19:24:35.402-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=156
+time=2026-04-23T19:24:35.492-04:00 level=INFO msg="pipeline progress" geode.flushed=30 geode.total=156
+time=2026-04-23T19:24:35.607-04:00 level=INFO msg="pipeline progress" geode.flushed=39 geode.total=156
+time=2026-04-23T19:24:35.664-04:00 level=INFO msg="pipeline progress" geode.flushed=48 geode.total=156
+time=2026-04-23T19:24:35.669-04:00 level=INFO msg="pipeline progress" geode.flushed=57 geode.total=156
+time=2026-04-23T19:24:35.719-04:00 level=INFO msg="pipeline progress" geode.flushed=66 geode.total=156
+time=2026-04-23T19:24:35.724-04:00 level=INFO msg="pipeline progress" geode.flushed=75 geode.total=156
+time=2026-04-23T19:24:35.757-04:00 level=INFO msg="pipeline progress" geode.flushed=84 geode.total=156
+time=2026-04-23T19:25:01.458-04:00 level=INFO msg="pipeline progress" geode.flushed=93 geode.total=156
+time=2026-04-23T19:25:01.458-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=14 geode.statements=9 geode.elapsed=26s geode.stmts_per_sec=0.34 geode.suggested_workers=8
+time=2026-04-23T19:25:01.463-04:00 level=INFO msg="pipeline progress" geode.flushed=102 geode.total=156
+time=2026-04-23T19:25:01.561-04:00 level=INFO msg="pipeline progress" geode.flushed=111 geode.total=156
+time=2026-04-23T19:25:01.566-04:00 level=INFO msg="pipeline progress" geode.flushed=120 geode.total=156
+time=2026-04-23T19:25:05.303-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:25:05.358-04:00 level=INFO msg="pipeline progress" geode.flushed=129 geode.total=156
+time=2026-04-23T19:25:05.363-04:00 level=INFO msg="pipeline progress" geode.flushed=138 geode.total=156
+time=2026-04-23T19:25:05.399-04:00 level=INFO msg="pipeline progress" geode.flushed=147 geode.total=156
+time=2026-04-23T19:25:06.342-04:00 level=INFO msg="pipeline progress" geode.flushed=156 geode.total=156
+time=2026-04-23T19:25:06.342-04:00 level=INFO msg="pipeline exec complete" geode.statements=156
+time=2026-04-23T19:25:06.342-04:00 level=INFO msg="seeded nodes" kind=application count=156
+time=2026-04-23T19:25:06.342-04:00 level=INFO msg="seeding nodes" kind=group file=groups.jsonl
+time=2026-04-23T19:25:06.358-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=20 geode.total=328 geode.workers=16
+time=2026-04-23T19:25:06.358-04:00 level=INFO msg="pipeline exec start" geode.total=328 geode.chunks=17 geode.chunk_size=20 geode.workers=16
+time=2026-04-23T19:25:06.474-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=328
+time=2026-04-23T19:25:06.553-04:00 level=INFO msg="pipeline progress" geode.flushed=40 geode.total=328
+time=2026-04-23T19:25:06.576-04:00 level=INFO msg="pipeline progress" geode.flushed=48 geode.total=328
+time=2026-04-23T19:25:06.596-04:00 level=INFO msg="pipeline progress" geode.flushed=68 geode.total=328
+time=2026-04-23T19:25:06.679-04:00 level=INFO msg="pipeline progress" geode.flushed=88 geode.total=328
+time=2026-04-23T19:25:06.719-04:00 level=INFO msg="pipeline progress" geode.flushed=108 geode.total=328
+time=2026-04-23T19:25:31.559-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.559-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.559-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.561-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.561-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.561-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.564-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.564-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.564-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:25:31.698-04:00 level=INFO msg="pipeline progress" geode.flushed=128 geode.total=328
+time=2026-04-23T19:25:31.698-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=9 geode.statements=20 geode.elapsed=25s geode.stmts_per_sec=0.79 geode.suggested_workers=8
+time=2026-04-23T19:25:32.820-04:00 level=INFO msg="pipeline progress" geode.flushed=148 geode.total=328
+time=2026-04-23T19:25:32.887-04:00 level=INFO msg="pipeline progress" geode.flushed=168 geode.total=328
+time=2026-04-23T19:25:32.947-04:00 level=INFO msg="pipeline progress" geode.flushed=188 geode.total=328
+time=2026-04-23T19:25:33.043-04:00 level=INFO msg="pipeline progress" geode.flushed=208 geode.total=328
+time=2026-04-23T19:25:33.100-04:00 level=INFO msg="pipeline progress" geode.flushed=228 geode.total=328
+time=2026-04-23T19:25:33.157-04:00 level=INFO msg="pipeline progress" geode.flushed=248 geode.total=328
+time=2026-04-23T19:25:33.175-04:00 level=INFO msg="pipeline progress" geode.flushed=268 geode.total=328
+time=2026-04-23T19:25:36.362-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:25:36.398-04:00 level=WARN msg="batch retry" geode.attempt=2 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=2s
+time=2026-04-23T19:25:36.469-04:00 level=INFO msg="pipeline progress" geode.flushed=288 geode.total=328
+time=2026-04-23T19:25:37.495-04:00 level=INFO msg="pipeline progress" geode.flushed=308 geode.total=328
+time=2026-04-23T19:25:38.499-04:00 level=INFO msg="pipeline progress" geode.flushed=328 geode.total=328
+time=2026-04-23T19:25:38.499-04:00 level=INFO msg="pipeline exec complete" geode.statements=328
+time=2026-04-23T19:25:38.499-04:00 level=INFO msg="seeded nodes" kind=group count=328
+time=2026-04-23T19:25:38.499-04:00 level=INFO msg="seeding nodes" kind=ip file=ip_addresses.jsonl
+time=2026-04-23T19:25:38.500-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=5 geode.total=80 geode.workers=16
+time=2026-04-23T19:25:38.500-04:00 level=INFO msg="pipeline exec start" geode.total=80 geode.chunks=16 geode.chunk_size=5 geode.workers=16
+time=2026-04-23T19:25:38.526-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=80
+time=2026-04-23T19:25:38.667-04:00 level=INFO msg="pipeline progress" geode.flushed=10 geode.total=80
+time=2026-04-23T19:25:38.779-04:00 level=INFO msg="pipeline progress" geode.flushed=15 geode.total=80
+time=2026-04-23T19:25:38.838-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=80
+time=2026-04-23T19:25:38.843-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=80
+time=2026-04-23T19:25:38.886-04:00 level=INFO msg="pipeline progress" geode.flushed=30 geode.total=80
+time=2026-04-23T19:25:38.918-04:00 level=INFO msg="pipeline progress" geode.flushed=35 geode.total=80
+time=2026-04-23T19:26:03.531-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:03.531-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:03.532-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:03.558-04:00 level=INFO msg="pipeline progress" geode.flushed=40 geode.total=80
+time=2026-04-23T19:26:03.558-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=3 geode.statements=5 geode.elapsed=25s geode.stmts_per_sec=0.20 geode.suggested_workers=8
+time=2026-04-23T19:26:03.563-04:00 level=INFO msg="pipeline progress" geode.flushed=45 geode.total=80
+time=2026-04-23T19:26:03.591-04:00 level=INFO msg="pipeline progress" geode.flushed=50 geode.total=80
+time=2026-04-23T19:26:04.559-04:00 level=INFO msg="pipeline progress" geode.flushed=55 geode.total=80
+time=2026-04-23T19:26:04.564-04:00 level=INFO msg="pipeline progress" geode.flushed=60 geode.total=80
+time=2026-04-23T19:26:04.569-04:00 level=INFO msg="pipeline progress" geode.flushed=65 geode.total=80
+time=2026-04-23T19:26:08.503-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:26:08.529-04:00 level=INFO msg="pipeline progress" geode.flushed=70 geode.total=80
+time=2026-04-23T19:26:08.534-04:00 level=INFO msg="pipeline progress" geode.flushed=75 geode.total=80
+time=2026-04-23T19:26:09.530-04:00 level=INFO msg="pipeline progress" geode.flushed=80 geode.total=80
+time=2026-04-23T19:26:09.530-04:00 level=INFO msg="pipeline exec complete" geode.statements=80
+time=2026-04-23T19:26:09.531-04:00 level=INFO msg="seeded nodes" kind=ip count=80
+time=2026-04-23T19:26:09.531-04:00 level=INFO msg="seeding nodes" kind=location file=locations.jsonl
+time=2026-04-23T19:26:09.531-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=2 geode.total=38 geode.workers=16
+time=2026-04-23T19:26:09.531-04:00 level=INFO msg="pipeline exec start" geode.total=38 geode.chunks=19 geode.chunk_size=2 geode.workers=16
+time=2026-04-23T19:26:09.547-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=38
+time=2026-04-23T19:26:09.552-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=38
+time=2026-04-23T19:26:09.564-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=38
+time=2026-04-23T19:26:09.576-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=38
+time=2026-04-23T19:26:09.586-04:00 level=INFO msg="pipeline progress" geode.flushed=10 geode.total=38
+time=2026-04-23T19:26:09.697-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=38
+time=2026-04-23T19:26:09.757-04:00 level=INFO msg="pipeline progress" geode.flushed=14 geode.total=38
+time=2026-04-23T19:26:09.789-04:00 level=INFO msg="pipeline progress" geode.flushed=16 geode.total=38
+time=2026-04-23T19:26:09.829-04:00 level=INFO msg="pipeline progress" geode.flushed=18 geode.total=38
+time=2026-04-23T19:26:34.581-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.581-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.581-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.584-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.584-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.584-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:26:34.599-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=38
+time=2026-04-23T19:26:34.599-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=2 geode.statements=2 geode.elapsed=25s geode.stmts_per_sec=0.08 geode.suggested_workers=8
+time=2026-04-23T19:26:34.633-04:00 level=INFO msg="pipeline progress" geode.flushed=22 geode.total=38
+time=2026-04-23T19:26:35.600-04:00 level=INFO msg="pipeline progress" geode.flushed=24 geode.total=38
+time=2026-04-23T19:26:35.605-04:00 level=INFO msg="pipeline progress" geode.flushed=26 geode.total=38
+time=2026-04-23T19:26:35.738-04:00 level=INFO msg="pipeline progress" geode.flushed=28 geode.total=38
+time=2026-04-23T19:26:35.802-04:00 level=INFO msg="pipeline progress" geode.flushed=30 geode.total=38
+time=2026-04-23T19:26:35.841-04:00 level=INFO msg="pipeline progress" geode.flushed=32 geode.total=38
+time=2026-04-23T19:26:35.887-04:00 level=INFO msg="pipeline progress" geode.flushed=34 geode.total=38
+time=2026-04-23T19:26:39.535-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:26:39.552-04:00 level=INFO msg="pipeline progress" geode.flushed=36 geode.total=38
+time=2026-04-23T19:26:40.551-04:00 level=INFO msg="pipeline progress" geode.flushed=38 geode.total=38
+time=2026-04-23T19:26:40.551-04:00 level=INFO msg="pipeline exec complete" geode.statements=38
+time=2026-04-23T19:26:40.551-04:00 level=INFO msg="seeded nodes" kind=location count=38
+time=2026-04-23T19:26:40.551-04:00 level=INFO msg="seeding nodes" kind=site file=sites.jsonl
+time=2026-04-23T19:26:40.555-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=11 geode.total=184 geode.workers=16
+time=2026-04-23T19:26:40.555-04:00 level=INFO msg="pipeline exec start" geode.total=184 geode.chunks=17 geode.chunk_size=11 geode.workers=16
+time=2026-04-23T19:26:40.604-04:00 level=INFO msg="pipeline progress" geode.flushed=11 geode.total=184
+time=2026-04-23T19:26:40.641-04:00 level=INFO msg="pipeline progress" geode.flushed=19 geode.total=184
+time=2026-04-23T19:26:40.739-04:00 level=INFO msg="pipeline progress" geode.flushed=30 geode.total=184
+time=2026-04-23T19:26:40.847-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=184
+time=2026-04-23T19:26:40.945-04:00 level=INFO msg="pipeline progress" geode.flushed=52 geode.total=184
+time=2026-04-23T19:26:40.970-04:00 level=INFO msg="pipeline progress" geode.flushed=63 geode.total=184
+time=2026-04-23T19:26:40.981-04:00 level=INFO msg="pipeline progress" geode.flushed=74 geode.total=184
+time=2026-04-23T19:26:41.009-04:00 level=INFO msg="pipeline progress" geode.flushed=85 geode.total=184
+time=2026-04-23T19:27:05.647-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:05.647-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:05.647-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:05.698-04:00 level=INFO msg="pipeline progress" geode.flushed=96 geode.total=184
+time=2026-04-23T19:27:05.698-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=12 geode.statements=11 geode.elapsed=25s geode.stmts_per_sec=0.44 geode.suggested_workers=8
+time=2026-04-23T19:27:05.703-04:00 level=INFO msg="pipeline progress" geode.flushed=107 geode.total=184
+time=2026-04-23T19:27:05.743-04:00 level=INFO msg="pipeline progress" geode.flushed=118 geode.total=184
+time=2026-04-23T19:27:06.733-04:00 level=INFO msg="pipeline progress" geode.flushed=129 geode.total=184
+time=2026-04-23T19:27:06.767-04:00 level=INFO msg="pipeline progress" geode.flushed=140 geode.total=184
+time=2026-04-23T19:27:06.817-04:00 level=INFO msg="pipeline progress" geode.flushed=151 geode.total=184
+time=2026-04-23T19:27:10.558-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:27:10.644-04:00 level=INFO msg="pipeline progress" geode.flushed=162 geode.total=184
+time=2026-04-23T19:27:10.649-04:00 level=INFO msg="pipeline progress" geode.flushed=173 geode.total=184
+time=2026-04-23T19:27:11.606-04:00 level=INFO msg="pipeline progress" geode.flushed=184 geode.total=184
+time=2026-04-23T19:27:11.606-04:00 level=INFO msg="pipeline exec complete" geode.statements=184
+time=2026-04-23T19:27:11.606-04:00 level=INFO msg="seeded nodes" kind=site count=184
+time=2026-04-23T19:27:11.606-04:00 level=INFO msg="seeding nodes" kind=drive file=drives.jsonl
+time=2026-04-23T19:27:11.609-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=14 geode.total=230 geode.workers=16
+time=2026-04-23T19:27:11.609-04:00 level=INFO msg="pipeline exec start" geode.total=230 geode.chunks=17 geode.chunk_size=14 geode.workers=16
+time=2026-04-23T19:27:11.665-04:00 level=INFO msg="pipeline progress" geode.flushed=14 geode.total=230
+time=2026-04-23T19:27:11.669-04:00 level=INFO msg="pipeline progress" geode.flushed=28 geode.total=230
+time=2026-04-23T19:27:11.694-04:00 level=INFO msg="pipeline progress" geode.flushed=34 geode.total=230
+time=2026-04-23T19:27:11.832-04:00 level=INFO msg="pipeline progress" geode.flushed=48 geode.total=230
+time=2026-04-23T19:27:11.886-04:00 level=INFO msg="pipeline progress" geode.flushed=62 geode.total=230
+time=2026-04-23T19:27:11.915-04:00 level=INFO msg="pipeline progress" geode.flushed=76 geode.total=230
+time=2026-04-23T19:27:11.951-04:00 level=INFO msg="pipeline progress" geode.flushed=90 geode.total=230
+time=2026-04-23T19:27:36.675-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.675-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.675-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.679-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.679-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.679-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:27:36.737-04:00 level=INFO msg="pipeline progress" geode.flushed=104 geode.total=230
+time=2026-04-23T19:27:36.737-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=9 geode.statements=14 geode.elapsed=25s geode.stmts_per_sec=0.56 geode.suggested_workers=8
+time=2026-04-23T19:27:36.795-04:00 level=INFO msg="pipeline progress" geode.flushed=118 geode.total=230
+time=2026-04-23T19:27:37.764-04:00 level=INFO msg="pipeline progress" geode.flushed=132 geode.total=230
+time=2026-04-23T19:27:37.799-04:00 level=INFO msg="pipeline progress" geode.flushed=146 geode.total=230
+time=2026-04-23T19:27:37.887-04:00 level=INFO msg="pipeline progress" geode.flushed=160 geode.total=230
+time=2026-04-23T19:27:37.964-04:00 level=INFO msg="pipeline progress" geode.flushed=174 geode.total=230
+time=2026-04-23T19:27:38.020-04:00 level=INFO msg="pipeline progress" geode.flushed=188 geode.total=230
+time=2026-04-23T19:27:38.058-04:00 level=INFO msg="pipeline progress" geode.flushed=202 geode.total=230
+time=2026-04-23T19:27:41.612-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:27:41.673-04:00 level=INFO msg="pipeline progress" geode.flushed=216 geode.total=230
+time=2026-04-23T19:27:42.989-04:00 level=INFO msg="pipeline progress" geode.flushed=230 geode.total=230
+time=2026-04-23T19:27:42.989-04:00 level=INFO msg="pipeline exec complete" geode.statements=230
+time=2026-04-23T19:27:42.989-04:00 level=INFO msg="seeded nodes" kind=drive count=230
+time=2026-04-23T19:27:42.989-04:00 level=INFO msg="seeding nodes" kind=drive_item file=drive_items.jsonl
+time=2026-04-23T19:27:43.018-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=84 geode.total=1345 geode.workers=16
+time=2026-04-23T19:27:43.018-04:00 level=INFO msg="pipeline exec start" geode.total=1345 geode.chunks=17 geode.chunk_size=84 geode.workers=16
+time=2026-04-23T19:27:43.331-04:00 level=INFO msg="pipeline progress" geode.flushed=84 geode.total=1345
+time=2026-04-23T19:27:43.354-04:00 level=INFO msg="pipeline progress" geode.flushed=85 geode.total=1345
+time=2026-04-23T19:27:43.763-04:00 level=INFO msg="pipeline progress" geode.flushed=169 geode.total=1345
+time=2026-04-23T19:27:44.485-04:00 level=INFO msg="pipeline progress" geode.flushed=253 geode.total=1345
+time=2026-04-23T19:27:44.542-04:00 level=INFO msg="pipeline progress" geode.flushed=337 geode.total=1345
+time=2026-04-23T19:27:44.613-04:00 level=INFO msg="pipeline progress" geode.flushed=421 geode.total=1345
+time=2026-04-23T19:27:44.688-04:00 level=INFO msg="pipeline progress" geode.flushed=505 geode.total=1345
+time=2026-04-23T19:27:44.938-04:00 level=INFO msg="pipeline progress" geode.flushed=589 geode.total=1345
+time=2026-04-23T19:28:08.358-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:08.358-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:08.358-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:08.801-04:00 level=INFO msg="pipeline progress" geode.flushed=673 geode.total=1345
+time=2026-04-23T19:28:08.880-04:00 level=INFO msg="pipeline progress" geode.flushed=757 geode.total=1345
+time=2026-04-23T19:28:09.014-04:00 level=INFO msg="pipeline progress" geode.flushed=841 geode.total=1345
+time=2026-04-23T19:28:09.816-04:00 level=INFO msg="pipeline progress" geode.flushed=925 geode.total=1345
+time=2026-04-23T19:28:09.949-04:00 level=INFO msg="pipeline progress" geode.flushed=1009 geode.total=1345
+time=2026-04-23T19:28:10.031-04:00 level=INFO msg="pipeline progress" geode.flushed=1093 geode.total=1345
+time=2026-04-23T19:28:13.021-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:28:13.403-04:00 level=INFO msg="pipeline progress" geode.flushed=1177 geode.total=1345
+time=2026-04-23T19:28:13.420-04:00 level=INFO msg="pipeline progress" geode.flushed=1261 geode.total=1345
+time=2026-04-23T19:28:14.412-04:00 level=INFO msg="pipeline progress" geode.flushed=1345 geode.total=1345
+time=2026-04-23T19:28:14.412-04:00 level=INFO msg="pipeline exec complete" geode.statements=1345
+time=2026-04-23T19:28:14.412-04:00 level=INFO msg="seeded nodes" kind=drive_item count=1345
+time=2026-04-23T19:28:14.412-04:00 level=INFO msg="seeding nodes" kind=conditional_access_policy file=conditional_access_policies.jsonl
+time=2026-04-23T19:28:14.413-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=27 geode.workers=16
+time=2026-04-23T19:28:14.413-04:00 level=INFO msg="pipeline exec start" geode.total=27 geode.chunks=27 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:28:14.426-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=27
+time=2026-04-23T19:28:14.432-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=27
+time=2026-04-23T19:28:14.444-04:00 level=INFO msg="pipeline progress" geode.flushed=3 geode.total=27
+time=2026-04-23T19:28:14.449-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=27
+time=2026-04-23T19:28:14.461-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=27
+time=2026-04-23T19:28:14.466-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=27
+time=2026-04-23T19:28:14.478-04:00 level=INFO msg="pipeline progress" geode.flushed=7 geode.total=27
+time=2026-04-23T19:28:14.483-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=27
+time=2026-04-23T19:28:14.492-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=27
+time=2026-04-23T19:28:14.503-04:00 level=INFO msg="pipeline progress" geode.flushed=10 geode.total=27
+time=2026-04-23T19:28:14.508-04:00 level=INFO msg="pipeline progress" geode.flushed=11 geode.total=27
+time=2026-04-23T19:28:14.517-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=27
+time=2026-04-23T19:28:14.528-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=27
+time=2026-04-23T19:28:14.577-04:00 level=INFO msg="pipeline progress" geode.flushed=14 geode.total=27
+time=2026-04-23T19:28:14.633-04:00 level=INFO msg="pipeline progress" geode.flushed=15 geode.total=27
+time=2026-04-23T19:28:14.674-04:00 level=INFO msg="pipeline progress" geode.flushed=16 geode.total=27
+time=2026-04-23T19:28:14.712-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=27
+time=2026-04-23T19:28:39.523-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.523-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.523-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.525-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.525-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.525-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:28:39.538-04:00 level=INFO msg="pipeline progress" geode.flushed=18 geode.total=27
+time=2026-04-23T19:28:39.538-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=12 geode.statements=1 geode.elapsed=25s geode.stmts_per_sec=0.04 geode.suggested_workers=8
+time=2026-04-23T19:28:39.572-04:00 level=INFO msg="pipeline progress" geode.flushed=19 geode.total=27
+time=2026-04-23T19:28:40.539-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=27
+time=2026-04-23T19:28:40.544-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=27
+time=2026-04-23T19:28:40.694-04:00 level=INFO msg="pipeline progress" geode.flushed=22 geode.total=27
+time=2026-04-23T19:28:40.742-04:00 level=INFO msg="pipeline progress" geode.flushed=23 geode.total=27
+time=2026-04-23T19:28:40.791-04:00 level=INFO msg="pipeline progress" geode.flushed=24 geode.total=27
+time=2026-04-23T19:28:40.843-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=27
+time=2026-04-23T19:28:44.417-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:28:44.432-04:00 level=INFO msg="pipeline progress" geode.flushed=26 geode.total=27
+time=2026-04-23T19:28:45.716-04:00 level=INFO msg="pipeline progress" geode.flushed=27 geode.total=27
+time=2026-04-23T19:28:45.716-04:00 level=INFO msg="pipeline exec complete" geode.statements=27
+time=2026-04-23T19:28:45.716-04:00 level=INFO msg="seeded nodes" kind=conditional_access_policy count=27
+time=2026-04-23T19:28:45.716-04:00 level=INFO msg="seeding nodes" kind=audit_event file=audit_events.jsonl
+time=2026-04-23T19:28:45.771-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=150 geode.total=2414 geode.workers=16
+time=2026-04-23T19:28:45.771-04:00 level=INFO msg="pipeline exec start" geode.total=2414 geode.chunks=17 geode.chunk_size=150 geode.workers=16
+time=2026-04-23T19:28:47.911-04:00 level=INFO msg="pipeline progress" geode.flushed=150 geode.total=2414
+time=2026-04-23T19:28:48.112-04:00 level=INFO msg="pipeline progress" geode.flushed=164 geode.total=2414
+time=2026-04-23T19:28:48.137-04:00 level=INFO msg="pipeline progress" geode.flushed=314 geode.total=2414
+time=2026-04-23T19:28:48.290-04:00 level=INFO msg="pipeline progress" geode.flushed=464 geode.total=2414
+time=2026-04-23T19:28:48.996-04:00 level=INFO msg="pipeline progress" geode.flushed=614 geode.total=2414
+time=2026-04-23T19:28:49.285-04:00 level=INFO msg="pipeline progress" geode.flushed=764 geode.total=2414
+time=2026-04-23T19:28:49.313-04:00 level=INFO msg="pipeline progress" geode.flushed=914 geode.total=2414
+time=2026-04-23T19:28:49.900-04:00 level=INFO msg="pipeline progress" geode.flushed=1064 geode.total=2414
+time=2026-04-23T19:29:13.117-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:29:13.117-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:29:13.117-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:29:14.971-04:00 level=INFO msg="pipeline progress" geode.flushed=1214 geode.total=2414
+time=2026-04-23T19:29:15.066-04:00 level=INFO msg="pipeline progress" geode.flushed=1364 geode.total=2414
+time=2026-04-23T19:29:15.197-04:00 level=INFO msg="pipeline progress" geode.flushed=1514 geode.total=2414
+time=2026-04-23T19:29:15.771-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:29:16.435-04:00 level=INFO msg="pipeline progress" geode.flushed=1664 geode.total=2414
+time=2026-04-23T19:29:16.533-04:00 level=INFO msg="pipeline progress" geode.flushed=1814 geode.total=2414
+time=2026-04-23T19:29:16.890-04:00 level=INFO msg="pipeline progress" geode.flushed=1964 geode.total=2414
+time=2026-04-23T19:29:17.988-04:00 level=INFO msg="pipeline progress" geode.flushed=2114 geode.total=2414
+time=2026-04-23T19:29:18.248-04:00 level=INFO msg="pipeline progress" geode.flushed=2264 geode.total=2414
+time=2026-04-23T19:29:42.440-04:00 level=WARN msg="batch retry" geode.attempt=2 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=2s
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="pipeline progress" geode.flushed=2414 geode.total=2414
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="pipeline exec complete" geode.statements=2414
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="seeded nodes" kind=audit_event count=2414
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="seeding nodes" kind=compliance_policy file=compliance_policies.jsonl
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=6 geode.workers=16
+time=2026-04-23T19:29:45.889-04:00 level=INFO msg="pipeline exec start" geode.total=6 geode.chunks=6 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:29:45.903-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=6
+time=2026-04-23T19:29:46.041-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=6
+time=2026-04-23T19:29:46.145-04:00 level=INFO msg="pipeline progress" geode.flushed=3 geode.total=6
+time=2026-04-23T19:29:46.207-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=6
+time=2026-04-23T19:29:46.212-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=6
+time=2026-04-23T19:29:46.246-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=6
+time=2026-04-23T19:29:46.246-04:00 level=INFO msg="pipeline exec complete" geode.statements=6
+time=2026-04-23T19:29:46.246-04:00 level=INFO msg="seeded nodes" kind=compliance_policy count=6
+time=2026-04-23T19:29:46.246-04:00 level=INFO msg="seeding nodes" kind=service_principal file=service_principals.jsonl
+time=2026-04-23T19:29:46.288-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=67 geode.total=1075 geode.workers=16
+time=2026-04-23T19:29:46.288-04:00 level=INFO msg="pipeline exec start" geode.total=1075 geode.chunks=17 geode.chunk_size=67 geode.workers=16
+time=2026-04-23T19:29:47.791-04:00 level=INFO msg="pipeline progress" geode.flushed=67 geode.total=1075
+time=2026-04-23T19:29:47.852-04:00 level=INFO msg="pipeline progress" geode.flushed=70 geode.total=1075
+time=2026-04-23T19:29:47.905-04:00 level=INFO msg="pipeline progress" geode.flushed=137 geode.total=1075
+time=2026-04-23T19:29:48.024-04:00 level=INFO msg="pipeline progress" geode.flushed=204 geode.total=1075
+time=2026-04-23T19:29:48.097-04:00 level=INFO msg="pipeline progress" geode.flushed=271 geode.total=1075
+time=2026-04-23T19:29:48.127-04:00 level=INFO msg="pipeline progress" geode.flushed=338 geode.total=1075
+time=2026-04-23T19:29:49.001-04:00 level=INFO msg="pipeline progress" geode.flushed=405 geode.total=1075
+time=2026-04-23T19:29:49.382-04:00 level=INFO msg="pipeline progress" geode.flushed=472 geode.total=1075
+time=2026-04-23T19:29:49.485-04:00 level=INFO msg="pipeline progress" geode.flushed=539 geode.total=1075
+time=2026-04-23T19:30:13.930-04:00 level=INFO msg="pipeline progress" geode.flushed=606 geode.total=1075
+time=2026-04-23T19:30:14.312-04:00 level=INFO msg="pipeline progress" geode.flushed=673 geode.total=1075
+time=2026-04-23T19:30:15.782-04:00 level=INFO msg="pipeline progress" geode.flushed=740 geode.total=1075
+time=2026-04-23T19:30:15.805-04:00 level=INFO msg="pipeline progress" geode.flushed=807 geode.total=1075
+time=2026-04-23T19:30:40.281-04:00 level=INFO msg="pipeline progress" geode.flushed=874 geode.total=1075
+time=2026-04-23T19:30:40.503-04:00 level=INFO msg="pipeline progress" geode.flushed=941 geode.total=1075
+time=2026-04-23T19:30:42.209-04:00 level=INFO msg="pipeline progress" geode.flushed=1008 geode.total=1075
+time=2026-04-23T19:30:42.235-04:00 level=INFO msg="pipeline progress" geode.flushed=1075 geode.total=1075
+time=2026-04-23T19:30:42.235-04:00 level=INFO msg="pipeline exec complete" geode.statements=1075
+time=2026-04-23T19:30:42.235-04:00 level=INFO msg="seeded nodes" kind=service_principal count=1075
+time=2026-04-23T19:30:42.235-04:00 level=INFO msg="seeding nodes" kind=tenant_setting file=tenant_settings.jsonl
+time=2026-04-23T19:30:42.236-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=6 geode.workers=16
+time=2026-04-23T19:30:42.236-04:00 level=INFO msg="pipeline exec start" geode.total=6 geode.chunks=6 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:30:42.250-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=6
+time=2026-04-23T19:30:42.255-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=6
+time=2026-04-23T19:30:42.265-04:00 level=INFO msg="pipeline progress" geode.flushed=3 geode.total=6
+time=2026-04-23T19:30:42.291-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=6
+time=2026-04-23T19:31:08.256-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:31:08.256-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:31:09.420-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=6
+time=2026-04-23T19:31:09.420-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=0 geode.statements=1 geode.elapsed=27s geode.stmts_per_sec=0.04 geode.suggested_workers=8
+time=2026-04-23T19:31:09.512-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=6
+time=2026-04-23T19:31:09.512-04:00 level=INFO msg="pipeline exec complete" geode.statements=6
+time=2026-04-23T19:31:09.512-04:00 level=INFO msg="seeded nodes" kind=tenant_setting count=6
+time=2026-04-23T19:31:09.512-04:00 level=INFO msg="seeding nodes" kind=directory_role file=directory_roles.jsonl
+time=2026-04-23T19:31:09.514-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=2 geode.total=35 geode.workers=16
+time=2026-04-23T19:31:09.514-04:00 level=INFO msg="pipeline exec start" geode.total=35 geode.chunks=18 geode.chunk_size=2 geode.workers=16
+time=2026-04-23T19:31:09.530-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=35
+time=2026-04-23T19:31:09.535-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=35
+time=2026-04-23T19:31:09.548-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=35
+time=2026-04-23T19:31:09.553-04:00 level=INFO msg="pipeline progress" geode.flushed=7 geode.total=35
+time=2026-04-23T19:31:09.671-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=35
+time=2026-04-23T19:31:09.736-04:00 level=INFO msg="pipeline progress" geode.flushed=11 geode.total=35
+time=2026-04-23T19:31:09.746-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=35
+time=2026-04-23T19:31:09.756-04:00 level=INFO msg="pipeline progress" geode.flushed=15 geode.total=35
+time=2026-04-23T19:31:09.777-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=35
+time=2026-04-23T19:31:09.806-04:00 level=INFO msg="pipeline progress" geode.flushed=19 geode.total=35
+time=2026-04-23T19:31:35.567-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=35
+time=2026-04-23T19:31:35.567-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=7 geode.statements=2 geode.elapsed=26s geode.stmts_per_sec=0.08 geode.suggested_workers=8
+time=2026-04-23T19:31:35.572-04:00 level=INFO msg="pipeline progress" geode.flushed=23 geode.total=35
+time=2026-04-23T19:31:35.614-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=35
+time=2026-04-23T19:31:39.516-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:31:39.539-04:00 level=INFO msg="pipeline progress" geode.flushed=27 geode.total=35
+time=2026-04-23T19:31:39.545-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=35
+time=2026-04-23T19:31:40.536-04:00 level=INFO msg="pipeline progress" geode.flushed=31 geode.total=35
+time=2026-04-23T19:32:39.516-04:00 level=ERROR msg="chunk failed" geode.chunk=11 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T19:32:39.516-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:32:40.708-04:00 level=INFO msg="pipeline progress" geode.flushed=33 geode.total=35
+time=2026-04-23T19:32:40.708-04:00 level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 11: batch begin tx: context deadline exceeded" geode.statements=35 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T19:32:40.708-04:00 level=INFO msg="seed exec start" geode.total=35 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T19:32:40.846-04:00 level=INFO msg="seed progress" geode.flushed=35 geode.total=35
+time=2026-04-23T19:32:40.846-04:00 level=INFO msg="seed exec complete" geode.statements=35
+time=2026-04-23T19:32:40.846-04:00 level=INFO msg="seeded nodes" kind=directory_role count=35
+time=2026-04-23T19:32:40.847-04:00 level=INFO msg="seeding nodes" kind=subscription file=subscriptions.jsonl
+time=2026-04-23T19:32:40.847-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=29 geode.workers=16
+time=2026-04-23T19:32:40.847-04:00 level=INFO msg="pipeline exec start" geode.total=29 geode.chunks=29 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:32:40.860-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=29
+time=2026-04-23T19:32:40.874-04:00 level=INFO msg="pipeline progress" geode.flushed=2 geode.total=29
+time=2026-04-23T19:32:40.889-04:00 level=INFO msg="pipeline progress" geode.flushed=3 geode.total=29
+time=2026-04-23T19:32:40.904-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=29
+time=2026-04-23T19:32:40.919-04:00 level=INFO msg="pipeline progress" geode.flushed=5 geode.total=29
+time=2026-04-23T19:32:40.932-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=29
+time=2026-04-23T19:32:40.946-04:00 level=INFO msg="pipeline progress" geode.flushed=7 geode.total=29
+time=2026-04-23T19:32:40.960-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=29
+time=2026-04-23T19:32:40.972-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=29
+time=2026-04-23T19:32:40.986-04:00 level=INFO msg="pipeline progress" geode.flushed=10 geode.total=29
+time=2026-04-23T19:32:40.999-04:00 level=INFO msg="pipeline progress" geode.flushed=11 geode.total=29
+time=2026-04-23T19:32:41.004-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=29
+time=2026-04-23T19:32:41.013-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=29
+time=2026-04-23T19:32:41.025-04:00 level=INFO msg="pipeline progress" geode.flushed=14 geode.total=29
+time=2026-04-23T19:32:41.030-04:00 level=INFO msg="pipeline progress" geode.flushed=15 geode.total=29
+time=2026-04-23T19:32:41.114-04:00 level=INFO msg="pipeline progress" geode.flushed=16 geode.total=29
+time=2026-04-23T19:32:41.168-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=29
+time=2026-04-23T19:32:41.173-04:00 level=INFO msg="pipeline progress" geode.flushed=18 geode.total=29
+time=2026-04-23T19:32:42.075-04:00 level=INFO msg="pipeline progress" geode.flushed=19 geode.total=29
+time=2026-04-23T19:32:42.075-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=11 geode.statements=1 geode.elapsed=1s geode.stmts_per_sec=0.81 geode.suggested_workers=8
+time=2026-04-23T19:32:42.090-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=29
+time=2026-04-23T19:33:07.033-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:07.033-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:07.033-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:07.049-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=29
+time=2026-04-23T19:33:07.055-04:00 level=INFO msg="pipeline progress" geode.flushed=22 geode.total=29
+time=2026-04-23T19:33:07.088-04:00 level=INFO msg="pipeline progress" geode.flushed=23 geode.total=29
+time=2026-04-23T19:33:08.048-04:00 level=INFO msg="pipeline progress" geode.flushed=24 geode.total=29
+time=2026-04-23T19:33:08.056-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=29
+time=2026-04-23T19:33:08.086-04:00 level=INFO msg="pipeline progress" geode.flushed=26 geode.total=29
+time=2026-04-23T19:33:10.849-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:33:10.864-04:00 level=INFO msg="pipeline progress" geode.flushed=27 geode.total=29
+time=2026-04-23T19:33:10.869-04:00 level=INFO msg="pipeline progress" geode.flushed=28 geode.total=29
+time=2026-04-23T19:33:11.864-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=29
+time=2026-04-23T19:33:11.864-04:00 level=INFO msg="pipeline exec complete" geode.statements=29
+time=2026-04-23T19:33:11.864-04:00 level=INFO msg="seeded nodes" kind=subscription count=29
+time=2026-04-23T19:33:11.864-04:00 level=INFO msg="seeding nodes" kind=security_alert file=security_alerts.jsonl
+time=2026-04-23T19:33:11.870-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=28 geode.total=460 geode.workers=16
+time=2026-04-23T19:33:11.870-04:00 level=INFO msg="pipeline exec start" geode.total=460 geode.chunks=17 geode.chunk_size=28 geode.workers=16
+time=2026-04-23T19:33:11.982-04:00 level=INFO msg="pipeline progress" geode.flushed=28 geode.total=460
+time=2026-04-23T19:33:11.986-04:00 level=INFO msg="pipeline progress" geode.flushed=56 geode.total=460
+time=2026-04-23T19:33:12.032-04:00 level=INFO msg="pipeline progress" geode.flushed=68 geode.total=460
+time=2026-04-23T19:33:12.138-04:00 level=INFO msg="pipeline progress" geode.flushed=96 geode.total=460
+time=2026-04-23T19:33:12.251-04:00 level=INFO msg="pipeline progress" geode.flushed=124 geode.total=460
+time=2026-04-23T19:33:12.268-04:00 level=INFO msg="pipeline progress" geode.flushed=152 geode.total=460
+time=2026-04-23T19:33:12.291-04:00 level=INFO msg="pipeline progress" geode.flushed=180 geode.total=460
+time=2026-04-23T19:33:36.992-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:36.992-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:36.992-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:36.994-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:36.994-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:36.994-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:33:37.104-04:00 level=INFO msg="pipeline progress" geode.flushed=208 geode.total=460
+time=2026-04-23T19:33:37.190-04:00 level=INFO msg="pipeline progress" geode.flushed=236 geode.total=460
+time=2026-04-23T19:33:38.920-04:00 level=INFO msg="pipeline progress" geode.flushed=264 geode.total=460
+time=2026-04-23T19:33:38.971-04:00 level=INFO msg="pipeline progress" geode.flushed=292 geode.total=460
+time=2026-04-23T19:33:38.980-04:00 level=INFO msg="pipeline progress" geode.flushed=320 geode.total=460
+time=2026-04-23T19:33:39.016-04:00 level=INFO msg="pipeline progress" geode.flushed=348 geode.total=460
+time=2026-04-23T19:33:39.078-04:00 level=INFO msg="pipeline progress" geode.flushed=376 geode.total=460
+time=2026-04-23T19:33:39.134-04:00 level=INFO msg="pipeline progress" geode.flushed=404 geode.total=460
+time=2026-04-23T19:33:41.872-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:33:41.990-04:00 level=INFO msg="pipeline progress" geode.flushed=432 geode.total=460
+time=2026-04-23T19:33:41.990-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=12 geode.statements=28 geode.elapsed=30s geode.stmts_per_sec=0.93 geode.suggested_workers=8
+time=2026-04-23T19:33:42.989-04:00 level=INFO msg="pipeline progress" geode.flushed=460 geode.total=460
+time=2026-04-23T19:33:42.989-04:00 level=INFO msg="pipeline exec complete" geode.statements=460
+time=2026-04-23T19:33:42.989-04:00 level=INFO msg="seeded nodes" kind=security_alert count=460
+time=2026-04-23T19:33:42.989-04:00 level=INFO msg="seeding nodes" kind=role_definition file=role_definitions.jsonl
+time=2026-04-23T19:33:43.009-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=56 geode.total=909 geode.workers=16
+time=2026-04-23T19:33:43.009-04:00 level=INFO msg="pipeline exec start" geode.total=909 geode.chunks=17 geode.chunk_size=56 geode.workers=16
+time=2026-04-23T19:33:43.228-04:00 level=INFO msg="pipeline progress" geode.flushed=56 geode.total=909
+time=2026-04-23T19:33:43.341-04:00 level=INFO msg="pipeline progress" geode.flushed=69 geode.total=909
+time=2026-04-23T19:33:43.479-04:00 level=INFO msg="pipeline progress" geode.flushed=125 geode.total=909
+time=2026-04-23T19:33:44.621-04:00 level=INFO msg="pipeline progress" geode.flushed=181 geode.total=909
+time=2026-04-23T19:33:44.634-04:00 level=INFO msg="pipeline progress" geode.flushed=237 geode.total=909
+time=2026-04-23T19:33:44.901-04:00 level=INFO msg="pipeline progress" geode.flushed=293 geode.total=909
+time=2026-04-23T19:33:45.027-04:00 level=INFO msg="pipeline progress" geode.flushed=349 geode.total=909
+time=2026-04-23T19:33:45.047-04:00 level=INFO msg="pipeline progress" geode.flushed=405 geode.total=909
+time=2026-04-23T19:34:08.347-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:08.347-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:08.347-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:08.658-04:00 level=INFO msg="pipeline progress" geode.flushed=461 geode.total=909
+time=2026-04-23T19:34:09.190-04:00 level=INFO msg="pipeline progress" geode.flushed=517 geode.total=909
+time=2026-04-23T19:34:10.074-04:00 level=INFO msg="pipeline progress" geode.flushed=573 geode.total=909
+time=2026-04-23T19:34:10.095-04:00 level=INFO msg="pipeline progress" geode.flushed=629 geode.total=909
+time=2026-04-23T19:34:10.115-04:00 level=INFO msg="pipeline progress" geode.flushed=685 geode.total=909
+time=2026-04-23T19:34:10.289-04:00 level=INFO msg="pipeline progress" geode.flushed=741 geode.total=909
+time=2026-04-23T19:34:13.011-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:34:13.261-04:00 level=INFO msg="pipeline progress" geode.flushed=797 geode.total=909
+time=2026-04-23T19:34:13.266-04:00 level=INFO msg="pipeline progress" geode.flushed=853 geode.total=909
+time=2026-04-23T19:34:14.261-04:00 level=INFO msg="pipeline progress" geode.flushed=909 geode.total=909
+time=2026-04-23T19:34:14.261-04:00 level=INFO msg="pipeline exec complete" geode.statements=909
+time=2026-04-23T19:34:14.261-04:00 level=INFO msg="seeded nodes" kind=role_definition count=909
+time=2026-04-23T19:34:14.261-04:00 level=INFO msg="seeding nodes" kind=app_role file=app_roles.jsonl
+time=2026-04-23T19:34:14.294-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=64 geode.total=1033 geode.workers=16
+time=2026-04-23T19:34:14.294-04:00 level=INFO msg="pipeline exec start" geode.total=1033 geode.chunks=17 geode.chunk_size=64 geode.workers=16
+time=2026-04-23T19:34:14.576-04:00 level=INFO msg="pipeline progress" geode.flushed=64 geode.total=1033
+time=2026-04-23T19:34:14.668-04:00 level=INFO msg="pipeline progress" geode.flushed=73 geode.total=1033
+time=2026-04-23T19:34:14.738-04:00 level=INFO msg="pipeline progress" geode.flushed=137 geode.total=1033
+time=2026-04-23T19:34:16.161-04:00 level=INFO msg="pipeline progress" geode.flushed=201 geode.total=1033
+time=2026-04-23T19:34:16.191-04:00 level=INFO msg="pipeline progress" geode.flushed=265 geode.total=1033
+time=2026-04-23T19:34:16.196-04:00 level=INFO msg="pipeline progress" geode.flushed=329 geode.total=1033
+time=2026-04-23T19:34:16.546-04:00 level=INFO msg="pipeline progress" geode.flushed=393 geode.total=1033
+time=2026-04-23T19:34:39.673-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:39.673-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:39.673-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:39.676-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:39.676-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:39.676-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:34:40.016-04:00 level=INFO msg="pipeline progress" geode.flushed=457 geode.total=1033
+time=2026-04-23T19:34:40.057-04:00 level=INFO msg="pipeline progress" geode.flushed=521 geode.total=1033
+time=2026-04-23T19:34:41.145-04:00 level=INFO msg="pipeline progress" geode.flushed=585 geode.total=1033
+time=2026-04-23T19:34:41.286-04:00 level=INFO msg="pipeline progress" geode.flushed=649 geode.total=1033
+time=2026-04-23T19:34:41.409-04:00 level=INFO msg="pipeline progress" geode.flushed=713 geode.total=1033
+time=2026-04-23T19:34:41.636-04:00 level=INFO msg="pipeline progress" geode.flushed=777 geode.total=1033
+time=2026-04-23T19:34:42.197-04:00 level=INFO msg="pipeline progress" geode.flushed=841 geode.total=1033
+time=2026-04-23T19:34:43.080-04:00 level=INFO msg="pipeline progress" geode.flushed=905 geode.total=1033
+time=2026-04-23T19:34:44.295-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:34:44.593-04:00 level=INFO msg="pipeline progress" geode.flushed=969 geode.total=1033
+time=2026-04-23T19:34:46.616-04:00 level=INFO msg="pipeline progress" geode.flushed=1033 geode.total=1033
+time=2026-04-23T19:34:46.616-04:00 level=INFO msg="pipeline exec complete" geode.statements=1033
+time=2026-04-23T19:34:46.616-04:00 level=INFO msg="seeded nodes" kind=app_role count=1033
+time=2026-04-23T19:34:46.617-04:00 level=INFO msg="seeding nodes" kind=auth_methods_policy file=auth_methods_policies.jsonl
+time=2026-04-23T19:34:46.617-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=16
+time=2026-04-23T19:34:46.617-04:00 level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:34:46.631-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-23T19:34:46.631-04:00 level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-23T19:34:46.631-04:00 level=INFO msg="seeded nodes" kind=auth_methods_policy count=1
+time=2026-04-23T19:34:46.631-04:00 level=INFO msg="seeding nodes" kind=pim_activation file=pim_activations.jsonl
+time=2026-04-23T19:34:46.632-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=4 geode.total=73 geode.workers=16
+time=2026-04-23T19:34:46.632-04:00 level=INFO msg="pipeline exec start" geode.total=73 geode.chunks=19 geode.chunk_size=4 geode.workers=16
+time=2026-04-23T19:34:46.659-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=73
+time=2026-04-23T19:34:46.684-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=73
+time=2026-04-23T19:34:46.710-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=73
+time=2026-04-23T19:34:46.727-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=73
+time=2026-04-23T19:34:46.802-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=73
+time=2026-04-23T19:34:46.905-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=73
+time=2026-04-23T19:34:46.976-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=73
+time=2026-04-23T19:34:46.980-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=73
+time=2026-04-23T19:34:47.011-04:00 level=INFO msg="pipeline progress" geode.flushed=33 geode.total=73
+time=2026-04-23T19:34:47.047-04:00 level=INFO msg="pipeline progress" geode.flushed=37 geode.total=73
+time=2026-04-23T19:35:11.732-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:11.732-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:11.732-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:11.760-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=73
+time=2026-04-23T19:35:11.760-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=11 geode.statements=4 geode.elapsed=25s geode.stmts_per_sec=0.16 geode.suggested_workers=8
+time=2026-04-23T19:35:11.765-04:00 level=INFO msg="pipeline progress" geode.flushed=45 geode.total=73
+time=2026-04-23T19:35:11.796-04:00 level=INFO msg="pipeline progress" geode.flushed=49 geode.total=73
+time=2026-04-23T19:35:13.792-04:00 level=INFO msg="pipeline progress" geode.flushed=53 geode.total=73
+time=2026-04-23T19:35:13.830-04:00 level=INFO msg="pipeline progress" geode.flushed=57 geode.total=73
+time=2026-04-23T19:35:13.855-04:00 level=INFO msg="pipeline progress" geode.flushed=61 geode.total=73
+time=2026-04-23T19:35:16.635-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:35:16.663-04:00 level=INFO msg="pipeline progress" geode.flushed=65 geode.total=73
+time=2026-04-23T19:35:16.668-04:00 level=INFO msg="pipeline progress" geode.flushed=69 geode.total=73
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="pipeline progress" geode.flushed=73 geode.total=73
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="pipeline exec complete" geode.statements=73
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="seeded nodes" kind=pim_activation count=73
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="seeding nodes" kind=access_review file=access_review.jsonl
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=16
+time=2026-04-23T19:35:18.405-04:00 level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:35:18.418-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-23T19:35:18.418-04:00 level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-23T19:35:18.418-04:00 level=INFO msg="seeded nodes" kind=access_review count=1
+time=2026-04-23T19:35:18.418-04:00 level=INFO msg="seeding nodes" kind=service_health_issue file=service_health_issue.jsonl
+time=2026-04-23T19:35:18.419-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=10 geode.total=166 geode.workers=16
+time=2026-04-23T19:35:18.419-04:00 level=INFO msg="pipeline exec start" geode.total=166 geode.chunks=17 geode.chunk_size=10 geode.workers=16
+time=2026-04-23T19:35:18.461-04:00 level=INFO msg="pipeline progress" geode.flushed=10 geode.total=166
+time=2026-04-23T19:35:18.466-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=166
+time=2026-04-23T19:35:18.491-04:00 level=INFO msg="pipeline progress" geode.flushed=26 geode.total=166
+time=2026-04-23T19:35:18.600-04:00 level=INFO msg="pipeline progress" geode.flushed=36 geode.total=166
+time=2026-04-23T19:35:18.670-04:00 level=INFO msg="pipeline progress" geode.flushed=46 geode.total=166
+time=2026-04-23T19:35:18.711-04:00 level=INFO msg="pipeline progress" geode.flushed=56 geode.total=166
+time=2026-04-23T19:35:18.752-04:00 level=INFO msg="pipeline progress" geode.flushed=66 geode.total=166
+time=2026-04-23T19:35:43.472-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.472-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.472-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.474-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.474-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.474-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:35:43.517-04:00 level=INFO msg="pipeline progress" geode.flushed=76 geode.total=166
+time=2026-04-23T19:35:43.517-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=10 geode.statements=10 geode.elapsed=25s geode.stmts_per_sec=0.40 geode.suggested_workers=8
+time=2026-04-23T19:35:43.554-04:00 level=INFO msg="pipeline progress" geode.flushed=86 geode.total=166
+time=2026-04-23T19:35:44.521-04:00 level=INFO msg="pipeline progress" geode.flushed=96 geode.total=166
+time=2026-04-23T19:35:44.525-04:00 level=INFO msg="pipeline progress" geode.flushed=106 geode.total=166
+time=2026-04-23T19:35:44.675-04:00 level=INFO msg="pipeline progress" geode.flushed=116 geode.total=166
+time=2026-04-23T19:35:44.720-04:00 level=INFO msg="pipeline progress" geode.flushed=126 geode.total=166
+time=2026-04-23T19:35:44.760-04:00 level=INFO msg="pipeline progress" geode.flushed=136 geode.total=166
+time=2026-04-23T19:35:44.802-04:00 level=INFO msg="pipeline progress" geode.flushed=146 geode.total=166
+time=2026-04-23T19:35:48.423-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:35:48.484-04:00 level=INFO msg="pipeline progress" geode.flushed=156 geode.total=166
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="pipeline progress" geode.flushed=166 geode.total=166
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="pipeline exec complete" geode.statements=166
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="seeded nodes" kind=service_health_issue count=166
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="seeding nodes" kind=oauth2_permission_grant file=oauth2_permission_grant.jsonl
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=3 geode.total=59 geode.workers=16
+time=2026-04-23T19:35:49.467-04:00 level=INFO msg="pipeline exec start" geode.total=59 geode.chunks=20 geode.chunk_size=3 geode.workers=16
+time=2026-04-23T19:35:49.487-04:00 level=INFO msg="pipeline progress" geode.flushed=3 geode.total=59
+time=2026-04-23T19:35:49.507-04:00 level=INFO msg="pipeline progress" geode.flushed=6 geode.total=59
+time=2026-04-23T19:35:49.526-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=59
+time=2026-04-23T19:35:49.546-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=59
+time=2026-04-23T19:35:49.562-04:00 level=INFO msg="pipeline progress" geode.flushed=14 geode.total=59
+time=2026-04-23T19:35:49.640-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=59
+time=2026-04-23T19:35:49.738-04:00 level=INFO msg="pipeline progress" geode.flushed=20 geode.total=59
+time=2026-04-23T19:35:49.794-04:00 level=INFO msg="pipeline progress" geode.flushed=23 geode.total=59
+time=2026-04-23T19:35:49.799-04:00 level=INFO msg="pipeline progress" geode.flushed=26 geode.total=59
+time=2026-04-23T19:35:49.850-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=59
+time=2026-04-23T19:35:49.887-04:00 level=INFO msg="pipeline progress" geode.flushed=32 geode.total=59
+time=2026-04-23T19:36:14.567-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:14.567-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:14.567-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:14.587-04:00 level=INFO msg="pipeline progress" geode.flushed=35 geode.total=59
+time=2026-04-23T19:36:14.587-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=5 geode.statements=3 geode.elapsed=25s geode.stmts_per_sec=0.12 geode.suggested_workers=8
+time=2026-04-23T19:36:14.592-04:00 level=INFO msg="pipeline progress" geode.flushed=38 geode.total=59
+time=2026-04-23T19:36:14.631-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=59
+time=2026-04-23T19:36:15.590-04:00 level=INFO msg="pipeline progress" geode.flushed=44 geode.total=59
+time=2026-04-23T19:36:15.595-04:00 level=INFO msg="pipeline progress" geode.flushed=47 geode.total=59
+time=2026-04-23T19:36:15.609-04:00 level=INFO msg="pipeline progress" geode.flushed=50 geode.total=59
+time=2026-04-23T19:36:19.471-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:36:19.492-04:00 level=INFO msg="pipeline progress" geode.flushed=53 geode.total=59
+time=2026-04-23T19:36:19.497-04:00 level=INFO msg="pipeline progress" geode.flushed=56 geode.total=59
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="pipeline progress" geode.flushed=59 geode.total=59
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="pipeline exec complete" geode.statements=59
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="seeded nodes" kind=oauth2_permission_grant count=59
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="seeding nodes" kind=organizational_branding file=organizational_branding.jsonl
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=16
+time=2026-04-23T19:36:21.049-04:00 level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=16
+time=2026-04-23T19:36:21.062-04:00 level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-23T19:36:21.062-04:00 level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-23T19:36:21.062-04:00 level=INFO msg="seeded nodes" kind=organizational_branding count=1
+time=2026-04-23T19:36:21.153-04:00 level=INFO msg="seeding edges" file=edges_activated_role.jsonl
+time=2026-04-23T19:36:21.154-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=4 geode.total=65 geode.workers=16
+time=2026-04-23T19:36:21.154-04:00 level=INFO msg="pipeline exec start" geode.total=65 geode.chunks=17 geode.chunk_size=4 geode.workers=16
+time=2026-04-23T19:36:21.646-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=65
+time=2026-04-23T19:36:21.648-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=65
+time=2026-04-23T19:36:21.862-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=65
+time=2026-04-23T19:36:21.953-04:00 level=INFO msg="pipeline progress" geode.flushed=13 geode.total=65
+time=2026-04-23T19:36:22.017-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=65
+time=2026-04-23T19:36:23.493-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=65
+time=2026-04-23T19:36:23.495-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=65
+time=2026-04-23T19:36:46.652-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.652-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.652-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.653-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.653-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.653-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:36:46.964-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=65
+time=2026-04-23T19:36:46.964-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=12 geode.statements=4 geode.elapsed=26s geode.stmts_per_sec=0.15 geode.suggested_workers=8
+time=2026-04-23T19:36:47.029-04:00 level=INFO msg="pipeline progress" geode.flushed=33 geode.total=65
+time=2026-04-23T19:36:49.474-04:00 level=INFO msg="pipeline progress" geode.flushed=37 geode.total=65
+time=2026-04-23T19:36:49.538-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=65
+time=2026-04-23T19:36:49.659-04:00 level=INFO msg="pipeline progress" geode.flushed=45 geode.total=65
+time=2026-04-23T19:36:49.717-04:00 level=INFO msg="pipeline progress" geode.flushed=49 geode.total=65
+time=2026-04-23T19:36:50.905-04:00 level=INFO msg="pipeline progress" geode.flushed=53 geode.total=65
+time=2026-04-23T19:36:50.985-04:00 level=INFO msg="pipeline progress" geode.flushed=57 geode.total=65
+time=2026-04-23T19:36:51.154-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:36:51.361-04:00 level=INFO msg="pipeline progress" geode.flushed=61 geode.total=65
+time=2026-04-23T19:36:53.205-04:00 level=INFO msg="pipeline progress" geode.flushed=65 geode.total=65
+time=2026-04-23T19:36:53.205-04:00 level=INFO msg="pipeline exec complete" geode.statements=65
+time=2026-04-23T19:36:53.205-04:00 level=INFO msg="seeded edges" file=edges_activated_role.jsonl count=65
+time=2026-04-23T19:36:53.205-04:00 level=INFO msg="seeding edges" file=edges_app_role_assignment.jsonl
+time=2026-04-23T19:36:53.214-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=25 geode.total=400 geode.workers=16
+time=2026-04-23T19:36:53.214-04:00 level=INFO msg="pipeline exec start" geode.total=400 geode.chunks=16 geode.chunk_size=25 geode.workers=16
+time=2026-04-23T19:37:14.679-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=400
+time=2026-04-23T19:37:17.059-04:00 level=INFO msg="pipeline progress" geode.flushed=50 geode.total=400
+time=2026-04-23T19:37:18.475-04:00 level=INFO msg="pipeline progress" geode.flushed=75 geode.total=400
+time=2026-04-23T19:37:18.475-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=15 geode.statements=25 geode.elapsed=25s geode.stmts_per_sec=0.99 geode.suggested_workers=8
+time=2026-04-23T19:37:18.829-04:00 level=INFO msg="pipeline progress" geode.flushed=100 geode.total=400
+time=2026-04-23T19:37:23.009-04:00 level=INFO msg="pipeline progress" geode.flushed=125 geode.total=400
+time=2026-04-23T19:37:23.214-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:37:23.214-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:37:23.219-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:37:23.219-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:37:23.219-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:37:39.267-04:00 level=INFO msg="pipeline progress" geode.flushed=150 geode.total=400
+time=2026-04-23T19:37:44.926-04:00 level=INFO msg="pipeline progress" geode.flushed=175 geode.total=400
+time=2026-04-23T19:37:48.195-04:00 level=INFO msg="pipeline progress" geode.flushed=200 geode.total=400
+time=2026-04-23T19:37:50.622-04:00 level=INFO msg="pipeline progress" geode.flushed=225 geode.total=400
+time=2026-04-23T19:37:50.886-04:00 level=INFO msg="pipeline progress" geode.flushed=250 geode.total=400
+time=2026-04-23T19:37:57.189-04:00 level=INFO msg="pipeline progress" geode.flushed=275 geode.total=400
+time=2026-04-23T19:38:10.607-04:00 level=INFO msg="pipeline progress" geode.flushed=300 geode.total=400
+time=2026-04-23T19:38:19.854-04:00 level=INFO msg="pipeline progress" geode.flushed=325 geode.total=400
+time=2026-04-23T19:38:27.697-04:00 level=INFO msg="pipeline progress" geode.flushed=350 geode.total=400
+time=2026-04-23T19:38:41.751-04:00 level=INFO msg="pipeline progress" geode.flushed=375 geode.total=400
+time=2026-04-23T19:38:50.058-04:00 level=INFO msg="pipeline progress" geode.flushed=400 geode.total=400
+time=2026-04-23T19:38:50.059-04:00 level=INFO msg="pipeline exec complete" geode.statements=400
+time=2026-04-23T19:38:50.059-04:00 level=INFO msg="seeded edges" file=edges_app_role_assignment.jsonl count=400
+time=2026-04-23T19:38:50.059-04:00 level=INFO msg="seeding edges" file=edges_audited.jsonl
+time=2026-04-23T19:38:50.064-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=50 geode.total=808 geode.workers=16
+time=2026-04-23T19:38:50.064-04:00 level=INFO msg="pipeline exec start" geode.total=808 geode.chunks=17 geode.chunk_size=50 geode.workers=16
+time=2026-04-23T19:39:20.065-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:39:20.065-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:40:16.085-04:00 level=INFO msg="pipeline progress" geode.flushed=50 geode.total=808
+time=2026-04-23T19:40:16.085-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=3 geode.statements=50 geode.elapsed=1m26s geode.stmts_per_sec=0.58 geode.suggested_workers=8
+time=2026-04-23T19:40:18.190-04:00 level=INFO msg="pipeline progress" geode.flushed=100 geode.total=808
+time=2026-04-23T19:40:25.648-04:00 level=INFO msg="pipeline progress" geode.flushed=150 geode.total=808
+time=2026-04-23T19:40:26.353-04:00 level=INFO msg="pipeline progress" geode.flushed=200 geode.total=808
+time=2026-04-23T19:40:31.893-04:00 level=INFO msg="pipeline progress" geode.flushed=208 geode.total=808
+time=2026-04-23T19:40:34.839-04:00 level=INFO msg="pipeline progress" geode.flushed=258 geode.total=808
+time=2026-04-23T19:40:40.236-04:00 level=INFO msg="pipeline progress" geode.flushed=308 geode.total=808
+time=2026-04-23T19:40:44.006-04:00 level=INFO msg="pipeline progress" geode.flushed=358 geode.total=808
+time=2026-04-23T19:40:50.655-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.655-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.655-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.656-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.656-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.656-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.658-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.658-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:40:50.658-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:41:51.476-04:00 level=INFO msg="pipeline progress" geode.flushed=408 geode.total=808
+time=2026-04-23T19:41:54.106-04:00 level=INFO msg="pipeline progress" geode.flushed=458 geode.total=808
+time=2026-04-23T19:41:56.016-04:00 level=INFO msg="pipeline progress" geode.flushed=558 geode.total=808
+time=2026-04-23T19:41:56.016-04:00 level=INFO msg="pipeline progress" geode.flushed=508 geode.total=808
+time=2026-04-23T19:41:58.919-04:00 level=INFO msg="pipeline progress" geode.flushed=608 geode.total=808
+time=2026-04-23T19:42:22.317-04:00 level=INFO msg="pipeline progress" geode.flushed=658 geode.total=808
+time=2026-04-23T19:42:25.390-04:00 level=INFO msg="pipeline progress" geode.flushed=708 geode.total=808
+time=2026-04-23T19:42:41.897-04:00 level=INFO msg="pipeline progress" geode.flushed=758 geode.total=808
+time=2026-04-23T19:43:06.573-04:00 level=INFO msg="pipeline progress" geode.flushed=808 geode.total=808
+time=2026-04-23T19:43:06.574-04:00 level=INFO msg="pipeline exec complete" geode.statements=808
+time=2026-04-23T19:43:06.574-04:00 level=INFO msg="seeded edges" file=edges_audited.jsonl count=808
+time=2026-04-23T19:43:06.574-04:00 level=INFO msg="seeding edges" file=edges_azure_rbac_assignment.jsonl
+time=2026-04-23T19:43:06.627-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=136 geode.total=2186 geode.workers=16
+time=2026-04-23T19:43:06.627-04:00 level=INFO msg="pipeline exec start" geode.total=2186 geode.chunks=17 geode.chunk_size=136 geode.workers=16
+time=2026-04-23T19:43:36.628-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:43:36.628-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:44:30.950-04:00 level=INFO msg="pipeline progress" geode.flushed=136 geode.total=2186
+time=2026-04-23T19:44:31.374-04:00 level=INFO msg="pipeline progress" geode.flushed=272 geode.total=2186
+time=2026-04-23T19:44:37.945-04:00 level=INFO msg="pipeline progress" geode.flushed=408 geode.total=2186
+time=2026-04-23T19:44:38.332-04:00 level=INFO msg="pipeline progress" geode.flushed=418 geode.total=2186
+time=2026-04-23T19:44:41.927-04:00 level=INFO msg="pipeline progress" geode.flushed=554 geode.total=2186
+time=2026-04-23T19:44:44.857-04:00 level=INFO msg="pipeline progress" geode.flushed=690 geode.total=2186
+time=2026-04-23T19:44:55.923-04:00 level=INFO msg="pipeline progress" geode.flushed=826 geode.total=2186
+time=2026-04-23T19:44:56.378-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:56.378-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:56.378-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:56.381-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:56.381-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:56.381-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:44:58.302-04:00 level=INFO msg="pipeline progress" geode.flushed=962 geode.total=2186
+time=2026-04-23T19:45:23.315-04:00 level=WARN msg="batch retry" geode.attempt=2 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=2s
+time=2026-04-23T19:45:23.315-04:00 level=WARN msg="batch retry" geode.attempt=2 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=2s
+time=2026-04-23T19:46:09.573-04:00 level=INFO msg="pipeline progress" geode.flushed=1098 geode.total=2186
+time=2026-04-23T19:46:09.573-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=3 geode.statements=136 geode.elapsed=3m3s geode.stmts_per_sec=0.74 geode.suggested_workers=8
+time=2026-04-23T19:46:13.868-04:00 level=INFO msg="pipeline progress" geode.flushed=1234 geode.total=2186
+time=2026-04-23T19:46:21.035-04:00 level=INFO msg="pipeline progress" geode.flushed=1370 geode.total=2186
+time=2026-04-23T19:46:22.746-04:00 level=INFO msg="pipeline progress" geode.flushed=1506 geode.total=2186
+time=2026-04-23T19:46:29.658-04:00 level=INFO msg="pipeline progress" geode.flushed=1642 geode.total=2186
+time=2026-04-23T19:46:34.827-04:00 level=INFO msg="pipeline progress" geode.flushed=1778 geode.total=2186
+time=2026-04-23T19:46:49.125-04:00 level=INFO msg="pipeline progress" geode.flushed=1914 geode.total=2186
+time=2026-04-23T19:47:03.426-04:00 level=INFO msg="pipeline progress" geode.flushed=2050 geode.total=2186
+time=2026-04-23T19:47:44.455-04:00 level=INFO msg="pipeline progress" geode.flushed=2186 geode.total=2186
+time=2026-04-23T19:47:44.455-04:00 level=INFO msg="pipeline exec complete" geode.statements=2186
+time=2026-04-23T19:47:44.455-04:00 level=INFO msg="seeded edges" file=edges_azure_rbac_assignment.jsonl count=2186
+time=2026-04-23T19:47:44.455-04:00 level=INFO msg="seeding edges" file=edges_contains.jsonl
+time=2026-04-23T19:47:44.461-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=98 geode.total=1575 geode.workers=16
+time=2026-04-23T19:47:44.461-04:00 level=INFO msg="pipeline exec start" geode.total=1575 geode.chunks=17 geode.chunk_size=98 geode.workers=16
+time=2026-04-23T19:48:14.462-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: context deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:48:14.462-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch get conn: failed to receive HELLO response: geode: transport read_length to 127.0.0.1:3147: deadline exceeded" geode.backoff=1s
+time=2026-04-23T19:48:52.640-04:00 level=INFO msg="pipeline progress" geode.flushed=98 geode.total=1575
+time=2026-04-23T19:48:57.735-04:00 level=INFO msg="pipeline progress" geode.flushed=105 geode.total=1575
+time=2026-04-23T19:48:57.884-04:00 level=INFO msg="pipeline progress" geode.flushed=203 geode.total=1575
+time=2026-04-23T19:48:57.890-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:48:57.890-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:48:57.890-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3147: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T19:49:00.528-04:00 level=INFO msg="pipeline progress" geode.flushed=301 geode.total=1575
+time=2026-04-23T19:49:06.214-04:00 level=INFO msg="pipeline progress" geode.flushed=399 geode.total=1575
+time=2026-04-23T19:49:12.076-04:00 level=INFO msg="pipeline progress" geode.flushed=497 geode.total=1575
+time=2026-04-23T19:49:35.636-04:00 level=INFO msg="pipeline progress" geode.flushed=595 geode.total=1575
+time=2026-04-23T19:49:35.636-04:00 level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=7 geode.statements=98 geode.elapsed=1m51s geode.stmts_per_sec=0.88 geode.suggested_workers=8
+time=2026-04-23T19:49:37.147-04:00 level=INFO msg="pipeline progress" geode.flushed=693 geode.total=1575
+time=2026-04-23T19:49:46.244-04:00 level=ERROR msg="chunk failed" geode.chunk=1 geode.error="statement 1: geode: 40001: Write lock acquisition timed out"
+time=2026-04-23T19:49:46.244-04:00 level=ERROR msg="chunk failed" geode.chunk=14 geode.error="statement 1: geode: 40001: Write lock acquisition timed out"
+time=2026-04-23T19:49:49.029-04:00 level=INFO msg="pipeline progress" geode.flushed=791 geode.total=1575
+time=2026-04-23T19:49:49.532-04:00 level=INFO msg="pipeline progress" geode.flushed=889 geode.total=1575
+time=2026-04-23T19:50:27.583-04:00 level=INFO msg="pipeline progress" geode.flushed=987 geode.total=1575
+time=2026-04-23T19:50:45.774-04:00 level=INFO msg="pipeline progress" geode.flushed=1085 geode.total=1575
+time=2026-04-23T19:50:55.413-04:00 level=INFO msg="pipeline progress" geode.flushed=1183 geode.total=1575
