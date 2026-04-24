@@ -156,10 +156,57 @@ test "R6: 16 writers on 16 different graphs do NOT serialise globally" {
     }
     defer for (graph_names) |n| allocator.free(n);
 
+    const iterations: u32 = 200;
+
+    // Measure the CONTENDED baseline: 16 workers on ONE shared graph.
+    // This is the "worst case" — the per-graph write lock is genuinely
+    // contended by every worker. On a pre-R6 global-exclusive path, the
+    // CROSS-GRAPH run would look identical to this (every mutation
+    // serialised on the global lock). On post-R6, cross-graph is
+    // parallel because each worker owns a different lock.
+    //
+    // Running both on the SAME host back-to-back absorbs whatever host
+    // load (CVAT workers, background builds, CPU oversubscription) is
+    // present — since both measurements see the same interference, the
+    // ratio between them still reveals the parallelism invariant. The
+    // previous wall-clock and single-thread-baseline-ratio formulations
+    // both flaked on heavily-loaded hosts because their reference point
+    // wasn't subject to the same load as the test itself.
+    const contended_graph = "r6_cross_graph_contended_baseline";
+    if (graph_store.getGlobalAdapter()) |adapter| {
+        _ = adapter.getOrCreateGraph(contended_graph) catch |err| switch (err) {
+            error.GraphAlreadyExists => {},
+            else => return err,
+        };
+    }
+    var contended_results: [num_workers]WorkerResult = @splat(WorkerResult{});
+    var contended_contexts: [num_workers]WorkerCtx = undefined;
+    var contended_gate = std.atomic.Value(u32).init(0);
+    var contended_threads: [num_workers]std.Thread = undefined;
+    for (0..num_workers) |i| {
+        contended_contexts[i] = .{
+            .thread_idx = i,
+            .graph_name = contended_graph,
+            .iterations = iterations,
+            .deadline_budget_ns = 5 * std.time.ns_per_s,
+            .start_gate = &contended_gate,
+            .result = &contended_results[i],
+        };
+        contended_threads[i] = try std.Thread.spawn(.{}, writerWorker, .{&contended_contexts[i]});
+    }
+    const contended_start = monoNanos();
+    contended_gate.store(1, .release);
+    for (contended_threads) |t| t.join();
+    const contended_ns = monoNanos() - contended_start;
+
+    var contended_failures: u64 = 0;
+    for (contended_results) |r| contended_failures += r.failed_acquisitions;
+    try testing.expectEqual(@as(u64, 0), contended_failures);
+
+    // Now the CROSS-GRAPH run: 16 workers on 16 distinct graphs.
     var results: [num_workers]WorkerResult = @splat(WorkerResult{});
     var contexts: [num_workers]WorkerCtx = undefined;
     var start_gate = std.atomic.Value(u32).init(0);
-    const iterations: u32 = 200;
 
     var threads: [num_workers]std.Thread = undefined;
     for (0..num_workers) |i| {
@@ -190,28 +237,25 @@ test "R6: 16 writers on 16 different graphs do NOT serialise globally" {
     try testing.expectEqual(@as(u64, 0), total_failures);
     try testing.expectEqual(@as(u64, num_workers * iterations), total_mutations);
 
-    // Throughput expectation: since each graph has its OWN lock, 16
-    // workers should complete roughly 16× faster than a fully-serialised
-    // run.  Each iteration's useful work is ~50 µs, so a single worker
-    // would finish in ~50 µs × 200 = 10 ms.  16 workers serialised (the
-    // pre-R6 behaviour, because they all queue behind the GLOBAL
-    // exclusive rwlock acquire) would take ≥ 160 ms.  16 workers
-    // parallel on 16 different graphs should complete in ~10-30 ms.
-    //
-    // Upper bound: 100 ms (10× single-thread) — tight enough to reject
-    // the pre-R6 serialised behaviour (≥ 160 ms from the serialised
-    // 16 × 10 ms), loose enough to absorb scheduler jitter on a loaded
-    // CI machine.  If this assertion fires, either the global exclusive
-    // acquire has regressed or a new cross-graph serialisation point
-    // has been introduced elsewhere.
-    const single_thread_budget_ns: u64 = 10 * std.time.ns_per_ms; // 50 µs × 200 iters
-    const upper_bound_ns: u64 = single_thread_budget_ns * 10;
+    // Cross-graph parallelism invariant: the 16-way cross-graph run
+    // must be at least 2× faster than the 16-way same-graph run on
+    // the same host. Pre-R6 made them indistinguishable (global lock
+    // forced serialisation regardless of graph); post-R6 separates
+    // them by a large factor. Host load shifts BOTH measurements
+    // equally — the ratio still holds. A 0.5× threshold cleanly
+    // rejects the pre-R6 "cross ≈ same" pathology while absorbing
+    // jitter on contended hosts.
+    const upper_bound_ns: u64 = contended_ns / 2;
     if (wall_ns > upper_bound_ns) {
         std.debug.print(
             "R6 cross-graph: 16 workers on 16 graphs took {d:.3} ms " ++
-                "(upper bound {d:.3} ms). Global lock is still serialising.\n",
+                "(same-graph 16-way contended baseline {d:.3} ms; " ++
+                "bound = 0.5× contended = {d:.3} ms). Cross-graph is " ++
+                "NOT beating same-graph — global lock is still " ++
+                "serialising or per-graph lock scope regressed.\n",
             .{
                 @as(f64, @floatFromInt(wall_ns)) / 1_000_000.0,
+                @as(f64, @floatFromInt(contended_ns)) / 1_000_000.0,
                 @as(f64, @floatFromInt(upper_bound_ns)) / 1_000_000.0,
             },
         );

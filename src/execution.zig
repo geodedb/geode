@@ -127,6 +127,16 @@ pub const executeKShell = centrality_algorithms.executeKShell;
 
 // Re-export CRUD operation functions for backward compatibility (M1 Phase 4 extraction)
 pub const executeCreateForBatch = crud_operations.executeCreateForBatch;
+
+/// GAP-0815 regression probe. Returns a monotonically-increasing counter
+/// that `executeBatchCreateHomogeneous` increments on entry. Tests read it
+/// before/after a CREATE query to verify the batch path was taken —
+/// replacing the prior wall-clock budget assertions that flaked on
+/// contended hosts. This is a zero-cost atomic read; not exposed on the
+/// wire protocol.
+pub fn batchCreateInvocations() u64 {
+    return crud_operations.batch_create_invocations.load(.monotonic);
+}
 pub const executeCreateForBatchWithTracking = crud_operations.executeCreateForBatchWithTracking;
 pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;
