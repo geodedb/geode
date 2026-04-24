@@ -3375,6 +3375,25 @@ pub fn build(b: *std.Build) void {
     const merge_prop_rcu_step = b.step("test-merge-prop-rcu", "Run merge_prop_index RCU N-reader/1-writer stress tests");
     merge_prop_rcu_step.dependOn(&run_merge_prop_rcu_tests.step);
 
+    // RCU merge_prop_index Task 9 (2026-04-24) — microbench for
+    //     `lookupMergeCandidate` throughput. Takes two CLI args:
+    //       mode    : "baseline" (snapshot-null, locked path) or "rcu"
+    //                 (snapshot-published, lock-free fast path)
+    //       threads : number of concurrent reader threads
+    //     Seeds 10k User nodes, then runs LOOKUPS_PER_THREAD random probes
+    //     per thread and prints a single `NATIVE_BENCH …` line with
+    //     ops/sec. Built ReleaseFast; meant for manual perf validation of
+    //     the RCU snapshot path.
+    const merge_prop_bench_mod = b.createModule(.{ .root_source_file = b.path("benchmarks/merge_prop_snapshot_lookup/main.zig"), .target = target, .optimize = .ReleaseFast });
+    merge_prop_bench_mod.addImport("geode", root_mod);
+    merge_prop_bench_mod.link_libc = true;
+    const merge_prop_bench_exe = b.addExecutable(.{ .name = "bench-merge-prop-lookup", .root_module = merge_prop_bench_mod });
+    b.installArtifact(merge_prop_bench_exe);
+    const run_merge_prop_bench = b.addRunArtifact(merge_prop_bench_exe);
+    if (b.args) |argv| run_merge_prop_bench.addArgs(argv);
+    const merge_prop_bench_step = b.step("bench-merge-prop-lookup", "Run the RCU merge_prop_index lookup microbench (args: <mode> <threads>)");
+    merge_prop_bench_step.dependOn(&run_merge_prop_bench.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
