@@ -1,0 +1,76 @@
+=== start 2026-04-23T20:58:08-04:00 ===
+time=2026-04-23T20:58:08.476-04:00 level=INFO msg="seed mode: parallel pipeline" workers=16 chunk_size=1000 serial_fallback=true
+time=2026-04-23T20:58:08.755-04:00 level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-23T20:58:08.803-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=38 geode.total=621 geode.workers=16
+time=2026-04-23T20:58:08.803-04:00 level=INFO msg="pipeline exec start" geode.total=621 geode.chunks=17 geode.chunk_size=38 geode.workers=16
+time=2026-04-23T20:58:10.191-04:00 level=INFO msg="pipeline progress" geode.flushed=38 geode.total=621
+time=2026-04-23T20:58:10.209-04:00 level=INFO msg="pipeline progress" geode.flushed=76 geode.total=621
+time=2026-04-23T20:58:10.214-04:00 level=INFO msg="pipeline progress" geode.flushed=114 geode.total=621
+time=2026-04-23T20:58:10.222-04:00 level=INFO msg="pipeline progress" geode.flushed=152 geode.total=621
+time=2026-04-23T20:58:10.227-04:00 level=INFO msg="pipeline progress" geode.flushed=190 geode.total=621
+time=2026-04-23T20:58:10.239-04:00 level=INFO msg="pipeline progress" geode.flushed=228 geode.total=621
+time=2026-04-23T20:58:10.336-04:00 level=INFO msg="pipeline progress" geode.flushed=241 geode.total=621
+time=2026-04-23T20:58:10.794-04:00 level=INFO msg="pipeline progress" geode.flushed=279 geode.total=621
+time=2026-04-23T20:58:10.882-04:00 level=INFO msg="pipeline progress" geode.flushed=317 geode.total=621
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=14 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=6 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=7 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=11 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:09.292-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: deadline exceeded" geode.backoff=1s
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=12 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:09.292-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: deadline exceeded" geode.backoff=1s
+time=2026-04-23T21:03:09.292-04:00 level=ERROR msg="chunk failed" geode.chunk=13 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:03:10.293-04:00 level=ERROR msg="chunk failed" geode.chunk=4 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-23T21:03:10.293-04:00 level=ERROR msg="chunk failed" geode.chunk=9 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-23T21:03:10.293-04:00 level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 14: batch begin tx: context deadline exceeded\nchunk 6: batch begin tx: context deadline exceeded\nchunk 7: batch begin tx: context deadline exceeded\nchunk 11: batch begin tx: context deadline exceeded\nchunk 12: batch begin tx: context deadline exceeded\nchunk 13: batch begin tx: context deadline exceeded\nchunk 4: batch begin tx: sql: connection is already closed\nchunk 9: batch begin tx: sql: connection is already closed" geode.statements=621 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T21:03:10.293-04:00 level=INFO msg="seed exec start" geode.total=621 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T21:03:10.300-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T21:03:12.922-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=621
+time=2026-04-23T21:03:16.713-04:00 level=INFO msg="seed progress" geode.flushed=400 geode.total=621
+time=2026-04-23T21:03:20.265-04:00 level=INFO msg="seed progress" geode.flushed=600 geode.total=621
+time=2026-04-23T21:03:22.602-04:00 level=INFO msg="seed progress" geode.flushed=621 geode.total=621
+time=2026-04-23T21:03:22.602-04:00 level=INFO msg="seed exec complete" geode.statements=621
+time=2026-04-23T21:03:22.602-04:00 level=INFO msg="seeded nodes" kind=user count=621
+time=2026-04-23T21:03:22.603-04:00 level=INFO msg="seeding nodes" kind=device file=devices.jsonl
+time=2026-04-23T21:03:22.608-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=4 geode.total=73 geode.workers=16
+time=2026-04-23T21:03:22.608-04:00 level=INFO msg="pipeline exec start" geode.total=73 geode.chunks=19 geode.chunk_size=4 geode.workers=16
+time=2026-04-23T21:03:23.152-04:00 level=INFO msg="pipeline progress" geode.flushed=4 geode.total=73
+time=2026-04-23T21:03:23.157-04:00 level=INFO msg="pipeline progress" geode.flushed=8 geode.total=73
+time=2026-04-23T21:03:23.162-04:00 level=INFO msg="pipeline progress" geode.flushed=12 geode.total=73
+time=2026-04-23T21:03:23.172-04:00 level=INFO msg="pipeline progress" geode.flushed=16 geode.total=73
+time=2026-04-23T21:03:23.185-04:00 level=INFO msg="pipeline progress" geode.flushed=17 geode.total=73
+time=2026-04-23T21:03:23.200-04:00 level=INFO msg="pipeline progress" geode.flushed=21 geode.total=73
+time=2026-04-23T21:03:23.205-04:00 level=INFO msg="pipeline progress" geode.flushed=25 geode.total=73
+time=2026-04-23T21:03:23.235-04:00 level=INFO msg="pipeline progress" geode.flushed=29 geode.total=73
+time=2026-04-23T21:03:23.249-04:00 level=INFO msg="pipeline progress" geode.flushed=33 geode.total=73
+time=2026-04-23T21:03:23.271-04:00 level=INFO msg="pipeline progress" geode.flushed=37 geode.total=73
+time=2026-04-23T21:03:23.276-04:00 level=INFO msg="pipeline progress" geode.flushed=41 geode.total=73
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=5 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:53.090-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: deadline exceeded" geode.backoff=1s
+time=2026-04-23T21:04:53.090-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: deadline exceeded" geode.backoff=1s
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=15 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=8 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=6 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=13 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:53.090-04:00 level=ERROR msg="chunk failed" geode.chunk=10 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-23T21:04:54.091-04:00 level=ERROR msg="chunk failed" geode.chunk=11 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-23T21:04:54.091-04:00 level=ERROR msg="chunk failed" geode.chunk=4 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-23T21:04:54.091-04:00 level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 5: batch begin tx: context deadline exceeded\nchunk 15: batch begin tx: context deadline exceeded\nchunk 8: batch begin tx: context deadline exceeded\nchunk 6: batch begin tx: context deadline exceeded\nchunk 13: batch begin tx: context deadline exceeded\nchunk 10: batch begin tx: context deadline exceeded\nchunk 11: batch begin tx: sql: connection is already closed\nchunk 4: batch begin tx: sql: connection is already closed" geode.statements=73 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T21:04:54.091-04:00 level=INFO msg="seed exec start" geode.total=73 geode.chunk_size=200 geode.pause=2s
+time=2026-04-23T21:04:54.094-04:00 level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3150: NO_ERROR (remote)" geode.backoff=1s
+time=2026-04-23T21:04:55.902-04:00 level=INFO msg="seed progress" geode.flushed=73 geode.total=73
+time=2026-04-23T21:04:55.903-04:00 level=INFO msg="seed exec complete" geode.statements=73
+time=2026-04-23T21:04:55.903-04:00 level=INFO msg="seeded nodes" kind=device count=73
+time=2026-04-23T21:04:55.903-04:00 level=INFO msg="seeding nodes" kind=application file=applications.jsonl
+time=2026-04-23T21:04:55.912-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=9 geode.total=156 geode.workers=16
+time=2026-04-23T21:04:55.913-04:00 level=INFO msg="pipeline exec start" geode.total=156 geode.chunks=18 geode.chunk_size=9 geode.workers=16
+time=2026-04-23T21:04:56.466-04:00 level=INFO msg="pipeline progress" geode.flushed=9 geode.total=156
+time=2026-04-23T21:04:56.477-04:00 level=INFO msg="pipeline progress" geode.flushed=18 geode.total=156
+time=2026-04-23T21:04:56.484-04:00 level=INFO msg="pipeline progress" geode.flushed=27 geode.total=156
+time=2026-04-23T21:04:56.489-04:00 level=INFO msg="pipeline progress" geode.flushed=36 geode.total=156
+time=2026-04-23T21:04:56.494-04:00 level=INFO msg="pipeline progress" geode.flushed=45 geode.total=156
+time=2026-04-23T21:04:56.499-04:00 level=INFO msg="pipeline progress" geode.flushed=54 geode.total=156
+time=2026-04-23T21:04:56.772-04:00 level=INFO msg="pipeline progress" geode.flushed=57 geode.total=156
+time=2026-04-23T21:04:56.799-04:00 level=INFO msg="pipeline progress" geode.flushed=66 geode.total=156
+time=2026-04-23T21:04:56.851-04:00 level=INFO msg="pipeline progress" geode.flushed=75 geode.total=156
+time=2026-04-23T21:04:56.872-04:00 level=INFO msg="pipeline progress" geode.flushed=84 geode.total=156
