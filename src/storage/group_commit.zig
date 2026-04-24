@@ -121,6 +121,13 @@ pub const ApplyOp = union(enum) {
         rel_type: []const u8,
         props: []const PropKV,
         result: ApplyResult,
+        /// Pre-resolved at submit time by `ShardedCoordinator.submit`
+        /// so the shard router sees a stable `shardKey()`. Zero means
+        /// "not yet resolved" (single-flusher paths never read this).
+        source_id: u64 = 0,
+        /// Pre-resolved at submit time when possible; zero means the
+        /// worker must resolve under its shard lock.
+        target_id: u64 = 0,
     },
     bulk_merge_node: struct {
         label: []const u8,
@@ -138,6 +145,21 @@ pub const ApplyOp = union(enum) {
             .bulk_insert_edge => |*p| &p.result,
             .bulk_match_create_edge => |*p| &p.result,
             .bulk_merge_node => |*p| &p.result,
+        };
+    }
+
+    /// Key that selects the shard whose worker applies this op.
+    /// For node / merge inserts the pre-allocated id is used (filled
+    /// in by `submit`); for edge ops the source id is used so every
+    /// edge leaving the same source lands on the same shard
+    /// (cross-shard src != dst is handled by the helper's two-lock
+    /// ascending-index acquire).
+    pub fn shardKey(self: *const ApplyOp) u64 {
+        return switch (self.*) {
+            .bulk_insert_node => |p| p.assigned_id,
+            .bulk_insert_edge => |p| p.source_id,
+            .bulk_match_create_edge => |p| p.source_id,
+            .bulk_merge_node => |p| p.assigned_id,
         };
     }
 };
