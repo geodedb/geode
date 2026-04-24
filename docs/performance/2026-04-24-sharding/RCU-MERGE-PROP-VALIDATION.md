@@ -81,13 +81,34 @@ throughput is not regressed.
 
 ## Correctness validation
 
-`tests/test_merge_prop_snapshot_concurrency.zig`: 16 reader threads +
-1 writer thread, 5000 mutations. Readers probe random IDs in the range
-[1, valid_ids_high_water + 100]. Passes with zero false positives
-(invariant: any `.found` returned by `lookupMergeCandidate` must yield
-a node_id ≤ the writer's high-water mark + 10).
+`tests/test_merge_prop_snapshot_concurrency.zig`: 16 reader threads
+hammering `lookupMergeCandidate` against a pre-populated, quiescent
+store. No concurrent writers. Passes with zero false positives,
+zero false negatives (1/1 tests passed in ~320 ms).
 
-Result: PASS. 1/1 tests passed in 724 ms.
+### Why no concurrent writer?
+
+An earlier version of this test had a writer thread creating new
+nodes in parallel with readers. It crashed reliably under the
+current graph_storage with a segfault in `self.nodes.get()`
+(ShardedStore probe racing with `nodes.put()`). The RCU snapshot
+in this plan only covers `merge_prop_index` — it does NOT make
+`GraphStore.nodes` concurrent-safe. `verifyMergeCandidate` must
+still consult `nodes.get()` and `node.properties.get()`, which
+take torn reads if a writer is mutating the maps in parallel.
+
+**Production invariant (unchanged by this plan):** callers MUST
+hold `mg.rwlock.lockShared()` around `lookupMergeCandidate`. The
+RCU merely lets the merge-index probe skip the dedicated
+`merge_prop_index_lock` SHARED — not the whole `mg.rwlock`.
+
+For `lookupMergeCandidate` to become truly lock-free against
+writers, one of the following must ALSO land (out of this plan's
+scope):
+
+1. RCU snapshot over `nodes` / `node.properties`
+2. Seqlock or sharded-rwlock scheme on the nodes map
+3. Epoch-based reclamation covering both indices
 
 ## Unit test coverage
 
