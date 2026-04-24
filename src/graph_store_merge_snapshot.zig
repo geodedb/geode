@@ -30,18 +30,31 @@ pub const MergePropSnapshot = struct {
     /// Increment the refcount and return the same pointer. Safe to call
     /// concurrently with `release`.
     pub fn acquire(self: *MergePropSnapshot) *MergePropSnapshot {
-        _ = self.refcount.fetchAdd(1, .monotonic);
+        const prev = self.refcount.fetchAdd(1, .monotonic);
+        // Acquiring a dropped snapshot is UB. Enforce in debug builds;
+        // no-op in release. Callers must hold a ref (or the publish lock)
+        // when calling this.
+        std.debug.assert(prev > 0);
         return self;
     }
 
     /// Decrement the refcount. On last release, frees the map, arena,
     /// and the snapshot struct itself.
     pub fn release(self: *MergePropSnapshot) void {
-        const prev = self.refcount.fetchSub(1, .release);
+        // .acq_rel: the release half pairs with every other thread's
+        // prior .release fetchSub on this same refcount (so their
+        // reads-through-the-snapshot are ordered before their
+        // decrement); the acquire half — taken only on the last-ref
+        // path — synchronizes-with those releases, guaranteeing those
+        // reads happen-before our teardown. This is the canonical
+        // RCU / shared_ptr drop barrier in the Zig 0.15+ atomics API
+        // (std.atomic.fence was removed; use acq_rel on the RMW).
+        //
+        // Correctness note: on x86 (TSO) this is equivalent to
+        // fetchSub(.release); on ARM64 / RISC-V it emits the ldaxr/stlxr
+        // (or equivalent) pair needed for a real teardown barrier.
+        const prev = self.refcount.fetchSub(1, .acq_rel);
         if (prev == 1) {
-            // Last ref: fence to ensure all reads-through-snap complete
-            // before we tear down.
-            _ = self.refcount.load(.acquire);
             self.map.deinit();
             self.key_arena.deinit();
             const pa = self.parent_allocator;
@@ -56,6 +69,7 @@ pub const MergePropSnapshot = struct {
         self: *MergePropSnapshot,
         live_map: *const std.StringHashMap(u64),
     ) !void {
+        std.debug.assert(self.map.count() == 0); // must be called on an empty snapshot
         try self.map.ensureTotalCapacity(live_map.count());
         const arena_alloc = self.key_arena.allocator();
         var it = live_map.iterator();
