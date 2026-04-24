@@ -138,6 +138,9 @@ pub const temporal = @import("temporal.zig");
 pub const query_traits = @import("query/query_traits.zig");
 pub const planned_read_runtime = @import("execution/planned_read_runtime.zig");
 pub const graph_storage_adapter = @import("storage/graph_storage_adapter.zig");
+// RCU snapshot primitive for the merge-prop index (Task 1 of the
+// lock-free merge-prop-index plan; not yet wired into GraphStore).
+pub const merge_snapshot = @import("graph_store_merge_snapshot.zig");
 // Task 19: per-graph group-commit coordinator.
 pub const group_commit = @import("storage/group_commit.zig");
 // Graph-sharding Phase 1: N-way sharded HashMap wrapper (foundation for
