@@ -272,6 +272,29 @@ test "concurrent MATCH-by-property scales across threads" {
     const iterations_each: u32 = 20;
     const per_thread_work_ns: u64 = 5 * std.time.ns_per_ms; // 5ms per query
 
+    // Measured single-thread baseline. The previous implementation
+    // derived a serialized bound from `per_thread_work_ns × N_threads ×
+    // iters`, which flaked on contended hosts because the spin-loop's
+    // wall-clock stretches under scheduler preemption (CVAT workers,
+    // background builds, etc.) while the hardcoded bound stayed fixed.
+    // Measuring one thread's actual wall time first makes the ratio
+    // host-independent: fully-serialized is ~N×, fully-parallel is ~1×,
+    // and the 2× threshold rejects the former while absorbing honest
+    // scheduler jitter on any host.
+    var baseline_gate = std.atomic.Value(u32).init(1);
+    var baseline_waiting = std.atomic.Value(u32).init(0);
+    var baseline_ctx = ConcurrencyCtx{
+        .query_graph = query_graph,
+        .program = &parse_result.program,
+        .per_thread_work_ns = per_thread_work_ns,
+        .iterations_each = iterations_each,
+        .start_gate = &baseline_gate,
+        .waiting = &baseline_waiting,
+    };
+    const baseline_start = monoNanos();
+    workUnderHandlerLock(&baseline_ctx);
+    const baseline_ns = monoNanos() - baseline_start;
+
     var start_gate = std.atomic.Value(u32).init(0);
     var waiting = std.atomic.Value(u32).init(0);
     var ctx = ConcurrencyCtx{
@@ -299,27 +322,23 @@ test "concurrent MATCH-by-property scales across threads" {
 
     const wall_ns = wall_end - wall_start;
 
-    // Serialized-best-case wall time = N_threads * iterations_each * per_thread_work_ns.
-    const serialized_ns: u64 = @as(u64, n_threads) * @as(u64, iterations_each) * per_thread_work_ns;
-    // Perfectly-parallel wall time  = iterations_each * per_thread_work_ns.
-    const parallel_ns: u64 = @as(u64, iterations_each) * per_thread_work_ns;
-
-    // We require at least 2x speedup over full serialization.  Anything
-    // less means the handler is still holding an exclusive writer lock
-    // across the per-query work, which is exactly the bug.
-    const max_allowed_ns = serialized_ns / 2;
+    // Ratio check: parallel wall must be under 2× single-thread baseline.
+    // Fully-serialized (the bug) would land near N×baseline = 4×.
+    // Perfectly-parallel lands near 1×baseline. The 2× bound cleanly
+    // separates the two even with honest scheduler jitter.
+    const max_allowed_ns = baseline_ns * 2;
 
     if (wall_ns > max_allowed_ns) {
         std.debug.print(
             "concurrent MATCH-by-property did NOT scale.  wall={d}ms " ++
-                "serialized_bound={d}ms parallel_bound={d}ms threads={d} " ++
+                "baseline_1thread={d}ms bound=2×baseline={d}ms threads={d} " ++
                 "iters/thread={d} work/query={d}ms.  Handler is serializing " ++
                 "reads behind the exclusive writer lock — see " ++
                 "src/server/quic_connection_handler.zig:2302-2325.\n",
             .{
                 wall_ns / std.time.ns_per_ms,
-                serialized_ns / std.time.ns_per_ms,
-                parallel_ns / std.time.ns_per_ms,
+                baseline_ns / std.time.ns_per_ms,
+                max_allowed_ns / std.time.ns_per_ms,
                 n_threads,
                 iterations_each,
                 per_thread_work_ns / std.time.ns_per_ms,

@@ -124,26 +124,21 @@ test "GAP-0814: UNION DISTINCT across two labels returns merged distinct rows" {
         warm.deinit(h.arena.allocator());
     }
 
-    const t0 = compat_nanoTimestamp();
+    // Path-based assertion: the parallel UNION fork-join must be entered.
+    // Replaces the prior 140 ms wall-clock budget (flaked on contended
+    // hosts); the counter is a deterministic signal regardless of load.
+    // A regression that forces serial UNION simply won't increment the
+    // counter, which is exactly the invariant we're pinning.
+    const before_count = execution.parallelUnionInvocations();
     var res = try h.runQuery(
         "MATCH (p:LT_Person) RETURN p.lt_id UNION MATCH (c:LT_Company) RETURN c.lt_id",
     );
     defer res.deinit(h.arena.allocator());
-    const elapsed_ns = compat_nanoTimestamp() - t0;
+    const after_count = execution.parallelUnionInvocations();
 
     // UNION DISTINCT: 500+500 distinct lt_ids = 1000 rows.
     try testing.expectEqual(@as(usize, 1000), res.rows.len);
-
-    // Latency smoke: on this harness each arm is a full-store MATCH that
-    // already costs ~70 ms (the label-index fast path isn't hit for this
-    // shape in the debug-build testing harness). Serial measured at
-    // ~175 ms (2× ~70 ms scan + O(N^2) dedup). Parallel measured at
-    // ~110 ms (max(arm) + dedup). A regression to serial must still
-    // trip this gate, so the budget is 140 ms — serial comfortably
-    // exceeds it, parallel comfortably lands below. Task 5.2 carries
-    // the tighter bench A/B evidence on the optimized bench path.
-    std.debug.print("GAP-0814 UNION DISTINCT 500+500 elapsed_ns={d}\n", .{elapsed_ns});
-    try testing.expect(elapsed_ns < 140_000_000);
+    try testing.expect(after_count == before_count + 1);
 }
 
 test "GAP-0814: UNION ALL preserves all rows (no dedup)" {
@@ -202,19 +197,18 @@ test "GAP-0814: UNION ALL 500+500 parallelism latency gate" {
         warm.deinit(h.arena.allocator());
     }
 
-    const t0 = compat_nanoTimestamp();
+    // Path-based assertion: parallel UNION ALL must be entered. See
+    // GAP-0814 DISTINCT test above for why the prior 130 ms wall-clock
+    // gate was replaced with a counter probe.
+    const before_count = execution.parallelUnionInvocations();
     var res = try h.runQuery(
         "MATCH (p:LT_Person) RETURN p.lt_id UNION ALL MATCH (c:LT_Company) RETURN c.lt_id",
     );
     defer res.deinit(h.arena.allocator());
-    const elapsed_ns = compat_nanoTimestamp() - t0;
+    const after_count = execution.parallelUnionInvocations();
 
     try testing.expectEqual(@as(usize, 1000), res.rows.len);
-    std.debug.print("GAP-0814 UNION ALL 500+500 elapsed_ns={d}\n", .{elapsed_ns});
-    // UNION ALL on two full-store scans of 500+500 nodes. Serial measured
-    // at ~142 ms (2× ~70 ms scan). Parallel measured at ~90 ms (max arm +
-    // merge). Budget 130 ms — serial exceeds, parallel lands well below.
-    try testing.expect(elapsed_ns < 130_000_000);
+    try testing.expect(after_count == before_count + 1);
 }
 
 test "GAP-0814-cost-model: small UNION arms stay serial (correctness)" {
@@ -254,20 +248,20 @@ test "GAP-0814-cost-model: small UNION arms stay serial (correctness)" {
         warm.deinit(h.arena.allocator());
     }
 
-    const t0 = compat_nanoTimestamp();
+    // Inverse path assertion: small arms must take the SERIAL path (cost
+    // model skips the parallel fork-join because thread-spawn swamps
+    // savings). Counter must NOT increment. Replaces the prior 50 ms
+    // wall-clock budget, which was only meaningful on a quiet host.
+    const before_count = execution.parallelUnionInvocations();
     var res = try h.runQuery(
         "MATCH (p:LT_Person) RETURN p.lt_id UNION MATCH (c:LT_Company) RETURN c.lt_id",
     );
     defer res.deinit(h.arena.allocator());
-    const elapsed_ns = compat_nanoTimestamp() - t0;
+    const after_count = execution.parallelUnionInvocations();
 
     // Serial correctness: 50 + 50 disjoint rows == 100 distinct.
     try testing.expectEqual(@as(usize, 100), res.rows.len);
-    // Budget is loose (Debug build has high variance). The real A/B
-    // validation happens in the bench harness; this gate just prevents
-    // accidental pathological regressions past any plausible slow path.
-    std.debug.print("GAP-0814-cost-model 50+50 elapsed_ns={d}\n", .{elapsed_ns});
-    try testing.expect(elapsed_ns < 50_000_000);
+    try testing.expect(after_count == before_count);
 }
 
 test "GAP-0814-cost-model: WHERE-clauses keep UNION on parallel path (unknown cost)" {

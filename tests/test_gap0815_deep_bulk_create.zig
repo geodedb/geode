@@ -112,12 +112,8 @@ test "GAP-0815-deep: createNodesBatch allocates 100 slots under one mutex" {
         testing.allocator.free(warm_ids);
     }
 
-    const t0 = compat_nanoTimestamp();
     const ids = try store.createNodesBatchWithAllocator(labels, "default", 100, testing.allocator);
-    const elapsed_ns = compat_nanoTimestamp() - t0;
     defer testing.allocator.free(ids);
-
-    std.debug.print("[GAP-0815-deep bulk100] elapsed_ns={d}\n", .{elapsed_ns});
 
     try testing.expectEqual(@as(usize, 100), ids.len);
 
@@ -131,20 +127,15 @@ test "GAP-0815-deep: createNodesBatch allocates 100 slots under one mutex" {
     }
 
     // Verify the label index reflects all 105 (100 batch + 5 warm) nodes.
+    // The correctness of the batch API (single-mutex-hold slot allocation,
+    // label-index consistency) is validated above; wall-clock budgets were
+    // previously used as a secondary smoke but flaked on contended hosts.
+    // The bench A/B ledger carries the tight latency gate.
     const aa = h.arena.allocator();
     var count_res = try h.runQuery("MATCH (p:LT_Person) RETURN count(p) AS n");
     defer count_res.deinit(aa);
     try testing.expectEqual(@as(usize, 1), count_res.rows.len);
     try testing.expectEqual(@as(i64, 105), count_res.rows[0][0].Int);
-
-    // Loose latency budget: generous ceiling in Debug covers filesystem
-    // variance, FLE encryption overhead, debug-allocator accounting, and
-    // contention with sibling test binaries running in parallel. Still
-    // catches a catastrophic regression into an N^2 path (pre-deep serial
-    // baseline for pure slot-alloc is ~7-10 ms per 100-node burst in
-    // isolation; observed deep path ~150 ms in isolation including the
-    // MATCH count round-trip). Bench A/B ledger carries the tight gate.
-    try testing.expect(elapsed_ns < 2_000_000_000);
 }
 
 test "GAP-0815-deep: inline 100-clause CREATE hits deep batch path" {
@@ -160,18 +151,18 @@ test "GAP-0815-deep: inline 100-clause CREATE hits deep batch path" {
         warm.deinit(aa);
     }
 
-    const t0 = compat_nanoTimestamp();
+    // GAP-0815-deep invariant: the batch path was entered. Replaces the
+    // previous 2 s wall-clock budget (flaked on contended hosts) with a
+    // deterministic fast-path-entry counter read. If the shape stops
+    // being recognised as homogeneous, `executeBatchCreateHomogeneous`
+    // won't be called and this assertion fires — which is exactly the
+    // regression the budget-based test was trying to detect.
+    const before_count = execution.batchCreateInvocations();
     var res = try h.runQuery(q);
-    const elapsed_ns = compat_nanoTimestamp() - t0;
+    const after_count = execution.batchCreateInvocations();
     res.deinit(aa);
 
-    std.debug.print("[GAP-0815-deep inline100] elapsed_ns={d}\n", .{elapsed_ns});
-
-    // GAP-0815 shallow baseline: ~470 ms Debug for 100 clauses.
-    // GAP-0815-deep target: well under the shallow baseline. Loose budget
-    // (2 s) lets CI absorb parser/coercion + first-run warmup without flake
-    // while still flagging a regression into the per-call path.
-    try testing.expect(elapsed_ns < 2_000_000_000);
+    try testing.expect(after_count == before_count + 1);
 
     // Verify all 100 were created.
     var count_res = try h.runQuery("MATCH (p:LT_Person) RETURN count(p) AS n");

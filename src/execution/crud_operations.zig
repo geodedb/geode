@@ -34,6 +34,12 @@ const EvaluatedPatternProp = struct {
     value: Value,
 };
 
+/// GAP-0815 regression probe: counts successful entries into the homogeneous
+/// batch-CREATE fast path. Tests read this before/after a CREATE to assert
+/// the fast path was exercised, replacing the prior wall-clock budget tests
+/// (which flaked on contended hosts). Monotonic; never decremented.
+pub var batch_create_invocations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
 /// Build an Env populated with query parameters from ExecutionContext.
 /// GAP #54: Ensures $param references resolve inside CREATE/MERGE/DELETE property maps.
 fn envFromContext(allocator: std.mem.Allocator, context: ExecutionContext) Env {
@@ -969,6 +975,10 @@ fn executeBatchCreateHomogeneous(
     param_values: []const Value,
     current_graph: ?[]const u8,
 ) !ExecutionResult {
+    // GAP-0815 regression probe: test harness reads this counter to verify
+    // the batch path was taken. Increment on entry so a test that observes
+    // an error from this function still sees the attempted invocation.
+    _ = batch_create_invocations.fetchAdd(1, .monotonic);
     const store = graph_store.getGlobalStore(allocator);
     const target_graph = current_graph orelse "default";
     const undo_log = txn_undo_log.getGlobalUndoLog(allocator);

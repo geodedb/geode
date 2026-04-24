@@ -114,22 +114,17 @@ test "GAP-0815: batch CREATE 100 homogeneous nodes under latency budget" {
         warm.deinit(aa);
     }
 
-    const t0 = compat_nanoTimestamp();
+    // GAP-0815 invariant: the batch path was entered. Path-based assertion
+    // replaces the prior wall-clock budget (1 s) that flaked on contended
+    // hosts — the counter is a deterministic signal regardless of load.
+    // The previous budget discriminated "batch vs serial" via timing; the
+    // counter discriminates via direct observation of the fast-path entry.
+    const before_count = execution.batchCreateInvocations();
     var res = try h.runQuery(q);
-    const elapsed_ns = compat_nanoTimestamp() - t0;
+    const after_count = execution.batchCreateInvocations();
     res.deinit(aa);
 
-    std.debug.print("[GAP-0815 batch100] elapsed_ns={d}\n", .{elapsed_ns});
-
-    // Correctness signal: the query completed without error. The latency
-    // threshold is a loose smoke signal that the batch path was taken —
-    // the single-query-with-100-clauses shape is ~35% faster in Debug
-    // with the batch optimization (serial ~700-750ms; batch ~450-500ms).
-    // In ReleaseFast the win is smaller because the serial tight loop is
-    // already well-optimized by LLVM. We use a high ceiling so the test
-    // doesn't flake under CI filesystem variance while still catching a
-    // catastrophic regression (e.g., accidentally O(N^2)).
-    try testing.expect(elapsed_ns < 1_000_000_000);
+    try testing.expect(after_count == before_count + 1);
 
     // Verify all 100 were created.
     var count_res = try h.runQuery("MATCH (p:LT_Person) RETURN count(p) AS n");

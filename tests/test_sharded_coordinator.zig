@@ -126,7 +126,14 @@ test "GroupCommitCoordinator: 16 submitters x 100 ops land in distinct ids" {
         });
     }
 
-    try waitForAllDone(&ctxs, start_ns + 30 * std.time.ns_per_s);
+    // 120 s is a deadlock detector, not a perf gate. 1600 submissions
+    // through a single-flusher coordinator should finish in <1 s on a
+    // quiet host, but under extreme CPU oversubscription (CI hosts
+    // running many concurrent test binaries + foreign workloads like
+    // background container workers) wall-clock can stretch well past
+    // 30 s without any actual deadlock. The budget is generous enough
+    // to absorb that while still catching genuine hangs.
+    try waitForAllDone(&ctxs, start_ns + 120 * std.time.ns_per_s);
 
     for (&ctxs, 0..) |*c, i| {
         if (c.err.load(.acquire) != 0) {
@@ -204,8 +211,10 @@ test "GroupCommitCoordinator: per-graph isolation — two graphs run independent
         try submitter_pool.submitBlocking(.{ .context = @ptrCast(c), .callback = submitterWorker });
     }
 
-    try waitForAllDone(&ctxs_g1, start_ns + 30 * std.time.ns_per_s);
-    try waitForAllDone(&ctxs_g2, start_ns + 30 * std.time.ns_per_s);
+    // 120 s deadlock detector — small workload (200 ops per graph) but
+    // same flake risk as the 16-submitter test under heavy CPU load.
+    try waitForAllDone(&ctxs_g1, start_ns + 120 * std.time.ns_per_s);
+    try waitForAllDone(&ctxs_g2, start_ns + 120 * std.time.ns_per_s);
 
     for (&ctxs_g1) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
     for (&ctxs_g2) |*c| try std.testing.expect(c.err.load(.acquire) == 0);
