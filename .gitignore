@@ -254,3 +254,4 @@ harness-reports/
 *.backup
 scratch_*.zig
 .worktrees/
+.superpowers/
