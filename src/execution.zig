@@ -137,6 +137,14 @@ pub const executeCreateForBatch = crud_operations.executeCreateForBatch;
 pub fn batchCreateInvocations() u64 {
     return crud_operations.batch_create_invocations.load(.monotonic);
 }
+
+/// GAP-0814 regression probe. Returns a monotonically-increasing counter
+/// that `tryParallelUnion` increments on entry. Tests read it before/after
+/// a UNION query to verify the parallel arm-spawn path fired, replacing
+/// prior wall-clock budget assertions that flaked on contended hosts.
+pub fn parallelUnionInvocations() u64 {
+    return set_operations.parallel_union_invocations.load(.monotonic);
+}
 pub const executeCreateForBatchWithTracking = crud_operations.executeCreateForBatchWithTracking;
 pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;

@@ -17,6 +17,12 @@ const sortRows = execution.sortRows;
 const Value = value_types.Value;
 const Env = value_types.Env;
 
+/// GAP-0814 regression probe: counts successful entries into the parallel
+/// UNION fork-join fast path. Tests read this before/after a UNION query
+/// to verify the parallel arm-spawn decision fired, replacing prior wall-
+/// clock budget assertions that flaked on contended hosts. Monotonic.
+pub var parallel_union_invocations: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
 // CANARY: REQ=REQ-EXEC-REFACTOR-002; FEATURE="ExecutionRefactoring"; ASPECT=SET_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted set operation functions from execution.zig for better modularity (M1 Phase 2)
 
@@ -751,6 +757,10 @@ fn tryParallelUnion(
 ) !?ExecutionResult {
     const arm_count = union_query.tails.len + 1;
     std.debug.assert(arm_count >= 2);
+    // GAP-0814 regression probe: count entries so tests can assert the
+    // parallel arm-spawn path was actually taken. Incremented before any
+    // failure-path return so a failed spawn still counts as "attempted".
+    _ = parallel_union_invocations.fetchAdd(1, .monotonic);
 
     var jobs = try allocator.alloc(ArmJob, arm_count);
     defer allocator.free(jobs);
