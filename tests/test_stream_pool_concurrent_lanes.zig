@@ -70,6 +70,14 @@ fn barrierTask(ctx: *anyopaque) void {
         }
     }
 
+    // Hold the worker briefly so concurrent tasks on sibling workers
+    // actually overlap (otherwise the body completes faster than the
+    // scheduler dispatches the next task, and max_concurrent collapses
+    // to 1 even on a correctly parallel pool — a false negative).  This
+    // is test-only scaffolding; the pool's parallelism is what's under
+    // test, not the task body timing.
+    sleepNs(5 * std.time.ns_per_ms);
+
     // Spin until release, bounded to ~5 s so a buggy pool fails the test
     // rather than wedging the test runner.
     const deadline = monoNanos() + 5 * std.time.ns_per_s;

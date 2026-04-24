@@ -189,10 +189,15 @@ pub const ThreadPool = struct {
     /// Initialize the thread pool.
     pub fn init(allocator: std.mem.Allocator, config: ThreadPoolConfig) !*Self {
         // Upstream thread_pool 0.2.0 enforces: if allow_blocking_lane = true
-        // then blocking_workers > 0 and strictly less than max_threads. Our
-        // API uses `submitBlocking(.lane = .blocking)` throughout, so the
-        // blocking lane must always be enabled — meaning we need at least
-        // 2 threads even when the caller requested 1.
+        // then blocking_workers > 0 and strictly less than max_threads.
+        // `submitBlocking` routes to `.lane = .blocking`, reserved for
+        // serialized long-lived work (cert gen, audit writes, keepalive
+        // loops), so the blocking lane must always be enabled. We keep
+        // `blocking_workers = 1` (load-bearing invariant, asserted by
+        // tests/test_thread_pool_lane_parallelism.zig) and require at
+        // least 2 total threads so the default lane has a worker.
+        // `submit` / `submitDefault` route to the `.default` lane, which
+        // owns `num_threads - 1` workers.
         const requested = effectiveThreadCount(config);
         const num: usize = @max(requested, 2);
         const workers = try allocator.alloc(WorkerStub, num);
@@ -232,26 +237,28 @@ pub const ThreadPool = struct {
         self.allocator.destroy(self);
     }
 
-    /// Submit a work item to the thread pool.
+    /// Submit a work item to the thread pool's default lane.
     /// Returns true if submitted, false if queue is full.
+    ///
+    /// Routes to `.lane = .default` — serviced by all non-blocking workers
+    /// (with `num_threads = N` and `blocking_workers = 1` the default lane
+    /// has `N - 1` workers). This is the right entry point for generic
+    /// parallel work (connection handlers, stream handlers, background
+    /// dispatch); pre-fix it routed to the 1-wide `.blocking` lane and
+    /// deadlocked under >1 concurrent long-lived task. See Task #31 triage
+    /// at docs/performance/2026-04-24-sharding/TASK-31-TRIAGE.md.
+    ///
+    /// Callers who genuinely need the 1-wide blocking lane (cert gen, audit
+    /// writes, keepalive loops) must use `submitBlocking` explicitly.
     pub fn submit(self: *Self, item: WorkItem) bool {
-        _ = self.submitInternal(item, .{ .lane = .blocking }) catch return false;
+        _ = self.submitInternal(item, .{ .lane = .default }) catch return false;
         return true;
     }
 
-    /// Submit a work item to the *default* lane (non-blocking).
-    /// Returns true if submitted, false if queue is full.
-    ///
-    /// Unlike `submit`/`submitBlocking`, which route to the 1-wide blocking
-    /// lane (reserved for genuinely blocking work such as cert generation
-    /// and audit writes — see GAP #751 triage), this helper dispatches to
-    /// the default lane serviced by all non-blocking worker threads.
-    /// Callers who need parallelism across N default-lane workers (e.g. the
-    /// QUIC accept loop dispatching connection admission) should use this
-    /// entry point.
+    /// Alias for `submit` — kept for source compatibility.  Both entry
+    /// points route to the default lane.  Prefer `submit` in new code.
     pub fn submitDefault(self: *Self, item: WorkItem) bool {
-        _ = self.submitInternal(item, .{ .lane = .default }) catch return false;
-        return true;
+        return self.submit(item);
     }
 
     /// Submit a work item, blocking if queue is full.
