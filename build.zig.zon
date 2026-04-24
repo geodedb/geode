@@ -150,9 +150,9 @@
 
         // Page-based graph storage engine
         // Updated 2026-04-24: ShardedGraphEngine with N=16 single-threaded shards,
-        // per-shard WAL/manifest, 2PC for cross-shard edges, parallel per-shard
-        // crash recovery. Microbench verified ≥4× throughput vs single-engine at
-        // 16 cores. See docs/superpowers/specs/2026-04-24-sharded-graph-engine-design.md
+        // per-shard WAL/manifest, 2PC cross-shard edges, parallel per-shard crash
+        // recovery. Microbench verified ≥4× throughput vs single-engine at 16 cores.
+        // See docs/superpowers/specs/2026-04-24-sharded-graph-engine-design.md
         // in the graph-storage repo.
         .graph_storage = .{
             .url = "git+https://gitlab.com/devnw/zig/graph-storage.git#0ce15769076d7c783c57d674e90182bc073853d1",
