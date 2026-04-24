@@ -1779,6 +1779,59 @@ pub const GraphStore = struct {
         found,
     };
 
+    /// Strong verification for an RCU-snapshot hit: confirm the node
+    /// still has the expected graph, label, property key, and property
+    /// value. Returns `true` only if all four match.
+    ///
+    /// Needed because an RCU snapshot can hold an entry whose live
+    /// property value has since changed — a weak verify (just
+    /// `nodes.get(id) != null`) would produce a false positive.
+    pub fn verifyMergeCandidate(
+        self: *const GraphStore,
+        node_id: u64,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: PropertyValue,
+    ) bool {
+        const node = self.nodes.get(node_id) orelse return false;
+        if (!std.mem.eql(u8, node.graph_name, graph_name)) return false;
+        var has_label = false;
+        for (node.labels) |l| {
+            if (std.mem.eql(u8, l, label)) {
+                has_label = true;
+                break;
+            }
+        }
+        if (!has_label) return false;
+        const live_value = node.properties.get(prop_key) orelse return false;
+        return propertyValuesEqual(live_value, prop_value);
+    }
+
+    /// Internal equality helper for `PropertyValue`. Handles the five
+    /// common cases; for `ExtValue` / `Decimal`, falls back to byte-
+    /// level comparison of the serialized form used by the merge-prop
+    /// index (via `serializePropValueForIndex`) so the semantics match
+    /// what the index itself considers equal.
+    fn propertyValuesEqual(a: PropertyValue, b: PropertyValue) bool {
+        if (@as(std.meta.Tag(PropertyValue), a) != @as(std.meta.Tag(PropertyValue), b)) return false;
+        return switch (a) {
+            .String => |sa| std.mem.eql(u8, sa, b.String),
+            .Int => |ia| ia == b.Int,
+            .Float => |fa| fa == b.Float,
+            .Bool => |ba| ba == b.Bool,
+            .Null => true,
+            .ExtValue, .Decimal => blk: {
+                var buf_a: [256]u8 = undefined;
+                var buf_b: [256]u8 = undefined;
+                const la = serializePropValueForIndex(&buf_a, a) orelse break :blk false;
+                const lb = serializePropValueForIndex(&buf_b, b) orelse break :blk false;
+                if (la != lb) break :blk false;
+                break :blk std.mem.eql(u8, buf_a[0..la], buf_b[0..lb]);
+            },
+        };
+    }
+
     /// Look up a node by graph, label, property key, and property value.
     /// Returns `.found` with the node_id when a verified match exists,
     /// `.not_found` when the index is authoritative and no match exists,
@@ -7542,4 +7595,57 @@ test "publishMergePropSnapshotIfDirty replaces old snapshot and releases it" {
     try std.testing.expect(first_snap != second_snap);
     try std.testing.expectEqual(@as(u32, 2), second_snap.map.count());
     _ = merge_snapshot; // silence unused
+}
+
+test "verifyMergeCandidate passes on live match" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    const ok = store.verifyMergeCandidate(node_id, "default", "User", "name", .{ .String = "alice" });
+    try std.testing.expect(ok);
+}
+
+test "verifyMergeCandidate rejects missing node" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const ok = store.verifyMergeCandidate(9999, "default", "User", "name", .{ .String = "alice" });
+    try std.testing.expect(!ok);
+}
+
+test "verifyMergeCandidate rejects stale property value" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    // Node has name=alice, but verify probes for name=bob.
+    const ok = store.verifyMergeCandidate(node_id, "default", "User", "name", .{ .String = "bob" });
+    try std.testing.expect(!ok);
+}
+
+test "verifyMergeCandidate rejects missing label" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    const ok = store.verifyMergeCandidate(node_id, "default", "Device", "name", .{ .String = "alice" });
+    try std.testing.expect(!ok);
+}
+
+test "verifyMergeCandidate rejects wrong graph" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    const ok = store.verifyMergeCandidate(node_id, "other_graph", "User", "name", .{ .String = "alice" });
+    try std.testing.expect(!ok);
 }
