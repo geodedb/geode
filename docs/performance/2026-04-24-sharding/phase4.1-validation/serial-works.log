@@ -1,0 +1,113 @@
+time=2026-04-24T06:54:48.884-04:00 level=INFO msg="seed mode: serial" chunk_size=100 pause=1s
+time=2026-04-24T06:54:49.201-04:00 level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-24T06:54:49.276-04:00 level=INFO msg="seed exec start" geode.total=621 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:54:50.232-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=621
+time=2026-04-24T06:54:52.320-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=621
+time=2026-04-24T06:54:54.540-04:00 level=INFO msg="seed progress" geode.flushed=300 geode.total=621
+time=2026-04-24T06:54:56.742-04:00 level=INFO msg="seed progress" geode.flushed=400 geode.total=621
+time=2026-04-24T06:54:58.853-04:00 level=INFO msg="seed progress" geode.flushed=500 geode.total=621
+time=2026-04-24T06:55:01.056-04:00 level=INFO msg="seed progress" geode.flushed=600 geode.total=621
+time=2026-04-24T06:55:02.306-04:00 level=INFO msg="seed progress" geode.flushed=621 geode.total=621
+time=2026-04-24T06:55:02.306-04:00 level=INFO msg="seed exec complete" geode.statements=621
+time=2026-04-24T06:55:02.306-04:00 level=INFO msg="seeded nodes" kind=user count=621
+time=2026-04-24T06:55:02.307-04:00 level=INFO msg="seeding nodes" kind=device file=devices.jsonl
+time=2026-04-24T06:55:02.316-04:00 level=INFO msg="seed exec start" geode.total=73 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:03.155-04:00 level=INFO msg="seed progress" geode.flushed=73 geode.total=73
+time=2026-04-24T06:55:03.155-04:00 level=INFO msg="seed exec complete" geode.statements=73
+time=2026-04-24T06:55:03.155-04:00 level=INFO msg="seeded nodes" kind=device count=73
+time=2026-04-24T06:55:03.155-04:00 level=INFO msg="seeding nodes" kind=application file=applications.jsonl
+time=2026-04-24T06:55:03.179-04:00 level=INFO msg="seed exec start" geode.total=156 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:03.753-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=156
+time=2026-04-24T06:55:05.133-04:00 level=INFO msg="seed progress" geode.flushed=156 geode.total=156
+time=2026-04-24T06:55:05.133-04:00 level=INFO msg="seed exec complete" geode.statements=156
+time=2026-04-24T06:55:05.133-04:00 level=INFO msg="seeded nodes" kind=application count=156
+time=2026-04-24T06:55:05.133-04:00 level=INFO msg="seeding nodes" kind=group file=groups.jsonl
+time=2026-04-24T06:55:05.169-04:00 level=INFO msg="seed exec start" geode.total=328 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:06.236-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=328
+time=2026-04-24T06:55:08.245-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=328
+time=2026-04-24T06:55:10.258-04:00 level=INFO msg="seed progress" geode.flushed=300 geode.total=328
+time=2026-04-24T06:55:11.579-04:00 level=INFO msg="seed progress" geode.flushed=328 geode.total=328
+time=2026-04-24T06:55:11.579-04:00 level=INFO msg="seed exec complete" geode.statements=328
+time=2026-04-24T06:55:11.579-04:00 level=INFO msg="seeded nodes" kind=group count=328
+time=2026-04-24T06:55:11.579-04:00 level=INFO msg="seeding nodes" kind=ip file=ip_addresses.jsonl
+time=2026-04-24T06:55:11.581-04:00 level=INFO msg="seed exec start" geode.total=80 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:12.285-04:00 level=INFO msg="seed progress" geode.flushed=80 geode.total=80
+time=2026-04-24T06:55:12.285-04:00 level=INFO msg="seed exec complete" geode.statements=80
+time=2026-04-24T06:55:12.285-04:00 level=INFO msg="seeded nodes" kind=ip count=80
+time=2026-04-24T06:55:12.285-04:00 level=INFO msg="seeding nodes" kind=location file=locations.jsonl
+time=2026-04-24T06:55:12.290-04:00 level=INFO msg="seed exec start" geode.total=38 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:12.542-04:00 level=INFO msg="seed progress" geode.flushed=38 geode.total=38
+time=2026-04-24T06:55:12.542-04:00 level=INFO msg="seed exec complete" geode.statements=38
+time=2026-04-24T06:55:12.542-04:00 level=INFO msg="seeded nodes" kind=location count=38
+time=2026-04-24T06:55:12.542-04:00 level=INFO msg="seeding nodes" kind=site file=sites.jsonl
+time=2026-04-24T06:55:12.545-04:00 level=INFO msg="seed exec start" geode.total=184 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:13.478-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=184
+time=2026-04-24T06:55:15.391-04:00 level=INFO msg="seed progress" geode.flushed=184 geode.total=184
+time=2026-04-24T06:55:15.391-04:00 level=INFO msg="seed exec complete" geode.statements=184
+time=2026-04-24T06:55:15.391-04:00 level=INFO msg="seeded nodes" kind=site count=184
+time=2026-04-24T06:55:15.391-04:00 level=INFO msg="seeding nodes" kind=drive file=drives.jsonl
+time=2026-04-24T06:55:15.395-04:00 level=INFO msg="seed exec start" geode.total=230 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:16.437-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=230
+time=2026-04-24T06:55:17.901-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=230
+time=2026-04-24T06:55:19.062-04:00 level=INFO msg="seed progress" geode.flushed=230 geode.total=230
+time=2026-04-24T06:55:19.062-04:00 level=INFO msg="seed exec complete" geode.statements=230
+time=2026-04-24T06:55:19.062-04:00 level=INFO msg="seeded nodes" kind=drive count=230
+time=2026-04-24T06:55:19.062-04:00 level=INFO msg="seeding nodes" kind=drive_item file=drive_items.jsonl
+time=2026-04-24T06:55:19.091-04:00 level=INFO msg="seed exec start" geode.total=1345 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:19.949-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=1345
+time=2026-04-24T06:55:21.865-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=1345
+time=2026-04-24T06:55:23.429-04:00 level=INFO msg="seed progress" geode.flushed=300 geode.total=1345
+time=2026-04-24T06:55:25.497-04:00 level=INFO msg="seed progress" geode.flushed=400 geode.total=1345
+time=2026-04-24T06:55:27.224-04:00 level=INFO msg="seed progress" geode.flushed=500 geode.total=1345
+time=2026-04-24T06:55:29.292-04:00 level=INFO msg="seed progress" geode.flushed=600 geode.total=1345
+time=2026-04-24T06:55:31.193-04:00 level=INFO msg="seed progress" geode.flushed=700 geode.total=1345
+time=2026-04-24T06:55:33.291-04:00 level=INFO msg="seed progress" geode.flushed=800 geode.total=1345
+time=2026-04-24T06:55:35.511-04:00 level=INFO msg="seed progress" geode.flushed=900 geode.total=1345
+time=2026-04-24T06:55:37.768-04:00 level=INFO msg="seed progress" geode.flushed=1000 geode.total=1345
+time=2026-04-24T06:55:39.953-04:00 level=INFO msg="seed progress" geode.flushed=1100 geode.total=1345
+time=2026-04-24T06:55:42.270-04:00 level=INFO msg="seed progress" geode.flushed=1200 geode.total=1345
+time=2026-04-24T06:55:44.694-04:00 level=INFO msg="seed progress" geode.flushed=1300 geode.total=1345
+time=2026-04-24T06:55:46.436-04:00 level=INFO msg="seed progress" geode.flushed=1345 geode.total=1345
+time=2026-04-24T06:55:46.436-04:00 level=INFO msg="seed exec complete" geode.statements=1345
+time=2026-04-24T06:55:46.436-04:00 level=INFO msg="seeded nodes" kind=drive_item count=1345
+time=2026-04-24T06:55:46.436-04:00 level=INFO msg="seeding nodes" kind=conditional_access_policy file=conditional_access_policies.jsonl
+time=2026-04-24T06:55:46.437-04:00 level=INFO msg="seed exec start" geode.total=27 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:46.592-04:00 level=INFO msg="seed progress" geode.flushed=27 geode.total=27
+time=2026-04-24T06:55:46.592-04:00 level=INFO msg="seed exec complete" geode.statements=27
+time=2026-04-24T06:55:46.592-04:00 level=INFO msg="seeded nodes" kind=conditional_access_policy count=27
+time=2026-04-24T06:55:46.592-04:00 level=INFO msg="seeding nodes" kind=audit_event file=audit_events.jsonl
+time=2026-04-24T06:55:46.647-04:00 level=INFO msg="seed exec start" geode.total=2414 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:55:47.758-04:00 level=INFO msg="seed progress" geode.flushed=100 geode.total=2414
+time=2026-04-24T06:55:49.914-04:00 level=INFO msg="seed progress" geode.flushed=200 geode.total=2414
+time=2026-04-24T06:55:51.561-04:00 level=INFO msg="seed progress" geode.flushed=300 geode.total=2414
+time=2026-04-24T06:55:53.843-04:00 level=INFO msg="seed progress" geode.flushed=400 geode.total=2414
+time=2026-04-24T06:55:55.434-04:00 level=INFO msg="seed progress" geode.flushed=500 geode.total=2414
+time=2026-04-24T06:55:57.723-04:00 level=INFO msg="seed progress" geode.flushed=600 geode.total=2414
+time=2026-04-24T06:55:59.881-04:00 level=INFO msg="seed progress" geode.flushed=700 geode.total=2414
+time=2026-04-24T06:56:01.601-04:00 level=INFO msg="seed progress" geode.flushed=800 geode.total=2414
+time=2026-04-24T06:56:03.825-04:00 level=INFO msg="seed progress" geode.flushed=900 geode.total=2414
+time=2026-04-24T06:56:05.477-04:00 level=INFO msg="seed progress" geode.flushed=1000 geode.total=2414
+time=2026-04-24T06:56:07.117-04:00 level=INFO msg="seed progress" geode.flushed=1100 geode.total=2414
+time=2026-04-24T06:56:09.430-04:00 level=INFO msg="seed progress" geode.flushed=1200 geode.total=2414
+time=2026-04-24T06:56:11.440-04:00 level=INFO msg="seed progress" geode.flushed=1300 geode.total=2414
+time=2026-04-24T06:56:13.972-04:00 level=INFO msg="seed progress" geode.flushed=1400 geode.total=2414
+time=2026-04-24T06:56:16.622-04:00 level=INFO msg="seed progress" geode.flushed=1500 geode.total=2414
+time=2026-04-24T06:56:18.970-04:00 level=INFO msg="seed progress" geode.flushed=1600 geode.total=2414
+time=2026-04-24T06:56:21.131-04:00 level=INFO msg="seed progress" geode.flushed=1700 geode.total=2414
+time=2026-04-24T06:56:23.643-04:00 level=INFO msg="seed progress" geode.flushed=1800 geode.total=2414
+time=2026-04-24T06:56:25.839-04:00 level=INFO msg="seed progress" geode.flushed=1900 geode.total=2414
+time=2026-04-24T06:56:28.291-04:00 level=INFO msg="seed progress" geode.flushed=2000 geode.total=2414
+time=2026-04-24T06:56:30.700-04:00 level=INFO msg="seed progress" geode.flushed=2100 geode.total=2414
+time=2026-04-24T06:56:33.145-04:00 level=INFO msg="seed progress" geode.flushed=2200 geode.total=2414
+time=2026-04-24T06:56:35.486-04:00 level=INFO msg="seed progress" geode.flushed=2300 geode.total=2414
+time=2026-04-24T06:56:37.224-04:00 level=INFO msg="seed progress" geode.flushed=2400 geode.total=2414
+time=2026-04-24T06:56:38.335-04:00 level=INFO msg="seed progress" geode.flushed=2414 geode.total=2414
+time=2026-04-24T06:56:38.335-04:00 level=INFO msg="seed exec complete" geode.statements=2414
+time=2026-04-24T06:56:38.335-04:00 level=INFO msg="seeded nodes" kind=audit_event count=2414
+time=2026-04-24T06:56:38.336-04:00 level=INFO msg="seeding nodes" kind=compliance_policy file=compliance_policies.jsonl
+time=2026-04-24T06:56:38.336-04:00 level=INFO msg="seed exec start" geode.total=6 geode.chunk_size=100 geode.pause=1s
+time=2026-04-24T06:56:38.375-04:00 level=INFO msg="seed progress" geode.flushed=6 geode.total=6
+time=2026-04-24T06:56:38.375-04:00 level=INFO msg="seed exec complete" geode.statements=6
+time=2026-04-24T06:56:38.375-04:00 level=INFO msg="seeded nodes" kind=compliance_policy count=6
+time=2026-04-24T06:56:38.375-04:00 level=INFO msg="seeding nodes" kind=service_principal file=service_principals.jsonl
+time=2026-04-24T06:56:38.426-04:00 level=INFO msg="seed exec start" geode.total=1075 geode.chunk_size=100 geode.pause=1s

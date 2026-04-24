@@ -1,0 +1,1248 @@
+time=2026-04-24T06:57:05.343-04:00 level=INFO msg="seed mode: parallel pipeline" workers=16 chunk_size=500 serial_fallback=true
+time=2026-04-24T06:57:06.296-04:00 level=INFO msg="pinned connections acquired" geode.count=16
+time=2026-04-24T06:57:06.296-04:00 level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-24T06:57:06.374-04:00 level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=500 geode.effective=38 geode.total=621 geode.workers=16
+time=2026-04-24T06:57:06.374-04:00 level=INFO msg="pipeline exec start" geode.total=621 geode.chunks=17 geode.chunk_size=38 geode.workers=16
+time=2026-04-24T06:57:07.611-04:00 level=INFO msg="pipeline progress" geode.flushed=38 geode.total=621
+time=2026-04-24T06:57:07.617-04:00 level=INFO msg="pipeline progress" geode.flushed=76 geode.total=621
+time=2026-04-24T06:57:07.629-04:00 level=INFO msg="pipeline progress" geode.flushed=114 geode.total=621
+time=2026-04-24T06:57:07.640-04:00 level=INFO msg="pipeline progress" geode.flushed=152 geode.total=621
+time=2026-04-24T06:57:07.905-04:00 level=INFO msg="pipeline progress" geode.flushed=165 geode.total=621
+time=2026-04-24T06:57:08.487-04:00 level=INFO msg="pipeline progress" geode.flushed=203 geode.total=621
+time=2026-04-24T06:57:08.532-04:00 level=INFO msg="pipeline progress" geode.flushed=241 geode.total=621
+time=2026-04-24T06:57:09.000-04:00 level=INFO msg="pipeline progress" geode.flushed=279 geode.total=621
+time=2026-04-24T06:57:09.034-04:00 level=INFO msg="pipeline progress" geode.flushed=317 geode.total=621
+SIGQUIT: quit
+PC=0x492e21 m=0 sigcode=0
+
+goroutine 0 gp=0x1e401c0 m=0 mp=0x1e41160 [idle]:
+runtime.futex(0x1e412b8, 0x80, 0x0, 0x0, 0x0, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/runtime/sys_linux_amd64.s:569 +0x21 fp=0x7ffcbd1509f8 sp=0x7ffcbd1509f0 pc=0x492e21
+runtime.futexsleep(0x1e41160?, 0xbd150a70?, 0x463e68?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/os_linux.go:73 +0x30 fp=0x7ffcbd150a48 sp=0x7ffcbd1509f8 pc=0x44ebf0
+runtime.notesleep(0x1e412b8)
+	/home/benji/.gvm/1.26.0/go/src/runtime/lock_futex.go:47 +0x87 fp=0x7ffcbd150a80 sp=0x7ffcbd150a48 pc=0x424ac7
+runtime.mPark(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:1967
+runtime.stopm()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:3008 +0x8c fp=0x7ffcbd150ab0 sp=0x7ffcbd150a80 pc=0x45a18c
+runtime.findRunnable()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:3796 +0xec8 fp=0x7ffcbd150c80 sp=0x7ffcbd150ab0 pc=0x45bd48
+runtime.schedule()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:4164 +0xb1 fp=0x7ffcbd150cc0 sp=0x7ffcbd150c80 pc=0x45ce91
+runtime.park_m(0x25d9527b30e0)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:4304 +0x285 fp=0x7ffcbd150d20 sp=0x7ffcbd150cc0 pc=0x45d325
+runtime.mcall()
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:496 +0x55 fp=0x7ffcbd150d38 sp=0x7ffcbd150d20 pc=0x48f695
+
+goroutine 1 gp=0x25d95242a1e0 m=nil [sync.WaitGroup.Wait]:
+runtime.gopark(0x25d95247c9f0?, 0x4270d4?, 0x30?, 0xe2?, 0x25d95283a2a0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95247c990 sp=0x25d95247c970 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.semacquire1(0x25d952a52018, 0x0, 0x1, 0x0, 0x19)
+	/home/benji/.gvm/1.26.0/go/src/runtime/sema.go:192 +0x232 fp=0x25d95247c9f8 sp=0x25d95247c990 pc=0x4694d2
+sync.runtime_SemacquireWaitGroup(0x25d9526aa7c0?, 0xe0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/sema.go:114 +0x2e fp=0x25d95247ca30 sp=0x25d95247c9f8 pc=0x48b56e
+sync.(*WaitGroup).Wait(0x25d952a52010)
+	/home/benji/.gvm/1.26.0/go/src/sync/waitgroup.go:206 +0x85 fp=0x25d95247ca58 sp=0x25d95247ca30 pc=0x49c305
+main.pipelineExec({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, {0x25d952c4e000, 0x26d, 0x400}, 0x1f4, 0x10, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:752 +0xb9b fp=0x25d95247cd50 sp=0x25d95247ca58 pc=0xc8b41b
+main.dispatchSeed({0x1683cd0, 0x25d95260ee10}, 0x25d952830c30, 0x0?, {0x25d952c4e000, 0x26d, 0x400}, {0x1, 0x10, 0x1f4, ...}, ...)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/seed.go:124 +0xa8 fp=0x25d95247ce28 sp=0x25d95247cd50 pc=0xc90b88
+main.runSeed(0x25d9526a2908, {0xf50ea4?, 0x4?, 0xf50d38?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/seed.go:275 +0xff0 fp=0x25d95247dc98 sp=0x25d95247ce28 pc=0xc91db0
+github.com/spf13/cobra.(*Command).execute(0x25d9526a2908, {0x25d952756000, 0xa, 0xa})
+	/home/benji/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1015 +0xb14 fp=0x25d95247de40 sp=0x25d95247dc98 pc=0xb695d4
+github.com/spf13/cobra.(*Command).ExecuteC(0x25d9526a2308)
+	/home/benji/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1148 +0x465 fp=0x25d95247df30 sp=0x25d95247de40 pc=0xb69f05
+github.com/spf13/cobra.(*Command).Execute(...)
+	/home/benji/go/pkg/mod/github.com/spf13/cobra@v1.10.2/command.go:1071
+main.main()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/main.go:19 +0x18 fp=0x25d95247df48 sp=0x25d95247df30 pc=0xc8d838
+runtime.main()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:290 +0x2d5 fp=0x25d95247dfe0 sp=0x25d95247df48 pc=0x455375
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95247dfe8 sp=0x25d95247dfe0 pc=0x4912e1
+
+goroutine 2 gp=0x25d95242ad20 m=nil [force gc (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952506fa8 sp=0x25d952506f88 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.forcegchelper()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:375 +0xb3 fp=0x25d952506fe0 sp=0x25d952506fa8 pc=0x455693
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952506fe8 sp=0x25d952506fe0 pc=0x4912e1
+created by runtime.init.7 in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:363 +0x1a
+
+goroutine 3 gp=0x25d95242b2c0 m=nil [GC sweep wait]:
+runtime.gopark(0x1?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952507788 sp=0x25d952507768 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.bgsweep(0x25d952530000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgcsweep.go:324 +0x151 fp=0x25d9525077c8 sp=0x25d952507788 pc=0x43f351
+runtime.gcenable.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:214 +0x17 fp=0x25d9525077e0 sp=0x25d9525077c8 pc=0x4306f7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525077e8 sp=0x25d9525077e0 pc=0x4912e1
+created by runtime.gcenable in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:214 +0x66
+
+goroutine 4 gp=0x25d95242b4a0 m=nil [GC scavenge wait]:
+runtime.gopark(0x10000?, 0x3b9aca00?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952507f78 sp=0x25d952507f58 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.(*scavengerState).park(0x1e3fc20)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgcscavenge.go:425 +0x49 fp=0x25d952507fa8 sp=0x25d952507f78 pc=0x43cdc9
+runtime.bgscavenge(0x25d952530000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgcscavenge.go:658 +0x59 fp=0x25d952507fc8 sp=0x25d952507fa8 pc=0x43d359
+runtime.gcenable.gowrap2()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:215 +0x17 fp=0x25d952507fe0 sp=0x25d952507fc8 pc=0x4306b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952507fe8 sp=0x25d952507fe0 pc=0x4912e1
+created by runtime.gcenable in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:215 +0xa5
+
+goroutine 5 gp=0x25d95242ba40 m=nil [GOMAXPROCS updater (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952508788 sp=0x25d952508768 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.updateMaxProcsGoroutine()
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:7095 +0xe7 fp=0x25d9525087e0 sp=0x25d952508788 pc=0x463b27
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525087e8 sp=0x25d9525087e0 pc=0x4912e1
+created by runtime.defaultGOMAXPROCSUpdateEnable in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:7083 +0x37
+
+goroutine 6 gp=0x25d95254a1e0 m=nil [finalizer wait]:
+runtime.gopark(0x464b75?, 0x1c8?, 0x0?, 0xb5?, 0x25d952506601?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952506620 sp=0x25d952506600 pc=0x489e8e
+runtime.runFinalizers()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mfinal.go:210 +0x107 fp=0x25d9525067e0 sp=0x25d952506620 pc=0x42f667
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525067e8 sp=0x25d9525067e0 pc=0x4912e1
+created by runtime.createfing in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mfinal.go:172 +0x3d
+
+goroutine 7 gp=0x25d95254ad20 m=nil [cleanup wait]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952508f68 sp=0x25d952508f48 pc=0x489e8e
+runtime.goparkunlock(...)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:468
+runtime.(*cleanupQueue).dequeue(0x1e3ffa0)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mcleanup.go:522 +0xd4 fp=0x25d952508fa0 sp=0x25d952508f68 pc=0x42c4b4
+runtime.runCleanups()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mcleanup.go:718 +0x45 fp=0x25d952508fe0 sp=0x25d952508fa0 pc=0x42cb25
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952508fe8 sp=0x25d952508fe0 pc=0x4912e1
+created by runtime.(*cleanupQueue).createGs in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mcleanup.go:672 +0xa5
+
+goroutine 8 gp=0x25d95254b2c0 m=nil [select]:
+runtime.gopark(0x25d952509788?, 0x2?, 0x60?, 0x9a?, 0x25d952509784?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952509620 sp=0x25d952509600 pc=0x489e8e
+runtime.selectgo(0x25d952509788, 0x25d952509780, 0x0?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952509750 sp=0x25d952509620 pc=0x468645
+database/sql.(*DB).connectionOpener(0x25d95272add0, {0x1683cd0, 0x25d95260ee60})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1261 +0x89 fp=0x25d9525097b8 sp=0x25d952509750 pc=0x9855c9
+database/sql.OpenDB.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:841 +0x1f fp=0x25d9525097e0 sp=0x25d9525097b8 pc=0x98391f
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525097e8 sp=0x25d9525097e0 pc=0x4912e1
+created by database/sql.OpenDB in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:841 +0x130
+
+goroutine 9 gp=0x25d95254b680 m=nil [IO wait]:
+runtime.gopark(0x25d9525aa000?, 0x25d952514a78?, 0x92?, 0x25?, 0x25d952514b60?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952514a28 sp=0x25d952514a08 pc=0x489e8e
+runtime.netpollblock(0x80?, 0x1677fe0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:575 +0xf7 fp=0x25d952514a60 sp=0x25d952514a28 pc=0x44de97
+internal/poll.runtime_pollWait(0x7b6d37e71c00, 0x72)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:351 +0x85 fp=0x25d952514a80 sp=0x25d952514a60 pc=0x489065
+internal/poll.(*pollDesc).wait(0x25d95274a380?, 0x25d952474930?, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x25d952514aa8 sp=0x25d952514a80 pc=0x501747
+internal/poll.(*pollDesc).waitRead(...)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).RawRead(0x25d95274a380, 0x25d9525a8000)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_unix.go:710 +0x125 fp=0x25d952514b08 sp=0x25d952514aa8 pc=0x5073a5
+net.(*rawConn).Read(0x25d9524288d0, 0x8?)
+	/home/benji/.gvm/1.26.0/go/src/net/rawconn.go:44 +0x36 fp=0x25d952514b40 sp=0x25d952514b08 pc=0x5fff96
+golang.org/x/net/internal/socket.(*syscaller).recvmmsg(0x25d9525a6048, {0x16820a0?, 0x25d9524288d0?}, {0x25d9525aa000?, 0x166f940?, 0x0?}, 0x25d952514bf0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/mmsghdr_unix.go:120 +0x70 fp=0x25d952514b70 sp=0x25d952514b40 pc=0x9e23f0
+golang.org/x/net/internal/socket.(*Conn).recvMsgs(0x25d9526e1120, {0x25d952754608, 0x8, 0x8}, 0x0)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/rawconn_mmsg.go:24 +0x165 fp=0x25d952514c30 sp=0x25d952514b70 pc=0x9e3405
+golang.org/x/net/internal/socket.(*Conn).RecvMsgs(...)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/socket.go:268
+golang.org/x/net/ipv4.(*payloadHandler).ReadBatch(0x25d95260eec0, {0x25d952754608?, 0x25d952530348?, 0x0?}, 0x0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/ipv4/batch.go:80 +0x57 fp=0x25d952514ca0 sp=0x25d952514c30 pc=0x9ea6b7
+github.com/quic-go/quic-go.(*oobConn).ReadPacket(0x25d952620ea0)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/sys_conn_oob.go:174 +0x762 fp=0x25d952514e28 sp=0x25d952514ca0 pc=0xa2f522
+github.com/quic-go/quic-go.(*Transport).listen(0x25d952720480, {0x168ae38, 0x25d952620ea0})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:533 +0x75 fp=0x25d952514f80 sp=0x25d952514e28 pc=0xa32795
+github.com/quic-go/quic-go.(*Transport).init.func1.1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:421 +0x65 fp=0x25d952514fe0 sp=0x25d952514f80 pc=0xa31b45
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952514fe8 sp=0x25d952514fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:419 +0x405
+
+goroutine 10 gp=0x25d95254b860 m=nil [select]:
+runtime.gopark(0x25d9525026e0?, 0x3?, 0x0?, 0x0?, 0x25d95250268a?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525024e8 sp=0x25d9525024c8 pc=0x489e8e
+runtime.selectgo(0x25d9525026e0, 0x25d952502684, 0x0?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952502618 sp=0x25d9525024e8 pc=0x468645
+github.com/quic-go/quic-go.(*Transport).runSendQueue(0x25d952720480)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:442 +0xef fp=0x25d9525027c8 sp=0x25d952502618 pc=0xa31dcf
+github.com/quic-go/quic-go.(*Transport).init.func1.gowrap1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x17 fp=0x25d9525027e0 sp=0x25d9525027c8 pc=0xa31ab7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525027e8 sp=0x25d9525027e0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x445
+
+goroutine 11 gp=0x25d952762000 m=nil [select]:
+runtime.gopark(0x25d952d9bed0?, 0x5?, 0x58?, 0xbc?, 0x25d952d9bde6?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952d9bc38 sp=0x25d952d9bc18 pc=0x489e8e
+runtime.selectgo(0x25d952d9bed0, 0x25d952d9bddc, 0x1e3fa20?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952d9bd68 sp=0x25d952d9bc38 pc=0x468645
+github.com/quic-go/quic-go.(*Conn).run(0x25d9526a5208)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:657 +0x425 fp=0x25d952d9bf70 sp=0x25d952d9bd68 pc=0x9f7c25
+github.com/quic-go/quic-go.(*Transport).doDial.func1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:326 +0x3a fp=0x25d952d9bfe0 sp=0x25d952d9bf70 pc=0xa314ba
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952d9bfe8 sp=0x25d952d9bfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).doDial in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:325 +0x737
+
+goroutine 18 gp=0x25d9527621e0 m=nil [select]:
+runtime.gopark(0x25d95294c790?, 0x2?, 0x70?, 0x0?, 0x25d95294c75c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95278adf8 sp=0x25d95278add8 pc=0x489e8e
+runtime.selectgo(0x25d95278af90, 0x25d95294c758, 0x0?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d95278af28 sp=0x25d95278adf8 pc=0x468645
+database/sql.(*DB).connectionCleaner(0x25d95272add0, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1104 +0x9e fp=0x25d95278afc0 sp=0x25d95278af28 pc=0x984b1e
+database/sql.(*DB).startCleanerLocked.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1091 +0x1b fp=0x25d95278afe0 sp=0x25d95278afc0 pc=0x984a5b
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95278afe8 sp=0x25d95278afe0 pc=0x4912e1
+created by database/sql.(*DB).startCleanerLocked in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1091 +0x105
+
+goroutine 13 gp=0x25d9527623c0 m=nil [select]:
+runtime.gopark(0x25d952519f58?, 0x2?, 0x40?, 0x9e?, 0x25d952519f2c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952519dc0 sp=0x25d952519da0 pc=0x489e8e
+runtime.selectgo(0x25d952519f58, 0x25d952519f28, 0x22?, 0x0, 0x10534?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952519ef0 sp=0x25d952519dc0 pc=0x468645
+github.com/quic-go/quic-go.(*sendQueue).Run(0x25d952729e30)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/send_queue.go:84 +0x110 fp=0x25d952519fb0 sp=0x25d952519ef0 pc=0xa1ec70
+github.com/quic-go/quic-go.(*Conn).run.func3()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:588 +0x25 fp=0x25d952519fe0 sp=0x25d952519fb0 pc=0x9f8665
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952519fe8 sp=0x25d952519fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Conn).run in goroutine 11
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:587 +0x1cf
+
+goroutine 21 gp=0x25d952962000 m=nil [select]:
+runtime.gopark(0x25d95294cee0?, 0x3?, 0x0?, 0x0?, 0x25d95294ce8a?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95294cce8 sp=0x25d95294ccc8 pc=0x489e8e
+runtime.selectgo(0x25d95294cee0, 0x25d95294ce84, 0x1e41160?, 0x0, 0x25d95294ce68?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d95294ce18 sp=0x25d95294cce8 pc=0x468645
+github.com/quic-go/quic-go.(*Transport).runSendQueue(0x25d952720120)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:442 +0xef fp=0x25d95294cfc8 sp=0x25d95294ce18 pc=0xa31dcf
+github.com/quic-go/quic-go.(*Transport).init.func1.gowrap1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x17 fp=0x25d95294cfe0 sp=0x25d95294cfc8 pc=0xa31ab7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95294cfe8 sp=0x25d95294cfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x445
+
+goroutine 34 gp=0x25d952584780 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952509f40 sp=0x25d952509f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d952509fc8 sp=0x25d952509f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d952509fe0 sp=0x25d952509fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952509fe8 sp=0x25d952509fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 35 gp=0x25d952584960 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952948740 sp=0x25d952948720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9529487c8 sp=0x25d952948740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9529487e0 sp=0x25d9529487c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9529487e8 sp=0x25d9529487e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 36 gp=0x25d952584b40 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952948f40 sp=0x25d952948f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d952948fc8 sp=0x25d952948f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d952948fe0 sp=0x25d952948fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952948fe8 sp=0x25d952948fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 37 gp=0x25d952584d20 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952949740 sp=0x25d952949720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9529497c8 sp=0x25d952949740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9529497e0 sp=0x25d9529497c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9529497e8 sp=0x25d9529497e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 38 gp=0x25d952584f00 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952949f40 sp=0x25d952949f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d952949fc8 sp=0x25d952949f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d952949fe0 sp=0x25d952949fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952949fe8 sp=0x25d952949fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 39 gp=0x25d9525850e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95294a740 sp=0x25d95294a720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d95294a7c8 sp=0x25d95294a740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d95294a7e0 sp=0x25d95294a7c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95294a7e8 sp=0x25d95294a7e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 40 gp=0x25d9525852c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95294af40 sp=0x25d95294af20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d95294afc8 sp=0x25d95294af40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d95294afe0 sp=0x25d95294afc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95294afe8 sp=0x25d95294afe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 41 gp=0x25d9525854a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95294b740 sp=0x25d95294b720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d95294b7c8 sp=0x25d95294b740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d95294b7e0 sp=0x25d95294b7c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95294b7e8 sp=0x25d95294b7e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 42 gp=0x25d952585680 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95294bf40 sp=0x25d95294bf20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d95294bfc8 sp=0x25d95294bf40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d95294bfe0 sp=0x25d95294bfc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95294bfe8 sp=0x25d95294bfe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 43 gp=0x25d952585860 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d6740 sp=0x25d9525d6720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d67c8 sp=0x25d9525d6740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d67e0 sp=0x25d9525d67c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d67e8 sp=0x25d9525d67e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 44 gp=0x25d952585a40 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d6f40 sp=0x25d9525d6f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d6fc8 sp=0x25d9525d6f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d6fe0 sp=0x25d9525d6fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d6fe8 sp=0x25d9525d6fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 45 gp=0x25d952585c20 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d7740 sp=0x25d9525d7720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d77c8 sp=0x25d9525d7740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d77e0 sp=0x25d9525d77c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d77e8 sp=0x25d9525d77e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 46 gp=0x25d9525da000 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d7f40 sp=0x25d9525d7f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d7fc8 sp=0x25d9525d7f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d7fe0 sp=0x25d9525d7fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d7fe8 sp=0x25d9525d7fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 47 gp=0x25d9525da1e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d8740 sp=0x25d9525d8720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d87c8 sp=0x25d9525d8740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d87e0 sp=0x25d9525d87c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d87e8 sp=0x25d9525d87e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 48 gp=0x25d9525da3c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d8f40 sp=0x25d9525d8f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d8fc8 sp=0x25d9525d8f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d8fe0 sp=0x25d9525d8fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d8fe8 sp=0x25d9525d8fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 49 gp=0x25d9525da5a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d9740 sp=0x25d9525d9720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d97c8 sp=0x25d9525d9740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d97e0 sp=0x25d9525d97c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d97e8 sp=0x25d9525d97e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 50 gp=0x25d9525da780 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d9f40 sp=0x25d9525d9f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d9fc8 sp=0x25d9525d9f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d9fe0 sp=0x25d9525d9fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d9fe8 sp=0x25d9525d9fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 51 gp=0x25d9525da960 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d2740 sp=0x25d9525d2720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d27c8 sp=0x25d9525d2740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d27e0 sp=0x25d9525d27c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d27e8 sp=0x25d9525d27e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 52 gp=0x25d9525dab40 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d2f40 sp=0x25d9525d2f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d2fc8 sp=0x25d9525d2f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d2fe0 sp=0x25d9525d2fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d2fe8 sp=0x25d9525d2fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 53 gp=0x25d9525dad20 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d3740 sp=0x25d9525d3720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d37c8 sp=0x25d9525d3740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d37e0 sp=0x25d9525d37c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d37e8 sp=0x25d9525d37e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 54 gp=0x25d9525daf00 m=nil [GC worker (idle)]:
+runtime.gopark(0x0?, 0x0?, 0x0?, 0x0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d3f40 sp=0x25d9525d3f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d3fc8 sp=0x25d9525d3f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d3fe0 sp=0x25d9525d3fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d3fe8 sp=0x25d9525d3fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 55 gp=0x25d9525db0e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b459d7b79?, 0x3?, 0x76?, 0x17?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d4740 sp=0x25d9525d4720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d47c8 sp=0x25d9525d4740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d47e0 sp=0x25d9525d47c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d47e8 sp=0x25d9525d47e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 56 gp=0x25d9525db2c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b459f848a?, 0x1?, 0xe2?, 0xa7?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d4f40 sp=0x25d9525d4f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d4fc8 sp=0x25d9525d4f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d4fe0 sp=0x25d9525d4fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d4fe8 sp=0x25d9525d4fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 57 gp=0x25d9525db4a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b459d5c16?, 0x1?, 0x23?, 0x72?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d5740 sp=0x25d9525d5720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d57c8 sp=0x25d9525d5740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d57e0 sp=0x25d9525d57c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d57e8 sp=0x25d9525d57e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 58 gp=0x25d9525db680 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b4136bc09?, 0x1?, 0xfd?, 0xb0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525d5f40 sp=0x25d9525d5f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525d5fc8 sp=0x25d9525d5f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525d5fe0 sp=0x25d9525d5fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525d5fe8 sp=0x25d9525d5fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 59 gp=0x25d9525db860 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b459d5cfc?, 0x1?, 0x96?, 0x83?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e2740 sp=0x25d9525e2720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e27c8 sp=0x25d9525e2740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e27e0 sp=0x25d9525e27c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e27e8 sp=0x25d9525e27e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 60 gp=0x25d9525dba40 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b45a81336?, 0x1?, 0x19?, 0xf5?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e2f40 sp=0x25d9525e2f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e2fc8 sp=0x25d9525e2f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e2fe0 sp=0x25d9525e2fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e2fe8 sp=0x25d9525e2fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 61 gp=0x25d9525dbc20 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b45a86fc5?, 0x1?, 0x9f?, 0xbf?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e3740 sp=0x25d9525e3720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e37c8 sp=0x25d9525e3740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e37e0 sp=0x25d9525e37c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e37e8 sp=0x25d9525e37e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 62 gp=0x25d9525e6000 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b459f9124?, 0x1?, 0xcb?, 0xd4?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e3f40 sp=0x25d9525e3f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e3fc8 sp=0x25d9525e3f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e3fe0 sp=0x25d9525e3fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e3fe8 sp=0x25d9525e3fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 63 gp=0x25d9525e61e0 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b4598a8ca?, 0x1?, 0x49?, 0x1a?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e4740 sp=0x25d9525e4720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e47c8 sp=0x25d9525e4740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e47e0 sp=0x25d9525e47c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e47e8 sp=0x25d9525e47e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 64 gp=0x25d9525e63c0 m=nil [GC worker (idle)]:
+runtime.gopark(0x4262b435e5428?, 0x1?, 0x4e?, 0x8b?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e4f40 sp=0x25d9525e4f20 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e4fc8 sp=0x25d9525e4f40 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e4fe0 sp=0x25d9525e4fc8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e4fe8 sp=0x25d9525e4fe0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 65 gp=0x25d9525e65a0 m=nil [GC worker (idle)]:
+runtime.gopark(0x1e62e60?, 0x1?, 0xa7?, 0x1a?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e5740 sp=0x25d9525e5720 pc=0x489e8e
+runtime.gcBgMarkWorker(0x25d9525cc000)
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1791 +0xeb fp=0x25d9525e57c8 sp=0x25d9525e5740 pc=0x4331cb
+runtime.gcBgMarkStartWorkers.gowrap1()
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x17 fp=0x25d9525e57e0 sp=0x25d9525e57c8 pc=0x4330b7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e57e8 sp=0x25d9525e57e0 pc=0x4912e1
+created by runtime.gcBgMarkStartWorkers in goroutine 1
+	/home/benji/.gvm/1.26.0/go/src/runtime/mgc.go:1695 +0x105
+
+goroutine 66 gp=0x25d9527b25a0 m=nil [IO wait]:
+runtime.gopark(0x25d952424000?, 0x25d95251ba78?, 0x92?, 0x25?, 0x25d95251bb60?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95251ba28 sp=0x25d95251ba08 pc=0x489e8e
+runtime.netpollblock(0x80?, 0x1677fe0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:575 +0xf7 fp=0x25d95251ba60 sp=0x25d95251ba28 pc=0x44de97
+internal/poll.runtime_pollWait(0x7b6d37e71a00, 0x72)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:351 +0x85 fp=0x25d95251ba80 sp=0x25d95251ba60 pc=0x489065
+internal/poll.(*pollDesc).wait(0x25d9525aee00?, 0x25d9527805b0?, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x25d95251baa8 sp=0x25d95251ba80 pc=0x501747
+internal/poll.(*pollDesc).waitRead(...)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).RawRead(0x25d9525aee00, 0x25d952830740)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_unix.go:710 +0x125 fp=0x25d95251bb08 sp=0x25d95251baa8 pc=0x5073a5
+net.(*rawConn).Read(0x25d9525821d0, 0x8?)
+	/home/benji/.gvm/1.26.0/go/src/net/rawconn.go:44 +0x36 fp=0x25d95251bb40 sp=0x25d95251bb08 pc=0x5fff96
+golang.org/x/net/internal/socket.(*syscaller).recvmmsg(0x25d95296ca68, {0x16820a0?, 0x25d9525821d0?}, {0x25d952424000?, 0x166f940?, 0x0?}, 0x25d95251bbf0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/mmsghdr_unix.go:120 +0x70 fp=0x25d95251bb70 sp=0x25d95251bb40 pc=0x9e23f0
+golang.org/x/net/internal/socket.(*Conn).recvMsgs(0x25d9525a2580, {0x25d952754c08, 0x8, 0x8}, 0x0)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/rawconn_mmsg.go:24 +0x165 fp=0x25d95251bc30 sp=0x25d95251bb70 pc=0x9e3405
+golang.org/x/net/internal/socket.(*Conn).RecvMsgs(...)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/socket.go:268
+golang.org/x/net/ipv4.(*payloadHandler).ReadBatch(0x25d95260e1f0, {0x25d952754c08?, 0x25d9525300c8?, 0x0?}, 0x0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/ipv4/batch.go:80 +0x57 fp=0x25d95251bca0 sp=0x25d95251bc30 pc=0x9ea6b7
+github.com/quic-go/quic-go.(*oobConn).ReadPacket(0x25d95288f4d0)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/sys_conn_oob.go:174 +0x762 fp=0x25d95251be28 sp=0x25d95251bca0 pc=0xa2f522
+github.com/quic-go/quic-go.(*Transport).listen(0x25d952867680, {0x168ae38, 0x25d95288f4d0})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:533 +0x75 fp=0x25d95251bf80 sp=0x25d95251be28 pc=0xa32795
+github.com/quic-go/quic-go.(*Transport).init.func1.1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:421 +0x65 fp=0x25d95251bfe0 sp=0x25d95251bf80 pc=0xa31b45
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95251bfe8 sp=0x25d95251bfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:419 +0x405
+
+goroutine 67 gp=0x25d9527b2780 m=nil [select]:
+runtime.gopark(0x25d952502ee0?, 0x3?, 0xd4?, 0x70?, 0x25d952502e8a?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952502ce8 sp=0x25d952502cc8 pc=0x489e8e
+runtime.selectgo(0x25d952502ee0, 0x25d952502e84, 0x0?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952502e18 sp=0x25d952502ce8 pc=0x468645
+github.com/quic-go/quic-go.(*Transport).runSendQueue(0x25d952867680)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:442 +0xef fp=0x25d952502fc8 sp=0x25d952502e18 pc=0xa31dcf
+github.com/quic-go/quic-go.(*Transport).init.func1.gowrap1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x17 fp=0x25d952502fe0 sp=0x25d952502fc8 pc=0xa31ab7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952502fe8 sp=0x25d952502fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x445
+
+goroutine 68 gp=0x25d9527b2d20 m=nil [select]:
+runtime.gopark(0x25d952e17ed0?, 0x5?, 0x58?, 0x7c?, 0x25d952e17de6?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952e17c38 sp=0x25d952e17c18 pc=0x489e8e
+runtime.selectgo(0x25d952e17ed0, 0x25d952e17ddc, 0x1e3fa20?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952e17d68 sp=0x25d952e17c38 pc=0x468645
+github.com/quic-go/quic-go.(*Conn).run(0x25d952968488)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:657 +0x425 fp=0x25d952e17f70 sp=0x25d952e17d68 pc=0x9f7c25
+github.com/quic-go/quic-go.(*Transport).doDial.func1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:326 +0x3a fp=0x25d952e17fe0 sp=0x25d952e17f70 pc=0xa314ba
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952e17fe8 sp=0x25d952e17fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).doDial in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:325 +0x737
+
+goroutine 20 gp=0x25d9527b2f00 m=nil [IO wait]:
+runtime.gopark(0x25d9525aa400?, 0x25d95278ba78?, 0x92?, 0x25?, 0x25d95278bb60?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95278ba28 sp=0x25d95278ba08 pc=0x489e8e
+runtime.netpollblock(0x80?, 0x1677fe0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:575 +0xf7 fp=0x25d95278ba60 sp=0x25d95278ba28 pc=0x44de97
+internal/poll.runtime_pollWait(0x7b6d37e71800, 0x72)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:351 +0x85 fp=0x25d95278ba80 sp=0x25d95278ba60 pc=0x489065
+internal/poll.(*pollDesc).wait(0x25d952795a80?, 0x25d95283a700?, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x25d95278baa8 sp=0x25d95278ba80 pc=0x501747
+internal/poll.(*pollDesc).waitRead(...)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).RawRead(0x25d952795a80, 0x25d9525a8610)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_unix.go:710 +0x125 fp=0x25d95278bb08 sp=0x25d95278baa8 pc=0x5073a5
+net.(*rawConn).Read(0x25d9527a62a0, 0x8?)
+	/home/benji/.gvm/1.26.0/go/src/net/rawconn.go:44 +0x36 fp=0x25d95278bb40 sp=0x25d95278bb08 pc=0x5fff96
+golang.org/x/net/internal/socket.(*syscaller).recvmmsg(0x25d9525a61f8, {0x16820a0?, 0x25d9527a62a0?}, {0x25d9525aa400?, 0x166f940?, 0x0?}, 0x25d95278bbf0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/mmsghdr_unix.go:120 +0x70 fp=0x25d95278bb70 sp=0x25d95278bb40 pc=0x9e23f0
+golang.org/x/net/internal/socket.(*Conn).recvMsgs(0x25d952a8cb00, {0x25d9526a2008, 0x8, 0x8}, 0x0)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/rawconn_mmsg.go:24 +0x165 fp=0x25d95278bc30 sp=0x25d95278bb70 pc=0x9e3405
+golang.org/x/net/internal/socket.(*Conn).RecvMsgs(...)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/socket.go:268
+golang.org/x/net/ipv4.(*payloadHandler).ReadBatch(0x25d952832d30, {0x25d9526a2008?, 0x25d952636e48?, 0x0?}, 0x0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/ipv4/batch.go:80 +0x57 fp=0x25d95278bca0 sp=0x25d95278bc30 pc=0x9ea6b7
+github.com/quic-go/quic-go.(*oobConn).ReadPacket(0x25d95296cb40)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/sys_conn_oob.go:174 +0x762 fp=0x25d95278be28 sp=0x25d95278bca0 pc=0xa2f522
+github.com/quic-go/quic-go.(*Transport).listen(0x25d952720120, {0x168ae38, 0x25d95296cb40})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:533 +0x75 fp=0x25d95278bf80 sp=0x25d95278be28 pc=0xa32795
+github.com/quic-go/quic-go.(*Transport).init.func1.1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:421 +0x65 fp=0x25d95278bfe0 sp=0x25d95278bf80 pc=0xa31b45
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95278bfe8 sp=0x25d95278bfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:419 +0x405
+
+goroutine 70 gp=0x25d9527b30e0 m=nil [select]:
+runtime.gopark(0x25d952787f58?, 0x2?, 0x40?, 0x7e?, 0x25d952787f2c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952787dc0 sp=0x25d952787da0 pc=0x489e8e
+runtime.selectgo(0x25d952787f58, 0x25d952787f28, 0x22?, 0x0, 0x10534?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952787ef0 sp=0x25d952787dc0 pc=0x468645
+github.com/quic-go/quic-go.(*sendQueue).Run(0x25d952893a40)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/send_queue.go:84 +0x110 fp=0x25d952787fb0 sp=0x25d952787ef0 pc=0xa1ec70
+github.com/quic-go/quic-go.(*Conn).run.func3()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:588 +0x25 fp=0x25d952787fe0 sp=0x25d952787fb0 pc=0x9f8665
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952787fe8 sp=0x25d952787fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Conn).run in goroutine 68
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:587 +0x1cf
+
+goroutine 22 gp=0x25d952962780 m=nil [select]:
+runtime.gopark(0x25d95330bed0?, 0x5?, 0x58?, 0xbc?, 0x25d95330bde6?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95330bc38 sp=0x25d95330bc18 pc=0x489e8e
+runtime.selectgo(0x25d95330bed0, 0x25d95330bddc, 0x1e3fa20?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d95330bd68 sp=0x25d95330bc38 pc=0x468645
+github.com/quic-go/quic-go.(*Conn).run(0x25d9526a5688)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:657 +0x425 fp=0x25d95330bf70 sp=0x25d95330bd68 pc=0x9f7c25
+github.com/quic-go/quic-go.(*Transport).doDial.func1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:326 +0x3a fp=0x25d95330bfe0 sp=0x25d95330bf70 pc=0xa314ba
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95330bfe8 sp=0x25d95330bfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).doDial in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:325 +0x737
+
+goroutine 24 gp=0x25d952962b40 m=nil [select]:
+runtime.gopark(0x25d952515f58?, 0x2?, 0x40?, 0x5e?, 0x25d952515f2c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952515dc0 sp=0x25d952515da0 pc=0x489e8e
+runtime.selectgo(0x25d952515f58, 0x25d952515f28, 0x22?, 0x0, 0x10534?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952515ef0 sp=0x25d952515dc0 pc=0x468645
+github.com/quic-go/quic-go.(*sendQueue).Run(0x25d952a9db60)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/send_queue.go:84 +0x110 fp=0x25d952515fb0 sp=0x25d952515ef0 pc=0xa1ec70
+github.com/quic-go/quic-go.(*Conn).run.func3()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:588 +0x25 fp=0x25d952515fe0 sp=0x25d952515fb0 pc=0x9f8665
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952515fe8 sp=0x25d952515fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Conn).run in goroutine 22
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:587 +0x1cf
+
+goroutine 25 gp=0x25d952962f00 m=nil [IO wait]:
+runtime.gopark(0x25d9525aa600?, 0x25d95278ca78?, 0x92?, 0x25?, 0x25d95278cb60?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95278ca28 sp=0x25d95278ca08 pc=0x489e8e
+runtime.netpollblock(0x80?, 0x1677fe0?, 0x0?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:575 +0xf7 fp=0x25d95278ca60 sp=0x25d95278ca28 pc=0x44de97
+internal/poll.runtime_pollWait(0x7b6d37e71600, 0x72)
+	/home/benji/.gvm/1.26.0/go/src/runtime/netpoll.go:351 +0x85 fp=0x25d95278ca80 sp=0x25d95278ca60 pc=0x489065
+internal/poll.(*pollDesc).wait(0x25d95260a580?, 0x25d95283b0a0?, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:84 +0x27 fp=0x25d95278caa8 sp=0x25d95278ca80 pc=0x501747
+internal/poll.(*pollDesc).waitRead(...)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_poll_runtime.go:89
+internal/poll.(*FD).RawRead(0x25d95260a580, 0x25d9525a8660)
+	/home/benji/.gvm/1.26.0/go/src/internal/poll/fd_unix.go:710 +0x125 fp=0x25d95278cb08 sp=0x25d95278caa8 pc=0x5073a5
+net.(*rawConn).Read(0x25d9527a6310, 0x8?)
+	/home/benji/.gvm/1.26.0/go/src/net/rawconn.go:44 +0x36 fp=0x25d95278cb40 sp=0x25d95278cb08 pc=0x5fff96
+golang.org/x/net/internal/socket.(*syscaller).recvmmsg(0x25d9525a6288, {0x16820a0?, 0x25d9527a6310?}, {0x25d9525aa600?, 0x166f940?, 0x0?}, 0x25d95278cbf0?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/mmsghdr_unix.go:120 +0x70 fp=0x25d95278cb70 sp=0x25d95278cb40 pc=0x9e23f0
+golang.org/x/net/internal/socket.(*Conn).recvMsgs(0x25d952a8cf40, {0x25d9526c4008, 0x8, 0x8}, 0x0)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/rawconn_mmsg.go:24 +0x165 fp=0x25d95278cc30 sp=0x25d95278cb70 pc=0x9e3405
+golang.org/x/net/internal/socket.(*Conn).RecvMsgs(...)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/internal/socket/socket.go:268
+golang.org/x/net/ipv4.(*payloadHandler).ReadBatch(0x25d952833be0, {0x25d9526c4008?, 0x25d9526c1148?, 0x25d9525e1cf0?}, 0x42672a?)
+	/home/benji/go/pkg/mod/golang.org/x/net@v0.52.0/ipv4/batch.go:80 +0x57 fp=0x25d95278cca0 sp=0x25d95278cc30 pc=0x9ea6b7
+github.com/quic-go/quic-go.(*oobConn).ReadPacket(0x25d95296d050)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/sys_conn_oob.go:174 +0x762 fp=0x25d95278ce28 sp=0x25d95278cca0 pc=0xa2f522
+github.com/quic-go/quic-go.(*Transport).listen(0x25d952720c60, {0x168ae38, 0x25d95296d050})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:533 +0x75 fp=0x25d95278cf80 sp=0x25d95278ce28 pc=0xa32795
+github.com/quic-go/quic-go.(*Transport).init.func1.1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:421 +0x65 fp=0x25d95278cfe0 sp=0x25d95278cf80 pc=0xa31b45
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95278cfe8 sp=0x25d95278cfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:419 +0x405
+
+goroutine 26 gp=0x25d9529630e0 m=nil [select]:
+runtime.gopark(0x25d9525e5ee0?, 0x3?, 0x0?, 0x0?, 0x25d9525e5e8a?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9525e5ce8 sp=0x25d9525e5cc8 pc=0x489e8e
+runtime.selectgo(0x25d9525e5ee0, 0x25d9525e5e84, 0x0?, 0x0, 0x0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d9525e5e18 sp=0x25d9525e5ce8 pc=0x468645
+github.com/quic-go/quic-go.(*Transport).runSendQueue(0x25d952720c60)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:442 +0xef fp=0x25d9525e5fc8 sp=0x25d9525e5e18 pc=0xa31dcf
+github.com/quic-go/quic-go.(*Transport).init.func1.gowrap1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x17 fp=0x25d9525e5fe0 sp=0x25d9525e5fc8 pc=0xa31ab7
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9525e5fe8 sp=0x25d9525e5fe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).init.func1 in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:427 +0x445
+
+goroutine 27 gp=0x25d952963680 m=nil [select]:
+runtime.gopark(0x25d952ccbed0?, 0x5?, 0x58?, 0xbc?, 0x25d952ccbde6?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952ccbc38 sp=0x25d952ccbc18 pc=0x489e8e
+runtime.selectgo(0x25d952ccbed0, 0x25d952ccbddc, 0x1e3fa20?, 0x0, 0x25d9524fd570?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952ccbd68 sp=0x25d952ccbc38 pc=0x468645
+github.com/quic-go/quic-go.(*Conn).run(0x25d9526a5b08)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:657 +0x425 fp=0x25d952ccbf70 sp=0x25d952ccbd68 pc=0x9f7c25
+github.com/quic-go/quic-go.(*Transport).doDial.func1()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:326 +0x3a fp=0x25d952ccbfe0 sp=0x25d952ccbf70 pc=0xa314ba
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952ccbfe8 sp=0x25d952ccbfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Transport).doDial in goroutine 1
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/transport.go:325 +0x737
+
+goroutine 29 gp=0x25d952963a40 m=nil [select]:
+runtime.gopark(0x25d9527acf58?, 0x2?, 0x40?, 0xce?, 0x25d9527acf2c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9527acdc0 sp=0x25d9527acda0 pc=0x489e8e
+runtime.selectgo(0x25d9527acf58, 0x25d9527acf28, 0x22?, 0x0, 0x10534?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d9527acef0 sp=0x25d9527acdc0 pc=0x468645
+github.com/quic-go/quic-go.(*sendQueue).Run(0x25d952b04960)
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/send_queue.go:84 +0x110 fp=0x25d9527acfb0 sp=0x25d9527acef0 pc=0xa1ec70
+github.com/quic-go/quic-go.(*Conn).run.func3()
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:588 +0x25 fp=0x25d9527acfe0 sp=0x25d9527acfb0 pc=0x9f8665
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9527acfe8 sp=0x25d9527acfe0 pc=0x4912e1
+created by github.com/quic-go/quic-go.(*Conn).run in goroutine 27
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/connection.go:587 +0x1cf
+
+goroutine 82 gp=0x25d95298c5a0 m=nil [select]:
+runtime.gopark(0x25d952af7f50?, 0x2?, 0x20?, 0x26?, 0x25d952af7f04?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952af7d80 sp=0x25d952af7d60 pc=0x489e8e
+runtime.selectgo(0x25d952af7f50, 0x25d952af7f00, 0x25d9529fe1c0?, 0x0, 0x8?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952af7eb0 sp=0x25d952af7d80 pc=0x468645
+main.(*pinnedConns).keepaliveLoop(0x25d9526aae00, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:512 +0x105 fp=0x25d952af7fc0 sp=0x25d952af7eb0 pc=0xc89ce5
+main.acquirePinnedConns.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:415 +0x1b fp=0x25d952af7fe0 sp=0x25d952af7fc0 pc=0xc8937b
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952af7fe8 sp=0x25d952af7fe0 pc=0x4912e1
+created by main.acquirePinnedConns in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:415 +0x46f
+
+goroutine 98 gp=0x25d95298cd20 m=nil [select]:
+runtime.gopark(0x25d95296f6b0?, 0x2?, 0xa0?, 0x96?, 0x25d95296f64c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d95296f4e0 sp=0x25d95296f4c0 pc=0x489e8e
+runtime.selectgo(0x25d95296f6b0, 0x25d95296f648, 0x1e3fa20?, 0x0, 0x25d95298cd20?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d95296f610 sp=0x25d95296f4e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce160, {0x25d9528b6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d95296f6e8 sp=0x25d95296f610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce160, {0x25d9528b6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d95296f768 sp=0x25d95296f6e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d95296f7f0?, {0x25d9528b6000?, 0x25d952842460?, 0x25d95296f808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d95296f798 sp=0x25d95296f768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d95288d920, {0x25d9527cc688, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d95296f7d0 sp=0x25d95296f798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d95288d920}, {0x25d9527cc688, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d95296f818 sp=0x25d95296f7d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc640, {0x1683d40, 0x25d952b00000})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d95296f8e8 sp=0x25d95296f818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d9527a5800, {0x1683d40, 0x25d952b00000}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d95296f970 sp=0x25d95296f8e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d952b00000}, 0x0?, {0x1680fc0, 0x25d9527a5800})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d95296f9c8 sp=0x25d95296f970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d95296fa38 sp=0x25d95296f9c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d95280a500}, 0x25d95296fac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d95296fa78 sp=0x25d95296fa38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d952b00000}, 0x25d95280a500, 0x25d95275a040, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d95296fb10 sp=0x25d95296fa78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d9527a5840, {0x1683d40, 0x25d952b00000}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d95296fb50 sp=0x25d95296fb10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d952b00000}, 0x25d9527a5840, {0x25d952c4f7c0, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d95296fc60 sp=0x25d95296fb50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c4f7c0, 0x26, 0x368}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d95296fd98 sp=0x25d95296fc60 pc=0xc8a0e5
+main.pipelineExec.func1(0x4, {0x25d952c4f7c0, 0x26, 0x368}, 0x25d9527a5840)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d95296ffa8 sp=0x25d95296fd98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d95296ffe0 sp=0x25d95296ffa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d95296ffe8 sp=0x25d95296ffe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 99 gp=0x25d95298cf00 m=nil [select]:
+runtime.gopark(0x25d9527aa6b0?, 0x2?, 0xa0?, 0x96?, 0x25d9527aa64c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9527aa4e0 sp=0x25d9527aa4c0 pc=0x489e8e
+runtime.selectgo(0x25d9527aa6b0, 0x25d9527aa648, 0x1e3fa20?, 0x0, 0x25d95298cf00?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d9527aa610 sp=0x25d9527aa4e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce210, {0x25d9528c6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d9527aa6e8 sp=0x25d9527aa610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce210, {0x25d9528c6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d9527aa768 sp=0x25d9527aa6e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d9527aa7f0?, {0x25d9528c6000?, 0x25d952842540?, 0x25d9527aa808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d9527aa798 sp=0x25d9527aa768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d95288d980, {0x25d9527cc728, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d9527aa7d0 sp=0x25d9527aa798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d95288d980}, {0x25d9527cc728, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d9527aa818 sp=0x25d9527aa7d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc6e0, {0x1683d40, 0x25d95268c310})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d9527aa8e8 sp=0x25d9527aa818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d9527a58c0, {0x1683d40, 0x25d95268c310}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d9527aa970 sp=0x25d9527aa8e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d95268c310}, 0x0?, {0x1680fc0, 0x25d9527a58c0})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d9527aa9c8 sp=0x25d9527aa970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d9527aaa38 sp=0x25d9527aa9c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d95280a580}, 0x25d9527aaac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d9527aaa78 sp=0x25d9527aaa38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d95268c310}, 0x25d95280a580, 0x25d952c138d0, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d9527aab10 sp=0x25d9527aaa78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d9527a5900, {0x1683d40, 0x25d95268c310}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d9527aab50 sp=0x25d9527aab10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d95268c310}, 0x25d9527a5900, {0x25d952c4fdb0, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d9527aac60 sp=0x25d9527aab50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c4fdb0, 0x26, 0x342}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d9527aad98 sp=0x25d9527aac60 pc=0xc8a0e5
+main.pipelineExec.func1(0x5, {0x25d952c4fdb0, 0x26, 0x342}, 0x25d9527a5900)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d9527aafa8 sp=0x25d9527aad98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d9527aafe0 sp=0x25d9527aafa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9527aafe8 sp=0x25d9527aafe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 100 gp=0x25d95298d0e0 m=nil [select]:
+runtime.gopark(0x25d952cb36b0?, 0x2?, 0xc8?, 0x7a?, 0x25d952cb364c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952ccd4e0 sp=0x25d952ccd4c0 pc=0x489e8e
+runtime.selectgo(0x25d952ccd6b0, 0x25d952cb3648, 0x1e3fa20?, 0x0, 0x25d95298d0e0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952ccd610 sp=0x25d952ccd4e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce2c0, {0x25d9528d6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d952ccd6e8 sp=0x25d952ccd610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce2c0, {0x25d9528d6000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d952ccd768 sp=0x25d952ccd6e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d952cb37f0?, {0x25d9528d6000?, 0x25d952842620?, 0x25d952cb3808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d952ccd798 sp=0x25d952ccd768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d95288d9e0, {0x25d9528fe048, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d952ccd7d0 sp=0x25d952ccd798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d95288d9e0}, {0x25d9528fe048, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d952ccd818 sp=0x25d952ccd7d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9528fe000, {0x1683d40, 0x25d9526ac000})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d952ccd8e8 sp=0x25d952ccd818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d952532000, {0x1683d40, 0x25d9526ac000}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d952ccd970 sp=0x25d952ccd8e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d9526ac000}, 0x0?, {0x1680fc0, 0x25d952532000})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d952ccd9c8 sp=0x25d952ccd970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d952ccda38 sp=0x25d952ccd9c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d952946000}, 0x25d952cb3ac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d952ccda78 sp=0x25d952ccda38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d9526ac000}, 0x25d952946000, 0x25d952478210, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d952ccdb10 sp=0x25d952ccda78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d9525326c0, {0x1683d40, 0x25d9526ac000}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d952ccdb50 sp=0x25d952ccdb10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d9526ac000}, 0x25d9525326c0, {0x25d952c503a0, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d952ccdc60 sp=0x25d952ccdb50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c503a0, 0x26, 0x31c}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d952ccdd98 sp=0x25d952ccdc60 pc=0xc8a0e5
+main.pipelineExec.func1(0x6, {0x25d952c503a0, 0x26, 0x31c}, 0x25d9525326c0)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d952ccdfa8 sp=0x25d952ccdd98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d952ccdfe0 sp=0x25d952ccdfa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952ccdfe8 sp=0x25d952ccdfe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 101 gp=0x25d95298d2c0 m=nil [select]:
+runtime.gopark(0x25d9527ab6b0?, 0x2?, 0xa0?, 0x96?, 0x25d9527ab64c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9527ab4e0 sp=0x25d9527ab4c0 pc=0x489e8e
+runtime.selectgo(0x25d9527ab6b0, 0x25d9527ab648, 0x1e3fa20?, 0x0, 0x25d95298d2c0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d9527ab610 sp=0x25d9527ab4e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d952976000, {0x25d95299a000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d9527ab6e8 sp=0x25d9527ab610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d952976000, {0x25d95299a000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d9527ab768 sp=0x25d9527ab6e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d9527ab7f0?, {0x25d95299a000?, 0x25d952958000?, 0x25d9527ab808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d9527ab798 sp=0x25d9527ab768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d952978000, {0x25d9527262c8, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d9527ab7d0 sp=0x25d9527ab798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d952978000}, {0x25d9527262c8, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d9527ab818 sp=0x25d9527ab7d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d952726280, {0x1683d40, 0x25d95268c4d0})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d9527ab8e8 sp=0x25d9527ab818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d9525c8200, {0x1683d40, 0x25d95268c4d0}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d9527ab970 sp=0x25d9527ab8e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d95268c4d0}, 0x0?, {0x1680fc0, 0x25d9525c8200})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d9527ab9c8 sp=0x25d9527ab970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d9527aba38 sp=0x25d9527ab9c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d95260af00}, 0x25d9527abac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d9527aba78 sp=0x25d9527aba38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d95268c4d0}, 0x25d95260af00, 0x25d952c13900, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d9527abb10 sp=0x25d9527aba78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d9525c8240, {0x1683d40, 0x25d95268c4d0}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d9527abb50 sp=0x25d9527abb10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d95268c4d0}, 0x25d9525c8240, {0x25d952c50990, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d9527abc60 sp=0x25d9527abb50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c50990, 0x26, 0x2f6}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d9527abd98 sp=0x25d9527abc60 pc=0xc8a0e5
+main.pipelineExec.func1(0x7, {0x25d952c50990, 0x26, 0x2f6}, 0x25d9525c8240)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d9527abfa8 sp=0x25d9527abd98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d9527abfe0 sp=0x25d9527abfa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d9527abfe8 sp=0x25d9527abfe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 105 gp=0x25d95298da40 m=nil [select]:
+runtime.gopark(0x25d9527866b0?, 0x2?, 0xa0?, 0x96?, 0x25d95278664c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d9527864e0 sp=0x25d9527864c0 pc=0x489e8e
+runtime.selectgo(0x25d9527866b0, 0x25d952786648, 0x1e3fa20?, 0x0, 0x25d95298da40?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952786610 sp=0x25d9527864e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce4d0, {0x25d9529ca000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d9527866e8 sp=0x25d952786610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce4d0, {0x25d9529ca000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d952786768 sp=0x25d9527866e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d9527867f0?, {0x25d9529ca000?, 0x25d9528428c0?, 0x25d952786808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d952786798 sp=0x25d952786768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d9528080c0, {0x25d9527cc2c8, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d9527867d0 sp=0x25d952786798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d9528080c0}, {0x25d9527cc2c8, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d952786818 sp=0x25d9527867d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc280, {0x1683d40, 0x25d95268c770})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d9527868e8 sp=0x25d952786818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d95281e440, {0x1683d40, 0x25d95268c770}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d952786970 sp=0x25d9527868e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d95268c770}, 0x0?, {0x1680fc0, 0x25d95281e440})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d9527869c8 sp=0x25d952786970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d952786a38 sp=0x25d9527869c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d952a94300}, 0x25d952786ac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d952786a78 sp=0x25d952786a38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d95268c770}, 0x25d952a94300, 0x25d952c13920, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d952786b10 sp=0x25d952786a78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d95281e500, {0x1683d40, 0x25d95268c770}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d952786b50 sp=0x25d952786b10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d95268c770}, 0x25d95281e500, {0x25d952c52150, 0x26, 0x10?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d952786c60 sp=0x25d952786b50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x25d95263f200?, {0x25d952c52150, 0x26, 0x25e}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d952786d98 sp=0x25d952786c60 pc=0xc8a0e5
+main.pipelineExec.func1(0xb, {0x25d952c52150, 0x26, 0x25e}, 0x25d95281e500)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d952786fa8 sp=0x25d952786d98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d952786fe0 sp=0x25d952786fa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952786fe8 sp=0x25d952786fe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 106 gp=0x25d95298dc20 m=nil [select]:
+runtime.gopark(0x25d9527af6b0?, 0x2?, 0x70?, 0x0?, 0x25d9527af64c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952d954e0 sp=0x25d952d954c0 pc=0x489e8e
+runtime.selectgo(0x25d952d956b0, 0x25d9527af648, 0x1e3fa20?, 0x0, 0x25d95298dc20?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952d95610 sp=0x25d952d954e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce580, {0x25d9529da000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d952d956e8 sp=0x25d952d95610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce580, {0x25d9529da000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d952d95768 sp=0x25d952d956e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d9527af7f0?, {0x25d9529da000?, 0x25d9528429a0?, 0x25d9527af808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d952d95798 sp=0x25d952d95768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d952808120, {0x25d9527cc368, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d952d957d0 sp=0x25d952d95798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d952808120}, {0x25d9527cc368, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d952d95818 sp=0x25d952d957d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc320, {0x1683d40, 0x25d9526843f0})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d952d958e8 sp=0x25d952d95818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d95281e600, {0x1683d40, 0x25d9526843f0}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d952d95970 sp=0x25d952d958e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d9526843f0}, 0x0?, {0x1680fc0, 0x25d95281e600})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d952d959c8 sp=0x25d952d95970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d952d95a38 sp=0x25d952d959c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d952a94380}, 0x25d9527afac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d952d95a78 sp=0x25d952d95a38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d9526843f0}, 0x25d952a94380, 0x25d952a880c0, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d952d95b10 sp=0x25d952d95a78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d95281e640, {0x1683d40, 0x25d9526843f0}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d952d95b50 sp=0x25d952d95b10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d9526843f0}, 0x25d95281e640, {0x25d952c52740, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d952d95c60 sp=0x25d952d95b50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c52740, 0x26, 0x238}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d952d95d98 sp=0x25d952d95c60 pc=0xc8a0e5
+main.pipelineExec.func1(0xc, {0x25d952c52740, 0x26, 0x238}, 0x25d95281e640)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d952d95fa8 sp=0x25d952d95d98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d952d95fe0 sp=0x25d952d95fa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952d95fe8 sp=0x25d952d95fe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 107 gp=0x25d9527b23c0 m=nil [select]:
+runtime.gopark(0x25d9527ae6b0?, 0x2?, 0x8?, 0xc4?, 0x25d9527ae64c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952c454e0 sp=0x25d952c454c0 pc=0x489e8e
+runtime.selectgo(0x25d952c456b0, 0x25d9527ae648, 0x1e3fa20?, 0x0, 0x25d9527b23c0?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952c45610 sp=0x25d952c454e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce630, {0x25d9529ea000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d952c456e8 sp=0x25d952c45610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce630, {0x25d9529ea000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d952c45768 sp=0x25d952c456e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d9527ae7f0?, {0x25d9529ea000?, 0x25d952842a80?, 0x25d9527ae808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d952c45798 sp=0x25d952c45768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d952808180, {0x25d9527cc408, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d952c457d0 sp=0x25d952c45798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d952808180}, {0x25d9527cc408, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d952c45818 sp=0x25d952c457d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc3c0, {0x1683d40, 0x25d952684310})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d952c458e8 sp=0x25d952c45818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d95281e6c0, {0x1683d40, 0x25d952684310}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d952c45970 sp=0x25d952c458e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d952684310}, 0x0?, {0x1680fc0, 0x25d95281e6c0})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d952c459c8 sp=0x25d952c45970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d952c45a38 sp=0x25d952c459c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d952a94400}, 0x25d9527aeac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d952c45a78 sp=0x25d952c45a38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d952684310}, 0x25d952a94400, 0x25d952a880a0, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d952c45b10 sp=0x25d952c45a78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d95281e700, {0x1683d40, 0x25d952684310}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d952c45b50 sp=0x25d952c45b10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d952684310}, 0x25d95281e700, {0x25d952c52d30, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d952c45c60 sp=0x25d952c45b50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c52d30, 0x26, 0x212}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d952c45d98 sp=0x25d952c45c60 pc=0xc8a0e5
+main.pipelineExec.func1(0xd, {0x25d952c52d30, 0x26, 0x212}, 0x25d95281e700)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d952c45fa8 sp=0x25d952c45d98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d952c45fe0 sp=0x25d952c45fa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952c45fe8 sp=0x25d952c45fe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+goroutine 108 gp=0x25d9527b2960 m=nil [select]:
+runtime.gopark(0x25d952cb46b0?, 0x2?, 0xe8?, 0xde?, 0x25d952cb464c?)
+	/home/benji/.gvm/1.26.0/go/src/runtime/proc.go:462 +0xce fp=0x25d952cc94e0 sp=0x25d952cc94c0 pc=0x489e8e
+runtime.selectgo(0x25d952cc96b0, 0x25d952cb4648, 0x1e3fa20?, 0x0, 0x25d9527b2960?, 0x1)
+	/home/benji/.gvm/1.26.0/go/src/runtime/select.go:351 +0xaa5 fp=0x25d952cc9610 sp=0x25d952cc94e0 pc=0x468645
+github.com/quic-go/quic-go.(*ReceiveStream).readImpl(0x25d9527ce6e0, {0x25d952a08000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:181 +0x447 fp=0x25d952cc96e8 sp=0x25d952cc9610 pc=0xa1b567
+github.com/quic-go/quic-go.(*ReceiveStream).Read(0x25d9527ce6e0, {0x25d952a08000, 0x10000, 0x10000})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/receive_stream.go:92 +0xd4 fp=0x25d952cc9768 sp=0x25d952cc96e8 pc=0xa1aef4
+github.com/quic-go/quic-go.(*Stream).Read(0x25d952cb47f0?, {0x25d952a08000?, 0x25d952842b60?, 0x25d952cb4808?})
+	/home/benji/go/pkg/mod/github.com/quic-go/quic-go@v0.59.0/stream.go:117 +0x1b fp=0x25d952cc9798 sp=0x25d952cc9768 pc=0xa29fbb
+bufio.(*Reader).Read(0x25d9528081e0, {0x25d9527cc7c8, 0x4, 0x41ed9e?})
+	/home/benji/.gvm/1.26.0/go/src/bufio/bufio.go:245 +0x197 fp=0x25d952cc97d0 sp=0x25d952cc9798 pc=0x633477
+io.ReadAtLeast({0x16788a0, 0x25d9528081e0}, {0x25d9527cc7c8, 0x4, 0x4}, 0x4)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:335 +0x8e fp=0x25d952cc9818 sp=0x25d952cc97d0 pc=0x4c3d6e
+io.ReadFull(...)
+	/home/benji/.gvm/1.26.0/go/src/io/io.go:354
+geodedb.com/geode.(*QUICTransport).ReceiveProto(0x25d9527cc780, {0x1683d40, 0x25d9526ac150})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/transport.go:259 +0x237 fp=0x25d952cc98e8 sp=0x25d952cc9818 pc=0xa514b7
+geodedb.com/geode.(*Conn).BeginTx(0x25d95281e780, {0x1683d40, 0x25d9526ac150}, {0xe0b120?, 0x60?})
+	/home/benji/go/pkg/mod/geodedb.com/geode@v0.1.19/conn.go:471 +0x1af fp=0x25d952cc9970 sp=0x25d952cc98e8 pc=0xa44e8f
+database/sql.ctxDriverBegin({0x1683d40, 0x25d9526ac150}, 0x0?, {0x1680fc0, 0x25d95281e780})
+	/home/benji/.gvm/1.26.0/go/src/database/sql/ctxutil.go:104 +0x77 fp=0x25d952cc99c8 sp=0x25d952cc9970 pc=0x981cd7
+database/sql.(*DB).beginDC.func1()
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1906 +0xae fp=0x25d952cc9a38 sp=0x25d952cc99c8 pc=0x989bce
+database/sql.withLock({0x167d9b8, 0x25d952a94480}, 0x25d952cb4ac8)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:3572 +0x71 fp=0x25d952cc9a78 sp=0x25d952cc9a38 pc=0x990c31
+database/sql.(*DB).beginDC(0x25d95272add0, {0x1683d40, 0x25d9526ac150}, 0x25d952a94480, 0x25d9524782c0, 0x427b25?)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:1902 +0xab fp=0x25d952cc9b10 sp=0x25d952cc9a78 pc=0x98990b
+database/sql.(*Conn).BeginTx(0x25d95281e840, {0x1683d40, 0x25d9526ac150}, 0x0)
+	/home/benji/.gvm/1.26.0/go/src/database/sql/sql.go:2115 +0x5f fp=0x25d952cc9b50 sp=0x25d952cc9b10 pc=0x98a75f
+main.batchExecTxOnConn({0x1683d40, 0x25d9526ac150}, 0x25d95281e840, {0x25d952c53320, 0x26, 0x0?})
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:308 +0x70 fp=0x25d952cc9c60 sp=0x25d952cc9b50 pc=0xc88990
+main.batchExecPinned({0x1683cd0, 0x25d95260ee10}, 0x25d9526aae00, 0x0?, {0x25d952c53320, 0x26, 0x1ec}, 0x25d952a88580)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:564 +0x1a5 fp=0x25d952cc9d98 sp=0x25d952cc9c60 pc=0xc8a0e5
+main.pipelineExec.func1(0xe, {0x25d952c53320, 0x26, 0x1ec}, 0x25d95281e840)
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:718 +0x151 fp=0x25d952cc9fa8 sp=0x25d952cc9d98 pc=0xc8b8b1
+main.pipelineExec.gowrap1()
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:749 +0x2c fp=0x25d952cc9fe0 sp=0x25d952cc9fa8 pc=0xc8b74c
+runtime.goexit({})
+	/home/benji/.gvm/1.26.0/go/src/runtime/asm_amd64.s:1771 +0x1 fp=0x25d952cc9fe8 sp=0x25d952cc9fe0 pc=0x4912e1
+created by main.pipelineExec in goroutine 1
+	/home/benji/src/devnw/go/msft/cmd/msft-graph/geodeutil.go:714 +0x686
+
+rax    0xca
+rbx    0x0
+rcx    0x492e23
+rdx    0x0
+rdi    0x1e412b8
+rsi    0x80
+rbp    0x7ffcbd150a38
+rsp    0x7ffcbd1509f0
+r8     0x0
+r9     0x0
+r10    0x0
+r11    0x286
+r12    0x25d9524f2008
+r13    0x1
+r14    0x1e401c0
+r15    0x7
+rip    0x492e21
+rflags 0x286
+cs     0x33
+fs     0x0
+gs     0x0
