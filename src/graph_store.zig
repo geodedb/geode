@@ -1836,11 +1836,28 @@ pub const GraphStore = struct {
     /// Returns `.found` with the node_id when a verified match exists,
     /// `.not_found` when the index is authoritative and no match exists,
     /// or `.not_indexable` when the key could not be built (caller must scan).
-    pub fn lookupMergeCandidate(self: *const GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+    pub fn lookupMergeCandidate(
+        self: *const GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: PropertyValue,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        // RCU fast path: probe the published snapshot without locks.
+        switch (self.lookupMergeCandidateSnapshot(graph_name, label, prop_key, prop_value, out_node_id)) {
+            .found => return .found,
+            .not_indexable => return .not_indexable,
+            .not_found => {}, // fall through
+        }
+
+        // Fall-through: locked live-map probe. Matches pre-RCU semantics
+        // exactly. Caller must hold the live-map lock as before (today
+        // that is `mg.rwlock` SHARED in the general path, or
+        // `merge_prop_index_lock` SHARED in the bulk-merge shard path).
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
         const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
-        // Verify node still exists (index could be stale after a failed delete)
         if (self.nodes.get(node_id)) |node| {
             if (std.mem.eql(u8, node.graph_name, graph_name)) {
                 out_node_id.* = node_id;
@@ -7726,4 +7743,51 @@ test "lookupMergeCandidateSnapshot rejects stale entry via strong-verify" {
     var out: u64 = 0;
     const r = store.lookupMergeCandidateSnapshot("default", "User", "name", .{ .String = "alice" }, &out);
     try std.testing.expectEqual(GraphStore.MergeLookupResult.not_found, r);
+}
+
+test "lookupMergeCandidate prefers snapshot when available" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    store.merge_prop_dirty_count.store(4096, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    var out: u64 = 0;
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate("default", "User", "name", .{ .String = "alice" }, &out));
+    try std.testing.expectEqual(node_id, out);
+}
+
+test "lookupMergeCandidate falls through on snapshot miss" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    // Create node AFTER publishing an empty snapshot. The snapshot is
+    // stale (does not know about this node), so the fall-through
+    // live-map path must find it.
+    store.merge_prop_dirty_count.store(4096, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    var out: u64 = 0;
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate("default", "User", "name", .{ .String = "alice" }, &out));
+    try std.testing.expectEqual(node_id, out);
+}
+
+test "lookupMergeCandidate behaves identically without snapshot" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    var out: u64 = 0;
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.found, store.lookupMergeCandidate("default", "User", "name", .{ .String = "alice" }, &out));
+    try std.testing.expectEqual(node_id, out);
+
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.not_found, store.lookupMergeCandidate("default", "User", "name", .{ .String = "bob" }, &out));
 }
