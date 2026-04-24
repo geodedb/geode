@@ -460,20 +460,44 @@ pub fn main() !void {
     }
 
     // Initialize AuditLogger.
-    // Security-graph mutations are audited by default; Debug builds may still opt out.
-    var audit_config = audit.AuditLogger.Config{ .enabled = true };
+    //
+    // 2026-04-24: the process-global audit logger is now opt-in
+    // (`enabled = false` by default).  Security-graph mutations are
+    // audited via a per-graph logger wired in
+    // `graph_storage_adapter.initAuditForGraph`, triggered only when
+    // the `__geode_security` graph is created.  The process-global
+    // logger was never consumed by the mutation hot path — only
+    // `setGlobalAuditLogger` writes it, and no code site reads it back
+    // (grep confirms zero `getGlobalAuditLogger` callers in src/ and
+    // tests/).  Turning the default off saves the keypair file
+    // creation in every data dir and the "Set GEODE_AUDIT_PUB/SEC"
+    // startup warning for operators who never configured audit.  See
+    // `docs/performance/2026-04-24-sharding/AUDIT-PERF-TRIAGE.md`.
+    //
+    // Operators who want the process-global logger (e.g. for a future
+    // hook into non-security-graph audit) can opt in via
+    // `GEODE_AUDIT_ENABLED=1`.  The legacy `GEODE_DISABLE_AUDIT=1`
+    // flag is preserved as a no-op for backward compatibility.
+    var audit_config = audit.AuditLogger.Config{ .enabled = false };
 
-    // Check for audit disable flag — only allowed in Debug builds.
+    const audit_enable_env = getEnvVarOwned(gpa, "GEODE_AUDIT_ENABLED") catch null;
+    defer if (audit_enable_env) |d| gpa.free(d);
+    if (audit_enable_env) |d| {
+        if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
+            audit_config.enabled = true;
+            log.info("Process-global audit logger enabled via GEODE_AUDIT_ENABLED", &.{});
+        }
+    }
+
+    // Legacy GEODE_DISABLE_AUDIT — kept for backward compat; a no-op
+    // now that the default is already disabled, but honoured if
+    // someone explicitly enabled via GEODE_AUDIT_ENABLED above.
     const audit_disable_env = getEnvVarOwned(gpa, "GEODE_DISABLE_AUDIT") catch null;
     defer if (audit_disable_env) |d| gpa.free(d);
     if (audit_disable_env) |d| {
         if (std.mem.eql(u8, d, "1") or std.mem.eql(u8, d, "true")) {
-            if (builtin.mode == .Debug) {
-                audit_config.enabled = false;
-                log.warn("Audit logging disabled via GEODE_DISABLE_AUDIT (Debug build only)", &.{});
-            } else {
-                log.warn("GEODE_DISABLE_AUDIT ignored outside Debug builds", &.{});
-            }
+            audit_config.enabled = false;
+            log.info("Process-global audit logger disabled via GEODE_DISABLE_AUDIT", &.{});
         }
     }
 

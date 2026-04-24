@@ -438,6 +438,14 @@ pub const AuditLogger = struct {
     }
 
     pub fn appendAuditEvent(self: *AuditLogger, ev: *AuditEvent) !void {
+        // Defense-in-depth: short-circuit when auditing is disabled so no
+        // mutex acquire, no hash chain work, no fsync happen on a logger
+        // whose init skipped file creation anyway.  Matches the gate in
+        // `logEvent` (line 544).  Callers already check
+        // `resolveAuditLogger` (`src/server/quic_connection_handler.zig:
+        // 2140-2163`) which returns null for non-security graphs in the
+        // default config, but this gate makes the invariant local.
+        if (!self.config.enabled) return;
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         try self.appendEventLocked(ev);
