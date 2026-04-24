@@ -154,6 +154,11 @@ pub const PropertyValue = union(enum) {
     Decimal: struct { coeff: i128, scale: u8 },
 };
 
+/// Number of live-map mutations since last publish before a writer will
+/// attempt a snapshot rebuild. Chosen to amortise rebuild cost at ~1ms
+/// per 1000 entries (empirical, see Task 9 bench).
+pub const MERGE_PROP_PUBLISH_THRESHOLD: u32 = 1024;
+
 // CANARY: REQ=REQ-GQL-PATH-UTIL-001; FEATURE="GraphStorePathOps"; ASPECT=Traversal; STATUS=IMPL; TEST=tests/integration/test_variable_paths.zig; OWNER=engine; UPDATED=2026-02-03
 pub const PathOptions = struct {
     min_length: ?u32 = null,
@@ -470,6 +475,23 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: std.StringHashMap(u64),
+    /// RCU snapshot pointer for lock-free merge-prop lookups. Published
+    /// by writers via `publishMergePropSnapshotIfDirty`; consumed by
+    /// `lookupMergeCandidate` without any lock acquisition.
+    ///
+    /// See docs/superpowers/plans/2026-04-24-lock-free-merge-prop-index-snapshot.md.
+    merge_prop_snapshot: std.atomic.Value(?*@import("graph_store_merge_snapshot.zig").MergePropSnapshot) =
+        std.atomic.Value(?*@import("graph_store_merge_snapshot.zig").MergePropSnapshot).init(null),
+    /// Writes since last snapshot publish. Publishers rebuild when this
+    /// exceeds `MERGE_PROP_PUBLISH_THRESHOLD`.
+    merge_prop_dirty_count: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// CAS-based publisher lock — a would-be publisher flips this
+    /// false→true to claim the rebuild; losers see true and skip.
+    /// The project uses `std.Io.Mutex` for most locks, but
+    /// `std.Io.Mutex` has no non-blocking tryLock, so we use an
+    /// atomic flag here to preserve the "publishers never block each
+    /// other" semantic.
+    merge_prop_rebuild_in_progress: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-001; FEATURE="EdgeTypeIndex"; ASPECT=EdgeTypeLookup; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
     // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
@@ -548,6 +570,10 @@ pub const GraphStore = struct {
     }
 
     pub fn deinit(self: *GraphStore) void {
+        // Release any published snapshot before tearing the map down.
+        if (self.merge_prop_snapshot.swap(null, .acq_rel)) |snap| {
+            snap.release();
+        }
         // Clear nodes and edges (which also frees memory)
         self.clearNodes();
         // Deinit the hashmaps
@@ -690,6 +716,10 @@ pub const GraphStore = struct {
         }
         self.merge_prop_index.deinit();
         self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+        if (self.merge_prop_snapshot.swap(null, .acq_rel)) |snap| {
+            snap.release();
+        }
+        self.merge_prop_dirty_count.store(0, .monotonic);
 
         // PERF-P0-001: Reset edge-type index
         var eti_iter = self.edge_type_index.iterator();
@@ -1906,6 +1936,10 @@ pub const GraphStore = struct {
         }
         self.merge_prop_index.deinit();
         self.merge_prop_index = std.StringHashMap(u64).init(self.allocator);
+        if (self.merge_prop_snapshot.swap(null, .acq_rel)) |snap| {
+            snap.release();
+        }
+        self.merge_prop_dirty_count.store(0, .monotonic);
 
         // PERF-P0-001: Reset edge-type index
         var eti_iter = self.edge_type_index.iterator();
@@ -7379,4 +7413,26 @@ test "PERF-P0-001: edge-type index posting list is sorted ascending" {
     for (1..chain_ids.?.len) |i| {
         try testing.expect(chain_ids.?[i] > chain_ids.?[i - 1]);
     }
+}
+
+test "GraphStore snapshot fields initialise to null/zero" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    try std.testing.expect(store.merge_prop_snapshot.load(.monotonic) == null);
+    try std.testing.expectEqual(@as(u32, 0), store.merge_prop_dirty_count.load(.monotonic));
+}
+
+test "GraphStore.clearNodes drops snapshot" {
+    const merge_snapshot = @import("graph_store_merge_snapshot.zig");
+
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const snap = try merge_snapshot.MergePropSnapshot.create(std.testing.allocator);
+    store.merge_prop_snapshot.store(snap, .release);
+
+    store.clearNodes();
+
+    try std.testing.expect(store.merge_prop_snapshot.load(.monotonic) == null);
 }
