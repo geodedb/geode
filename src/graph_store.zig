@@ -1850,6 +1850,39 @@ pub const GraphStore = struct {
         return .not_found;
     }
 
+    /// Lock-free RCU snapshot probe. Returns `.found` only if a
+    /// snapshot exists AND it contains the probe key AND strong-verify
+    /// succeeds against the live `nodes` map.
+    ///
+    /// Returns `.not_found` in every other case (null snapshot, miss,
+    /// stale entry, non-indexable probe). Callers that need the
+    /// strict "index is authoritative" semantic from
+    /// `lookupMergeCandidate` must fall back on this method's
+    /// `.not_found` to the locked live-map lookup.
+    pub fn lookupMergeCandidateSnapshot(
+        self: *const GraphStore,
+        graph_name: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+        prop_value: PropertyValue,
+        out_node_id: *u64,
+    ) MergeLookupResult {
+        var buf: [1024]u8 = undefined;
+        const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
+
+        const snap_raw = self.merge_prop_snapshot.load(.acquire) orelse return .not_found;
+        // Pin the snapshot for the duration of this call.
+        const snap = snap_raw.acquire();
+        defer snap.release();
+
+        const node_id = snap.map.get(probe) orelse return .not_found;
+        if (!self.verifyMergeCandidate(node_id, graph_name, label, prop_key, prop_value)) {
+            return .not_found;
+        }
+        out_node_id.* = node_id;
+        return .found;
+    }
+
     // CANARY: REQ=REQ-PERF-LABEL-INDEX-003; FEATURE="LabelBasedIndex"; ASPECT=NodeLookup; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-23
     // Issue #391: Get nodes by label and graph (O(1) lookup instead of O(n) scan)
     //
@@ -7648,4 +7681,49 @@ test "verifyMergeCandidate rejects wrong graph" {
 
     const ok = store.verifyMergeCandidate(node_id, "other_graph", "User", "name", .{ .String = "alice" });
     try std.testing.expect(!ok);
+}
+
+test "lookupMergeCandidateSnapshot hits published snapshot" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    // Force a publish.
+    store.merge_prop_dirty_count.store(4096, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    var out: u64 = 0;
+    const r = store.lookupMergeCandidateSnapshot("default", "User", "name", .{ .String = "alice" }, &out);
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.found, r);
+    try std.testing.expectEqual(node_id, out);
+}
+
+test "lookupMergeCandidateSnapshot returns not_found on null snapshot" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    var out: u64 = 0;
+    const r = store.lookupMergeCandidateSnapshot("default", "User", "name", .{ .String = "alice" }, &out);
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.not_found, r);
+}
+
+test "lookupMergeCandidateSnapshot rejects stale entry via strong-verify" {
+    var store = try GraphStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    const node_id = try store.createNode(&.{"User"});
+    try store.setNodeProperty(node_id, "name", .{ .String = "alice" });
+
+    store.merge_prop_dirty_count.store(4096, .monotonic);
+    store.publishMergePropSnapshotIfDirty(MERGE_PROP_PUBLISH_THRESHOLD);
+
+    // Mutate live map: change the property to a new value. Snapshot still
+    // holds the old (alice → node_id) entry.
+    try store.setNodeProperty(node_id, "name", .{ .String = "bob" });
+
+    var out: u64 = 0;
+    const r = store.lookupMergeCandidateSnapshot("default", "User", "name", .{ .String = "alice" }, &out);
+    try std.testing.expectEqual(GraphStore.MergeLookupResult.not_found, r);
 }
