@@ -777,6 +777,9 @@ pub fn build(b: *std.Build) void {
     graph_store_mod.addImport("rtree_lib", rtree_ext_mod);
     graph_store_mod.addImport("hnsw_lib", hnsw_ext_mod);
     graph_store_mod.addImport("transport/thread_pool", thread_pool_mod);
+    // group_commit.zig (transitively imported from graph_store.zig) needs
+    // the external thread-pool library for its blocking-lane flusher.
+    graph_store_mod.addImport("thread_pool", thread_pool_ext_mod);
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     graph_algo_tests.root_module.link_libc = true;
@@ -979,6 +982,7 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("rtree_lib", rtree_ext_mod);
     graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
     graph_store_unit_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
+    graph_store_unit_tests.root_module.addImport("thread_pool", thread_pool_ext_mod);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 
@@ -2314,6 +2318,7 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("rtree_lib", rtree_ext_mod);
     merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
     merge_bench_gs_mod.addImport("transport/thread_pool", thread_pool_mod);
+    merge_bench_gs_mod.addImport("thread_pool", thread_pool_ext_mod);
     const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
     merge_throughput_bench.root_module.addImport("graph_store", merge_bench_gs_mod);
     merge_throughput_bench.root_module.link_libc = true;

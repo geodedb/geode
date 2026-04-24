@@ -598,19 +598,33 @@ pub fn shutdownAllCoordinators() void {
     }
 }
 
-/// Returns true when `GEODE_GROUP_COMMIT` is set to a truthy value.
+/// Returns true unless `GEODE_GROUP_COMMIT` is explicitly set to a
+/// falsy value (`0`, `false`, `no`, `off`).  The coordinator is the
+/// architectural default post-Phase 2.3 — the single-phase fallback
+/// lives on only for legacy tests and operators who need to disable
+/// batching for forensic comparison.
+///
+/// Default-on rationale: the single-phase path's two-phase lock
+/// (SHARED endpoint lookup → EXCLUSIVE write) is the known source of
+/// `40001: Write lock acquisition timed out` cascades under the
+/// 16-worker msft-graph ingest workload.  Routing all writes through
+/// the coordinator eliminates that class of failure — the coordinator
+/// holds EXCLUSIVE itself, drains the batch under `lockUncancelable`
+/// (writer-preferred, deadline-free), and returns errors per-op
+/// rather than tripping a whole-file cascade.
 pub fn isEnabled() bool {
     if (cached_enabled) |v| return v;
     const val_z = std.c.getenv("GEODE_GROUP_COMMIT") orelse {
-        cached_enabled = false;
-        return false;
+        cached_enabled = true;
+        return true;
     };
     const val = std.mem.span(val_z);
-    const on = std.mem.eql(u8, val, "1") or
-        std.mem.eql(u8, val, "true") or
-        std.mem.eql(u8, val, "yes");
-    cached_enabled = on;
-    return on;
+    const off = std.mem.eql(u8, val, "0") or
+        std.mem.eql(u8, val, "false") or
+        std.mem.eql(u8, val, "no") or
+        std.mem.eql(u8, val, "off");
+    cached_enabled = !off;
+    return !off;
 }
 
 /// Test / bench hook: force the feature on/off regardless of the env var.
