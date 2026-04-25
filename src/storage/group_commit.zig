@@ -139,11 +139,10 @@ const ShardState = struct {
     batches: std.atomic.Value(u64),
 };
 
-/// Thread-local flag set while a ShardedCoordinator worker is executing
-/// its shard loop. Consumed by `transactions/manager.zig:hasWriteWriteConflicts`
-/// (Debug builds only) to detect routing-bug-driven write-write
-/// collisions. Non-worker threads leave this at its default (false).
-pub threadlocal var t_is_shard_worker: bool = false;
+/// Thread-local flag set/cleared by shardLoop. Declared in the standalone
+/// shard_worker_tls.zig leaf so transactions/manager.zig can import it as a
+/// named build module without pulling in group_commit's full dependency graph.
+const shard_worker_tls = @import("shard_worker_tls");
 
 /// 16-way sharded coordinator. `SHARD_COUNT` worker tasks drain their
 /// own queues in parallel under the shard-locked write protocol.
@@ -299,8 +298,8 @@ pub const ShardedCoordinator = struct {
     }
 
     fn shardLoop(self: *ShardedCoordinator, shard_idx: usize) void {
-        t_is_shard_worker = true;
-        defer t_is_shard_worker = false;
+        shard_worker_tls.t_is_shard_worker = true;
+        defer shard_worker_tls.t_is_shard_worker = false;
 
         const io = std.Io.Threaded.global_single_threaded.io();
         const s = &self.shards[shard_idx];

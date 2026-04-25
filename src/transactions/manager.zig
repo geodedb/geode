@@ -206,6 +206,18 @@ pub const Manager = struct {
         }
         // Check for write-write conflicts before committing
         if (try self.hasWriteWriteConflicts(txn.id)) {
+            if (@import("builtin").mode == .Debug) {
+                const shard_worker_tls = @import("shard_worker_tls");
+                if (shard_worker_tls.t_is_shard_worker) {
+                    std.debug.panic(
+                        "write-write conflict under ShardedCoordinator routing — " ++
+                            "the routing contract (same source_id → same shard → same thread) " ++
+                            "has been violated. See " ++
+                            "docs/superpowers/specs/2026-04-25-sharded-coordinator-restoration-design.md",
+                        .{},
+                    );
+                }
+            }
             return error.SerializationFailure;
         }
 
