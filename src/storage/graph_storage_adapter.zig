@@ -59,6 +59,12 @@ pub fn getLabelScanLookupCount() u64 {
 const NodePropertyExactIndex = struct {
     allocator: Allocator,
     postings: std.StringHashMap(std.ArrayList(u64)),
+    /// Guards `postings` against concurrent mutation by ShardedCoordinator
+    /// workers. Write paths (add / remove) hold EXCLUSIVE; reads via `get`
+    /// also lock briefly to read the slice header consistently. Held only
+    /// for the StringHashMap operation itself — not across `setNodeProperty`
+    /// or any caller-side work — so contention is microsecond-bounded.
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     fn init(allocator: Allocator) NodePropertyExactIndex {
         return .{
@@ -77,6 +83,10 @@ const NodePropertyExactIndex = struct {
     }
 
     fn clear(self: *NodePropertyExactIndex) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         var it = self.postings.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -86,6 +96,10 @@ const NodePropertyExactIndex = struct {
     }
 
     fn add(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         const probe_key = try self.encodeKey(label_id, property_key, value_hash);
         defer self.allocator.free(probe_key);
 
@@ -110,6 +124,10 @@ const NodePropertyExactIndex = struct {
     }
 
     fn remove(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64, node_id: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return;
         defer self.allocator.free(probe_key);
 
@@ -131,7 +149,11 @@ const NodePropertyExactIndex = struct {
         }
     }
 
-    fn get(self: *const NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u64 {
+    fn get(self: *NodePropertyExactIndex, label_id: gs.LabelId, property_key: []const u8, value_hash: u64) ?[]const u64 {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         const probe_key = self.encodeKey(label_id, property_key, value_hash) catch return null;
         defer self.allocator.free(probe_key);
 
@@ -153,7 +175,11 @@ const NodePropertyExactIndex = struct {
 
     /// Persist the index to `prop_exact.idx` inside `graph_dir_path`.
     /// Non-fatal: callers should catch and log warnings.
-    fn saveToFile(self: *const NodePropertyExactIndex, graph_dir_path: []const u8) !void {
+    fn saveToFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         const idx_path = try self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len);
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
@@ -197,6 +223,10 @@ const NodePropertyExactIndex = struct {
     /// Returns true on success, false if file is missing, corrupt, or unreadable
     /// (caller should fall back to full rebuild).
     fn loadFromFile(self: *NodePropertyExactIndex, graph_dir_path: []const u8) bool {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+
         const idx_path = self.allocator.alloc(u8, graph_dir_path.len + "/prop_exact.idx".len) catch return false;
         defer self.allocator.free(idx_path);
         @memcpy(idx_path[0..graph_dir_path.len], graph_dir_path);
