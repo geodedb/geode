@@ -10,6 +10,7 @@ const graph_storage = @import("graph_storage");
 const adapter_mod = geode.graph_storage_adapter;
 const group_commit = geode.group_commit;
 
+// CANARY: REQ=REQ-PERF-SHARD-COORD-ROUTING; FEATURE="ShardedCoordinatorRouting"; ASPECT=RoutingCorrectness; STATUS=TESTED; TEST=tests/test_sharded_coordinator_routing.zig; OWNER=perf; UPDATED=2026-04-25
 test "ShardedCoordinator routes ops by shardIndex(shardKey)" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
