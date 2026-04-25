@@ -483,10 +483,10 @@ fn shouldExposePropertyKey(key: []const u8) bool {
 // ManagedGraph — one engine instance + its label dictionary
 // ============================================================================
 
-/// Wraps a single `GraphEngine` together with its label dictionary and
+/// Wraps a single `ShardedGraphEngine` together with its label dictionary and
 /// metadata.  Owned by (and keyed inside) the `StorageAdapter`.
 pub const ManagedGraph = struct {
-    engine: *gs.GraphEngine,
+    engine: *gs.ShardedGraphEngine,
     label_dict: LabelStringDict,
     exact_node_property_index: NodePropertyExactIndex,
     name: []const u8, // owned
@@ -551,7 +551,13 @@ pub const ManagedGraph = struct {
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
     pub fn storage(self: *ManagedGraph) gs.GraphStorage {
-        return gs.GraphStorage.init(gs.GraphEngine, self.engine);
+        return self.engine.storage();
+    }
+
+    /// Return the per-shard `GraphEngine` that owns `node_id`. Cheap: just
+    /// an index into the shard array.
+    pub fn shardEngineForNode(self: *ManagedGraph, node_id: u64) *gs.GraphEngine {
+        return self.engine.shards[gs.shard_count.shardOfNode(node_id)];
     }
 
     fn deinit(self: *ManagedGraph, allocator: Allocator) void {
@@ -586,6 +592,54 @@ pub const ManagedGraph = struct {
         allocator.destroy(self);
     }
 };
+
+// ============================================================================
+// ShardedGraphEngine TxnId encoding helpers (mirrors sharded_engine.zig internals).
+//
+// ShardedGraphEngine encodes the shard index in the high 8 bits of TxnId so
+// commitTxn/abortTxn can route back to the right per-shard engine.  These
+// helpers replicate that layout so graph_storage_adapter.zig can decode a
+// statement-txn id to determine whether a given node_id resides on the same
+// shard and can therefore share the existing local txn.
+//
+// Layout (matches sharded_engine.zig):
+//   bits [63:56] = shard_index  (high 8 bits)
+//   bits [55:0]  = per-shard local TxnId
+// ============================================================================
+
+const SHARDED_TXN_SHARD_SHIFT: u6 = 56;
+const SHARDED_TXN_LOCAL_MASK: u64 = (@as(u64, 1) << 56) - 1;
+
+/// Extract the shard index from a ShardedGraphEngine-encoded TxnId.
+fn shardedTxnShard(txn: gs.TxnId) usize {
+    return @as(usize, @intCast(txn >> SHARDED_TXN_SHARD_SHIFT));
+}
+
+/// Extract the per-shard local TxnId from a ShardedGraphEngine-encoded TxnId.
+fn shardedTxnLocal(txn: gs.TxnId) gs.TxnId {
+    return txn & SHARDED_TXN_LOCAL_MASK;
+}
+
+/// Encode a shard index and per-shard local TxnId back into the
+/// ShardedGraphEngine's wire format.  Used by beginStatementTxnForShard so the
+/// resulting txn_id round-trips through commitTxn / abortTxn correctly.
+fn encodeShardedTxn(shard_idx: usize, local: gs.TxnId) gs.TxnId {
+    return (@as(gs.TxnId, @intCast(shard_idx)) << SHARDED_TXN_SHARD_SHIFT) | (local & SHARDED_TXN_LOCAL_MASK);
+}
+
+/// Return the per-shard engine TxnId to use for an operation on `node_id`
+/// given an outer `stmt_txn_id` opened via `ShardedGraphEngine.beginTxn()`.
+///
+/// If the statement txn was opened on the same shard that owns `node_id`,
+/// return the decoded local txn (batching all ops in the same fsync).
+/// Otherwise return null — the caller should open a fresh local txn on the
+/// node's shard.
+fn shardLocalTxnForNode(stmt_txn_id: gs.TxnId, node_id: u64) ?gs.TxnId {
+    const txn_shard = shardedTxnShard(stmt_txn_id);
+    const node_shard = gs.shard_count.shardOfNode(node_id);
+    if (txn_shard != node_shard) return null;
+    return shardedTxnLocal(stmt_txn_id);
+}
 
 fn addIndexedNodeProperty(mg: *ManagedGraph, label_id: gs.LabelId, node_id: u64, property_key: []const u8, value: gs.PropertyValue) !void {
     const value_hash = try hashStorageProperty(mg.engine.allocator, value);
@@ -649,7 +703,8 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
             if (self.err != null) return;
             if (rec.label_head == 0 or rec.prop_head == 0) return;
 
-            const label_ids = self.mg.engine.label_store.getLabels(rec.label_head, self.mg.engine.allocator) catch |err| {
+            const shard = self.mg.shardEngineForNode(node_id);
+            const label_ids = shard.label_store.getLabels(rec.label_head, self.mg.engine.allocator) catch |err| {
                 self.err = err;
                 return;
             };
@@ -661,9 +716,15 @@ fn rebuildExactNodePropertyIndex(mg: *ManagedGraph) !void {
         }
     };
 
+    // Scan all shards sequentially; each shard owns nodes with ids
+    // satisfying shardOfNode(id) == shard_idx.
     var ctx = Ctx{ .mg = mg };
-    try mg.engine.node_store.scanNodes(mg.engine.manifest.next_node_id, &ctx, Ctx.callback);
-    if (ctx.err) |err| return err;
+    for (mg.engine.shards) |shard| {
+        shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, Ctx.callback) catch |err| {
+            return err;
+        };
+        if (ctx.err) |err| return err;
+    }
 }
 
 // ============================================================================
@@ -1050,13 +1111,25 @@ pub const StorageAdapter = struct {
         // putProperty) each call `txn_manager.begin()` + `commit()`, and
         // `commit()` always ends with `wal.sync()` (fsync) — see
         // `graph_storage/src/txn.zig:67-85`.
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
-        errdefer if (stmt_txn == null) {
-            mg.engine.abortTxn(txn) catch {};
-        };
-
         const node_id = try mg.engine.allocNode();
+        const node_shard = mg.shardEngineForNode(node_id);
+
+        // R7/R8 (2026-04-22): batch putNode + addLabel into a single per-shard
+        // txn.  Under ShardedGraphEngine, each txn is pinned to one shard; we
+        // always route to the shard that owns node_id.  If a statement txn is
+        // active on this graph AND was opened on the same shard, reuse its
+        // local txn (one fsync for the whole statement).  Otherwise open a
+        // fresh local txn on node_shard (correct isolation, one fsync per
+        // createNode call instead of per sub-op).
+        const stmt_txn = currentStatementTxnForGraph(graph_name);
+        const local_txn: gs.TxnId = if (stmt_txn) |s|
+            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
+        else
+            try node_shard.beginTxn();
+        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        errdefer if (own_txn) {
+            node_shard.abortTxn(local_txn) catch {};
+        };
 
         // Write an initial node record.  The txn_stamp must be non-zero so
         // that getNode() does not treat the slot as empty (isEmpty checks all
@@ -1071,16 +1144,16 @@ pub const StorageAdapter = struct {
             ._pad = .{ 0, 0, 0, 0 },
             .txn_stamp = 1,
         };
-        try mg.engine.putNodeTxn(node_id, rec, txn);
+        try node_shard.putNodeTxn(node_id, rec, local_txn);
 
         // Attach each label via the engine (updates label blocks in var.store
         // and the label index).
         for (labels) |lbl| {
             const label_id = try mg.label_dict.getOrCreate(lbl);
-            try mg.engine.addLabelTxn(node_id, label_id, txn);
+            try node_shard.addLabelTxn(node_id, label_id, local_txn);
         }
 
-        if (stmt_txn == null) try mg.engine.commitTxn(txn);
+        if (own_txn) try node_shard.commitTxn(local_txn);
         return node_id;
     }
 
@@ -1849,26 +1922,36 @@ pub const StorageAdapter = struct {
         const out = try out_allocator.alloc(u64, n);
         errdefer out_allocator.free(out);
 
-        // R7 (2026-04-22): collapse N × (1 + L) fsyncs (one per putNode and
-        // one per addLabel) into ONE fsync for the full batch.  This is the
-        // whole reason `createNodesBatch` exists — to amortise per-slot
-        // overhead over a single transaction.  Previously each of the
-        // N × (1 + L) auto-commits did its own `wal.sync()`, so the
-        // "batch" was only amortising the mutex + graph-lookup costs.
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
+        // R7 (2026-04-22): batch across N nodes.  Under ShardedGraphEngine,
+        // nodes are distributed across SHARD_COUNT shards (round-robin by the
+        // coordinator_txn_counter).  Open one local txn per shard and commit
+        // all at the end — still one fsync per shard, far fewer fsyncs than
+        // the per-node auto-commit path.  Shards with no nodes in this batch
+        // are skipped.
+        const shard_count = gs.sharded_engine.SHARD_COUNT;
+        var shard_txns: [shard_count]?gs.TxnId = [_]?gs.TxnId{null} ** shard_count;
+        errdefer for (mg.engine.shards, 0..) |shard, si| {
+            if (shard_txns[si]) |t| shard.abortTxn(t) catch {};
+        };
 
         var i: usize = 0;
         while (i < n) : (i += 1) {
             const node_id = try mg.engine.allocNode();
-            try mg.engine.putNodeTxn(node_id, rec_template, txn);
+            const si = gs.shard_count.shardOfNode(node_id);
+            const node_shard = mg.engine.shards[si];
+            if (shard_txns[si] == null) shard_txns[si] = try node_shard.beginTxn();
+            const local_txn = shard_txns[si].?;
+            try node_shard.putNodeTxn(node_id, rec_template, local_txn);
             for (label_ids) |label_id| {
-                try mg.engine.addLabelTxn(node_id, label_id, txn);
+                try node_shard.addLabelTxn(node_id, label_id, local_txn);
             }
             out[i] = node_id;
         }
 
-        try mg.engine.commitTxn(txn);
+        for (mg.engine.shards, 0..) |shard, si| {
+            if (shard_txns[si]) |t| try shard.commitTxn(t);
+            shard_txns[si] = null;
+        }
         return out;
     }
 
@@ -1881,20 +1964,20 @@ pub const StorageAdapter = struct {
         };
 
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
-        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        const shard = mg.shardEngineForNode(node_id);
+        const label_ids = try shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
         removeNodePropertiesForLabels(mg, node_id, label_ids, rec.prop_head);
 
         // R7 (2026-04-22): wrap the engine deleteNode call in an explicit
-        // transaction — same fsync batching rationale as createNode.  For
-        // deleteNode specifically there is only one engine sub-op, so the
-        // saving is minimal, but using the `*Txn` variant keeps the code
-        // path consistent with the other adapter methods and future-proofs
-        // any follow-up that adds per-property tombstones.
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
-        try mg.engine.deleteNodeTxn(node_id, txn);
-        try mg.engine.commitTxn(txn);
+        // transaction — same fsync batching rationale as createNode.  Route
+        // directly to the shard that owns node_id so the txn and the data
+        // mutation are on the same single-threaded engine (ShardedGraphEngine
+        // migration: Task 7).
+        const txn = try shard.beginTxn();
+        errdefer shard.abortTxn(txn) catch {};
+        try shard.deleteNodeTxn(node_id, txn);
+        try shard.commitTxn(txn);
     }
 
     /// Retrieve the string labels for a node. Caller owns the returned
@@ -1907,9 +1990,9 @@ pub const StorageAdapter = struct {
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
-        // Retrieve label IDs from the engine's LabelStore (variable-length
-        // label blocks stored in var.store).
-        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, allocator);
+        // Retrieve label IDs from the per-shard engine's LabelStore.
+        const shard = mg.shardEngineForNode(node_id);
+        const label_ids = try shard.label_store.getLabels(rec.label_head, allocator);
         defer allocator.free(label_ids);
 
         var result: std.ArrayList([]const u8) = .empty;
@@ -1942,9 +2025,13 @@ pub const StorageAdapter = struct {
         // engine's `addEdge` auto-commit variant costs ~10 ms on SSD —
         // dominant in workloads with thousands of edges per batch (msft-
         // graph edges_signed_in_to / located_at have 8K+ rows each).
+        // R10: join the active statement/session txn if it is on the same shard
+        // as from_id (edge txns are pinned to the source-node's shard).
         const stmt_txn = currentStatementTxnForGraph(graph_name);
         if (stmt_txn) |s| {
-            return mg.engine.addEdgeTxn(from_id, to_id, rel_type, s.txn_id);
+            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
+                return mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+            }
         }
         return mg.engine.addEdge(from_id, to_id, rel_type);
     }
@@ -1956,11 +2043,12 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        // R10 (2026-04-22): join active session/statement engine txn when
-        // present — keeps DELETE ... edge batches at one fsync per batch.
+        // R10: join active session/statement engine txn if on the same shard.
         if (currentStatementTxnForGraph(graph_name)) |s| {
-            try mg.engine.removeEdgeTxn(from_id, to_id, edge_id, s.txn_id);
-            return;
+            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
+                try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
+                return;
+            }
         }
         try mg.engine.removeEdge(from_id, to_id, edge_id);
     }
@@ -2043,7 +2131,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
-        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        const node_shard = mg.shardEngineForNode(node_id);
+        const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
         const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
@@ -2060,25 +2149,26 @@ pub const StorageAdapter = struct {
             }
         }
 
-        // R7 (2026-04-22): batch putProperty + putNode into one txn — see
-        // `createNode` for the fsync rationale.
-        //
-        // R8 (2026-04-22): join the current thread's StatementTxn when
-        // one is active on this graph, so the whole GQL statement
-        // commits with a single fsync.
+        // R7/R8 (2026-04-22): batch putProperty + putNode into one txn on the
+        // node's shard. Join the statement txn's local txn if it is on the
+        // same shard; otherwise open a fresh shard-local txn.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
-        errdefer if (stmt_txn == null) {
-            mg.engine.abortTxn(txn) catch {};
+        const local_txn: gs.TxnId = if (stmt_txn) |s|
+            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
+        else
+            try node_shard.beginTxn();
+        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        errdefer if (own_txn) {
+            node_shard.abortTxn(local_txn) catch {};
         };
 
-        const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, key, storage_val, txn);
+        const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, storage_val, local_txn);
 
         // Update the node record with the (possibly changed) prop_head.
         rec.prop_head = new_prop_head;
-        try mg.engine.putNodeTxn(node_id, rec, txn);
+        try node_shard.putNodeTxn(node_id, rec, local_txn);
 
-        if (stmt_txn == null) try mg.engine.commitTxn(txn);
+        if (own_txn) try node_shard.commitTxn(local_txn);
 
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, storage_val);
@@ -2103,28 +2193,19 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
-        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        const node_shard = mg.shardEngineForNode(node_id);
+        const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
-        // R7 (2026-04-22): wrap the full N-property batch in ONE engine
-        // transaction so the entire batch incurs a single WAL fsync instead
-        // of one per property.  Caller invokes this specifically to amortise
-        // per-property overhead, so collapsing N fsyncs → 1 fsync is the
-        // whole point.
-        //
-        // R8-parity (2026-04-24, Task #33): join the current thread's
-        // StatementTxn when one is active on this graph, mirroring the
-        // logic in `setNodeProperty` at line 1981.  Without this, calling
-        // `setNodePropertiesBatch` from inside a bulk-ingest code path
-        // (e.g. `bulkInsertNode`) would open a separate engine txn and
-        // commit with its own fsync, negating the whole-statement
-        // one-fsync-per-batch design.  The new bulk-insert wiring
-        // (`bulkInsertNode`'s batch-path switch in the same commit)
-        // makes this join load-bearing.
+        // R7/R8: one txn on the node's shard covering the full N-property batch.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
-        errdefer if (stmt_txn == null) {
-            mg.engine.abortTxn(txn) catch {};
+        const local_txn: gs.TxnId = if (stmt_txn) |s|
+            shardLocalTxnForNode(s.txn_id, node_id) orelse try node_shard.beginTxn()
+        else
+            try node_shard.beginTxn();
+        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, node_id) == null;
+        errdefer if (own_txn) {
+            node_shard.abortTxn(local_txn) catch {};
         };
 
         for (entries) |entry| {
@@ -2141,7 +2222,7 @@ pub const StorageAdapter = struct {
                         removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
                     }
                 }
-                const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, entry.key, storage_val, txn);
+                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, entry.key, storage_val, local_txn);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     try addIndexedNodeProperty(mg, label_id, node_id, entry.key, storage_val);
@@ -2152,7 +2233,7 @@ pub const StorageAdapter = struct {
                         removeIndexedNodeProperty(mg, label_id, node_id, entry.key, existing);
                     }
                 }
-                const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, entry.key, .null, txn);
+                const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, entry.key, .null, local_txn);
                 rec.prop_head = new_prop_head;
                 for (label_ids) |label_id| {
                     try addIndexedNodeProperty(mg, label_id, node_id, entry.key, .null);
@@ -2160,12 +2241,9 @@ pub const StorageAdapter = struct {
             }
         }
 
-        // Write the node record once after all property mutations — still
-        // inside the same transaction so the whole batch commits atomically
-        // with a single fsync (or, when joining a StatementTxn, with the
-        // caller's eventual commit).
-        try mg.engine.putNodeTxn(node_id, rec, txn);
-        if (stmt_txn == null) try mg.engine.commitTxn(txn);
+        // Write the node record once after all property mutations.
+        try node_shard.putNodeTxn(node_id, rec, local_txn);
+        if (own_txn) try node_shard.commitTxn(local_txn);
     }
 
     /// Remove a property from a node by writing a null tombstone.
@@ -2176,7 +2254,8 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
         var rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
-        const label_ids = try mg.engine.label_store.getLabels(rec.label_head, self.allocator);
+        const node_shard = mg.shardEngineForNode(node_id);
+        const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
         const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
         defer {
@@ -2189,13 +2268,13 @@ pub const StorageAdapter = struct {
             }
         }
 
-        // R7 (2026-04-22): batch putProperty + putNode into one txn.
-        const txn = try mg.engine.beginTxn();
-        errdefer mg.engine.abortTxn(txn) catch {};
+        // R7: batch putProperty + putNode into one txn on the node's shard.
+        const txn = try node_shard.beginTxn();
+        errdefer node_shard.abortTxn(txn) catch {};
 
-        const new_prop_head = try mg.engine.putPropertyTxn(rec.prop_head, key, .null, txn);
+        const new_prop_head = try node_shard.putPropertyTxn(rec.prop_head, key, .null, txn);
         rec.prop_head = new_prop_head;
-        try mg.engine.putNodeTxn(node_id, rec, txn);
+        try node_shard.putNodeTxn(node_id, rec, txn);
 
         try mg.engine.commitTxn(txn);
 
@@ -2247,29 +2326,38 @@ pub const StorageAdapter = struct {
         // and whose null-based filtering caused regressions in prior attempts.
         const node_mod = gs.node;
         const NodeRec = node_mod.NodeRec;
-        const npp = mg.engine.node_store.nodes_per_page;
         const hdr_size = gs.node.PAGE_HEADER_SIZE;
-        const bp = mg.engine.node_store.buffer_pool;
 
-        // Cache the pinned page frame across iterations.  Node IDs from
-        // the label index are sorted, so consecutive IDs usually share the
-        // same page — caching avoids redundant pin/unpin round-trips.
+        // The FanOutNodeIterator across all shards may return nids from
+        // different shards interleaved.  Route buffer-pool pin/unpin
+        // operations to the shard that owns each nid.  Track the cached page
+        // per shard to avoid redundant pin round-trips within one shard's run.
+        var cached_shard_idx: ?usize = null;
         var cached_page_id: ?u64 = null;
         var cached_frame: *gs.page_frame.PageFrame = undefined;
-        defer if (cached_page_id != null) bp.unpin(bp.frameIndex(cached_frame), false);
+        defer if (cached_shard_idx != null and cached_page_id != null) {
+            const bp = mg.engine.shards[cached_shard_idx.?].node_store.buffer_pool;
+            bp.unpin(bp.frameIndex(cached_frame), false);
+        };
 
         while (try iter.next()) |nid| {
+            const shard_idx = gs.shard_count.shardOfNode(nid);
+            const nstore = &mg.engine.shards[shard_idx].node_store;
+            const bp = nstore.buffer_pool;
+            const npp = nstore.nodes_per_page;
             const page_id = nid / npp;
-            // Page not allocated → node cannot be live (stale index entry)
-            if (!mg.engine.node_store.free_space.isAllocated(page_id)) continue;
 
-            // Re-pin only when we transition to a different page.
-            if (cached_page_id == null or cached_page_id.? != page_id) {
-                if (cached_page_id != null) {
-                    bp.unpin(bp.frameIndex(cached_frame), false);
-                    cached_page_id = null;
+            // Page not allocated → node cannot be live (stale index entry)
+            if (!nstore.free_space.isAllocated(page_id)) continue;
+
+            // Unpin cached frame when moving to a different shard or page.
+            if (cached_shard_idx == null or cached_shard_idx.? != shard_idx or cached_page_id.? != page_id) {
+                if (cached_shard_idx != null and cached_page_id != null) {
+                    const old_bp = mg.engine.shards[cached_shard_idx.?].node_store.buffer_pool;
+                    old_bp.unpin(old_bp.frameIndex(cached_frame), false);
                 }
                 cached_frame = try bp.pin(.nodes, page_id);
+                cached_shard_idx = shard_idx;
                 cached_page_id = page_id;
             }
 
@@ -2354,34 +2442,43 @@ pub const StorageAdapter = struct {
         const storage_val = try toStorageProperty(self.allocator, value);
         defer freeTemporaryStorageProperty(self.allocator, storage_val);
 
+        // Edges live on the source node's shard.
+        const from_shard = mg.shardEngineForNode(from_id);
         if (currentStatementTxnForGraph(graph_name)) |s| {
-            // R12: manual setEdgeProperty using Txn variants.  Mirrors the
-            // upstream engine_edge_props.setEdgeProperty logic 1:1, just
-            // threading our session/statement txn through `putPropertyTxn`.
-            const edge_entry = mg.engine.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+            // R12: manual setEdgeProperty using Txn variants, routed to the
+            // from_id's shard. Mirrors engine_edge_props.setEdgeProperty 1:1.
+            const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
             if (edge_entry.from != from_id or edge_entry.neighbor != to_id) return error.EdgeNotFound;
 
-            const from_rec = (try mg.engine.node_store.getNode(from_id)) orelse return error.NodeNotFound;
+            const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
             const found_prop_head = edge_entry.prop_head;
 
-            const new_head_u64 = try mg.engine.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, s.txn_id);
+            // Use shard-local txn from the statement txn if shards match.
+            const local_txn = shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn();
+            const own_txn = shardLocalTxnForNode(s.txn_id, from_id) == null;
+            errdefer if (own_txn) from_shard.abortTxn(local_txn) catch {};
+
+            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, found_prop_head), key, storage_val, local_txn);
             const new_head: u32 = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
 
             if (new_head != found_prop_head) {
-                _ = try mg.engine.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
-                const to_rec = (try mg.engine.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-                _ = try mg.engine.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
+                _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, new_head);
+                // For cross-shard edges, to_node is on a different shard; for
+                // same-shard edges both adj lists are on from_shard.
+                const to_shard = mg.shardEngineForNode(to_id);
+                const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
+                _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, new_head);
 
-                if (mg.engine.edge_index.getPtr(edge_id)) |idx_entry| {
+                if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
                     idx_entry.prop_head = new_head;
                 }
             }
 
-            // Keep the property-chain index in sync (same as upstream does).
             if (found_prop_head != 0 and found_prop_head != new_head) {
-                mg.engine.property_index.removeChain(found_prop_head);
+                from_shard.property_index.removeChain(found_prop_head);
             }
-            try mg.engine.refreshPropertyChainIndex(new_head_u64);
+            try from_shard.refreshPropertyChainIndex(new_head_u64);
+            if (own_txn) try from_shard.commitTxn(local_txn);
             return;
         }
         try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
@@ -2423,30 +2520,26 @@ pub const StorageAdapter = struct {
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
 
-        const edge_entry = mg.engine.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        // Edges live on the source-node's shard (edge_id is shard-striped
+        // by allocNode on the source shard).
+        const from_shard = mg.shardEngineForNode(edge_id);
+        const edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
         const from_id = edge_entry.from;
         const to_id = edge_entry.neighbor;
-        const from_rec = (try mg.engine.node_store.getNode(from_id)) orelse return error.NodeNotFound;
+        const from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
         const orig_prop_head: u32 = edge_entry.prop_head;
 
-        // R8/R12 parity: join the active StatementTxn when one is live on
-        // this graph so the whole batch commits with the caller's single
-        // WAL fsync.  Without this, the batch would open + commit its own
-        // engine txn and produce a separate fsync inside the caller's
-        // statement window — the exact overhead this batch exists to
-        // eliminate.  `setEdgeProperty` at line 2289 applies the same logic.
+        // R8/R12 parity: one txn on from_shard for all N property writes.
         const stmt_txn = currentStatementTxnForGraph(graph_name);
-        const txn: gs.TxnId = if (stmt_txn) |s| s.txn_id else try mg.engine.beginTxn();
-        errdefer if (stmt_txn == null) {
-            mg.engine.abortTxn(txn) catch {};
+        const local_txn: gs.TxnId = if (stmt_txn) |s|
+            shardLocalTxnForNode(s.txn_id, from_id) orelse try from_shard.beginTxn()
+        else
+            try from_shard.beginTxn();
+        const own_txn = stmt_txn == null or shardLocalTxnForNode(stmt_txn.?.txn_id, from_id) == null;
+        errdefer if (own_txn) {
+            from_shard.abortTxn(local_txn) catch {};
         };
 
-        // Thread the prop_head through all N property writes.  Each
-        // `putPropertyTxn` returns a new chain head we pass into the next
-        // call.  We never refresh the chain index or update adjacency for
-        // intermediate heads — the adjacency lists only need the terminal
-        // head, and the chain index needs exactly one refresh over the
-        // final chain.
         var running_prop_head: u32 = orig_prop_head;
         var last_new_head_u64: u64 = @as(u64, orig_prop_head);
         for (entries) |entry| {
@@ -2456,32 +2549,28 @@ pub const StorageAdapter = struct {
                 .null;
             defer if (entry.value != null) freeTemporaryStorageProperty(self.allocator, storage_val);
 
-            const new_head_u64 = try mg.engine.putPropertyTxn(@as(u64, running_prop_head), entry.key, storage_val, txn);
+            const new_head_u64 = try from_shard.putPropertyTxn(@as(u64, running_prop_head), entry.key, storage_val, local_txn);
             running_prop_head = std.math.cast(u32, new_head_u64) orelse return error.Overflow;
             last_new_head_u64 = new_head_u64;
         }
 
-        // Terminal adjacency + index updates — exactly once, with the
-        // final `prop_head`.  Skip when nothing changed (empty batch or
-        // no-op rewrite).
         if (running_prop_head != orig_prop_head) {
-            _ = try mg.engine.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, running_prop_head);
-            const to_rec = (try mg.engine.node_store.getNode(to_id)) orelse return error.NodeNotFound;
-            _ = try mg.engine.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
+            _ = try from_shard.adj_out.updateEdgePropHead(from_rec.out_head, edge_id, running_prop_head);
+            const to_shard = mg.shardEngineForNode(to_id);
+            const to_rec = (try to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
+            _ = try to_shard.adj_in.updateEdgePropHead(to_rec.in_head, edge_id, running_prop_head);
 
-            if (mg.engine.edge_index.getPtr(edge_id)) |idx_entry| {
+            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
                 idx_entry.prop_head = running_prop_head;
             }
         }
 
-        // Single property-chain index refresh — sweeps the whole final
-        // chain once instead of K times as the per-property loop did.
         if (orig_prop_head != 0 and orig_prop_head != running_prop_head) {
-            mg.engine.property_index.removeChain(orig_prop_head);
+            from_shard.property_index.removeChain(orig_prop_head);
         }
-        try mg.engine.refreshPropertyChainIndex(last_new_head_u64);
+        try from_shard.refreshPropertyChainIndex(last_new_head_u64);
 
-        if (stmt_txn == null) try mg.engine.commitTxn(txn);
+        if (own_txn) try from_shard.commitTxn(local_txn);
     }
 
     /// Get a property from an edge. Delegates to the engine's
@@ -2537,12 +2626,11 @@ pub const StorageAdapter = struct {
             }
         };
 
+        // Fan out across all shards — each shard owns a disjoint node_id range.
         var ctx = Ctx{ .entries = .empty, .alloc = allocator };
-        try mg.engine.node_store.scanNodes(
-            mg.engine.manifest.next_node_id,
-            &ctx,
-            &Ctx.onNode,
-        );
+        for (mg.engine.shards) |shard| {
+            try shard.node_store.scanNodes(shard.manifest.next_node_id, &ctx, &Ctx.onNode);
+        }
 
         if (ctx.had_error) return error.OutOfMemory;
 
@@ -2570,18 +2658,25 @@ pub const StorageAdapter = struct {
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk self.requireExistingGraphLocked(graph_name) catch return null;
         };
-        const m = &mg.engine.manifest;
+        // Aggregate stats across all per-shard manifests.
+        var node_count: u64 = 0;
+        var edge_count: u64 = 0;
+        var pages_used: u64 = 0;
+        var label_count: u32 = 0;
+        for (mg.engine.shards) |shard| {
+            const m = &shard.manifest;
+            node_count += m.node_count;
+            edge_count += m.edge_count;
+            pages_used += m.nodes_pages + m.adj_out_pages + m.adj_in_pages +
+                m.props_pages + m.var_pages + m.free_pages;
+            if (m.label_count > label_count) label_count = m.label_count;
+        }
 
         return .{
-            .node_count = m.node_count,
-            .edge_count = m.edge_count,
-            .pages_used = m.nodes_pages +
-                m.adj_out_pages +
-                m.adj_in_pages +
-                m.props_pages +
-                m.var_pages +
-                m.free_pages,
-            .label_count = m.label_count,
+            .node_count = node_count,
+            .edge_count = edge_count,
+            .pages_used = pages_used,
+            .label_count = label_count,
         };
     }
 
@@ -2751,11 +2846,17 @@ pub const StorageAdapter = struct {
         var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
             mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+            var nc: u64 = 0;
+            var ec: u64 = 0;
+            for (mg.engine.shards) |shard| {
+                nc += shard.manifest.node_count;
+                ec += shard.manifest.edge_count;
+            }
             counts_buf[i] = .{
                 .name = mg.name,
                 .uuid = mg.uuid,
-                .node_count = mg.engine.manifest.node_count,
-                .edge_count = mg.engine.manifest.edge_count,
+                .node_count = nc,
+                .edge_count = ec,
             };
             mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
@@ -3012,13 +3113,13 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
-        const engine = gs.GraphEngine.create(
+        const engine = gs.ShardedGraphEngine.create(
             self.allocator,
             self.data_dir,
             graph_uuid,
             cfg,
         ) catch |err| {
-            log.err("failed to create GraphEngine for graph '{s}': {}", .{ name, err });
+            log.err("failed to create ShardedGraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
         errdefer engine.close() catch {};
@@ -3035,7 +3136,12 @@ pub const StorageAdapter = struct {
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
-            .label_dict = LabelStringDict.initView(&engine.label_dict),
+            // ShardedGraphEngine synchronises the label dictionary across all
+            // shards via getOrAssignLabel. shard 0 holds the canonical copy;
+            // LabelStringDict.initView binds to that copy so the string<→id
+            // mapping is consistent whether the caller reads via the adapter
+            // or directly via the per-shard label_store.
+            .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
             .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
             .name = owned_name,
             .uuid = graph_uuid,
@@ -3067,13 +3173,13 @@ pub const StorageAdapter = struct {
         var cfg = self.config;
         cfg.data_dir = self.data_dir;
 
-        const engine = gs.GraphEngine.open(
+        const engine = gs.ShardedGraphEngine.open(
             self.allocator,
             self.data_dir,
             graph_uuid,
             cfg,
         ) catch |err| {
-            log.err("failed to open GraphEngine for graph '{s}': {}", .{ name, err });
+            log.err("failed to open ShardedGraphEngine for graph '{s}': {}", .{ name, err });
             return err;
         };
         errdefer engine.close() catch {};
@@ -3087,7 +3193,7 @@ pub const StorageAdapter = struct {
         const is_security_graph = std.mem.eql(u8, name, "__geode_security");
         mg.* = .{
             .engine = engine,
-            .label_dict = LabelStringDict.initView(&engine.label_dict),
+            .label_dict = LabelStringDict.initView(&engine.shards[0].label_dict),
             .exact_node_property_index = NodePropertyExactIndex.init(self.allocator),
             .name = owned_name,
             .uuid = graph_uuid,
@@ -3112,7 +3218,14 @@ pub const StorageAdapter = struct {
         }
 
         try self.engines.put(owned_name, mg);
-        self.upsertRegistryEntryLocked(name, graph_uuid, mg.engine.manifest.node_count, mg.engine.manifest.edge_count);
+        // Aggregate node/edge counts across all shards for the registry.
+        var total_nodes: u64 = 0;
+        var total_edges: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            total_nodes += shard.manifest.node_count;
+            total_edges += shard.manifest.edge_count;
+        }
+        self.upsertRegistryEntryLocked(name, graph_uuid, total_nodes, total_edges);
         self.saveRegistryLocked() catch |err| {
             log.warn("failed to persist graph registry after open of '{s}': {}", .{ name, err });
         };
@@ -3177,11 +3290,17 @@ pub const StorageAdapter = struct {
     }
 
     fn syncRegistryCountsLocked(self: *StorageAdapter, mg: *ManagedGraph) void {
+        var total_nodes: u64 = 0;
+        var total_edges: u64 = 0;
+        for (mg.engine.shards) |shard| {
+            total_nodes += shard.manifest.node_count;
+            total_edges += shard.manifest.edge_count;
+        }
         self.upsertRegistryEntryLocked(
             mg.name,
             mg.uuid,
-            mg.engine.manifest.node_count,
-            mg.engine.manifest.edge_count,
+            total_nodes,
+            total_edges,
         );
     }
 
@@ -3206,8 +3325,10 @@ pub const StorageAdapter = struct {
 
         for (self.registry.entries.items) |entry| {
             if (self.engines.get(entry.name)) |mg| {
-                next_node_id = @max(next_node_id, mg.engine.manifest.next_node_id);
-                next_edge_id = @max(next_edge_id, mg.engine.manifest.next_edge_id);
+                for (mg.engine.shards) |shard| {
+                    next_node_id = @max(next_node_id, shard.manifest.next_node_id);
+                    next_edge_id = @max(next_edge_id, shard.manifest.next_edge_id);
+                }
                 continue;
             }
 
@@ -3248,9 +3369,14 @@ pub const StorageAdapter = struct {
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = try mg.label_dict.getOrCreate(label);
-        // R10 (2026-04-22): join active session/statement engine txn.
+        const node_shard = mg.shardEngineForNode(node_id);
+        // R10: join active session/statement engine txn if on the same shard.
         if (currentStatementTxnForGraph(graph_name)) |s| {
-            try mg.engine.addLabelTxn(node_id, label_id, s.txn_id);
+            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
+                try node_shard.addLabelTxn(node_id, label_id, local);
+            } else {
+                try mg.engine.addLabel(node_id, label_id);
+            }
         } else {
             try mg.engine.addLabel(node_id, label_id);
         }
@@ -3268,9 +3394,14 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
         const label_id = mg.label_dict.getId(label) orelse return; // nothing to remove
         removeNodePropertiesForLabels(mg, node_id, &[_]gs.LabelId{label_id}, rec.prop_head);
-        // R10 (2026-04-22): join active session/statement engine txn.
+        const node_shard = mg.shardEngineForNode(node_id);
+        // R10: join active session/statement engine txn if on the same shard.
         if (currentStatementTxnForGraph(graph_name)) |s| {
-            try mg.engine.removeLabelTxn(node_id, label_id, s.txn_id);
+            if (shardLocalTxnForNode(s.txn_id, node_id)) |local| {
+                try node_shard.removeLabelTxn(node_id, label_id, local);
+            } else {
+                try mg.engine.removeLabel(node_id, label_id);
+            }
         } else {
             try mg.engine.removeLabel(node_id, label_id);
         }
@@ -3303,23 +3434,25 @@ pub const StorageAdapter = struct {
     // ------------------------------------------------------------------
 
     /// Return storage-level statistics for the named graph.
+    /// Routes to shard 0 (representative; per-shard stats are not aggregated).
     pub fn getStorageStats(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.StorageStats {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        return mg.engine.getStorageStats();
+        return mg.engine.shards[0].getStorageStats();
     }
 
     /// Run an integrity check on the named graph and return the report.
+    /// Routes to shard 0 (representative; full cross-shard check not yet wired).
     pub fn checkIntegrity(self: *StorageAdapter, graph_name: []const u8) !gs.GraphEngine.IntegrityReport {
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             break :blk try self.requireExistingGraphLocked(graph_name);
         };
-        return mg.engine.checkIntegrity();
+        return mg.engine.shards[0].checkIntegrity();
     }
 
     // ------------------------------------------------------------------
@@ -3504,6 +3637,45 @@ pub const StorageAdapter = struct {
             .mg = mg,
             .txn_id = txn_id,
             .graph_name = mg.name, // owned by ManagedGraph, stable while engines map keeps the entry
+        };
+        t_current_statement_txn = out;
+    }
+
+    /// Task 7 (ShardedGraphEngine migration): open a statement transaction
+    /// pinned to `shard_idx`'s per-shard engine.  Used by ShardedCoordinator
+    /// shard workers so each worker's batch txn is confined to its own
+    /// per-shard `GraphEngine`, eliminating contention on a shared
+    /// TxnManager.  The resulting `StatementTxn.txn_id` is encoded with the
+    /// shard index in the high 8 bits (same layout as `ShardedGraphEngine`'s
+    /// own `beginTxn`), so `commitTxn` / `abortTxn` route back correctly.
+    ///
+    /// Caller guarantee: only one worker thread per `shard_idx` at a time
+    /// (enforced by the coordinator's shard-queue design), so the per-shard
+    /// engine is touched single-threadedly even though 16 workers run in
+    /// parallel.
+    pub fn beginStatementTxnForShard(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+        shard_idx: usize,
+        out: *StatementTxn,
+    ) !void {
+        if (t_current_statement_txn != null) return error.NestedStatementTxn;
+
+        const mg = blk: {
+            self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            break :blk self.engines.get(graph_name) orelse return error.GraphNotFound;
+        };
+
+        // Open a local txn on the shard directly, then re-encode it in the
+        // ShardedGraphEngine wire format so commitTxn/abortTxn route back.
+        const local_txn = try mg.engine.shards[shard_idx].beginTxn();
+        const encoded_txn = encodeShardedTxn(shard_idx, local_txn);
+
+        out.* = .{
+            .mg = mg,
+            .txn_id = encoded_txn,
+            .graph_name = mg.name,
         };
         t_current_statement_txn = out;
     }
