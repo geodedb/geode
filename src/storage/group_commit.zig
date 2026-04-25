@@ -333,14 +333,23 @@ pub const ShardedCoordinator = struct {
         _ = shard_idx;
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
-        var have_txn = false;
+        // The bulk helpers (bulkInsertNodeWithReservedId,
+        // bulkInsertEdgeWithIdsShardLocked, bulkMergeNodeWithReservedId) all
+        // write through the GraphStore (in-memory store) path, NOT through
+        // the storage engine's WAL-backed txn system.  Opening a
+        // `beginStatementTxn` here would call `mg.engine.beginTxn()` from
+        // all 16 shard workers simultaneously, racing on the
+        // TxnManager.active_txns HashMap (not thread-safe) and triggering
+        // the `pointer_stability` assertion that the hub-node regression test
+        // reproduces.
+        //
+        // Correct fix: shard workers must NOT call any engine-txn API
+        // concurrently on the same single-threaded GraphEngine.  Since the
+        // bulk helpers don't use the engine txn anyway, simply omit it.
+        // When the adapter is migrated to ShardedGraphEngine each worker will
+        // open its shard-pinned txn via beginStatementTxnForShard (Task 6).
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
-        // txn unavailable (e.g. engine not yet registered); fall back to
-        // per-op auto-commit inside each helper.
-        if (self.adapter.beginStatementTxn(self.graph_name, &stmt_txn)) |_| {
-            have_txn = true;
-        } else |_| {}
+        const have_txn = false;
 
         for (batch) |op| {
             const res = op.resultPtr();
@@ -419,14 +428,9 @@ pub const ShardedCoordinator = struct {
             }
         }
 
-        if (have_txn) {
-            if (stmt_txn.commit()) |_| {} else |e| {
-                for (batch) |op| {
-                    const res = op.resultPtr();
-                    if (res.err == null) res.err = e;
-                }
-            }
-        }
+        // have_txn is always false (no engine txn opened); this block is a
+        // no-op but kept for future use when shard-pinned txns are wired.
+        if (have_txn) unreachable;
 
         for (batch) |op| {
             const res = op.resultPtr();
