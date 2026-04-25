@@ -329,26 +329,23 @@ pub const ShardedCoordinator = struct {
     }
 
     fn applyShardBatch(self: *ShardedCoordinator, shard_idx: usize, batch: []*ApplyOp) void {
-        _ = shard_idx;
         const io = std.Io.Threaded.global_single_threaded.io();
 
-        // The bulk helpers (bulkInsertNodeWithReservedId,
-        // bulkInsertEdgeWithIdsShardLocked, bulkMergeNodeWithReservedId) all
-        // write through the GraphStore (in-memory store) path, NOT through
-        // the storage engine's WAL-backed txn system.  Opening a
-        // `beginStatementTxn` here would call `mg.engine.beginTxn()` from
-        // all 16 shard workers simultaneously, racing on the
-        // TxnManager.active_txns HashMap (not thread-safe) and triggering
-        // the `pointer_stability` assertion that the hub-node regression test
-        // reproduces.
-        //
-        // Correct fix: shard workers must NOT call any engine-txn API
-        // concurrently on the same single-threaded GraphEngine.  Since the
-        // bulk helpers don't use the engine txn anyway, simply omit it.
-        // When the adapter is migrated to ShardedGraphEngine each worker will
-        // open its shard-pinned txn via beginStatementTxnForShard (Task 6).
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
-        const have_txn = false;
+
+        // Task 7 (ShardedGraphEngine migration): open a statement txn pinned
+        // to this worker's shard.  Each shard has its own independent
+        // GraphEngine so there is no cross-shard TxnManager contention — the
+        // 16 workers run in parallel without any serialisation on a shared
+        // TxnManager.  All ops in the batch go through the shard-locked bulk
+        // helpers which route writes to `engine.shards[shard_idx]` already;
+        // the txn wraps them in a single WAL fsync, restoring the fsync
+        // amortisation that commit a6cf7af7 had to remove.
+        var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
+        var have_txn = false;
+        if (self.adapter.beginStatementTxnForShard(self.graph_name, shard_idx, &stmt_txn)) |_| {
+            have_txn = true;
+        } else |_| {}
 
         for (batch) |op| {
             const res = op.resultPtr();
@@ -427,9 +424,17 @@ pub const ShardedCoordinator = struct {
             }
         }
 
-        // have_txn is always false (no engine txn opened); this block is a
-        // no-op but kept for future use when shard-pinned txns are wired.
-        if (have_txn) unreachable;
+        // Commit the shard-pinned statement txn — one WAL fsync covers the
+        // entire batch for this shard.  On commit failure, propagate the error
+        // to any ops that did not already carry a per-op error.
+        if (have_txn) {
+            if (stmt_txn.commit()) |_| {} else |e| {
+                for (batch) |op| {
+                    const res = op.resultPtr();
+                    if (res.err == null) res.err = e;
+                }
+            }
+        }
 
         for (batch) |op| {
             const res = op.resultPtr();
