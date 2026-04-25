@@ -250,7 +250,11 @@ pub const Parser = struct {
 
     fn expect(self: *Parser, kind: tok.TokenKind) !tok.Token {
         if (self.cur.kind != kind) {
-            self.last_error = @tagName(kind);
+            self.last_error = std.fmt.allocPrint(
+                self.arena.allocator(),
+                "expected token '{s}', got '{s}' at line {d} col {d}",
+                .{ @tagName(kind), @tagName(self.cur.kind), self.cur.loc.line, self.cur.loc.column },
+            ) catch @tagName(kind);
             return error.UnexpectedToken;
         }
         const out = self.cur;
@@ -267,7 +271,11 @@ pub const Parser = struct {
             self.advance();
             return out;
         }
-        self.last_error = "identifier";
+        self.last_error = std.fmt.allocPrint(
+            self.arena.allocator(),
+            "expected identifier or keyword, got '{s}' at line {d} col {d}",
+            .{ @tagName(self.cur.kind), self.cur.loc.line, self.cur.loc.column },
+        ) catch "identifier";
         return error.UnexpectedToken;
     }
 
