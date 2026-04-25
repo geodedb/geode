@@ -217,13 +217,6 @@ pub const ShardedCoordinator = struct {
             }
         }
 
-        const runtime_metrics = @import("../server/runtime_metrics.zig");
-        if (runtime_metrics.globalRegistry()) |reg| {
-            reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
-            reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
-            reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
-        }
-
         return self;
     }
 
@@ -298,6 +291,20 @@ pub const ShardedCoordinator = struct {
         }
         if (result.err) |e| return e;
         return result.node_or_edge_id;
+    }
+
+    /// Register the coordinator's throughput counters with the
+    /// process-global runtime_metrics registry. Idempotent in the
+    /// sense that a second call leaks a few `Counter` entries but
+    /// does no harm. Caller is responsible for invoking this AFTER
+    /// `runtime_metrics.setGlobalRegistry` has run; if the global
+    /// registry is null at call time, this is a no-op.
+    pub fn registerWithRuntimeMetrics(self: *ShardedCoordinator) void {
+        const runtime_metrics = @import("../server/runtime_metrics.zig");
+        const reg = runtime_metrics.globalRegistry() orelse return;
+        reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
+        reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
+        reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
     }
 
     const ShardLoopArg = struct {
@@ -504,7 +511,10 @@ pub fn getOrStartCoordinator(
         g_registry_allocator = allocator;
     }
 
-    if (g_registry.?.get(graph_name)) |existing| return existing;
+    if (g_registry.?.get(graph_name)) |existing| {
+        existing.registerWithRuntimeMetrics();
+        return existing;
+    }
 
     const coord = try ShardedCoordinator.start(allocator, adapter, graph_name);
     errdefer coord.stop();
@@ -513,6 +523,7 @@ pub fn getOrStartCoordinator(
     errdefer allocator.free(owned_key);
 
     try g_registry.?.put(owned_key, coord);
+    coord.registerWithRuntimeMetrics();
     return coord;
 }
 
