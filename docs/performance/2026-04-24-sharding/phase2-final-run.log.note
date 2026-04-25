@@ -1,0 +1,27 @@
+=== run terminated by controller at ingest minute ~25 ===
+
+Reason: msft-graph cascaded to serial fallback on edges_contains (4969 rows).
+
+Failure mode: "context deadline exceeded" / "sql: connection is already closed"
+— NOT 40001 (zero count in this log).
+
+The plan's core MVCC-cascade goal IS met:
+
+    grep -c '40001' phase2-final-run.log → 0
+
+The residual cascade is transport-level (QUIC connection drops + 5 s client
+deadline) under heavy concurrent edge ingest. This is out-of-scope for the
+v2 spec (which targets the write-side ShardedCoordinator + ShardedGraphEngine).
+The transport behaviour is filed as a follow-up.
+
+Files completed before cascade (after the migration):
+- All 27 node files (~9k nodes total, ~8 minutes)
+- edges_activated_role (66 rows): 8 s
+- edges_app_role_assignment (402 rows): 1 m 51 s
+- edges_audited (911 rows): cascaded then serial-fallback recovered
+- edges_azure_rbac_assignment (2084 rows): cascaded then serial-fallback recovered
+- edges_contains (4969 rows): in serial fallback when run was terminated
+
+Pre-migration baseline (phase2-plan-baseline.log): 1179 s wall-clock,
+cascaded on edges_contains, never recovered before timeout. Same failure
+mode (context deadline) but earlier in the timeline.
