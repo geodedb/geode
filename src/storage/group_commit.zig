@@ -156,6 +156,13 @@ pub const ShardedCoordinator = struct {
 
     pool: *pooled.ThreadPool,
 
+    /// Cumulative number of shard-batches applied across all 16 shard workers.
+    apply_batches_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Cumulative number of ops applied across all shard-batches.
+    apply_ops_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Cumulative count of ops whose ApplyResult.err was set.
+    apply_errors_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     pub const max_batch: usize = 256;
 
     pub fn start(
@@ -208,6 +215,13 @@ pub const ShardedCoordinator = struct {
                 self.wakeAllShards();
                 return error.ShardSubmitFailed;
             }
+        }
+
+        const runtime_metrics = @import("../server/runtime_metrics.zig");
+        if (runtime_metrics.globalRegistry()) |reg| {
+            reg.register("coord_apply_batches_total", &self.apply_batches_total) catch {};
+            reg.register("coord_apply_ops_total", &self.apply_ops_total) catch {};
+            reg.register("coord_apply_errors_total", &self.apply_errors_total) catch {};
         }
 
         return self;
@@ -441,6 +455,15 @@ pub const ShardedCoordinator = struct {
             res.done.store(1, .release);
             std.Io.futexWake(io, u32, &res.done.raw, 1);
         }
+
+        // Aggregate into coordinator-wide counters for runtime_metrics.
+        _ = self.apply_batches_total.fetchAdd(1, .monotonic);
+        _ = self.apply_ops_total.fetchAdd(@intCast(batch.len), .monotonic);
+        var errs: u64 = 0;
+        for (batch) |op| if (op.resultPtr().err != null) {
+            errs += 1;
+        };
+        if (errs > 0) _ = self.apply_errors_total.fetchAdd(errs, .monotonic);
     }
 
     pub fn shardQueueDepthForTest(self: *ShardedCoordinator, shard_idx: usize) usize {
