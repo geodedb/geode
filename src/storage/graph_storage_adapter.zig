@@ -548,6 +548,15 @@ pub const ManagedGraph = struct {
     /// deadlocking.
     string_indexes_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
+    /// Diagnostic: cumulative count of SHARED acquires on `rwlock`.
+    rwlock_shared_acquired_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Diagnostic: cumulative wall-time (ns) all SHARED acquires waited
+    /// before locking. A growing value with steady acquired count signals
+    /// EXCLUSIVE-side starvation.
+    rwlock_shared_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Diagnostic: cumulative wall-time (ns) all EXCLUSIVE acquires waited.
+    rwlock_exclusive_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
     pub fn storage(self: *ManagedGraph) gs.GraphStorage {
@@ -1310,7 +1319,10 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
+        const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
 
         const idx = sharded_store.shardIndex(reserved_id);
@@ -1367,7 +1379,10 @@ pub const StorageAdapter = struct {
         const src_shard = sharded_store.shardIndex(source_id);
         const dst_shard = sharded_store.shardIndex(target_id);
 
+        const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
 
         if (src_shard == dst_shard) {
@@ -1447,7 +1462,10 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
+        const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
 
         // Probe phase: shared lock on merge-index, fast return on hit.
@@ -2822,7 +2840,10 @@ pub const StorageAdapter = struct {
         // (label_index, edge_index) that mutations can resize concurrently,
         // causing use-after-free and GPA size mismatch errors.
         for (graphs_buf[0..graph_count]) |mg| {
+            const _t_start = monoNanosNow();
             mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
@@ -2845,7 +2866,10 @@ pub const StorageAdapter = struct {
         //   Thread B (checkpoint): holds mutex → wants rwlock (here)
         var counts_buf: [64]struct { name: []const u8, uuid: [16]u8, node_count: u64, edge_count: u64 } = undefined;
         for (graphs_buf[0..graph_count], 0..) |mg, i| {
+            const _t_start = monoNanosNow();
             mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+            _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+            _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
             var nc: u64 = 0;
             var ec: u64 = 0;
             for (mg.engine.shards) |shard| {
@@ -3156,6 +3180,14 @@ pub const StorageAdapter = struct {
         }
 
         try self.engines.put(owned_name, mg);
+        {
+            const runtime_metrics = @import("../server/runtime_metrics.zig");
+            if (runtime_metrics.globalRegistry()) |reg| {
+                reg.register("mg_rwlock_shared_acquired_total", &mg.rwlock_shared_acquired_total) catch {};
+                reg.register("mg_rwlock_shared_wait_ns_total", &mg.rwlock_shared_wait_ns_total) catch {};
+                reg.register("mg_rwlock_exclusive_wait_ns_total", &mg.rwlock_exclusive_wait_ns_total) catch {};
+            }
+        }
         self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
         self.saveRegistryLocked() catch |err| {
             log.warn("failed to persist graph registry after create of '{s}': {}", .{ name, err });
@@ -3468,7 +3500,10 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         };
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
+        _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+        _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         return mg;
     }
 
@@ -3485,7 +3520,9 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         };
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        const _t_start = monoNanosNow();
         mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         return mg;
     }
 
@@ -3565,7 +3602,9 @@ pub const StorageAdapter = struct {
             // sections (coordinator batch apply, fast-path mutations
             // are all tens of ms worst case), so waiting without a
             // deadline is safe in practice.
+            const _t_start = monoNanosNow();
             mg.rwlock.lockUncancelable(io);
+            _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             return mg;
         }
 
@@ -4043,7 +4082,10 @@ test "StorageAdapter: create and query graph" {
 /// ascending-index acquire pattern in `bulkInsertEdgeWithIds`.
 pub fn acquireShardWriteLock(mg: *ManagedGraph, key: u64) void {
     const io = std.Io.Threaded.global_single_threaded.io();
+    const _t_start = monoNanosNow();
     mg.rwlock.lockSharedUncancelable(io);
+    _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+    _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
     const idx = sharded_store.shardIndex(key);
     mg.shard_locks[idx].lockUncancelable(io);
 }
@@ -4068,7 +4110,10 @@ pub fn acquireShardWriteLockCancelable(
     deadline_mono_ns: u64,
 ) !void {
     const io = std.Io.Threaded.global_single_threaded.io();
+    const _t_start = monoNanosNow();
     mg.rwlock.lockSharedUncancelable(io);
+    _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+    _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
     errdefer mg.rwlock.unlockShared(io);
     const idx = sharded_store.shardIndex(key);
     if (mg.shard_locks[idx].tryLock(io)) return;
@@ -4098,7 +4143,9 @@ pub fn acquireShardWriteLockCancelable(
 /// writers to release their SHARED hold.
 pub fn acquireWholeGraphExclusive(mg: *ManagedGraph) void {
     const io = std.Io.Threaded.global_single_threaded.io();
+    const _t_start = monoNanosNow();
     mg.rwlock.lockUncancelable(io);
+    _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
     for (&mg.shard_locks) |*sl| sl.lockUncancelable(io);
 }
 
