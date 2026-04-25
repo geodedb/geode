@@ -2,9 +2,8 @@
 // Copyright (c) 2024-2025 CodePros
 
 //! Phase 2.1 regression test: the thread-pool-hosted
-//! `GroupCommitCoordinator` (single flusher per graph, morning-baseline
-//! logic) drains 16-way concurrent submissions under the same-graph
-//! fan-in pattern and completes in a reasonable window.
+//! `ShardedCoordinator` drains 16-way concurrent submissions under the
+//! same-graph fan-in pattern and completes in a reasonable window.
 //!
 //! Also pins the per-graph isolation invariant: two graphs each get
 //! their own coordinator + thread pool + flusher task, so traffic on
@@ -38,7 +37,7 @@ fn monoNanosNow() u64 {
 }
 
 const WorkerCtx = struct {
-    coord: *group_commit.GroupCommitCoordinator,
+    coord: *group_commit.ShardedCoordinator,
     per_worker: usize,
     err: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     done: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
@@ -80,7 +79,7 @@ fn waitForAllDone(ctxs: []WorkerCtx, deadline_ns: u64) !void {
     }
 }
 
-test "GroupCommitCoordinator: 16 submitters x 100 ops land in distinct ids" {
+test "ShardedCoordinator: 16 submitters x 100 ops land in distinct ids" {
     const allocator = std.testing.allocator;
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -154,7 +153,7 @@ test "GroupCommitCoordinator: 16 submitters x 100 ops land in distinct ids" {
     try std.testing.expectEqual(workers * per_worker, seen.count());
 }
 
-test "GroupCommitCoordinator: per-graph isolation — two graphs run independently" {
+test "ShardedCoordinator: per-graph isolation — two graphs run independently" {
     // Pins the invariant that each graph has its own coordinator +
     // thread pool + flusher, so holding the write lock on one graph
     // does NOT block submissions on another graph.  We verify by

@@ -83,8 +83,24 @@ const Harness = struct {
 // new node id.
 // ----------------------------------------------------------------------
 
+fn sumOpsApplied(coord: *group_commit.ShardedCoordinator) u64 {
+    var total: u64 = 0;
+    for (&coord.shards) |*s| {
+        total += s.ops_applied.load(.acquire);
+    }
+    return total;
+}
+
+fn sumBatches(coord: *group_commit.ShardedCoordinator) u64 {
+    var total: u64 = 0;
+    for (&coord.shards) |*s| {
+        total += s.batches.load(.acquire);
+    }
+    return total;
+}
+
 fn submitInsertNode(
-    coord: *group_commit.GroupCommitCoordinator,
+    coord: *group_commit.ShardedCoordinator,
     labels: []const []const u8,
     props: []const adapter_mod.StorageAdapter.PropKV,
 ) !u64 {
@@ -132,7 +148,7 @@ test "group commit: smoke — single submit creates one node" {
 // ----------------------------------------------------------------------
 
 const ShutdownCtx = struct {
-    coord: *group_commit.GroupCommitCoordinator,
+    coord: *group_commit.ShardedCoordinator,
     ok_count: std.atomic.Value(u32),
 };
 
@@ -172,7 +188,7 @@ test "group commit: shutdown drains in-flight ops" {
     // unregisters the coordinator (the counters belong to the coord
     // struct and go away on stop()).
     try testing.expectEqual(@as(u32, @intCast(N)), ctx.ok_count.load(.acquire));
-    try testing.expectEqual(@as(u64, @intCast(N)), coord.ops_applied.load(.acquire));
+    try testing.expectEqual(@as(u64, @intCast(N)), sumOpsApplied(coord));
 
     group_commit.shutdownAllCoordinators();
 
@@ -186,7 +202,7 @@ test "group commit: shutdown drains in-flight ops" {
 // ----------------------------------------------------------------------
 
 const ConcurrentCtx = struct {
-    coord: *group_commit.GroupCommitCoordinator,
+    coord: *group_commit.ShardedCoordinator,
     ops_per_thread: usize,
     tid: usize,
     errors: std.atomic.Value(u32),
@@ -241,21 +257,21 @@ test "group commit: 16 concurrent submitters land all ops + coalesce batches" {
     for (contexts) |c| try testing.expectEqual(@as(u32, 0), c.errors.load(.acquire));
 
     // All ops applied, zero loss.
-    try testing.expectEqual(@as(u64, @intCast(total_ops)), coord.ops_applied.load(.acquire));
+    try testing.expectEqual(@as(u64, @intCast(total_ops)), sumOpsApplied(coord));
     try testing.expectEqual(total_ops, store.nodes.count());
 
-    // Batch coalescing invariant: under 16-way fan-in with max_batch=32,
-    // we expect the coordinator to absorb multiple ops per lock acquire
-    // on average.  The strictest valid claim is `batches < ops` — if
-    // the coordinator degenerated to one-op-per-batch we'd see
-    // `batches == ops` and the whole feature would be worthless.
-    const batches = coord.batches.load(.acquire);
+    // Batch coalescing invariant: under 16-way fan-in with max_batch=256,
+    // we expect each shard coordinator to absorb multiple ops per lock
+    // acquire on average.  `sumBatches` totals across all shards, and
+    // `sumOpsApplied` totals ops across all shards; coalescing still
+    // happens per-shard so the global claim `batches < ops` holds.
+    const batches = sumBatches(coord);
     std.debug.print(
         "group_commit coalescing: ops={d}, batches={d}, avg_batch={d:.2}\n",
         .{
-            coord.ops_applied.load(.acquire),
+            sumOpsApplied(coord),
             batches,
-            @as(f64, @floatFromInt(coord.ops_applied.load(.acquire))) / @as(f64, @floatFromInt(batches)),
+            @as(f64, @floatFromInt(sumOpsApplied(coord))) / @as(f64, @floatFromInt(batches)),
         },
     );
     try testing.expect(batches < total_ops);

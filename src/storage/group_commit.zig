@@ -24,7 +24,6 @@ const graph_store = @import("../graph_store.zig");
 const graph_storage_adapter = @import("graph_storage_adapter.zig");
 const graph_storage = @import("graph_storage");
 const pooled = @import("transport/thread_pool");
-const ext_tp = @import("thread_pool");
 
 const StorageAdapter = graph_storage_adapter.StorageAdapter;
 const PropKV = StorageAdapter.PropKV;
@@ -337,6 +336,8 @@ pub const ShardedCoordinator = struct {
         var stmt_txn: graph_storage_adapter.StatementTxn = undefined;
         var have_txn = false;
         _ = self.adapter.getOrCreateGraph(self.graph_name) catch {};
+        // txn unavailable (e.g. engine not yet registered); fall back to
+        // per-op auto-commit inside each helper.
         if (self.adapter.beginStatementTxn(self.graph_name, &stmt_txn)) |_| {
             have_txn = true;
         } else |_| {}
@@ -449,11 +450,6 @@ pub const ShardedCoordinator = struct {
     }
 };
 
-/// Backwards-compatible alias — existing callers of
-/// `GroupCommitCoordinator` (e.g. `quic_connection_handler`) keep
-/// working without source changes until Task 4 updates them.
-pub const GroupCommitCoordinator = ShardedCoordinator;
-
 // ---------------------------------------------------------------------------
 // Per-adapter coordinator registry
 // ---------------------------------------------------------------------------
@@ -557,9 +553,3 @@ pub fn setEnabledForTest(on: bool) void {
 }
 
 var cached_enabled: ?bool = null;
-
-fn monoNanosNow() u64 {
-    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
-    return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
-}
