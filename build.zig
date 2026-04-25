@@ -3416,6 +3416,14 @@ pub fn build(b: *std.Build) void {
     const rwlock_fairness_step = b.step("test-rwlock-fairness-under-load", "Run mg.rwlock fairness regression under sustained 16-way SHARED contention");
     rwlock_fairness_step.dependOn(&run_rwlock_fairness_tests.step);
 
+    const conn_pool_lifetime_mod = b.createModule(.{ .root_source_file = b.path("tests/test_handle_quic_connection_pool_lifetime.zig"), .target = target, .optimize = optimize });
+    conn_pool_lifetime_mod.addImport("geode", root_mod);
+    const conn_pool_lifetime_tests = b.addTest(.{ .root_module = conn_pool_lifetime_mod });
+    const run_conn_pool_lifetime_tests = b.addRunArtifact(conn_pool_lifetime_tests);
+    test_step.dependOn(&run_conn_pool_lifetime_tests.step);
+    const conn_pool_lifetime_step = b.step("test-handle-quic-connection-pool-lifetime", "Run pooled.ThreadPool init+deinit thread-leak regression test");
+    conn_pool_lifetime_step.dependOn(&run_conn_pool_lifetime_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
