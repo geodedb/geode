@@ -3408,6 +3408,14 @@ pub fn build(b: *std.Build) void {
     const runtime_metrics_step = b.step("test-runtime-metrics", "Run runtime_metrics registry tests");
     runtime_metrics_step.dependOn(&run_runtime_metrics_tests.step);
 
+    const rwlock_fairness_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rwlock_fairness_under_load.zig"), .target = target, .optimize = optimize });
+    rwlock_fairness_mod.addImport("geode", root_mod);
+    const rwlock_fairness_tests = b.addTest(.{ .root_module = rwlock_fairness_mod });
+    const run_rwlock_fairness_tests = b.addRunArtifact(rwlock_fairness_tests);
+    test_step.dependOn(&run_rwlock_fairness_tests.step);
+    const rwlock_fairness_step = b.step("test-rwlock-fairness-under-load", "Run mg.rwlock fairness regression under sustained 16-way SHARED contention");
+    rwlock_fairness_step.dependOn(&run_rwlock_fairness_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
