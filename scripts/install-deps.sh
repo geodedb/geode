@@ -94,6 +94,59 @@ fi
 echo "→ Installing OpenSSL development files..."
 sudo apt-get install -y libssl-dev
 
+# Install performance and diagnostic tooling.
+#
+# These are not required to BUILD Geode, but they are required to
+# diagnose and tune it under heavy load (the kind of work the
+# edges_contains cascade investigation needed). Keeping them in
+# `make deps` means a fresh dev environment is one command away
+# from being able to capture stack traces, sample-profile under
+# load, and inspect system-call / lock behaviour.
+echo ""
+echo "=== Installing performance + diagnostic tooling ==="
+echo ""
+
+# Core debugging + tracing.
+#   gdb        — stack capture during repros (`gdb -p <pid> -batch -ex 'thread apply all bt'`)
+#   strace     — system call tracing (`strace -c -e fsync` for fsync amortisation)
+#   ltrace     — library call tracing
+#   valgrind   — memory error / leak detection (`valgrind --tool=memcheck`)
+#   lsof       — open file descriptor inspection (cross-check FD counts under load)
+#   sysstat    — sar / iostat / pidstat for time-series system metrics
+#   tcpdump    — network capture for QUIC packet-level analysis
+#   numactl    — bind to CPU/memory nodes for reproducible perf benchmarks
+echo "→ Installing core debug tools..."
+sudo apt-get install -y \
+    gdb \
+    strace \
+    ltrace \
+    valgrind \
+    lsof \
+    sysstat \
+    tcpdump \
+    numactl
+
+# Linux perf — sampling profiler. Package name varies by kernel.
+#   On Debian/Ubuntu the matching package is `linux-tools-$(uname -r)` plus the
+#   `linux-tools-generic` umbrella. Some hosts (containers, custom kernels)
+#   only carry one or the other; install both and let dpkg pick.
+echo "→ Installing linux perf tools..."
+KREL=$(uname -r 2>/dev/null || true)
+if [ -n "$KREL" ]; then
+    sudo apt-get install -y "linux-tools-$KREL" linux-tools-generic linux-tools-common 2>/dev/null \
+        || sudo apt-get install -y linux-tools-generic linux-tools-common 2>/dev/null \
+        || echo "⚠ perf install failed — try 'sudo apt-get install linux-tools-\$(uname -r)' manually"
+else
+    sudo apt-get install -y linux-tools-generic linux-tools-common 2>/dev/null \
+        || echo "⚠ perf install failed — try manually"
+fi
+
+# bpftrace — high-level eBPF tracing for production-safe in-kernel probes.
+#   The Debian/Ubuntu package is `bpftrace`; on older releases it may be missing.
+echo "→ Installing bpftrace (eBPF tracing)..."
+sudo apt-get install -y bpftrace 2>/dev/null \
+    || echo "⚠ bpftrace not available on this distro release — skip; gdb + strace + perf cover the most-common needs"
+
 # Configure QUIC performance optimizations
 echo ""
 echo "=== Configuring QUIC Performance Optimizations ==="
@@ -147,6 +200,8 @@ echo "Installed components:"
 echo "  • Build tools and prerequisites"
 echo "  • OpenSSL development files"
 echo "  • QUIC: vendored implementation (no system libmsquic needed)"
+echo "  • Performance + diagnostic tools: gdb, strace, ltrace, valgrind,"
+echo "    lsof, sysstat, tcpdump, numactl, perf (linux-tools), bpftrace"
 echo ""
 echo "QUIC Performance Optimizations:"
 echo "  • UDP buffer sizes increased to 7MB (net.core.rmem_max, net.core.wmem_max)"

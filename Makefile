@@ -155,6 +155,22 @@ deps-check:
 		exit 1; \
 	fi
 	@echo ""
+	@echo "--- Performance + diagnostic tools (optional but recommended) ---"
+	@for tool in gdb strace ltrace valgrind lsof tcpdump numactl perf bpftrace; do \
+		printf "Checking %-10s... " "$$tool"; \
+		if command -v $$tool >/dev/null 2>&1; then \
+			echo "✓"; \
+		else \
+			echo "⚠ missing (run 'make deps' to install)"; \
+		fi; \
+	done
+	@printf "Checking %-10s... " "sar"
+	@if command -v sar >/dev/null 2>&1; then \
+		echo "✓ (sysstat)"; \
+	else \
+		echo "⚠ missing (run 'make deps' to install)"; \
+	fi
+	@echo ""
 	@echo "✓ All required dependencies are installed"
 	@echo ""
 	@echo "Note: Go, Python, Rust clients have moved to separate repositories"
