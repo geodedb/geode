@@ -8,6 +8,10 @@
 
 const std = @import("std");
 
+/// `name` must outlive the registry — the registry stores the slice
+/// by reference. Use string literals or otherwise-static memory.
+/// `ptr` likewise must outlive the registry; the counter's owner is
+/// responsible for keeping the atomic value alive while it's registered.
 pub const Counter = struct {
     name: []const u8,
     ptr: *std.atomic.Value(u64),
@@ -72,6 +76,11 @@ pub fn globalRegistry() ?*Registry {
     return g_registry;
 }
 
+/// Must only be called before any thread can call `globalRegistry()`,
+/// or after all such threads have stopped (e.g., server startup before
+/// the metrics-emit task is spawned, and shutdown after it joins).
+/// `g_registry` is not protected by an atomic; concurrent calls during
+/// active read traffic are a data race.
 pub fn setGlobalRegistry(r: ?*Registry) void {
     g_registry = r;
 }
