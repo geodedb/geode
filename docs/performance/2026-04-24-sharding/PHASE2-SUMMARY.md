@@ -76,6 +76,7 @@ path, Phase 2.4's fix of the adapter's tryLock-spin is incomplete.
 ## What Phase 2.4 actually won
 
 Significant progress even without a clean sub-60s result:
+
 - No more starvation on the per-graph rwlock under 16-way fan-in
   (the tryLock-spin bug is genuinely fixed for ≥1s budgets).
 - First clean completion of `edges_located_at` (8259 rows) — a
@@ -137,3 +138,80 @@ a52248bf feat(storage): extend ShardedStore API for real-caller needs
 ```
 
 Plus `2dadc13` in graph-storage publishing v0.2.0.
+
+---
+
+## Phase 2-final — closed (2026-04-25)
+
+The deferred items 1–4 above ("Re-enable ShardedCoordinator", "Per-shard
+auxiliary state", "Per-shard WalFlusher", "Engine thread-safety") were
+revisited under a v2 spec narrowed to the highest-leverage subset.
+
+**Spec:** `docs/superpowers/specs/2026-04-25-sharded-coordinator-restoration-design.md`
+**Plan:** `docs/superpowers/plans/2026-04-25-sharded-coordinator-restoration.md`
+
+### What landed
+
+- `ShardedCoordinator` restored from commit `210de668`, adapted for current
+  HEAD (commits `2e845d48`, `e0803bdf`).
+- Single-flusher `GroupCommitCoordinator` deleted; backwards-compat alias
+  removed.
+- `ApplyOp.shardKey()` + pre-resolved ids on `bulk_match_create_edge`
+  (`6d012c0c`).
+- `ManagedGraph.engine` migrated from `*GraphEngine` (single-threaded) to
+  `*ShardedGraphEngine` (16 per-shard engines) — the deep upstream fix
+  Phase 2 originally deferred. Commits `d16916af`, `647e99ba`.
+- `beginStatementTxnForShard(graph_name, shard_idx, *StatementTxn)` —
+  worker N opens its txn directly on `engine.shards[N]` instead of via
+  the round-robin `ShardedGraphEngine.beginTxn`. One WAL fsync per
+  shard-batch restored.
+- `NodePropertyExactIndex` mutex (`f795cca7`) — fixes a hash-map race
+  surfaced by sharded writes.
+- `bulkMergeNodeWithReservedId` `.not_indexable` parity fix
+  (`266e084f`).
+- MVCC routing-invariant: thread-local `t_is_shard_worker` (extracted to
+  `src/storage/shard_worker_tls.zig` to avoid module-cycle), Debug-mode
+  panic in `transactions/manager.zig:hasWriteWriteConflicts` (commit
+  `8c2b1fcc`).
+- New tests: `test_sharded_coordinator_routing.zig`,
+  `test_sharded_coordinator_hub_regression.zig`,
+  `test_txn_manager_routing_guard.zig` — all green; hub regression
+  reproduces 16-thread × 50-edge fan-in pattern (Phase 2.4 trigger) without
+  any `SerializationFailure`.
+
+### Measurement
+
+- Pre-change baseline (`phase2-plan-baseline.log`): 1179 s wall-clock,
+  cascaded on `edges_contains` at 16 min, `context deadline exceeded` /
+  `driver: bad connection`.
+- Post-change run (`phase2-final-run.log` + `.note`): zero `40001`
+  errors, parallel pipeline reaches further into the workload before
+  the residual transport-level cascade trips on `edges_contains` again.
+
+### Plan exit criteria
+
+- ✅ ShardedCoordinator restored; single-flusher deleted; full test suite
+  green.
+- ✅ Routing test, hub-node regression test, MVCC guard test all pass.
+- ✅ Zero `40001` errors in the post-change msft-graph run (the original
+  `40001` cascade is structurally eliminated by deterministic shard
+  routing + `ShardedGraphEngine`).
+- ❌ ≤ 70 s wall-clock target NOT met. The residual cascade is
+  transport-level (`context deadline exceeded` / `sql: connection is
+  already closed`) under heavy concurrent edge ingest, not write-write
+  conflict. Out of scope for the v2 spec; tracked as a follow-up.
+
+### Follow-up
+
+- Investigate QUIC keep-alive vs client 5-second statement deadline under
+  16-worker parallel writes for high-row-count edge files (`edges_contains`,
+  `edges_signed_in_to`, `edges_located_at`).
+- Consider raising client-side per-statement deadline in `msft-graph` or
+  adding server-side handshake throttling.
+- Reassess whether per-shard `WalFlusher` (deferred non-goal) is worth
+  picking back up once the transport residual is addressed — the current
+  design uses one statement transaction per shard-batch, which already
+  amortises fsync.
+- Phase 2.1–2.3 workarounds (writer-preferred lock, tryLock-spin backoff,
+  120 s deadline widening) are no longer load-bearing and can be deleted
+  in a hygiene pass.
