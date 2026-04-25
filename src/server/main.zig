@@ -190,6 +190,11 @@ const ConnectionContext = struct {
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer = null,
     // #683: Cached env config to avoid per-connection syscalls
     env_config: *const server_init.EnvironmentConfig = undefined,
+    // Shared stream + acceptor pools owned by main(); one per server lifetime
+    // instead of one per connection (which leaked under msft-graph reconnect).
+    // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
+    stream_pool: *thread_pool.ThreadPool,
+    acceptor_pool: *thread_pool.ThreadPool,
 };
 
 const PollLoopContext = struct {
@@ -214,6 +219,8 @@ fn handleConnectionAsync(context: *anyopaque) void {
         ctx.shared_ast_cache,
         ctx.shared_optimizer,
         ctx.env_config,
+        ctx.stream_pool,
+        ctx.acceptor_pool,
     ) catch |err| {
         log.err("Error handling QUIC connection (async)", &.{
             Attr.string("error", @errorName(err)),
@@ -816,6 +823,25 @@ pub fn main() !void {
             graph_store.deinitGlobalStore();
         }
 
+        // CANARY: REQ=REQ-PERF-STREAM-POOL-001; FEATURE="SharedStreamPool"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
+        // SP Tasks 2+3: Allocate shared stream + acceptor pools at server startup.
+        // These live for the full server lifetime so connection-close is no longer
+        // a pool-lifecycle event.  See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
+        const stream_pool = try thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 64,
+            .queue_capacity = 256,
+            // No deinit timeout: the pool lives as long as the server.
+            // On shutdown the queue should be empty; if any task is
+            // genuinely stuck the operator wants to know about it.
+        });
+        defer stream_pool.deinit();
+
+        const acceptor_pool = try thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 4,
+            .queue_capacity = 64,
+        });
+        defer acceptor_pool.deinit();
+
         // CANARY: REQ=REQ-PERF-ASYNC-CONN-002; FEATURE="AsyncConnectionHandling"; ASPECT=ThreadPoolInit; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
         // GAP-0202: Initialize thread pool for async connection handling
         // This allows accepting new connections while previous ones are being processed
@@ -835,7 +861,7 @@ pub fn main() !void {
                     });
                     continue;
                 };
-                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config) catch |err2| {
+                quic_connection_handler.handleQuicConnection(gpa, &transport, conn, disable_estimates, compact_profile, memcurve_profile, env_spill_threshold, env_storage_checksum_error, false, init_ctx.security_manager, init_ctx.shared_ast_cache, init_ctx.shared_optimizer, &init_ctx.env_config, stream_pool, acceptor_pool) catch |err2| {
                     log.err("Error handling QUIC connection", &.{
                         Attr.string("error", @errorName(err2)),
                     });
@@ -985,6 +1011,8 @@ pub fn main() !void {
                 .shared_ast_cache = init_ctx.shared_ast_cache,
                 .shared_optimizer = init_ctx.shared_optimizer,
                 .env_config = &init_ctx.env_config,
+                .stream_pool = stream_pool,
+                .acceptor_pool = acceptor_pool,
             };
 
             // Submit to thread pool for async handling

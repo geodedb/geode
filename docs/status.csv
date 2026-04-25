@@ -3308,6 +3308,7 @@ REQ-PERF-SPICE-027,ParallelWrapperBenchmarks,Performance,IMPL,,,performance,2026
 REQ-PERF-SPICE-027,ParallelWrapperTests,BuildIntegration,IMPL,,,performance,2026-04-12,build.zig
 REQ-PERF-SPICE-028,ParallelWrapperBenchBuild,BuildIntegration,IMPL,,,performance,2026-04-12,build.zig
 REQ-PERF-STREAM-001,Performance,StreamProcessing,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch6_comprehensive.zig
+REQ-PERF-STREAM-POOL-001,SharedStreamPool,ThreadPoolInit,IMPL,,,server,2026-04-25,src/server/main.zig
 REQ-PERF-STREAM-REMOVE-001,StreamRemovalOptimization,O1Removal,TESTED,,,transport,2026-01-30,src/transport/quic.zig
 REQ-PERF-TEST-001,PerfTest,QuerySpeed,TESTED,,,performance,2026-01-16,tests/test_gap_0193_batch2_testing.zig
 REQ-PERF-TEST-001,PerformanceTests,UnitTests,IMPL,,,test,2026-01-26,tests/test_performance_optimizations.zig

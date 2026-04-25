@@ -1675,6 +1675,8 @@ pub fn handleQuicConnection(
     shared_ast_cache: ?*anyopaque, // Type is query_ast_cache.SharedAstCache
     shared_optimizer: ?*query_plan_cache.SharedQueryOptimizer, // Issue #460
     env_config: *const server_init.EnvironmentConfig, // #683: Cached env vars
+    stream_pool: *pooled.ThreadPool,
+    acceptor_pool: *pooled.ThreadPool,
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
@@ -1967,77 +1969,15 @@ pub fn handleQuicConnection(
         conn_state.deinit();
     }
 
-    // R5 (2026-04-22): size the per-connection stream worker pool from
-    // CPU count (capped at 16) instead of hardcoding 4 threads.  Under
-    // the 16-worker Go-client ingest workload the old 4-thread pool was
-    // the bottleneck: a handful of long-running mutations saturated the
-    // pool and queued everything else behind them, which fed directly
-    // into the "thread-pool deinit timed out with 1 active tasks"
-    // shutdown warning.
-    //
-    // R6 (2026-04-22): R5's per-connection pool size was too large.
-    // With N client connections each spawning min(CPU, 16) stream
-    // worker threads, an 8-core host under the 16-worker ingest
-    // workload spawned 16 × 8 = 128 stream threads just for stream
-    // dispatch, on top of the 16-wide top-level connection pool.  The
-    // resulting 3-4× oversubscription burned ~800% CPU in kernel
-    // scheduler overhead and context switches even while clients were
-    // effectively serialised behind the per-graph write lock.
-    //
-    // Most clients (including msft-graph / TopologyGraph) use 1-2
-    // streams per connection.  Pool size 4 covers the first stream +
-    // the acceptor loop + a safety margin for multiplexed queries, and
-    // keeps total server thread count bounded: 16 clients × 4 stream
-    // threads = 64, which fits comfortably on 8-16 core hosts.
-    const cpu_count = std.Thread.getCpuCount() catch 4;
-    _ = cpu_count; // retained for future per-host tuning; see R6 notes
-    const stream_pool_size: usize = 4;
-    const stream_pool = pooled.ThreadPool.init(gpa, .{
-        .num_threads = stream_pool_size,
-        // Queue capacity scales with pool size so bursty clients don't
-        // spuriously trip backpressure on a wider pool.
-        .queue_capacity = stream_pool_size * 16,
-        // 2026-04-23: the thread-pool default deinit_timeout is 30 s.
-        // msft-graph's per-file reconnect pattern closes the QUIC
-        // connection after each file, which triggers this pool's
-        // `defer stream_pool.deinit()` — and if ANY task is still
-        // active (e.g. a worker parked on the cancelable-write-lock
-        // backoff, or mid-apply in the coordinator), deinit blocks
-        // up to 30 s.  That's the 30 s/file floor we've been
-        // attributing to client-side pipeline overhead.  Post Task 16
-        // + Task 19 + the R2 backoff-tuning commit, every mutation
-        // completes in milliseconds under the exclusive lock, so a
-        // 2 s ceiling is ample — if a task isn't done in 2 s it's
-        // almost certainly stuck on something we'd want to see a
-        // warning about anyway.
-        .deinit_timeout_ns = 2 * std.time.ns_per_s,
-    }) catch |err| {
-        log.warn("Failed to initialize stream worker pool, single-stream mode", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
-        return;
-    };
-    defer stream_pool.deinit();
+    // SP Tasks 2+3 (2026-04-25): stream_pool and acceptor_pool are now owned by
+    // main() and passed in as parameters.  Per-connection pool init was removed
+    // because per-connection deinit leaked ~5 zombie worker threads per QUIC
+    // connection-close under msft-graph's per-file reconnect pattern (~720
+    // closes × 5 = ~1800 zombie threads, starving the QUIC packet pump).
+    // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
 
     var acceptor_shutdown = std.atomic.Value(bool).init(false);
-    const acceptor_pool = pooled.ThreadPool.init(gpa, .{
-        .num_threads = 1,
-        .queue_capacity = 4,
-        // 2 s deinit ceiling for the same reason as stream_pool above
-        // — the connection closes sooner than the 30 s default allows
-        // under msft-graph's per-file reconnect pattern.
-        .deinit_timeout_ns = 2 * std.time.ns_per_s,
-    }) catch |err| {
-        // If we can't spawn the acceptor, fall back to single-stream mode.
-        // The first stream still works fine — just no multiplexing.
-        log.warn("Failed to spawn stream acceptor, single-stream mode", &.{
-            Attr.string("error", @errorName(err)),
-        });
-        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
-        return;
-    };
-    defer acceptor_pool.deinit();
+
     var acceptor_ctx = StreamAcceptorContext{
         .allocator = gpa,
         .transport = transport,

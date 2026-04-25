@@ -98,8 +98,8 @@ fn barrierTask(ctx: *anyopaque) void {
 // barrier deadline.
 // ──────────────────────────────────────────────────────────────────────
 test "task31_regression: submit() — 4 tasks on 4-thread pool must run concurrently" {
-    // Mirror the per-connection stream pool config at
-    // src/server/quic_connection_handler.zig:1994 (stream_pool_size = 4).
+    // Use the same 4-worker config that was formerly the per-connection stream pool
+    // (SP Tasks 2+3: pool is now server-lifetime in main.zig, 64 workers shared).
     const num_workers: usize = 4;
     const pool = try ThreadPool.init(testing.allocator, .{
         .num_threads = num_workers,
