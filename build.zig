@@ -3400,6 +3400,14 @@ pub fn build(b: *std.Build) void {
     const routing_guard_step = b.step("test-txn-routing-guard", "Run txn-manager routing-invariant guard placeholder");
     routing_guard_step.dependOn(&run_routing_guard_tests.step);
 
+    const runtime_metrics_mod = b.createModule(.{ .root_source_file = b.path("tests/test_runtime_metrics.zig"), .target = target, .optimize = optimize });
+    runtime_metrics_mod.addImport("geode", root_mod);
+    const runtime_metrics_tests = b.addTest(.{ .root_module = runtime_metrics_mod });
+    const run_runtime_metrics_tests = b.addRunArtifact(runtime_metrics_tests);
+    test_step.dependOn(&run_runtime_metrics_tests.step);
+    const runtime_metrics_step = b.step("test-runtime-metrics", "Run runtime_metrics registry tests");
+    runtime_metrics_step.dependOn(&run_runtime_metrics_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
