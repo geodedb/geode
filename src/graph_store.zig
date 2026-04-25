@@ -5950,8 +5950,16 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
 }
 
 fn persistenceLoop() void {
-    // Use a short poll interval (1s) for responsive cross-process visibility
-    const poll_ms: u64 = @min(g_persist_interval_ms, 1000);
+    // 2026-04-25 (Phase 2-final follow-up, edges_contains cascade fix): the
+    // prior `@min(g_persist_interval_ms, 1000)` clamp meant the persister
+    // polled every 1 s regardless of `--persist-interval`. Under sustained
+    // 16-way SHARED traffic on `mg.rwlock` (msft-graph ingest), that fired
+    // an EXCLUSIVE acquire every second that got starved indefinitely,
+    // accumulating thousands of parked threads. Honour the configured
+    // interval (still bounded below by 100 ms so a misconfigured 0 or 1 ms
+    // doesn't burn CPU). See
+    // docs/performance/2026-04-25-edges-contains/diagnosis.md.
+    const poll_ms: u64 = @max(g_persist_interval_ms, 100);
     while (!g_persist_shutdown.load(.acquire)) {
         {
             const ns: u64 = poll_ms * std.time.ns_per_ms;
