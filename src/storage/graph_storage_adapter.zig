@@ -1352,7 +1352,11 @@ pub const StorageAdapter = struct {
         var probe_id: u64 = 0;
         const probe = store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id);
         mg.merge_prop_index_lock.unlockShared(io);
-        if (probe == .found) return probe_id;
+        switch (probe) {
+            .found => return probe_id,
+            .not_indexable => return error.MergeValueNotIndexable,
+            .not_found => {},
+        }
 
         // Insert phase: take the shard lock for the reserved id plus
         // the merge-index lock EXCLUSIVE.  Re-probe under the
@@ -1366,8 +1370,10 @@ pub const StorageAdapter = struct {
         defer mg.merge_prop_index_lock.unlock(io);
 
         var reprobe_id: u64 = 0;
-        if (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &reprobe_id) == .found) {
-            return reprobe_id;
+        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &reprobe_id)) {
+            .found => return reprobe_id,
+            .not_indexable => return error.MergeValueNotIndexable,
+            .not_found => {},
         }
 
         mg.string_indexes_mutex.lockUncancelable(io);
