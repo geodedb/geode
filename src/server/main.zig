@@ -845,6 +845,55 @@ pub fn main() !void {
         };
         defer pool.deinit();
 
+        // CANARY: REQ=REQ-PERF-METRICS-001; FEATURE="RuntimeMetrics"; ASPECT=RegistryInit; STATUS=IMPL; OWNER=server; UPDATED=2026-04-25
+        // Task 4: Initialise the process-global runtime_metrics registry and spawn
+        // the periodic-emit task onto the existing connection thread pool.
+        // Access via geode module to avoid duplicate-module conflict (runtime_metrics.zig
+        // is owned by the 'geode' module via lib.zig; main.zig is in 'root').
+        const runtime_metrics_mod = geode.runtime_metrics;
+        const metrics_registry = try runtime_metrics_mod.Registry.init(gpa);
+        runtime_metrics_mod.setGlobalRegistry(metrics_registry);
+        defer {
+            runtime_metrics_mod.setGlobalRegistry(null);
+            metrics_registry.deinit();
+        }
+
+        var metrics_should_stop = std.atomic.Value(u32).init(0);
+        const MetricsCtx = struct {
+            registry: *runtime_metrics_mod.Registry,
+            should_stop: *std.atomic.Value(u32),
+            allocator: std.mem.Allocator,
+        };
+        const metrics_ctx = try gpa.create(MetricsCtx);
+        defer gpa.destroy(metrics_ctx);
+        metrics_ctx.* = .{
+            .registry = metrics_registry,
+            .should_stop = &metrics_should_stop,
+            .allocator = gpa,
+        };
+
+        const metricsLoop = struct {
+            fn run(ctx_ptr: *anyopaque) void {
+                const ctx: *MetricsCtx = @ptrCast(@alignCast(ctx_ptr));
+                while (ctx.should_stop.load(.acquire) == 0) {
+                    const req = std.os.linux.timespec{
+                        .sec = 5,
+                        .nsec = 0,
+                    };
+                    var rem: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.nanosleep(&req, &rem);
+                    if (ctx.should_stop.load(.acquire) != 0) break;
+                    var buf: std.ArrayList(u8) = .empty;
+                    defer buf.deinit(ctx.allocator);
+                    ctx.registry.snapshotInto(ctx.allocator, &buf) catch continue;
+                    std.log.info("metrics: {s}", .{buf.items});
+                }
+            }
+        }.run;
+
+        _ = pool.submitDefault(.{ .context = @ptrCast(metrics_ctx), .callback = metricsLoop });
+        defer metrics_should_stop.store(1, .release);
+
         std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ compat_milliTimestamp() - phase_start, pool.workers.len });
 
         // GAP-0269: Log total startup time for operator diagnostics (stderr, visible at all log levels)
