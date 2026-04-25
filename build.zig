@@ -3369,6 +3369,14 @@ pub fn build(b: *std.Build) void {
     const sharded_coord_routing_step = b.step("test-sharded-coordinator-routing", "Run ShardedCoordinator routing correctness tests");
     sharded_coord_routing_step.dependOn(&run_sharded_coord_routing_tests.step);
 
+    const sharded_hub_mod = b.createModule(.{ .root_source_file = b.path("tests/test_sharded_coordinator_hub_regression.zig"), .target = target, .optimize = optimize });
+    sharded_hub_mod.addImport("geode", root_mod);
+    const sharded_hub_tests = b.addTest(.{ .root_module = sharded_hub_mod });
+    const run_sharded_hub_tests = b.addRunArtifact(sharded_hub_tests);
+    test_step.dependOn(&run_sharded_hub_tests.step);
+    const sharded_hub_step = b.step("test-sharded-coordinator-hub", "Run ShardedCoordinator hub-node concurrent-edge regression");
+    sharded_hub_step.dependOn(&run_sharded_hub_tests.step);
+
     // MATCH-by-property write-lock serialization regression:
     // reproduction tests for the point_read QPS ceiling observed in
     // docs/audit/LOADTEST_REPORT_2026_04_18_v0.3.5.md — the transport
