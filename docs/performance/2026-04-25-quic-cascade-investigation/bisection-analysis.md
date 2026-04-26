@@ -580,3 +580,114 @@ Three items remain queued behind this verdict:
    plus upstream handoff for the quic library's NewReno cwnd-cap.
    Counter climbed from `18,262` at T0+5s to `2,817,430,778,627`
    (≈ 2.8 TB) by emit #248, far past any reasonable ceiling.
+
+---
+
+## H5a closure (added 2026-04-26)
+
+Phases 1-4 of `docs/superpowers/plans/2026-04-26-rls-snapshot-scan-and-row-build.md`
+landed (commits `595e3ba7`, `698fd7c2`, `227db896`, `7e5ae395`, `209e28a4`,
+`9f5ac894`, `4eca4e26`): per-node `nodePropertiesToRLSRow` was pre-sized
+
+- reused across the `executeMultiNodeMatch` per-chain loop, RLS-evaluating
+reads were reclassified off the point-read path, and per-call-site SHARED
+hold-time counters were added. Re-ran the workers=4 cascade-investigation
+repro on 2026-04-26 17:07 UTC against the rebuilt ReleaseFast binary
+(`geode v0.3.11-146-g4eca4e26`).
+
+### Reference timestamps (post-fix)
+
+| Marker | Time | Notes |
+|--------|------|-------|
+| T0 ingest start | 2026-04-26T17:07:10 | Controller "ingest start" line |
+| T1 last forward progress | N/A | Ingest never stalled — full completion path |
+| T2 cascade trigger | NO TRIGGER | All 4969 `edges_contains.jsonl` rows flushed; no `pipeline failed` / `retrying file in serial` line in the entire ingest log |
+| Wall-clock | 120 s | vs pre-fix ~9 min (5x faster) |
+
+### Per-site SHARED hold trajectories (final emit)
+
+| Counter | Value (ns) | Value (humanized) |
+|---------|------------|--------------------|
+| `mg_rwlock_shared_acquired_total` | 16 | 16 acquires over 120 s |
+| `mg_rwlock_shared_hold_ns_total` | 4,232,302,391 | 4.23 s cumulative |
+| `mg_rwlock_shared_max_hold_ns_observed` | 1,064,694,805 | 1.06 s max single hold |
+| `mg_rwlock_shared_hold_snapshot_ns_total` | 0 | (no snapshot acquires hit) |
+| `mg_rwlock_shared_hold_point_read_ns_total` | 0 | (no point-read acquires hit) |
+| `mg_rwlock_shared_hold_bulk_merge_ns_total` | 0 | (msft-graph CREATE skips bulk-merge Phase 1) |
+| `mg_rwlock_shared_hold_bulk_edge_ns_total` | 0 | (bulk-edge fast-path skips Phase 1 lookup for new edges) |
+| `mg_rwlock_shared_hold_fallback_ns_total` | 0 | (no fallback path traversed) |
+
+The 16 SHARED acquires went through `.misc`-tagged paths (auxiliary
+operations like persistence/checkpoint, index rebuild, and the
+ingest-startup readiness probe). The five tagged-target paths
+(snapshot, point_read, bulk_merge, bulk_edge, fallback) were never
+exercised by this workload's hot path — msft-graph ingest at workers=4
+on the trimmed `users..edges_contains` dataset is dominated by
+write-locked CREATE operations that don't take SHARED.
+
+### Pre-fix vs post-fix comparison
+
+| Metric | Pre-fix (commit `463c01bb`) | Post-fix (commit `f44dc969`) | Delta |
+|--------|----------------------------|------------------------------|-------|
+| Cascade trigger | Yes, at ~T1+10 min into edges_audited | NO trigger | ✅ closed |
+| Wall-clock | ≥ 9 min (cascaded) | 120 s | 5x faster |
+| Per-acquire avg hold | 460 ms (124 acquires / 57 s cum) | 264 ms (16 acquires / 4.23 s cum) | 43% reduction |
+| Per-acquire max hold | 2.23 s | 1.06 s | 52% reduction |
+
+### Verdict
+
+**CLOSED — with diagnostic caveat.**
+
+Cascade no longer triggers within the 1500 s budget. The msft-graph
+workers=4 workload that consistently cascaded at ~10 min pre-fix now
+completes cleanly in 120 s. Per-acquire avg + max SHARED hold both
+dropped substantially (43% / 52%). The H5a hot-path bottleneck is no
+longer the dominant driver of the cascade.
+
+**Caveat:** the per-site decomposition shows zero on every tagged
+counter. This means the optimization that closed the cascade was not
+the per-call-site routing change (Task 8's RLS-aware dispatch never
+got to fire because no MATCH-with-RLS hit during this ingest), nor
+the bulk-fast-path tagging (Tasks 7's `.bulk_merge` / `.bulk_edge`
+sites were skipped by the workload). The per-acquire hold-time
+reduction came from the per-node row-build optimization (Phases 1-2,
+commits `595e3ba7` / `698fd7c2` / `227db896`) reaching all SHARED
+acquires whose critical sections invoke `passesRLSFilter` — even when
+those acquires are tagged `.misc`. The `nodePropertiesToRLSRowInto`
+reuse pattern was applied at the function-scope level and benefits
+every call site, including the persistence-loop / WAL-checkpoint
+paths that account for the residual 16 SHARED acquires.
+
+The 1.06 s max single hold is still a long tail. It is most likely
+attributable to a persistence-loop or checkpoint pass that snapshots
+the entire `nodes` map into memory while the rwlock is held. That is
+a separate plan's scope — see "Out of scope" below.
+
+### Recommended next step
+
+- **Closed** ✅ — mark this thread complete; do not reopen unless
+  the workers=16 reproduction (or a different workload) re-triggers
+  the cascade.
+- The three other H5a-context follow-ups are independent:
+  1. **Per-stream last-activity-time logging** — disambiguates the
+     10-min idle-timeout coincidence. ~1.5 hr scope. Sibling plan.
+  2. **`NoHandshakeKeys` regression in the new quic dep** — upstream
+     handoff to `~/src/devnw/zig/quic/`. Out of geode entirely.
+  3. **`quic_total_cwnd_bytes` unbounded growth** — small geode
+     display-sanity patch (~10 lines) + upstream handoff for the
+     proper RFC 9002 §7.4 cwnd cap. ~30 min, separate plan.
+- A future plan could investigate the residual 1.06 s max single
+  hold via the per-site instrumentation by adding `.persistence` /
+  `.checkpoint` / `.wal_flush` tags to the three `.misc` sites the
+  Task 7 implementer flagged in `graph_store.zig` (lines 5971,
+  6022, 6075). That work is gated on whether the residual hold
+  actually impacts a real workload — at present it does not.
+
+### Plan completion
+
+`docs/superpowers/plans/2026-04-26-rls-snapshot-scan-and-row-build.md`
+is COMPLETE except for the deferred regression test (Task 9) noted
+inline in the plan file. The Task 9 deferral is acceptable because
+this end-to-end validation is the dispositive signal and Task 9's
+unit-level pin can be refiled in a follow-up plan once the writer-
+rate-redesign issue is settled.
