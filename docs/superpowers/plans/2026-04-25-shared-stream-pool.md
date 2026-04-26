@@ -439,6 +439,32 @@ This task adds two `*pooled.ThreadPool` fields to `ConnectionContext` and initia
 
 ## Phase 2 — Validate end-to-end
 
+> **CLOSURE NOTE (2026-04-25):** Tasks 4 and 5 are PARTIALLY RESOLVED.
+> The per-connection QUIC pool fix from Phase 1 (commits `edb82c71`,
+> `b52846cc`) was insufficient on its own — the dominant per-engine
+> `tp.ThreadPool` fanout in `graph_storage` (16 sub-engines × 56 workers
+> per `ShardedGraphEngine`) remained. That root cause was fixed upstream
+> in graph-storage Phase 1 (commits `ef9bf88` → `5ead31b`) and pulled
+> into geode by bumping `build.zig.zon` to graph-storage `5ead31b`. NLWP
+> dropped from 1881 → 97 (~19× reduction).
+>
+> **However, the cascade still triggers.** Re-running the repro on the
+> bumped dep showed `edges_contains` still hits the 1500s timeout. The
+> dominant cause is now writer starvation on `mg.rwlock`
+> (`mg_rwlock_exclusive_wait_ns_total` froze at 17.85s for the entire
+> 25-min run), not thread budget. Continuation of the work belongs in
+> the rwlock-fairness plan
+> (`docs/superpowers/plans/2026-04-25-enterprise-rwlock-fairness.md`).
+>
+> Full results: `docs/performance/2026-04-25-shared-stream-pool/2026-04-25-graph-storage-bump-result.md`.
+> Upstream design referenced from this fix:
+> `~/src/devnw/zig/graph-storage/docs/2026-04-25-shared-engine-thread-pool.md`.
+>
+> Tasks 4 and 5 below are kept for historical context but their
+> "completion" criterion (cascade resolved) is satisfied by the
+> graph-storage dep bump for the thread-pool dimension and is now
+> blocked on the rwlock-fairness work for the actual end-to-end pass.
+
 ### Task 4: Re-run the cascade repro under the shared-pool fix
 
 **Files:**

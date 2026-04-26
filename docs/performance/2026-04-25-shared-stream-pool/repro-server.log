@@ -1,0 +1,403 @@
+[startup] user store initialized (1ms)
+Generated self-signed certificates at /tmp/geode-shared-pool/server.crt and /tmp/geode-shared-pool/server.key
+[startup] certificates ready (110ms)
+warning: Audit signing keys stored as files. Set GEODE_AUDIT_PUB and GEODE_AUDIT_SEC env vars for production.
+info(graph_storage_adapter): created graph '__geode_security'
+
+[GEODE SECURITY] WARNING: Auto-generated admin password written to disk: ./.geode_admin_password
+[GEODE SECURITY] WARNING: Set GEODE_DEFAULT_PASSWORD env var for production.
+
+[startup] server initialized (3021ms)
+[startup] auth cache configured (1076ms)
+{"component":"transport","transport":"quic","tls":"true","port":3174,"library":"vendor/quic","api":"native-endpoint","status":"listening"}
+[startup] QUIC transport listening (0ms)
+[startup] thread pool initialized (56ms, 16 workers)
+[startup] server ready (4472ms total)
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info: metrics:
+info(graph_storage_adapter): created graph 'abs_eagleg'
+info: metrics: mg_rwlock_shared_acquired_total=4 mg_rwlock_shared_wait_ns_total=3484 mg_rwlock_exclusive_wait_ns_total=970
+info: metrics: mg_rwlock_shared_acquired_total=4 mg_rwlock_shared_wait_ns_total=3484 mg_rwlock_exclusive_wait_ns_total=970
+info: metrics: mg_rwlock_shared_acquired_total=4 mg_rwlock_shared_wait_ns_total=3484 mg_rwlock_exclusive_wait_ns_total=8991058262
+info: metrics: mg_rwlock_shared_acquired_total=4 mg_rwlock_shared_wait_ns_total=3484 mg_rwlock_exclusive_wait_ns_total=28383353686
+info: metrics: mg_rwlock_shared_acquired_total=4 mg_rwlock_shared_wait_ns_total=3484 mg_rwlock_exclusive_wait_ns_total=32039712196
+info: metrics: mg_rwlock_shared_acquired_total=7 mg_rwlock_shared_wait_ns_total=6611 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=12 mg_rwlock_shared_wait_ns_total=11913 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=15 mg_rwlock_shared_wait_ns_total=14468 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=15 mg_rwlock_shared_wait_ns_total=14468 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=17 mg_rwlock_shared_wait_ns_total=16636 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=22 mg_rwlock_shared_wait_ns_total=21974 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=22 mg_rwlock_shared_wait_ns_total=21974 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=22 mg_rwlock_shared_wait_ns_total=21974 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=28 mg_rwlock_shared_wait_ns_total=29251 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=33 mg_rwlock_shared_wait_ns_total=35123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=33 mg_rwlock_shared_wait_ns_total=35123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=33 mg_rwlock_shared_wait_ns_total=35123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=35 mg_rwlock_shared_wait_ns_total=37357 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=40 mg_rwlock_shared_wait_ns_total=43124 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=44 mg_rwlock_shared_wait_ns_total=46917 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=44 mg_rwlock_shared_wait_ns_total=46917 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=45 mg_rwlock_shared_wait_ns_total=47916 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=51 mg_rwlock_shared_wait_ns_total=53704 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=51 mg_rwlock_shared_wait_ns_total=53704 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=51 mg_rwlock_shared_wait_ns_total=53704 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=57 mg_rwlock_shared_wait_ns_total=59798 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=62 mg_rwlock_shared_wait_ns_total=65197 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=62 mg_rwlock_shared_wait_ns_total=65197 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=62 mg_rwlock_shared_wait_ns_total=65197 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=65 mg_rwlock_shared_wait_ns_total=68344 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=69 mg_rwlock_shared_wait_ns_total=78192 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=73 mg_rwlock_shared_wait_ns_total=82253 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=73 mg_rwlock_shared_wait_ns_total=82253 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=75 mg_rwlock_shared_wait_ns_total=84187 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=80 mg_rwlock_shared_wait_ns_total=88906 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=80 mg_rwlock_shared_wait_ns_total=88906 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=80 mg_rwlock_shared_wait_ns_total=88906 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=85 mg_rwlock_shared_wait_ns_total=106902 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=91 mg_rwlock_shared_wait_ns_total=114364 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=91 mg_rwlock_shared_wait_ns_total=114364 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=91 mg_rwlock_shared_wait_ns_total=114364 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=93 mg_rwlock_shared_wait_ns_total=117038 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=98 mg_rwlock_shared_wait_ns_total=121613 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=102 mg_rwlock_shared_wait_ns_total=125715 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=102 mg_rwlock_shared_wait_ns_total=125715 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=103 mg_rwlock_shared_wait_ns_total=126884 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=109 mg_rwlock_shared_wait_ns_total=133123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=109 mg_rwlock_shared_wait_ns_total=133123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=109 mg_rwlock_shared_wait_ns_total=133123 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=115 mg_rwlock_shared_wait_ns_total=139415 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=120 mg_rwlock_shared_wait_ns_total=144812 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=120 mg_rwlock_shared_wait_ns_total=144812 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=120 mg_rwlock_shared_wait_ns_total=144812 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=122 mg_rwlock_shared_wait_ns_total=147621 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=127 mg_rwlock_shared_wait_ns_total=153111 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=131 mg_rwlock_shared_wait_ns_total=156700 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=131 mg_rwlock_shared_wait_ns_total=156700 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=133 mg_rwlock_shared_wait_ns_total=167794 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=138 mg_rwlock_shared_wait_ns_total=174153 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=138 mg_rwlock_shared_wait_ns_total=174153 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=138 mg_rwlock_shared_wait_ns_total=174153 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=144 mg_rwlock_shared_wait_ns_total=180430 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=149 mg_rwlock_shared_wait_ns_total=186160 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=149 mg_rwlock_shared_wait_ns_total=186160 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=149 mg_rwlock_shared_wait_ns_total=186160 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=151 mg_rwlock_shared_wait_ns_total=188527 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=156 mg_rwlock_shared_wait_ns_total=194825 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=160 mg_rwlock_shared_wait_ns_total=198717 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=160 mg_rwlock_shared_wait_ns_total=198717 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=161 mg_rwlock_shared_wait_ns_total=199918 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=167 mg_rwlock_shared_wait_ns_total=206891 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=167 mg_rwlock_shared_wait_ns_total=206891 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=167 mg_rwlock_shared_wait_ns_total=206891 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=173 mg_rwlock_shared_wait_ns_total=213363 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=178 mg_rwlock_shared_wait_ns_total=218222 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=178 mg_rwlock_shared_wait_ns_total=218222 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=178 mg_rwlock_shared_wait_ns_total=218222 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=182 mg_rwlock_shared_wait_ns_total=222702 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=185 mg_rwlock_shared_wait_ns_total=226199 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=189 mg_rwlock_shared_wait_ns_total=229878 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=189 mg_rwlock_shared_wait_ns_total=229878 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=191 mg_rwlock_shared_wait_ns_total=232987 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=196 mg_rwlock_shared_wait_ns_total=238831 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=196 mg_rwlock_shared_wait_ns_total=238831 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=196 mg_rwlock_shared_wait_ns_total=238831 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=204 mg_rwlock_shared_wait_ns_total=248146 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=207 mg_rwlock_shared_wait_ns_total=251705 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=207 mg_rwlock_shared_wait_ns_total=251705 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=207 mg_rwlock_shared_wait_ns_total=251705 mg_rwlock_exclusive_wait_ns_total=32039713074
+info: metrics: mg_rwlock_shared_acquired_total=218 mg_rwlock_shared_wait_ns_total=262005 mg_rwlock_exclusive_wait_ns_total=38750411380
+info: metrics: mg_rwlock_shared_acquired_total=221 mg_rwlock_shared_wait_ns_total=598027535 mg_rwlock_exclusive_wait_ns_total=49501775133
+info: metrics: mg_rwlock_shared_acquired_total=224 mg_rwlock_shared_wait_ns_total=955149251 mg_rwlock_exclusive_wait_ns_total=54412282547
+info: metrics: mg_rwlock_shared_acquired_total=224 mg_rwlock_shared_wait_ns_total=955149251 mg_rwlock_exclusive_wait_ns_total=56765242470
+info: metrics: mg_rwlock_shared_acquired_total=224 mg_rwlock_shared_wait_ns_total=955149251 mg_rwlock_exclusive_wait_ns_total=57161789015
+info: metrics: mg_rwlock_shared_acquired_total=224 mg_rwlock_shared_wait_ns_total=955149251 mg_rwlock_exclusive_wait_ns_total=57161789015
+info: metrics: mg_rwlock_shared_acquired_total=245 mg_rwlock_shared_wait_ns_total=1714027604 mg_rwlock_exclusive_wait_ns_total=59401632327
+info: metrics: mg_rwlock_shared_acquired_total=245 mg_rwlock_shared_wait_ns_total=1714027604 mg_rwlock_exclusive_wait_ns_total=59592986548
+info: metrics: mg_rwlock_shared_acquired_total=245 mg_rwlock_shared_wait_ns_total=1714027604 mg_rwlock_exclusive_wait_ns_total=59592986548
+info: metrics: mg_rwlock_shared_acquired_total=245 mg_rwlock_shared_wait_ns_total=1714027604 mg_rwlock_exclusive_wait_ns_total=59592986548
+info: metrics: mg_rwlock_shared_acquired_total=252 mg_rwlock_shared_wait_ns_total=1714033527 mg_rwlock_exclusive_wait_ns_total=59592986548
+info: metrics: mg_rwlock_shared_acquired_total=252 mg_rwlock_shared_wait_ns_total=1714033527 mg_rwlock_exclusive_wait_ns_total=60071322169
+info: metrics: mg_rwlock_shared_acquired_total=253 mg_rwlock_shared_wait_ns_total=1714034821 mg_rwlock_exclusive_wait_ns_total=60071322169
+info: metrics: mg_rwlock_shared_acquired_total=256 mg_rwlock_shared_wait_ns_total=2023429932 mg_rwlock_exclusive_wait_ns_total=63259469162
+info: metrics: mg_rwlock_shared_acquired_total=263 mg_rwlock_shared_wait_ns_total=2369348166 mg_rwlock_exclusive_wait_ns_total=63259469162
+info: metrics: mg_rwlock_shared_acquired_total=263 mg_rwlock_shared_wait_ns_total=2369348166 mg_rwlock_exclusive_wait_ns_total=63821310157
+info: metrics: mg_rwlock_shared_acquired_total=263 mg_rwlock_shared_wait_ns_total=2369348166 mg_rwlock_exclusive_wait_ns_total=63821310157
+info: metrics: mg_rwlock_shared_acquired_total=263 mg_rwlock_shared_wait_ns_total=2369348166 mg_rwlock_exclusive_wait_ns_total=63821310157
+info: metrics: mg_rwlock_shared_acquired_total=270 mg_rwlock_shared_wait_ns_total=2496813604 mg_rwlock_exclusive_wait_ns_total=63821310157
+info: metrics: mg_rwlock_shared_acquired_total=274 mg_rwlock_shared_wait_ns_total=2545050985 mg_rwlock_exclusive_wait_ns_total=66020783967
+info: metrics: mg_rwlock_shared_acquired_total=274 mg_rwlock_shared_wait_ns_total=2545050985 mg_rwlock_exclusive_wait_ns_total=66020783967
+info: metrics: mg_rwlock_shared_acquired_total=274 mg_rwlock_shared_wait_ns_total=2545050985 mg_rwlock_exclusive_wait_ns_total=66020784932
+info: metrics: mg_rwlock_shared_acquired_total=281 mg_rwlock_shared_wait_ns_total=3082397653 mg_rwlock_exclusive_wait_ns_total=66020784932
+info: metrics: mg_rwlock_shared_acquired_total=281 mg_rwlock_shared_wait_ns_total=3082397653 mg_rwlock_exclusive_wait_ns_total=66437491880
+info: metrics: mg_rwlock_shared_acquired_total=281 mg_rwlock_shared_wait_ns_total=3082397653 mg_rwlock_exclusive_wait_ns_total=66437493960
+warning: orphan-txn rolled back on stream close (txn_id=1777137481861, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1777137481861, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1777137481861, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1777137481862, graph=abs_eagleg)
+warning: orphan-txn rolled back on stream close (txn_id=1777137481862, graph=abs_eagleg)
+info: metrics: mg_rwlock_shared_acquired_total=282 mg_rwlock_shared_wait_ns_total=3082399175 mg_rwlock_exclusive_wait_ns_total=66437501045
+info: metrics: mg_rwlock_shared_acquired_total=286 mg_rwlock_shared_wait_ns_total=3310522424 mg_rwlock_exclusive_wait_ns_total=70311573064
+info: metrics: mg_rwlock_shared_acquired_total=286 mg_rwlock_shared_wait_ns_total=3310522424 mg_rwlock_exclusive_wait_ns_total=70311574112
+info: metrics: mg_rwlock_shared_acquired_total=286 mg_rwlock_shared_wait_ns_total=3310522424 mg_rwlock_exclusive_wait_ns_total=70311575040
+info: metrics: mg_rwlock_shared_acquired_total=286 mg_rwlock_shared_wait_ns_total=3310522424 mg_rwlock_exclusive_wait_ns_total=70311577225
+info: metrics: mg_rwlock_shared_acquired_total=287 mg_rwlock_shared_wait_ns_total=3310523619 mg_rwlock_exclusive_wait_ns_total=70658989318
+info: metrics: mg_rwlock_shared_acquired_total=287 mg_rwlock_shared_wait_ns_total=3310523619 mg_rwlock_exclusive_wait_ns_total=70658989318
+info: metrics: mg_rwlock_shared_acquired_total=288 mg_rwlock_shared_wait_ns_total=3310525137 mg_rwlock_exclusive_wait_ns_total=70658989318
+info: metrics: mg_rwlock_shared_acquired_total=291 mg_rwlock_shared_wait_ns_total=3518968451 mg_rwlock_exclusive_wait_ns_total=75994375221
+info: metrics: mg_rwlock_shared_acquired_total=292 mg_rwlock_shared_wait_ns_total=3519540317 mg_rwlock_exclusive_wait_ns_total=76042941891
+info: metrics: mg_rwlock_shared_acquired_total=292 mg_rwlock_shared_wait_ns_total=3519540317 mg_rwlock_exclusive_wait_ns_total=76042955590
+info: metrics: mg_rwlock_shared_acquired_total=292 mg_rwlock_shared_wait_ns_total=3519540317 mg_rwlock_exclusive_wait_ns_total=76042956520
+info: metrics: mg_rwlock_shared_acquired_total=292 mg_rwlock_shared_wait_ns_total=3519540317 mg_rwlock_exclusive_wait_ns_total=76042959270
+info: metrics: mg_rwlock_shared_acquired_total=293 mg_rwlock_shared_wait_ns_total=3525106689 mg_rwlock_exclusive_wait_ns_total=76233049772
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021874323
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021875894
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021876764
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021878834
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021878834
+info: metrics: mg_rwlock_shared_acquired_total=297 mg_rwlock_shared_wait_ns_total=3545820904 mg_rwlock_exclusive_wait_ns_total=79021880184
+info: metrics: mg_rwlock_shared_acquired_total=298 mg_rwlock_shared_wait_ns_total=3545822107 mg_rwlock_exclusive_wait_ns_total=79021880184
+info: metrics: mg_rwlock_shared_acquired_total=302 mg_rwlock_shared_wait_ns_total=3591250216 mg_rwlock_exclusive_wait_ns_total=83750126287
+info: metrics: mg_rwlock_shared_acquired_total=302 mg_rwlock_shared_wait_ns_total=3591250216 mg_rwlock_exclusive_wait_ns_total=83750126287
+info: metrics: mg_rwlock_shared_acquired_total=302 mg_rwlock_shared_wait_ns_total=3591250216 mg_rwlock_exclusive_wait_ns_total=83750127349
+info: metrics: mg_rwlock_shared_acquired_total=302 mg_rwlock_shared_wait_ns_total=3591250216 mg_rwlock_exclusive_wait_ns_total=83750127349
+info: metrics: mg_rwlock_shared_acquired_total=303 mg_rwlock_shared_wait_ns_total=3591251331 mg_rwlock_exclusive_wait_ns_total=84010845890
+info: metrics: mg_rwlock_shared_acquired_total=303 mg_rwlock_shared_wait_ns_total=3591251331 mg_rwlock_exclusive_wait_ns_total=84010845890
+info: metrics: mg_rwlock_shared_acquired_total=304 mg_rwlock_shared_wait_ns_total=3610738103 mg_rwlock_exclusive_wait_ns_total=84010845890
+info: metrics: mg_rwlock_shared_acquired_total=304 mg_rwlock_shared_wait_ns_total=3610738103 mg_rwlock_exclusive_wait_ns_total=84010845890
+info: metrics: mg_rwlock_shared_acquired_total=308 mg_rwlock_shared_wait_ns_total=3616532662 mg_rwlock_exclusive_wait_ns_total=90204276076
+info: metrics: mg_rwlock_shared_acquired_total=308 mg_rwlock_shared_wait_ns_total=3616532662 mg_rwlock_exclusive_wait_ns_total=90204276076
+info: metrics: mg_rwlock_shared_acquired_total=308 mg_rwlock_shared_wait_ns_total=3616532662 mg_rwlock_exclusive_wait_ns_total=90204276076
+info: metrics: mg_rwlock_shared_acquired_total=308 mg_rwlock_shared_wait_ns_total=3616532662 mg_rwlock_exclusive_wait_ns_total=90204277073
+info: metrics: mg_rwlock_shared_acquired_total=309 mg_rwlock_shared_wait_ns_total=3616533572 mg_rwlock_exclusive_wait_ns_total=90437156081
+info: metrics: mg_rwlock_shared_acquired_total=309 mg_rwlock_shared_wait_ns_total=3616533572 mg_rwlock_exclusive_wait_ns_total=90437157378
+info: metrics: mg_rwlock_shared_acquired_total=310 mg_rwlock_shared_wait_ns_total=3616535200 mg_rwlock_exclusive_wait_ns_total=90437157378
+info: metrics: mg_rwlock_shared_acquired_total=313 mg_rwlock_shared_wait_ns_total=3619754613 mg_rwlock_exclusive_wait_ns_total=97659810854
+info: metrics: mg_rwlock_shared_acquired_total=314 mg_rwlock_shared_wait_ns_total=3619755966 mg_rwlock_exclusive_wait_ns_total=97659810854
+info: metrics: mg_rwlock_shared_acquired_total=314 mg_rwlock_shared_wait_ns_total=3619755966 mg_rwlock_exclusive_wait_ns_total=98406276444
+info: metrics: mg_rwlock_shared_acquired_total=314 mg_rwlock_shared_wait_ns_total=3619755966 mg_rwlock_exclusive_wait_ns_total=98406276444
+info: metrics: mg_rwlock_shared_acquired_total=314 mg_rwlock_shared_wait_ns_total=3619755966 mg_rwlock_exclusive_wait_ns_total=98406276444
+info: metrics: mg_rwlock_shared_acquired_total=315 mg_rwlock_shared_wait_ns_total=3619756821 mg_rwlock_exclusive_wait_ns_total=98613077936
+info: metrics: mg_rwlock_shared_acquired_total=316 mg_rwlock_shared_wait_ns_total=3624027339 mg_rwlock_exclusive_wait_ns_total=98613077936
+info: metrics: mg_rwlock_shared_acquired_total=319 mg_rwlock_shared_wait_ns_total=3648050063 mg_rwlock_exclusive_wait_ns_total=104261915163
+info: metrics: mg_rwlock_shared_acquired_total=319 mg_rwlock_shared_wait_ns_total=3648050063 mg_rwlock_exclusive_wait_ns_total=104261916302
+info: metrics: mg_rwlock_shared_acquired_total=320 mg_rwlock_shared_wait_ns_total=3648051010 mg_rwlock_exclusive_wait_ns_total=104261916302
+info: metrics: mg_rwlock_shared_acquired_total=320 mg_rwlock_shared_wait_ns_total=3648051010 mg_rwlock_exclusive_wait_ns_total=105013905356
+info: metrics: mg_rwlock_shared_acquired_total=320 mg_rwlock_shared_wait_ns_total=3648051010 mg_rwlock_exclusive_wait_ns_total=105013906252
+info: metrics: mg_rwlock_shared_acquired_total=320 mg_rwlock_shared_wait_ns_total=3648051010 mg_rwlock_exclusive_wait_ns_total=105013906252
+info: metrics: mg_rwlock_shared_acquired_total=321 mg_rwlock_shared_wait_ns_total=3648052343 mg_rwlock_exclusive_wait_ns_total=105013907187
+info: metrics: mg_rwlock_shared_acquired_total=321 mg_rwlock_shared_wait_ns_total=3648052343 mg_rwlock_exclusive_wait_ns_total=105013907187
+info: metrics: mg_rwlock_shared_acquired_total=324 mg_rwlock_shared_wait_ns_total=13285903473 mg_rwlock_exclusive_wait_ns_total=114895571658
+info: metrics: mg_rwlock_shared_acquired_total=325 mg_rwlock_shared_wait_ns_total=13940112658 mg_rwlock_exclusive_wait_ns_total=116015962915
+info: metrics: mg_rwlock_shared_acquired_total=326 mg_rwlock_shared_wait_ns_total=13940113574 mg_rwlock_exclusive_wait_ns_total=116746987809
+info: metrics: mg_rwlock_shared_acquired_total=326 mg_rwlock_shared_wait_ns_total=13940113574 mg_rwlock_exclusive_wait_ns_total=116746987809
+info: metrics: mg_rwlock_shared_acquired_total=326 mg_rwlock_shared_wait_ns_total=13940113574 mg_rwlock_exclusive_wait_ns_total=116746989058
+info: metrics: mg_rwlock_shared_acquired_total=326 mg_rwlock_shared_wait_ns_total=13940113574 mg_rwlock_exclusive_wait_ns_total=116746990083
+info: metrics: mg_rwlock_shared_acquired_total=327 mg_rwlock_shared_wait_ns_total=14001022660 mg_rwlock_exclusive_wait_ns_total=116978397105
+info: metrics: mg_rwlock_shared_acquired_total=328 mg_rwlock_shared_wait_ns_total=14047921511 mg_rwlock_exclusive_wait_ns_total=116978397105
+info: metrics: mg_rwlock_shared_acquired_total=328 mg_rwlock_shared_wait_ns_total=14047921511 mg_rwlock_exclusive_wait_ns_total=116978397105
+info: metrics: mg_rwlock_shared_acquired_total=331 mg_rwlock_shared_wait_ns_total=14243684607 mg_rwlock_exclusive_wait_ns_total=129228778257
+info: metrics: mg_rwlock_shared_acquired_total=332 mg_rwlock_shared_wait_ns_total=14243686056 mg_rwlock_exclusive_wait_ns_total=129373289884
+info: metrics: mg_rwlock_shared_acquired_total=332 mg_rwlock_shared_wait_ns_total=14243686056 mg_rwlock_exclusive_wait_ns_total=129373290721
+info: metrics: mg_rwlock_shared_acquired_total=332 mg_rwlock_shared_wait_ns_total=14243686056 mg_rwlock_exclusive_wait_ns_total=129373290721
+info: metrics: mg_rwlock_shared_acquired_total=332 mg_rwlock_shared_wait_ns_total=14243686056 mg_rwlock_exclusive_wait_ns_total=129373290721
+info: metrics: mg_rwlock_shared_acquired_total=333 mg_rwlock_shared_wait_ns_total=14256007176 mg_rwlock_exclusive_wait_ns_total=129373290721
+info: metrics: mg_rwlock_shared_acquired_total=334 mg_rwlock_shared_wait_ns_total=14278991555 mg_rwlock_exclusive_wait_ns_total=130647594674
+info: metrics: mg_rwlock_shared_acquired_total=337 mg_rwlock_shared_wait_ns_total=14346944205 mg_rwlock_exclusive_wait_ns_total=137006064772
+info: metrics: mg_rwlock_shared_acquired_total=337 mg_rwlock_shared_wait_ns_total=14346944205 mg_rwlock_exclusive_wait_ns_total=137006065603
+info: metrics: mg_rwlock_shared_acquired_total=338 mg_rwlock_shared_wait_ns_total=14436937581 mg_rwlock_exclusive_wait_ns_total=137006065603
