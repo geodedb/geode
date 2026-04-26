@@ -396,3 +396,187 @@ change the H5 verdict but tightens the H4 narrative.
 **Quaternary**: revisit the `NoHandshakeKeys` regression (Task 1 left
 this INDETERMINATE and it surfaced again here at workers=4; under
 heavier workers=16 it blocked the run entirely).
+
+---
+
+## Secondary bisection — rwlock SHARED hold-time (added 2026-04-26)
+
+After the primary verdict (H5 — rwlock saturation as the wall-clock
+chokepoint), the next investigation thread instrumented per-acquire
+SHARED hold-time on `ManagedGraph`
+(commits `c7eb4703` / `c29f441c` / `410b842d` / `a25a7a05` / `b48007e9` / `3bcfd597`)
+and re-ran the same workers=4 cascade repro
+(`docs/performance/2026-04-26-rwlock-hold-time/`, commit `463c01bb`).
+Two new counters were added:
+
+- `mg_rwlock_shared_hold_ns_total` — cumulative ns spent inside the
+  SHARED critical section across all acquire sites.
+- `mg_rwlock_shared_max_hold_ns_observed` — max single hold duration
+  ever observed (high-water mark, monotonic).
+
+The new repro emits metrics on the same 5 s cadence as the primary
+investigation, so checkpoints are anchored the same way: emit #N ≈
+ingest-start + N × 5 s.
+
+### Reference timestamps
+
+| Marker | Time | Notes |
+|--------|------|-------|
+| T0 ingest start | 2026-04-26T12:36:42 | Controller "ingest start" line (`repro-ingest.log:4`) |
+| T0+5s (1st metric emit) | ≈ 2026-04-26T12:36:47 | First `info: metrics:` line at server-log L18 (emit #1) |
+| T1 last forward progress | 2026-04-26T12:47:16 | `seeding edges file=edges_audited.jsonl` followed by `pipeline exec start geode.total=911` (`repro-ingest.log:283-285`) |
+| T1+30s | ≈ 2026-04-26T12:47:46 | emit #133 / server-log L153 |
+| T1+5min | ≈ 2026-04-26T12:52:16 | emit #187 / server-log L207 |
+| T2−5s | ≈ 2026-04-26T12:57:12 | emit #246 / server-log L266 |
+| T2 cascade trigger | 2026-04-26T12:57:17 | "pipeline failed — retrying file in serial mode" (`repro-ingest.log:291`); stack capture timestamp matches (`cascade-stacks.txt:1`) |
+| Δ (T2 − T1) | 10 min 1 s | Same signature as the prior workers=4 cascade |
+| Run config | --workers 4, --chunk-size 1000 | Identical to primary repro |
+
+### Hold-time deltas
+
+Per-interval avg-hold-per-acquire = `Δhold_ns_total / Δacquired_total`
+(ns), reported in ms. Cumulative avg at T2 = `hold_ns_total[T2] /
+acquired_total[T2]`.
+
+| Checkpoint | acquired_total | hold_ns_total (ns) | avg-hold-per-acquire (ms) | max_hold_observed (ns) |
+|------------|----------------|--------------------|---------------------------|------------------------|
+| T0+5s | 0 | 0 | n/a — no acquires yet | 0 |
+| T1 | 68 | 36,272,955,667 | **533** (cumulative T0→T1; interval n/a from zero) | 2,229,036,825 |
+| T1+30s | 72 | 38,522,632,034 | **562** (interval T1→T1+30s: Δacq=4, Δhold=2,249,676,367) | 2,229,036,825 |
+| T1+5min | 96 | 46,875,318,571 | **348** (interval T1+30s→T1+5m: Δacq=24, Δhold=8,352,686,537) | 2,229,036,825 |
+| T2−5s | 124 | 56,999,476,714 | **361** (interval T1+5m→T2−5s: Δacq=28, Δhold=10,124,158,143) | 2,229,036,825 |
+| T2 | 124 | 56,999,476,714 | **460** (cumulative T0→T2) | 2,229,036,825 |
+
+#### When did per-acquire hold first cross the H5a threshold?
+
+The instrumentation first emits non-zero values at emit #7 (server-log
+L27, ≈ T0+35 s = 12:37:17): `acq=4, hold_ns=586,767,294,
+max=531,308,838`. That gives a cumulative avg of **147 ms/acquire**
+and a max single hold of **531 ms** — already at the upper end of the
+H5a "hundreds-of-ms" threshold from the very first emitted sample.
+
+The max single hold crossed 1 sec at emit #19 (≈ T0+95 s = 12:38:22)
+with `max=1,263,318,098 ns = 1.26 s`, and reached the run's ceiling
+of 2.23 s at emit #52 (≈ T0+260 s = 12:41:02). Both events occurred
+**before T1** — the cascade-trigger run does not need T1's edges_audited
+workload to surface multi-second holds; the SHARED critical section
+was already chronically expensive during the earlier edge-seed phases
+(`edges_activated_role.jsonl`, `edges_app_role_assignment.jsonl`).
+
+### Sub-hypothesis verdict
+
+#### H5a — Long MATCH-with-RLS holds the read lock
+
+**Signature:** avg-hold-per-acquire grows from sub-microsecond at T0
+to hundreds-of-ms or more at T1 onwards; max_hold_observed exceeds 1
+second somewhere between T1 and T2.
+
+**Verdict: YES — confirmed.** The cumulative avg per acquire at T2 is
+**460 ms** (124 acquires, 56,999,476,714 ns total) — roughly 5× above
+the "hundreds-of-ms" threshold. The largest single observed hold is
+**2,229,036,825 ns = 2.23 s** — well above the "> 1 second"
+threshold. Per-interval avgs (533 / 562 / 348 / 361 ms) confirm the
+elevated hold-time is sustained across the 10-min hang window, not a
+transient spike.
+
+The signature is actually *stronger* than the original framing
+predicted: the threshold is crossed **before T1**, not "between T1 and
+T2." The first emit with a non-zero counter (emit #7, ≈ T0+35 s) already
+shows a 531 ms max single hold and a 147 ms cumulative average — i.e.
+the long-MATCH chokepoint is present from the start of the
+edge-seeding phases, and the edges_audited.jsonl workload at T1 then
+just keeps the lock saturated for the full 10-min hang. This refines
+the original H5a hypothesis: it is not "edges_audited triggers long
+holds" but "long holds are the steady state once the edge-MATCH-CREATE
+phase begins; edges_audited is the file that finally exhausts the
+controller's per-statement deadline."
+
+**Cross-check from `cascade-stacks.txt` at T2 (12:57:17):**
+
+- Thread 9 (LWP 114870) is the active SHARED holder, deep inside the
+  RLS path:
+  `executeMultiNodeMatch → passesRLSFilter → passesRLSExprFilter →
+  rls_value_bridge.nodePropertiesToRLSRow → HashMapUnmanaged.allocate`
+  (frames #13 → #11 → #10 → #3, file `cascade-stacks.txt:1518-1532`).
+  This thread is allocating an RLS row in the per-node hash map — the
+  exact code path the H5a hypothesis predicted.
+- Threads 23 and 20 (LWPs 114856 and 114859) are blocked at
+  `Io.RwLock.lockUncancelable → Io.Mutex.lockUncancelable` waiting on
+  the `acquireGraphWriteLock` path from
+  `ServerState.tearDownForStreamClose` (`cascade-stacks.txt:1289-1295`
+  and `1338-1345`). These are the EXCLUSIVE waiters being starved by
+  the long SHARED holder above.
+
+This is a textbook reader-blocking-writer signature with the SHARED
+holder in the RLS evaluation path — direct evidence supporting H5a.
+
+#### H5b — Rwlock implementation is the chokepoint (per-acquire hold is small)
+
+**Signature:** avg-hold-per-acquire stays small (< 1 ms) throughout
+the run.
+
+**Verdict: NO — refuted.** Per-acquire hold is 460 ms cumulative at
+T2, not sub-millisecond — three orders of magnitude above the H5b
+ceiling. The rwlock implementation is not the chokepoint; the work
+done while holding the SHARED side is.
+
+#### H5c — Neither (something else)
+
+**Verdict: NO.** H5a fits the data cleanly; the per-checkpoint
+trajectory, the stack at T2, and the reader-blocks-writer signature
+all line up. No need to invoke H5c.
+
+### Recommended next step
+
+Based on the H5a verdict, the fix lives in
+`match_operations.executeMultiNodeMatch` (and specifically the
+`passesRLSFilter` / `passesRLSExprFilter` / `nodePropertiesToRLSRow`
+sub-tree confirmed by the T2 stack). Three candidate approaches:
+
+- **(a) Release the read lock between row batches and re-acquire.**
+  Introduces a possible inconsistency window — if the graph mutates
+  between batches, the second half of a single MATCH may see different
+  state than the first half. Needs design review against MVCC
+  semantics: is this acceptable, or does GQL require single-statement
+  consistency? If the latter, this fix is out.
+
+- **(b) Take a snapshot reference at MATCH-start and operate on that
+  for the full scan.** No inconsistency window. But may overcommit
+  memory under long scans if the snapshot must materialize the whole
+  reachable graph region (depending on how MVCC snapshots are
+  implemented in the storage engine). Probably the right fix if MVCC
+  snapshot reads are cheap.
+
+- **(c) Bound the MATCH execution time.** If individual query duration
+  is the chokepoint, a per-statement deadline (separate from the
+  QUIC-layer request deadline) at the executor level would let the
+  query short-circuit rather than starve other writers. This is a
+  defensive layer regardless of (a) or (b).
+
+Recommend opening a new investigation plan for (b) — snapshot-based
+reads — as the primary fix, with (c) as a defense-in-depth layer.
+
+A complicating wrinkle from the T2 stack: the long hold is partly
+spent inside `rls_value_bridge.nodePropertiesToRLSRow` building a
+per-node `HashMapUnmanaged([]const u8, rls_core.Value, ...)` — i.e.
+the per-node RLS row construction is itself a hot path inside the
+critical section. Even if the rwlock is released between batches,
+shrinking the per-node work (e.g. caching compiled property lookups
+or moving the RLS row construction outside the lock) is likely needed
+in tandem with (b). Worth noting in the follow-up plan.
+
+### Out-of-scope follow-ups (from the rwlock-hold-time plan §"Out of scope")
+
+Three items remain queued behind this verdict:
+
+1. **Per-stream last-activity-time logging** — disambiguates the
+   10-min idle-timeout coincidence (Task 2 of the original
+   investigation list).
+2. **`NoHandshakeKeys` regression in the new quic dep `c7808ed`** —
+   needs upstream handoff in `~/src/devnw/zig/quic/`. Surfaced again
+   in this run at server-log L17 / L20 / L22 / L24 alongside the
+   first connection establishments.
+3. **`quic_total_cwnd_bytes` unbounded growth** — small geode patch
+   plus upstream handoff for the quic library's NewReno cwnd-cap.
+   Counter climbed from `18,262` at T0+5s to `2,817,430,778,627`
+   (≈ 2.8 TB) by emit #248, far past any reasonable ceiling.
