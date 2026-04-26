@@ -73,6 +73,27 @@ pub fn nodePropertiesToRLSRow(
     return row;
 }
 
+/// Reusable variant of `nodePropertiesToRLSRow`: caller owns and reuses
+/// `row` across many invocations. Clears the row's contents (retaining
+/// the backing buffer) before populating, then ensures capacity for the
+/// new property count and inserts each property without bounds checks.
+///
+/// Use this from per-node loops (`executeMultiNodeMatch` et al.) to
+/// avoid one HashMap init/deinit per matched node.
+pub fn nodePropertiesToRLSRowInto(
+    row: *std.StringHashMap(rls.Value),
+    properties: *const std.StringHashMap(graph_store.PropertyValue),
+) !void {
+    row.clearRetainingCapacity();
+    try row.ensureTotalCapacity(@as(u32, @intCast(properties.count())));
+
+    var it = properties.iterator();
+    while (it.next()) |entry| {
+        const rls_val = propertyValueToRLS(entry.value_ptr.*);
+        row.putAssumeCapacityNoClobber(entry.key_ptr.*, rls_val);
+    }
+}
+
 /// Convert a single PropertyValue to rls.Value.
 fn propertyValueToRLS(pv: graph_store.PropertyValue) rls.Value {
     return switch (pv) {

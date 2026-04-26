@@ -3421,6 +3421,16 @@ pub fn build(b: *std.Build) void {
     const gsa_metrics_step = b.step("test-graph-storage-adapter-metrics", "Hold-time atomics unit test");
     gsa_metrics_step.dependOn(&run_gsa_metrics_tests.step);
 
+    const rls_row_build_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_row_build_hot_path.zig"), .target = target, .optimize = optimize });
+    rls_row_build_mod.addImport("geode", root_mod);
+    rls_row_build_mod.addImport("rls", rls_mod);
+    rls_row_build_mod.addImport("rls_value_bridge", rls_value_bridge_mod);
+    const rls_row_build_tests = b.addTest(.{ .root_module = rls_row_build_mod });
+    const run_rls_row_build_tests = b.addRunArtifact(rls_row_build_tests);
+    test_step.dependOn(&run_rls_row_build_tests.step);
+    const rls_row_build_step = b.step("test-rls-row-build-hot-path", "Run nodePropertiesToRLSRow hot-path coverage");
+    rls_row_build_step.dependOn(&run_rls_row_build_tests.step);
+
     const rwlock_fairness_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rwlock_fairness_under_load.zig"), .target = target, .optimize = optimize });
     rwlock_fairness_mod.addImport("geode", root_mod);
     const rwlock_fairness_tests = b.addTest(.{ .root_module = rwlock_fairness_mod });
