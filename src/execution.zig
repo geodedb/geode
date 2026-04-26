@@ -181,6 +181,7 @@ pub const executeMatchQueryWithParams = match_operations.executeMatchQueryWithPa
 pub const executeMatchQuery = match_operations.executeMatchQuery;
 pub const executeMultiNodeMatch = match_operations.executeMultiNodeMatch;
 pub const executeMatchQueryImpl = match_operations.executeMatchQueryImpl;
+pub const wouldEvaluateRLS = match_operations.wouldEvaluateRLS;
 
 // Re-export statement handler functions for backward compatibility (M1 Phase 7 extraction)
 pub const executeShow = statement_handlers.executeShow;

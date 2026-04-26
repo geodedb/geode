@@ -2061,9 +2061,12 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                     // Mutations: exclusive writer lock held across execute to
                     // prevent HashMap rehash races (GAP-0001, CWE-362/CWE-416).
                     graph_lock_handle = graph_store.acquireGraphWriteLock(query_graph_name);
-                } else if (analysis.is_point_read) {
+                } else if (analysis.is_point_read and !execution.wouldEvaluateRLS()) {
                     // GAP-0805: zero-copy point-read view scoped by the
                     // shared read lock (handle kept alive until defer).
+                    // NOTE: RLS-evaluating reads bypass this path (wouldEvaluateRLS()
+                    // returns true) and fall through to the snapshot path below, so
+                    // the SHARED rwlock is released before per-node row construction.
                     graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(allocator);
                     if (graph_store.PointReadView.init(store_ref)) |view| {

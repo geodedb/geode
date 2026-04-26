@@ -166,6 +166,20 @@ fn passesRLSExprFilter(
     ) catch false;
 }
 
+// CANARY: REQ=REQ-PERF-RLS-DISPATCH-001; FEATURE="RLSAwareDispatch"; ASPECT=PointReadReclassify; STATUS=IMPL; OWNER=performance; UPDATED=2026-04-26
+/// Returns true if any RLS engine (label-deny or expression) is currently
+/// configured AND the active session has an authenticated user. Used by
+/// the transport dispatcher to keep RLS-evaluating reads on the snapshot
+/// path (which releases the SHARED rwlock before per-node row construction)
+/// rather than the point-read path (which holds SHARED across execute).
+pub fn wouldEvaluateRLS() bool {
+    const ctx = execution.getActiveContext() orelse return false;
+    if (ctx.user == null) return false;
+    const has_label_engine = rls_types.getGlobalRLSFilterEngine() != null;
+    const has_expr_engine = rls_types.getGlobalExprRLSEngine() != null;
+    return has_label_engine or has_expr_engine;
+}
+
 /// Resolve a LIMIT or OFFSET value from either a literal or a $param reference.
 fn resolveLimitParam(literal: ?usize, param_name: ?[]const u8, param_names_arr: []const []const u8, param_values_arr: []const Value) ?usize {
     if (literal) |v| return v;
