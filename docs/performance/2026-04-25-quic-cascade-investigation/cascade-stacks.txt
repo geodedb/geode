@@ -1,0 +1,1681 @@
+=== stacks captured at 2026-04-26T02:04:53+00:00 ===
+=== /proc/2178588/status ===
+FDSize:	512
+VmPeak:	 2664788 kB
+VmRSS:	  756652 kB
+Threads:	97
+
+=== gdb thread apply all bt ===
+[New LWP 2179664]
+[New LWP 2179663]
+[New LWP 2179662]
+[New LWP 2179661]
+[New LWP 2179151]
+[New LWP 2179150]
+[New LWP 2179149]
+[New LWP 2179148]
+[New LWP 2179147]
+[New LWP 2179146]
+[New LWP 2179145]
+[New LWP 2179144]
+[New LWP 2179143]
+[New LWP 2179142]
+[New LWP 2179141]
+[New LWP 2179140]
+[New LWP 2179139]
+[New LWP 2179138]
+[New LWP 2179137]
+[New LWP 2179136]
+[New LWP 2179135]
+[New LWP 2179134]
+[New LWP 2179133]
+[New LWP 2179132]
+[New LWP 2179131]
+[New LWP 2179130]
+[New LWP 2179129]
+[New LWP 2179128]
+[New LWP 2179127]
+[New LWP 2179126]
+[New LWP 2179125]
+[New LWP 2179124]
+[New LWP 2179123]
+[New LWP 2179122]
+[New LWP 2179121]
+[New LWP 2179120]
+[New LWP 2179119]
+[New LWP 2179118]
+[New LWP 2179117]
+[New LWP 2179116]
+[New LWP 2179115]
+[New LWP 2179114]
+[New LWP 2179113]
+[New LWP 2179112]
+[New LWP 2179111]
+[New LWP 2179110]
+[New LWP 2179109]
+[New LWP 2179108]
+[New LWP 2179107]
+[New LWP 2179106]
+[New LWP 2179105]
+[New LWP 2179104]
+[New LWP 2179103]
+[New LWP 2179102]
+[New LWP 2179101]
+[New LWP 2179100]
+[New LWP 2179099]
+[New LWP 2179098]
+[New LWP 2179097]
+[New LWP 2179096]
+[New LWP 2179095]
+[New LWP 2179094]
+[New LWP 2179093]
+[New LWP 2179092]
+[New LWP 2179091]
+[New LWP 2179090]
+[New LWP 2179089]
+[New LWP 2179088]
+[New LWP 2179087]
+[New LWP 2179086]
+[New LWP 2179085]
+[New LWP 2179084]
+[New LWP 2179083]
+[New LWP 2179082]
+[New LWP 2179081]
+[New LWP 2179080]
+[New LWP 2179079]
+[New LWP 2179078]
+[New LWP 2179077]
+[New LWP 2179076]
+[New LWP 2179075]
+[New LWP 2179074]
+[New LWP 2179073]
+[New LWP 2179072]
+[New LWP 2179071]
+[New LWP 2179070]
+[New LWP 2179069]
+[New LWP 2179068]
+[New LWP 2179067]
+[New LWP 2179066]
+[New LWP 2179065]
+[New LWP 2179064]
+[New LWP 2178626]
+[New LWP 2178625]
+[New LWP 2178624]
+[New LWP 2178623]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=140724879515872, arg2=140724879515872)
+
+Thread 97 (Thread 0x7f67c1d0f6c0 (LWP 2178623) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083610716012, arg2=128, arg3=0, arg4=140083609787208)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67c1db076c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67c1db076c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67c1db076c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67c1db076c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67c1db076c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67c1db0768, m=0x7f67c1db0774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67c1db0768, m=0x7f67c1db0774, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1dc0000, worker_index=0)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1dc0000, worker_index=0)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 96 (Thread 0x7f67c0d0e6c0 (LWP 2178624) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083610718060, arg2=128, arg3=2, arg4=140083593005896)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67c1db0f6c, futex_op=..., val=2, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67c1db0f6c, expect=2, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67c1db0f6c, expect=2, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67c1db0f6c, expected=2, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67c1db0f6c, expected=2, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67c1db0f68, m=0x7f67c1db0f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67c1db0f68, m=0x7f67c1db0f74, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1dc0000, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1dc0000, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 95 (Thread 0x7f67bfd0d6c0 (LWP 2178625) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083610720108, arg2=128, arg3=0, arg4=140083576224584)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67c1db176c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67c1db176c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67c1db176c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67c1db176c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67c1db176c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67c1db1768, m=0x7f67c1db1774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67c1db1768, m=0x7f67c1db1774, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1dc0000, worker_index=2)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1dc0000, worker_index=2)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 94 (Thread 0x7f67bed0c6c0 (LWP 2178626) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083610722156, arg2=128, arg3=0, arg4=140083559443272)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67c1db1f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67c1db1f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67c1db1f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67c1db1f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67c1db1f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67c1db1f68, m=0x7f67c1db1f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67c1db1f68, m=0x7f67c1db1f74, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1dc0000, worker_index=3)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1dc0000, worker_index=3)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 93 (Thread 0x7f67bd15f6c0 (LWP 2179064) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=140083530421248, arg2=140083530421280)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x7f67bd11d400, rem=...)
+#2  0x0000000002d7e32c in graph_store.persistenceLoop ()
+#3  0x0000000002d7de96 in graph_store.runPersistenceLoop ()
+#4  0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67bba100c0, runtime=0x7f67bd11e448)
+#5  0x000000000166831a in pool.Core.runTask (self=0x7f67ba5a0000, worker_index=0, entry=4294967296)
+#6  0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba5a0000, worker_index=0)
+#7  0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#8  0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#9  0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 92 (Thread 0x7f67bb8ff6c0 (LWP 2179065) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484757868, arg2=128, arg3=0, arg4=140083504864072)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba590f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba590f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba590f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba590f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba590f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba590f68, m=0x7f67ba590f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba590f68, m=0x7f67ba590f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba5a0000, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba5a0000, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 91 (Thread 0x7f67ba4df6c0 (LWP 2179066) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484493676, arg2=128, arg3=0, arg4=140083483761480)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55076c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55076c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55076c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55076c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55076c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba550768, m=0x7f67ba550774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba550768, m=0x7f67ba550774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=0)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=0)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 90 (Thread 0x7f67b94de6c0 (LWP 2179067) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484495724, arg2=128, arg3=0, arg4=140083466980168)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba550f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba550f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba550f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba550f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba550f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba550f68, m=0x7f67ba550f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba550f68, m=0x7f67ba550f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 89 (Thread 0x7f67b84dd6c0 (LWP 2179068) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=140083449952112, arg2=140083449952144)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x7f67b845f770, rem=...)
+#2  0x00000000023abf0f in graph_store.acquireStoreWriteLockCancelable (deadline_mono_ns=810461053588099)
+#3  0x00000000023ac1ec in graph_store.acquireGraphWriteLockCancelable (graph_name=..., deadline_mono_ns=810461053588099)
+#4  0x00000000024c5f77 in server.quic_connection_handler.handleClientMessage (gpa=..., state=0x7f67b849ad50, stream=0x7f672d040080, msg=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#5  0x000000000251c5bd in server.quic_connection_handler.runStreamQueryLoop (gpa=..., transport=0x7ffd10748d80, stream=0x7f672d040080, state=0x7f67b849ad50, conn_state=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#6  0x000000000251f011 in server.quic_connection_handler.handleAdditionalStream (ctx_ptr=0x7f672d0400c0)
+#7  0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f672d040100, runtime=0x7f67b849c448)
+#8  0x000000000166831a in pool.Core.runTask (self=0x7f67c1f80800, worker_index=2, entry=4294967296)
+#9  0x0000000001672a61 in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=2)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 88 (Thread 0x7f67b74dc6c0 (LWP 2179069) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484499820, arg2=128, arg3=0, arg4=140083433417544)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba551f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba551f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba551f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba551f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba551f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba551f68, m=0x7f67ba551f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba551f68, m=0x7f67ba551f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=3)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=3)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 87 (Thread 0x7f67b64db6c0 (LWP 2179070) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484501868, arg2=128, arg3=0, arg4=140083416636232)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55276c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55276c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55276c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55276c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55276c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba552768, m=0x7f67ba552774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba552768, m=0x7f67ba552774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=4)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=4)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 86 (Thread 0x7f67b54da6c0 (LWP 2179071) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484503916, arg2=128, arg3=0, arg4=140083399854920)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba552f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba552f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba552f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba552f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba552f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba552f68, m=0x7f67ba552f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba552f68, m=0x7f67ba552f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=5)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=5)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 85 (Thread 0x7f67b44d96c0 (LWP 2179072) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484505964, arg2=128, arg3=0, arg4=140083383073608)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55376c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55376c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55376c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55376c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55376c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba553768, m=0x7f67ba553774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba553768, m=0x7f67ba553774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=6)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=6)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 84 (Thread 0x7f67b34d86c0 (LWP 2179073) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484508012, arg2=128, arg3=0, arg4=140083366292296)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba553f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba553f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba553f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba553f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba553f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba553f68, m=0x7f67ba553f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba553f68, m=0x7f67ba553f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=7)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=7)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 83 (Thread 0x7f67b24d76c0 (LWP 2179074) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484510060, arg2=128, arg3=0, arg4=140083349510984)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55476c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55476c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55476c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55476c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55476c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba554768, m=0x7f67ba554774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba554768, m=0x7f67ba554774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=8)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=8)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 82 (Thread 0x7f67b14d66c0 (LWP 2179075) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484512108, arg2=128, arg3=0, arg4=140083332729672)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba554f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba554f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba554f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba554f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba554f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba554f68, m=0x7f67ba554f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba554f68, m=0x7f67ba554f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=9)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=9)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 81 (Thread 0x7f67b04d56c0 (LWP 2179076) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484514156, arg2=128, arg3=0, arg4=140083315948360)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55576c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55576c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55576c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55576c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55576c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba555768, m=0x7f67ba555774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba555768, m=0x7f67ba555774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=10)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=10)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 80 (Thread 0x7f67af4d46c0 (LWP 2179077) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484516204, arg2=128, arg3=0, arg4=140083299167048)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba555f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba555f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba555f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba555f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba555f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba555f68, m=0x7f67ba555f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba555f68, m=0x7f67ba555f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=11)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=11)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 79 (Thread 0x7f67ae4d36c0 (LWP 2179078) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484518252, arg2=128, arg3=0, arg4=140083282385736)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55676c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55676c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55676c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55676c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55676c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba556768, m=0x7f67ba556774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba556768, m=0x7f67ba556774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=12)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=12)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 78 (Thread 0x7f67ad4d26c0 (LWP 2179079) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484520300, arg2=128, arg3=0, arg4=140083265604424)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba556f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba556f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba556f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba556f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba556f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba556f68, m=0x7f67ba556f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba556f68, m=0x7f67ba556f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=13)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=13)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 77 (Thread 0x7f67ac4d16c0 (LWP 2179080) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484522348, arg2=128, arg3=0, arg4=140083248823112)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55776c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55776c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55776c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55776c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55776c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba557768, m=0x7f67ba557774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba557768, m=0x7f67ba557774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=14)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=14)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 76 (Thread 0x7f67ab4d06c0 (LWP 2179081) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484524396, arg2=128, arg3=0, arg4=140083232041800)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba557f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba557f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba557f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba557f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba557f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba557f68, m=0x7f67ba557f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba557f68, m=0x7f67ba557f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=15)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=15)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 75 (Thread 0x7f67aa4cf6c0 (LWP 2179082) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484526444, arg2=128, arg3=0, arg4=140083215260488)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55876c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55876c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55876c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55876c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55876c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba558768, m=0x7f67ba558774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba558768, m=0x7f67ba558774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=16)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=16)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 74 (Thread 0x7f67a94ce6c0 (LWP 2179083) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484528492, arg2=128, arg3=0, arg4=140083198479176)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba558f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba558f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba558f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba558f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba558f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba558f68, m=0x7f67ba558f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba558f68, m=0x7f67ba558f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=17)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=17)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 73 (Thread 0x7f67a84cd6c0 (LWP 2179084) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484530540, arg2=128, arg3=0, arg4=140083181697864)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55976c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55976c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55976c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55976c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55976c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba559768, m=0x7f67ba559774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba559768, m=0x7f67ba559774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=18)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=18)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 72 (Thread 0x7f67a74cc6c0 (LWP 2179085) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484532588, arg2=128, arg3=0, arg4=140083164916552)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba559f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba559f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba559f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba559f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba559f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba559f68, m=0x7f67ba559f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba559f68, m=0x7f67ba559f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=19)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=19)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 71 (Thread 0x7f67a64cb6c0 (LWP 2179086) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484534636, arg2=128, arg3=0, arg4=140083148135240)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55a76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55a76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55a76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55a76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55a76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55a768, m=0x7f67ba55a774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55a768, m=0x7f67ba55a774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=20)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=20)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 70 (Thread 0x7f67a54ca6c0 (LWP 2179087) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484536684, arg2=128, arg3=0, arg4=140083131353928)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55af6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55af6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55af6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55af6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55af6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55af68, m=0x7f67ba55af74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55af68, m=0x7f67ba55af74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=21)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=21)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 69 (Thread 0x7f67a44c96c0 (LWP 2179088) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484538732, arg2=128, arg3=0, arg4=140083114572616)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55b76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55b76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55b76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55b76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55b76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55b768, m=0x7f67ba55b774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55b768, m=0x7f67ba55b774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=22)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=22)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 68 (Thread 0x7f67a34c86c0 (LWP 2179089) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484540780, arg2=128, arg3=0, arg4=140083097791304)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55bf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55bf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55bf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55bf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55bf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55bf68, m=0x7f67ba55bf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55bf68, m=0x7f67ba55bf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=23)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=23)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 67 (Thread 0x7f67a24c76c0 (LWP 2179090) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484542828, arg2=128, arg3=0, arg4=140083081009992)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55c76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55c76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55c76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55c76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55c76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55c768, m=0x7f67ba55c774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55c768, m=0x7f67ba55c774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=24)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=24)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 66 (Thread 0x7f67a14c66c0 (LWP 2179091) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484544876, arg2=128, arg3=0, arg4=140083064228680)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55cf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55cf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55cf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55cf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55cf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55cf68, m=0x7f67ba55cf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55cf68, m=0x7f67ba55cf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=25)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=25)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 65 (Thread 0x7f67a04c56c0 (LWP 2179092) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484546924, arg2=128, arg3=0, arg4=140083047447368)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55d76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55d76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55d76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55d76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55d76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55d768, m=0x7f67ba55d774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55d768, m=0x7f67ba55d774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=26)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=26)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 64 (Thread 0x7f679f4c46c0 (LWP 2179093) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484548972, arg2=128, arg3=0, arg4=140083030666056)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55df6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55df6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55df6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55df6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55df6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55df68, m=0x7f67ba55df74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55df68, m=0x7f67ba55df74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=27)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=27)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 63 (Thread 0x7f679e4c36c0 (LWP 2179094) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484551020, arg2=128, arg3=0, arg4=140083013884744)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55e76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55e76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55e76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55e76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55e76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55e768, m=0x7f67ba55e774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55e768, m=0x7f67ba55e774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=28)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=28)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 62 (Thread 0x7f679d4c26c0 (LWP 2179095) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484553068, arg2=128, arg3=0, arg4=140082997103432)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55ef6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55ef6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55ef6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55ef6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55ef6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55ef68, m=0x7f67ba55ef74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55ef68, m=0x7f67ba55ef74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=29)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=29)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 61 (Thread 0x7f679c4c16c0 (LWP 2179096) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484555116, arg2=128, arg3=0, arg4=140082980322120)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55f76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55f76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55f76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55f76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55f76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55f768, m=0x7f67ba55f774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55f768, m=0x7f67ba55f774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=30)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=30)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 60 (Thread 0x7f679b4c06c0 (LWP 2179097) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484557164, arg2=128, arg3=0, arg4=140082963540808)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba55ff6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba55ff6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba55ff6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba55ff6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba55ff6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba55ff68, m=0x7f67ba55ff74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba55ff68, m=0x7f67ba55ff74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=31)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=31)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 59 (Thread 0x7f679a4bf6c0 (LWP 2179098) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484559212, arg2=128, arg3=0, arg4=140082946759496)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56076c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56076c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56076c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56076c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56076c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba560768, m=0x7f67ba560774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba560768, m=0x7f67ba560774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=32)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=32)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 58 (Thread 0x7f67994be6c0 (LWP 2179099) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484561260, arg2=128, arg3=0, arg4=140082929978184)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba560f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba560f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba560f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba560f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba560f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba560f68, m=0x7f67ba560f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba560f68, m=0x7f67ba560f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=33)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=33)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 57 (Thread 0x7f67984bd6c0 (LWP 2179100) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484563308, arg2=128, arg3=0, arg4=140082913196872)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56176c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56176c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56176c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56176c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56176c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba561768, m=0x7f67ba561774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba561768, m=0x7f67ba561774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=34)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=34)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 56 (Thread 0x7f67974bc6c0 (LWP 2179101) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484565356, arg2=128, arg3=0, arg4=140082896415560)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba561f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba561f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba561f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba561f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba561f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba561f68, m=0x7f67ba561f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba561f68, m=0x7f67ba561f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=35)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=35)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 55 (Thread 0x7f67964bb6c0 (LWP 2179102) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484567404, arg2=128, arg3=0, arg4=140082879634248)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56276c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56276c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56276c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56276c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56276c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba562768, m=0x7f67ba562774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba562768, m=0x7f67ba562774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=36)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=36)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 54 (Thread 0x7f67954ba6c0 (LWP 2179103) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484569452, arg2=128, arg3=0, arg4=140082862852936)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba562f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba562f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba562f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba562f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba562f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba562f68, m=0x7f67ba562f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba562f68, m=0x7f67ba562f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=37)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=37)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 53 (Thread 0x7f67944b96c0 (LWP 2179104) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484571500, arg2=128, arg3=0, arg4=140082846071624)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56376c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56376c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56376c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56376c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56376c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba563768, m=0x7f67ba563774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba563768, m=0x7f67ba563774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=38)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=38)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 52 (Thread 0x7f67934b86c0 (LWP 2179105) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484573548, arg2=128, arg3=0, arg4=140082829290312)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba563f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba563f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba563f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba563f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba563f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba563f68, m=0x7f67ba563f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba563f68, m=0x7f67ba563f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=39)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=39)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 51 (Thread 0x7f67924b76c0 (LWP 2179106) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484575596, arg2=128, arg3=0, arg4=140082812509000)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56476c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56476c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56476c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56476c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56476c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba564768, m=0x7f67ba564774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba564768, m=0x7f67ba564774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=40)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=40)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 50 (Thread 0x7f67914b66c0 (LWP 2179107) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484577644, arg2=128, arg3=0, arg4=140082795727688)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba564f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba564f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba564f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba564f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba564f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba564f68, m=0x7f67ba564f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba564f68, m=0x7f67ba564f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=41)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=41)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 49 (Thread 0x7f67904b56c0 (LWP 2179108) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484579692, arg2=128, arg3=0, arg4=140082778946376)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56576c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56576c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56576c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56576c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56576c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba565768, m=0x7f67ba565774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba565768, m=0x7f67ba565774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=42)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=42)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 48 (Thread 0x7f678f4b46c0 (LWP 2179109) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484581740, arg2=128, arg3=0, arg4=140082762165064)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba565f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba565f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba565f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba565f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba565f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba565f68, m=0x7f67ba565f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba565f68, m=0x7f67ba565f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=43)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=43)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 47 (Thread 0x7f678e4b36c0 (LWP 2179110) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484583788, arg2=128, arg3=0, arg4=140082745383752)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56676c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56676c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56676c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56676c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56676c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba566768, m=0x7f67ba566774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba566768, m=0x7f67ba566774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=44)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=44)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 46 (Thread 0x7f678d4b26c0 (LWP 2179111) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484585836, arg2=128, arg3=0, arg4=140082728602440)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba566f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba566f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba566f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba566f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba566f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba566f68, m=0x7f67ba566f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba566f68, m=0x7f67ba566f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=45)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=45)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 45 (Thread 0x7f678c4b16c0 (LWP 2179112) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484587884, arg2=128, arg3=0, arg4=140082711821128)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56776c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56776c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56776c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56776c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56776c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba567768, m=0x7f67ba567774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba567768, m=0x7f67ba567774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=46)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=46)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 44 (Thread 0x7f678b4b06c0 (LWP 2179113) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484589932, arg2=128, arg3=0, arg4=140082695039816)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba567f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba567f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba567f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba567f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba567f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba567f68, m=0x7f67ba567f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba567f68, m=0x7f67ba567f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=47)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=47)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 43 (Thread 0x7f678a4af6c0 (LWP 2179114) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484591980, arg2=128, arg3=0, arg4=140082678258504)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56876c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56876c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56876c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56876c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56876c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba568768, m=0x7f67ba568774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba568768, m=0x7f67ba568774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=48)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=48)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 42 (Thread 0x7f67894ae6c0 (LWP 2179115) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484594028, arg2=128, arg3=0, arg4=140082661477192)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba568f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba568f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba568f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba568f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba568f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba568f68, m=0x7f67ba568f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba568f68, m=0x7f67ba568f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=49)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=49)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 41 (Thread 0x7f67884ad6c0 (LWP 2179116) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484596076, arg2=128, arg3=0, arg4=140082644695880)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56976c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56976c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56976c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56976c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56976c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba569768, m=0x7f67ba569774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba569768, m=0x7f67ba569774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=50)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=50)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 40 (Thread 0x7f67874ac6c0 (LWP 2179117) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484598124, arg2=128, arg3=0, arg4=140082627914568)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba569f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba569f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba569f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba569f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba569f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba569f68, m=0x7f67ba569f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba569f68, m=0x7f67ba569f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=51)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=51)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 39 (Thread 0x7f67864ab6c0 (LWP 2179118) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484600172, arg2=128, arg3=0, arg4=140082611133256)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56a76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56a76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56a76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56a76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56a76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56a768, m=0x7f67ba56a774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56a768, m=0x7f67ba56a774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=52)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=52)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 38 (Thread 0x7f67854aa6c0 (LWP 2179119) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484602220, arg2=128, arg3=0, arg4=140082594351944)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56af6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56af6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56af6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56af6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56af6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56af68, m=0x7f67ba56af74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56af68, m=0x7f67ba56af74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=53)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=53)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 37 (Thread 0x7f67844a96c0 (LWP 2179120) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484604268, arg2=128, arg3=0, arg4=140082577570632)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56b76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56b76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56b76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56b76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56b76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56b768, m=0x7f67ba56b774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56b768, m=0x7f67ba56b774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=54)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=54)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 36 (Thread 0x7f67834a86c0 (LWP 2179121) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484606316, arg2=128, arg3=0, arg4=140082560789320)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56bf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56bf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56bf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56bf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56bf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56bf68, m=0x7f67ba56bf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56bf68, m=0x7f67ba56bf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=55)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=55)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 35 (Thread 0x7f67824a76c0 (LWP 2179122) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484608364, arg2=128, arg3=0, arg4=140082544008008)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56c76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56c76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56c76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56c76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56c76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56c768, m=0x7f67ba56c774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56c768, m=0x7f67ba56c774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=56)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=56)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 34 (Thread 0x7f67814a66c0 (LWP 2179123) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484610412, arg2=128, arg3=0, arg4=140082527226696)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56cf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56cf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56cf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56cf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56cf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56cf68, m=0x7f67ba56cf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56cf68, m=0x7f67ba56cf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=57)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=57)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 33 (Thread 0x7f67804a56c0 (LWP 2179124) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484612460, arg2=128, arg3=0, arg4=140082510445384)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56d76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56d76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56d76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56d76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56d76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56d768, m=0x7f67ba56d774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56d768, m=0x7f67ba56d774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=58)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=58)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 32 (Thread 0x7f677f4a46c0 (LWP 2179125) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484614508, arg2=128, arg3=0, arg4=140082493664072)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56df6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56df6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56df6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56df6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56df6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56df68, m=0x7f67ba56df74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56df68, m=0x7f67ba56df74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=59)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=59)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 31 (Thread 0x7f677e4a36c0 (LWP 2179126) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484616556, arg2=128, arg3=0, arg4=140082476882760)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56e76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56e76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56e76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56e76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56e76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56e768, m=0x7f67ba56e774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56e768, m=0x7f67ba56e774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=60)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=60)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 30 (Thread 0x7f677d4a26c0 (LWP 2179127) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484618604, arg2=128, arg3=0, arg4=140082460101448)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56ef6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56ef6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56ef6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56ef6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56ef6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56ef68, m=0x7f67ba56ef74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56ef68, m=0x7f67ba56ef74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=61)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=61)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 29 (Thread 0x7f677c4a16c0 (LWP 2179128) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484620652, arg2=128, arg3=0, arg4=140082443320136)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56f76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56f76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56f76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56f76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56f76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56f768, m=0x7f67ba56f774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56f768, m=0x7f67ba56f774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=62)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=62)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 28 (Thread 0x7f677b4a06c0 (LWP 2179129) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484622700, arg2=128, arg3=0, arg4=140082426538824)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba56ff6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba56ff6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba56ff6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba56ff6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba56ff6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba56ff68, m=0x7f67ba56ff74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba56ff68, m=0x7f67ba56ff74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67c1f80800, worker_index=63)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67c1f80800, worker_index=63)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 27 (Thread 0x7f677a49f6c0 (LWP 2179130) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=51423032, arg2=140082409758816)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x310a738 <__anon_607711>, rem=...)
+#2  0x000000000251db9b in server.quic_connection_handler.streamAcceptorLoop (ctx=0x7f67764589d8)
+#3  0x000000000251ce3b in server.quic_connection_handler.runStreamAcceptorLoop (ctx=0x7f67764589d8)
+#4  0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c17c0, runtime=0x7f677a45e448)
+#5  0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e2800, worker_index=0, entry=12884901888)
+#6  0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e2800, worker_index=0)
+#7  0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#8  0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#9  0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#10 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 26 (Thread 0x7f677949e6c0 (LWP 2179131) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484176236, arg2=128, arg3=0, arg4=140082392976200)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba502f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba502f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba502f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba502f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba502f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba502f68, m=0x7f67ba502f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba502f68, m=0x7f67ba502f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e2800, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e2800, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 25 (Thread 0x7f677849d6c0 (LWP 2179132) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484178284, arg2=128, arg3=0, arg4=140082376194888)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba50376c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba50376c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba50376c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba50376c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba50376c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba503768, m=0x7f67ba503774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba503768, m=0x7f67ba503774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e2800, worker_index=2)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e2800, worker_index=2)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 24 (Thread 0x7f677749c6c0 (LWP 2179133) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484180332, arg2=128, arg3=0, arg4=140082359413576)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba503f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba503f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba503f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba503f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba503f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba503f68, m=0x7f67ba503f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba503f68, m=0x7f67ba503f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e2800, worker_index=3)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e2800, worker_index=3)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 23 (Thread 0x7f677649b6c0 (LWP 2179134) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140081917985048, arg2=128, arg3=2, arg4=0)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f675cf60118, futex_op=..., val=2, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f675cf60118, expect=2, uncancelable=true, timeout_ns=...)
+#3  0x000000000145e96f in Io.Threaded.Thread.futexWaitUncancelable (ptr=0x7f675cf60118, expect=2, timeout_ns=...)
+#4  0x000000000151e8a1 in Io.Threaded.futexWaitUncancelable (userdata=..., ptr=0x7f675cf60118, expected=2)
+#5  0x00000000014506d1 in Io.futexWaitUncancelable__anon_12835 (io=..., T=<optimized out>, ptr=0x7f675cf60118, expected=contended)
+#6  0x000000000145039c in Io.Mutex.lockUncancelable (m=0x7f675cf60118, io=...)
+#7  0x0000000001450d87 in Io.RwLock.lockUncancelable (rl=0x7f675cf600f8, io=...)
+#8  0x00000000023ab751 in storage.graph_storage_adapter.StorageAdapter.acquireGraphWriteLockCancelable (self=0x7f67c1f10000, graph_name=..., deadline_mono_ns=810460587409637)
+#9  0x00000000023ac121 in graph_store.acquireGraphWriteLockCancelable (graph_name=..., deadline_mono_ns=810460587409637)
+#10 0x00000000024c5f77 in server.quic_connection_handler.handleClientMessage (gpa=..., state=0x7f6776450de8, stream=0x7f67c20c1700, msg=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#11 0x00000000024fb498 in server.quic_connection_handler.handleQuicConnection (gpa=..., transport=0x7ffd10748d80, conn=0x7f67c20c12c0, disable_estimates=false, compact_profile=false, memcurve_profile=false, env_spill_threshold=0, env_storage_checksum_error=false, _force_serialization_failure_unused=false, security_manager=..., shared_ast_cache=..., shared_optimizer=..., env_config=0x7ffd10747058, stream_pool=0x7f67c20c0340, acceptor_pool=0x7f67c20c0380)
+#12 0x0000000002511fe6 in server.main.handleConnectionAsync (context=0x7f67ba5e1f80)
+#13 0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c1300, runtime=0x7f677645a448)
+#14 0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e3000, worker_index=0, entry=12884901889)
+#15 0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=0)
+#16 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#17 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#18 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#19 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 22 (Thread 0x7f677549a6c0 (LWP 2179135) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484331884, arg2=128, arg3=0, arg4=140082325850952)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba528f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba528f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba528f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba528f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba528f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba528f68, m=0x7f67ba528f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba528f68, m=0x7f67ba528f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 21 (Thread 0x7f67744996c0 (LWP 2179136) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=51439224, arg2=140082309070904)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x310e678 <__anon_608899>, rem=...)
+#2  0x0000000002518610 in server.main.main__struct_608411.run (ctx_ptr=0x7f67c21402c0)
+#3  0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c0400, runtime=0x7f6774458448)
+#4  0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e3000, worker_index=2, entry=4294967296)
+#5  0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=2)
+#6  0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#7  0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#8  0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#9  0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 20 (Thread 0x7f67734986c0 (LWP 2179137) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140081917985048, arg2=128, arg3=2, arg4=0)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f675cf60118, futex_op=..., val=2, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f675cf60118, expect=2, uncancelable=true, timeout_ns=...)
+#3  0x000000000145e96f in Io.Threaded.Thread.futexWaitUncancelable (ptr=0x7f675cf60118, expect=2, timeout_ns=...)
+#4  0x000000000151e8a1 in Io.Threaded.futexWaitUncancelable (userdata=..., ptr=0x7f675cf60118, expected=2)
+#5  0x00000000014506d1 in Io.futexWaitUncancelable__anon_12835 (io=..., T=<optimized out>, ptr=0x7f675cf60118, expected=contended)
+#6  0x000000000145039c in Io.Mutex.lockUncancelable (m=0x7f675cf60118, io=...)
+#7  0x0000000001450d87 in Io.RwLock.lockUncancelable (rl=0x7f675cf600f8, io=...)
+#8  0x00000000023ab751 in storage.graph_storage_adapter.StorageAdapter.acquireGraphWriteLockCancelable (self=0x7f67c1f10000, graph_name=..., deadline_mono_ns=810459893373195)
+#9  0x00000000023ac121 in graph_store.acquireGraphWriteLockCancelable (graph_name=..., deadline_mono_ns=810459893373195)
+#10 0x00000000024c5f77 in server.quic_connection_handler.handleClientMessage (gpa=..., state=0x7f677344dde8, stream=0x7f67c20c9b40, msg=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#11 0x00000000024fb498 in server.quic_connection_handler.handleQuicConnection (gpa=..., transport=0x7ffd10748d80, conn=0x7f67c20c9600, disable_estimates=false, compact_profile=false, memcurve_profile=false, env_spill_threshold=0, env_storage_checksum_error=false, _force_serialization_failure_unused=false, security_manager=..., shared_ast_cache=..., shared_optimizer=..., env_config=0x7ffd10747058, stream_pool=0x7f67c20c0340, acceptor_pool=0x7f67c20c0380)
+#12 0x0000000002511fe6 in server.main.handleConnectionAsync (context=0x7f67ba5ed480)
+#13 0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c9640, runtime=0x7f6773457448)
+#14 0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e3000, worker_index=3, entry=4294967299)
+#15 0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=3)
+#16 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#17 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#18 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#19 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 19 (Thread 0x7f67724976c0 (LWP 2179138) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140081917985048, arg2=128, arg3=2, arg4=0)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f675cf60118, futex_op=..., val=2, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f675cf60118, expect=2, uncancelable=true, timeout_ns=...)
+#3  0x000000000145e96f in Io.Threaded.Thread.futexWaitUncancelable (ptr=0x7f675cf60118, expect=2, timeout_ns=...)
+#4  0x000000000151e8a1 in Io.Threaded.futexWaitUncancelable (userdata=..., ptr=0x7f675cf60118, expected=2)
+#5  0x00000000014506d1 in Io.futexWaitUncancelable__anon_12835 (io=..., T=<optimized out>, ptr=0x7f675cf60118, expected=contended)
+#6  0x000000000145039c in Io.Mutex.lockUncancelable (m=0x7f675cf60118, io=...)
+#7  0x0000000001450d87 in Io.RwLock.lockUncancelable (rl=0x7f675cf600f8, io=...)
+#8  0x00000000023ab751 in storage.graph_storage_adapter.StorageAdapter.acquireGraphWriteLockCancelable (self=0x7f67c1f10000, graph_name=..., deadline_mono_ns=810459079761034)
+#9  0x00000000023ac121 in graph_store.acquireGraphWriteLockCancelable (graph_name=..., deadline_mono_ns=810459079761034)
+#10 0x00000000024c5f77 in server.quic_connection_handler.handleClientMessage (gpa=..., state=0x7f677244cde8, stream=0x7f67c20ca600, msg=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#11 0x00000000024fb498 in server.quic_connection_handler.handleQuicConnection (gpa=..., transport=0x7ffd10748d80, conn=0x7f67c20c9dc0, disable_estimates=false, compact_profile=false, memcurve_profile=false, env_spill_threshold=0, env_storage_checksum_error=false, _force_serialization_failure_unused=false, security_manager=..., shared_ast_cache=..., shared_optimizer=..., env_config=0x7ffd10747058, stream_pool=0x7f67c20c0340, acceptor_pool=0x7f67c20c0380)
+#12 0x0000000002511fe6 in server.main.handleConnectionAsync (context=0x7f67ba5edc00)
+#13 0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c9e00, runtime=0x7f6772456448)
+#14 0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e3000, worker_index=4, entry=4294967300)
+#15 0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=4)
+#16 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#17 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#18 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#19 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 18 (Thread 0x7f67714966c0 (LWP 2179139) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484340076, arg2=128, arg3=0, arg4=140082258725704)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52af6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52af6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52af6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52af6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52af6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52af68, m=0x7f67ba52af74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52af68, m=0x7f67ba52af74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=5)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=5)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 17 (Thread 0x7f67704956c0 (LWP 2179140) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484342124, arg2=128, arg3=0, arg4=140082241944392)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52b76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52b76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52b76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52b76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52b76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52b768, m=0x7f67ba52b774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52b768, m=0x7f67ba52b774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=6)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=6)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 16 (Thread 0x7f676f4946c0 (LWP 2179141) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484344172, arg2=128, arg3=0, arg4=140082225163080)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52bf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52bf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52bf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52bf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52bf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52bf68, m=0x7f67ba52bf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52bf68, m=0x7f67ba52bf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=7)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=7)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 15 (Thread 0x7f676e4936c0 (LWP 2179142) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484346220, arg2=128, arg3=0, arg4=140082208381768)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52c76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52c76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52c76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52c76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52c76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52c768, m=0x7f67ba52c774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52c768, m=0x7f67ba52c774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=8)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=8)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 14 (Thread 0x7f676d4926c0 (LWP 2179143) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484348268, arg2=128, arg3=0, arg4=140082191600456)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52cf6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52cf6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52cf6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52cf6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52cf6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52cf68, m=0x7f67ba52cf74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52cf68, m=0x7f67ba52cf74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=9)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=9)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 13 (Thread 0x7f676c4916c0 (LWP 2179144) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484350316, arg2=128, arg3=0, arg4=140082174819144)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52d76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52d76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52d76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52d76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52d76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52d768, m=0x7f67ba52d774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52d768, m=0x7f67ba52d774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=10)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=10)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 12 (Thread 0x7f676b4906c0 (LWP 2179145) "geode"):
+#0  0x0000000002859e10 in heap.debug_allocator.DebugAllocator(.{ .stack_trace_frames = 6, .enable_memory_limit = false, .safety = true, .thread_safe = true, .never_unmap = false, .retain_metadata = false, .verbose_log = false, .backing_allocator_zeroes = true, .resize_stack_traces = false, .canary = 10534666094765928719, .page_size = 131072 }).alloc (context=0x7ffd10746420, len=1064, alignment=8, ret_addr=40675927)
+#1  0x00000000013c2483 in mem.Allocator.allocBytesWithAlignment__anon_7746 (self=..., alignment=8, byte_count=1064, return_address=40675927)
+#2  0x00000000013f3886 in mem.Allocator.allocWithSizeAndAlignment__anon_9887 (self=..., size=1, alignment=8, n=1064, return_address=40675927)
+#3  0x00000000013f354c in mem.Allocator.alignedAlloc__anon_9885 (self=..., T=<optimized out>, alignment=..., n=1064)
+#4  0x00000000026caa57 in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).allocate (self=0x7f676b3c3a80, allocator=..., new_capacity=16)
+#5  0x00000000026c968e in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).grow (self=0x7f676b3c42b8, allocator=..., new_capacity=16, ctx=...)
+#6  0x00000000026c945e in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).growIfNeeded (self=0x7f676b3c42b8, allocator=..., new_count=1, ctx=...)
+#7  0x00000000026c832c in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).getOrPutContextAdapted__anon_617923 (self=0x7f676b3c42b8, allocator=..., key=..., key_ctx=..., ctx=...)
+#8  0x00000000026c7dc6 in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).getOrPutContext (self=0x7f676b3c42b8, allocator=..., key=..., ctx=...)
+#9  0x00000000026c771c in hash_map.HashMapUnmanaged([]const u8,rls_core.Value,hash_map.StringContext,80).putContext (self=0x7f676b3c42b8, allocator=..., key=..., value=..., ctx=...)
+#10 0x00000000026c754f in hash_map.HashMap([]const u8,rls_core.Value,hash_map.StringContext,80).put (self=0x7f676b3c42b8, key=..., value=...)
+#11 0x00000000026b7f04 in rls_value_bridge.nodePropertiesToRLSRow (allocator=..., properties=0x7f676b3c4558) at rls_value_bridge.zig:65
+#12 0x00000000026be096 in execution.match_operations.passesRLSExprFilter (allocator=..., node=..., username=...)
+#13 0x00000000026b74a3 in execution.match_operations.passesRLSFilter (allocator=..., node=...)
+#14 0x0000000002591806 in execution.match_operations.executeMultiNodeMatch (allocator=..., q=..., param_names=..., param_values=..., inline_let_bindings=..., current_graph=...)
+#15 0x00000000025e85e3 in execution.match_operations.executeMatchQueryImpl (allocator=..., q=..., param_names=..., param_values=..., inline_let_bindings=..., current_graph=...)
+#16 0x000000000262fff1 in execution.match_operations.executeMatchQueryWithParams (allocator=..., q=..., param_names=..., param_values=..., inline_let_bindings=..., current_graph=...)
+#17 0x0000000002aa6aeb in execution.match_operations.executeMatchCreateQuery (allocator=..., q=..., param_names_arg=..., param_values_arg=..., current_graph=...)
+#18 0x0000000002a786f5 in execution.query_execution.executeLegacyQueryWithResolvedParams (allocator=..., q=..., context=..., resolved_param_names=..., resolved_param_values=...)
+#19 0x000000000242bf87 in execution.query_execution.executeQueryWithContext (allocator=..., q=..., context=...)
+#20 0x00000000024730ca in execution.executeStatementWithContext (allocator=..., stmt=..., context=...)
+#21 0x000000000249f0af in execution.executeProgramWithContext (allocator=..., program=0x7f6706d63300, context=...)
+#22 0x00000000024d48cf in server.quic_connection_handler.handleClientMessage (gpa=..., state=0x7f676b445de8, stream=0x7f67c20c9300, msg=..., disable_estimates=false, compact_profile=false, memcurve_profile=false, peer_ip=...)
+#23 0x00000000024fb498 in server.quic_connection_handler.handleQuicConnection (gpa=..., transport=0x7ffd10748d80, conn=0x7f67c20c8dc0, disable_estimates=false, compact_profile=false, memcurve_profile=false, env_spill_threshold=0, env_storage_checksum_error=false, _force_serialization_failure_unused=false, security_manager=..., shared_ast_cache=..., shared_optimizer=..., env_config=0x7ffd10747058, stream_pool=0x7f67c20c0340, acceptor_pool=0x7f67c20c0380)
+#24 0x0000000002511fe6 in server.main.handleConnectionAsync (context=0x7f67ba5ece00)
+#25 0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c8e00, runtime=0x7f676b44f448)
+#26 0x000000000166831a in pool.Core.runTask (self=0x7f67ba4e3000, worker_index=11, entry=4294967298)
+#27 0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=11)
+#28 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#29 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#30 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#31 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 11 (Thread 0x7f676a48f6c0 (LWP 2179146) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484354412, arg2=128, arg3=0, arg4=140082141256520)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52e76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52e76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52e76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52e76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52e76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52e768, m=0x7f67ba52e774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52e768, m=0x7f67ba52e774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=12)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=12)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 10 (Thread 0x7f676948e6c0 (LWP 2179147) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484356460, arg2=128, arg3=0, arg4=140082124475208)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52ef6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52ef6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52ef6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52ef6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52ef6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52ef68, m=0x7f67ba52ef74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52ef68, m=0x7f67ba52ef74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=13)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=13)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 9 (Thread 0x7f676848d6c0 (LWP 2179148) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484358508, arg2=128, arg3=0, arg4=140082107693896)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52f76c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52f76c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52f76c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52f76c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52f76c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52f768, m=0x7f67ba52f774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52f768, m=0x7f67ba52f774, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=14)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=14)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 8 (Thread 0x7f676748c6c0 (LWP 2179149) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083484360556, arg2=128, arg3=0, arg4=140082090912584)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67ba52ff6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67ba52ff6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67ba52ff6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67ba52ff6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67ba52ff6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67ba52ff68, m=0x7f67ba52ff74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67ba52ff68, m=0x7f67ba52ff74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4e3000, worker_index=15)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4e3000, worker_index=15)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 7 (Thread 0x7f676648b6c0 (LWP 2179150) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=140082074132488, arg2=140082074132520)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x7f676644a008, rem=...)
+#2  0x0000000002d1016e in quic.compat_sleepNs (ns=500000)
+#3  0x0000000002516a09 in quic.QuicTransport.pollLoop (self=0x7ffd10748d80, shutdown=0x7ffd1074c170)
+#4  0x000000000251667b in server.main.runPollLoopTask (context=0x7ffd1074b560)
+#5  0x000000000227daa2 in thread_pool.ThreadPool.runSubmittedTask (ctx=0x7f67c20c0480, runtime=0x7f676644a448)
+#6  0x000000000166831a in pool.Core.runTask (self=0x7f67ba4ec000, worker_index=0, entry=4294967296)
+#7  0x0000000001672a61 in pool.Core.workerMain (self=0x7f67ba4ec000, worker_index=0)
+#8  0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#9  0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#10 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#11 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 6 (Thread 0x7f676548a6c0 (LWP 2179151) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083612778348, arg2=128, arg3=0, arg4=140082057349960)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67c1fa7f6c, futex_op=..., val=0, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67c1fa7f6c, expect=0, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67c1fa7f6c, expect=0, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67c1fa7f6c, expected=0, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67c1fa7f6c, expected=0, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67c1fa7f68, m=0x7f67c1fa7f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67c1fa7f68, m=0x7f67c1fa7f74, timeout_ns=10000000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67ba4ec000, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67ba4ec000, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 5 (Thread 0x7f675ffff6c0 (LWP 2179661) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083512870764, arg2=128, arg3=142, arg4=140081968700232)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67bc06076c, futex_op=..., val=142, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67bc06076c, expect=142, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67bc06076c, expect=142, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67bc06076c, expected=142, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67bc06076c, expected=142, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67bc060768, m=0x7f67bc060774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67bc060768, m=0x7f67bc060774, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67bc070000, worker_index=0)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67bc070000, worker_index=0)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 4 (Thread 0x7f675effe6c0 (LWP 2179662) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083512872812, arg2=128, arg3=101, arg4=140081951918920)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67bc060f6c, futex_op=..., val=101, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67bc060f6c, expect=101, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67bc060f6c, expect=101, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67bc060f6c, expected=101, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67bc060f6c, expected=101, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67bc060f68, m=0x7f67bc060f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67bc060f68, m=0x7f67bc060f74, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67bc070000, worker_index=1)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67bc070000, worker_index=1)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 3 (Thread 0x7f675dffd6c0 (LWP 2179663) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083512874860, arg2=128, arg3=100, arg4=140081935137608)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67bc06176c, futex_op=..., val=100, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67bc06176c, expect=100, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67bc06176c, expect=100, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67bc06176c, expected=100, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67bc06176c, expected=100, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67bc061768, m=0x7f67bc061774, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67bc061768, m=0x7f67bc061774, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67bc070000, worker_index=2)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67bc070000, worker_index=2)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 2 (Thread 0x7f6757fff6c0 (LWP 2179664) "geode"):
+#0  0x000000000146194b in os.linux.x86_64.syscall4 (number=futex, arg1=140083512876908, arg2=128, arg3=115, arg4=140081834482504)
+#1  0x000000000146152f in os.linux.futex_4arg (uaddr=0x7f67bc061f6c, futex_op=..., val=115, timeout=...)
+#2  0x0000000001460bb4 in Io.Threaded.Thread.futexWaitInner (ptr=0x7f67bc061f6c, expect=115, uncancelable=false, timeout_ns=...)
+#3  0x000000000151faff in Io.Threaded.Thread.futexWait (ptr=0x7f67bc061f6c, expect=115, timeout_ns=...)
+#4  0x000000000151f90a in Io.Threaded.futexWait (userdata=..., ptr=0x7f67bc061f6c, expected=115, timeout=...)
+#5  0x000000000145205a in Io.futexWaitTimeout__anon_12972 (io=..., T=<optimized out>, ptr=0x7f67bc061f6c, expected=115, timeout=...)
+#6  0x00000000015ece3d in sync.Condition.waitInner (self=0x7f67bc061f68, m=0x7f67bc061f74, timeout=...)
+#7  0x00000000015ec906 in sync.Condition.timedWait (self=0x7f67bc061f68, m=0x7f67bc061f74, timeout_ns=250000)
+#8  0x000000000166913d in pool.Core.idle (self=0x7f67bc070000, worker_index=3)
+#9  0x0000000001672a1a in pool.Core.workerMain (self=0x7f67bc070000, worker_index=3)
+#10 0x00000000016728f4 in Thread.callFn__anon_52125 (f=<optimized out>, args=...)
+#11 0x0000000001672662 in Thread.PosixThreadImpl.spawn__anon_52091.Instance.entryFn (raw_arg=...)
+#12 0x00007f67c337db7b in start_thread (arg=<optimized out>) at ./nptl/pthread_create.c:448
+#13 0x00007f67c33fb7f8 in __GI___clone3 () at ../sysdeps/unix/sysv/linux/x86_64/clone3.S:78
+
+Thread 1 (Thread 0x7f67c30eccc0 (LWP 2178588) "geode"):
+#0  0x00000000015a141a in os.linux.x86_64.syscall2 (number=nanosleep, arg1=140724879515872, arg2=140724879515872)
+#1  0x000000000227f2af in os.linux.nanosleep (req=0x7ffd107460e0, rem=...)
+#2  0x0000000002d7c341 in endpoint.Endpoint.waitForAccepted (self=0x7f67c1fc1000, timeout_ms=50)
+#3  0x0000000002d7bc01 in api.waitForAccepted (ep=0x7f67c1fc1000, timeout_ms=50)
+#4  0x0000000002361e7b in quic.QuicTransport.accept (self=0x7ffd10748d80)
+#5  0x000000000250c10b in server.main.main ()
+#6  0x000000000251133d in cli.main.cmdServe (allocator=..., argv=..., start_idx=1)
+#7  0x0000000001588dd3 in cli.cli_dispatcher.dispatch (allocator=..., argv=..., cmdServe=0x2511160 <cli.main.cmdServe>, cmdQuery=0x2317a00 <cli.main.cmdQuery>, cmdShell=0x226da00 <cli.main.cmdShell>, cmdLsp=0x21f2380 <cli.main.cmdLsp>, cmdAuth=0x2145110 <cli.main.cmdAuth>, cmdFLE=0x20e4cb0 <cli.fle_cli.cmdFLE>)
+#8  0x000000000158be37 in cli.main.main (proc_init=...)
+#9  0x000000000158c0b2 in unified_entry.main (proc_init=...)
+#10 0x000000000158c54a in start.main (c_argc=10, c_argv=0x7ffd1074e408, c_envp=0x7ffd1074e460)
+[Inferior 1 (process 2178588) detached]

@@ -1,0 +1,296 @@
+server_pid=2178588
+ready after 2s
+{"status_class":"00000","ordered":false,"order_keys":[],"columns":[],"rows":[],"additional_statuses":[],"flagger_findings":["I:PropertyOrderingEnabled","U:NullsFirstPolicy"]}
+ingest start: 2026-04-26T01:44:08+00:00
+time=2026-04-26T01:44:08.343Z level=INFO msg="seed mode: parallel pipeline" workers=4 chunk_size=1000 serial_fallback=true
+time=2026-04-26T01:44:18.368Z level=INFO msg="pinned connections acquired" geode.count=4
+time=2026-04-26T01:44:18.368Z level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-26T01:44:18.676Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=155 geode.total=623 geode.workers=4
+time=2026-04-26T01:44:18.676Z level=INFO msg="pipeline exec start" geode.total=623 geode.chunks=5 geode.chunk_size=155 geode.workers=4
+time=2026-04-26T01:44:47.550Z level=INFO msg="pipeline progress" geode.flushed=155 geode.total=623
+time=2026-04-26T01:44:47.551Z level=INFO msg="pipeline progress" geode.flushed=310 geode.total=623
+time=2026-04-26T01:44:47.554Z level=INFO msg="pipeline progress" geode.flushed=465 geode.total=623
+time=2026-04-26T01:44:47.567Z level=INFO msg="pipeline progress" geode.flushed=620 geode.total=623
+time=2026-04-26T01:44:47.727Z level=INFO msg="pipeline progress" geode.flushed=623 geode.total=623
+time=2026-04-26T01:44:47.727Z level=INFO msg="pipeline exec complete" geode.statements=623
+time=2026-04-26T01:44:47.727Z level=INFO msg="seeded nodes" kind=user count=623
+time=2026-04-26T01:44:47.727Z level=INFO msg="seeding nodes" kind=device file=devices.jsonl
+time=2026-04-26T01:44:47.796Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=18 geode.total=74 geode.workers=4
+time=2026-04-26T01:44:47.797Z level=INFO msg="pipeline exec start" geode.total=74 geode.chunks=5 geode.chunk_size=18 geode.workers=4
+time=2026-04-26T01:44:50.355Z level=INFO msg="pipeline progress" geode.flushed=18 geode.total=74
+time=2026-04-26T01:44:50.356Z level=INFO msg="pipeline progress" geode.flushed=36 geode.total=74
+time=2026-04-26T01:44:50.356Z level=INFO msg="pipeline progress" geode.flushed=54 geode.total=74
+time=2026-04-26T01:44:50.361Z level=INFO msg="pipeline progress" geode.flushed=72 geode.total=74
+time=2026-04-26T01:44:50.400Z level=INFO msg="pipeline progress" geode.flushed=74 geode.total=74
+time=2026-04-26T01:44:50.400Z level=INFO msg="pipeline exec complete" geode.statements=74
+time=2026-04-26T01:44:50.400Z level=INFO msg="seeded nodes" kind=device count=74
+time=2026-04-26T01:44:50.401Z level=INFO msg="seeding nodes" kind=application file=applications.jsonl
+time=2026-04-26T01:44:50.429Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=39 geode.total=159 geode.workers=4
+time=2026-04-26T01:44:50.429Z level=INFO msg="pipeline exec start" geode.total=159 geode.chunks=5 geode.chunk_size=39 geode.workers=4
+time=2026-04-26T01:44:53.304Z level=INFO msg="pipeline progress" geode.flushed=39 geode.total=159
+time=2026-04-26T01:44:53.305Z level=INFO msg="pipeline progress" geode.flushed=78 geode.total=159
+time=2026-04-26T01:44:53.308Z level=INFO msg="pipeline progress" geode.flushed=117 geode.total=159
+time=2026-04-26T01:44:53.315Z level=INFO msg="pipeline progress" geode.flushed=156 geode.total=159
+time=2026-04-26T01:44:53.396Z level=INFO msg="pipeline progress" geode.flushed=159 geode.total=159
+time=2026-04-26T01:44:53.396Z level=INFO msg="pipeline exec complete" geode.statements=159
+time=2026-04-26T01:44:53.396Z level=INFO msg="seeded nodes" kind=application count=159
+time=2026-04-26T01:44:53.396Z level=INFO msg="seeding nodes" kind=group file=groups.jsonl
+time=2026-04-26T01:44:53.509Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=80 geode.total=320 geode.workers=4
+time=2026-04-26T01:44:53.509Z level=INFO msg="pipeline exec start" geode.total=320 geode.chunks=4 geode.chunk_size=80 geode.workers=4
+time=2026-04-26T01:45:03.536Z level=INFO msg="pipeline progress" geode.flushed=80 geode.total=320
+time=2026-04-26T01:45:03.536Z level=INFO msg="pipeline progress" geode.flushed=160 geode.total=320
+time=2026-04-26T01:45:03.537Z level=INFO msg="pipeline progress" geode.flushed=240 geode.total=320
+time=2026-04-26T01:45:03.541Z level=INFO msg="pipeline progress" geode.flushed=320 geode.total=320
+time=2026-04-26T01:45:03.541Z level=INFO msg="pipeline exec complete" geode.statements=320
+time=2026-04-26T01:45:03.541Z level=INFO msg="seeded nodes" kind=group count=320
+time=2026-04-26T01:45:03.541Z level=INFO msg="seeding nodes" kind=ip file=ip_addresses.jsonl
+time=2026-04-26T01:45:03.544Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=20 geode.total=81 geode.workers=4
+time=2026-04-26T01:45:03.544Z level=INFO msg="pipeline exec start" geode.total=81 geode.chunks=5 geode.chunk_size=20 geode.workers=4
+time=2026-04-26T01:45:04.431Z level=INFO msg="pipeline progress" geode.flushed=20 geode.total=81
+time=2026-04-26T01:45:04.432Z level=INFO msg="pipeline progress" geode.flushed=40 geode.total=81
+time=2026-04-26T01:45:04.433Z level=INFO msg="pipeline progress" geode.flushed=60 geode.total=81
+time=2026-04-26T01:45:04.437Z level=INFO msg="pipeline progress" geode.flushed=80 geode.total=81
+time=2026-04-26T01:45:04.451Z level=INFO msg="pipeline progress" geode.flushed=81 geode.total=81
+time=2026-04-26T01:45:04.451Z level=INFO msg="pipeline exec complete" geode.statements=81
+time=2026-04-26T01:45:04.451Z level=INFO msg="seeded nodes" kind=ip count=81
+time=2026-04-26T01:45:04.451Z level=INFO msg="seeding nodes" kind=location file=locations.jsonl
+time=2026-04-26T01:45:04.454Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=9 geode.total=37 geode.workers=4
+time=2026-04-26T01:45:04.454Z level=INFO msg="pipeline exec start" geode.total=37 geode.chunks=5 geode.chunk_size=9 geode.workers=4
+time=2026-04-26T01:45:04.959Z level=INFO msg="pipeline progress" geode.flushed=9 geode.total=37
+time=2026-04-26T01:45:04.960Z level=INFO msg="pipeline progress" geode.flushed=18 geode.total=37
+time=2026-04-26T01:45:04.960Z level=INFO msg="pipeline progress" geode.flushed=27 geode.total=37
+time=2026-04-26T01:45:04.979Z level=INFO msg="pipeline progress" geode.flushed=36 geode.total=37
+time=2026-04-26T01:45:04.983Z level=INFO msg="pipeline progress" geode.flushed=37 geode.total=37
+time=2026-04-26T01:45:04.983Z level=INFO msg="pipeline exec complete" geode.statements=37
+time=2026-04-26T01:45:04.983Z level=INFO msg="seeded nodes" kind=location count=37
+time=2026-04-26T01:45:04.983Z level=INFO msg="seeding nodes" kind=site file=sites.jsonl
+time=2026-04-26T01:45:04.996Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=46 geode.total=184 geode.workers=4
+time=2026-04-26T01:45:04.996Z level=INFO msg="pipeline exec start" geode.total=184 geode.chunks=4 geode.chunk_size=46 geode.workers=4
+time=2026-04-26T01:45:10.230Z level=INFO msg="pipeline progress" geode.flushed=46 geode.total=184
+time=2026-04-26T01:45:10.231Z level=INFO msg="pipeline progress" geode.flushed=92 geode.total=184
+time=2026-04-26T01:45:10.232Z level=INFO msg="pipeline progress" geode.flushed=138 geode.total=184
+time=2026-04-26T01:45:10.238Z level=INFO msg="pipeline progress" geode.flushed=184 geode.total=184
+time=2026-04-26T01:45:10.239Z level=INFO msg="pipeline exec complete" geode.statements=184
+time=2026-04-26T01:45:10.240Z level=INFO msg="seeded nodes" kind=site count=184
+time=2026-04-26T01:45:10.240Z level=INFO msg="seeding nodes" kind=drive file=drives.jsonl
+time=2026-04-26T01:45:10.257Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=57 geode.total=230 geode.workers=4
+time=2026-04-26T01:45:10.257Z level=INFO msg="pipeline exec start" geode.total=230 geode.chunks=5 geode.chunk_size=57 geode.workers=4
+time=2026-04-26T01:45:13.580Z level=INFO msg="pipeline progress" geode.flushed=57 geode.total=230
+time=2026-04-26T01:45:13.597Z level=INFO msg="pipeline progress" geode.flushed=114 geode.total=230
+time=2026-04-26T01:45:13.599Z level=INFO msg="pipeline progress" geode.flushed=171 geode.total=230
+time=2026-04-26T01:45:13.616Z level=INFO msg="pipeline progress" geode.flushed=228 geode.total=230
+time=2026-04-26T01:45:13.641Z level=INFO msg="pipeline progress" geode.flushed=230 geode.total=230
+time=2026-04-26T01:45:13.641Z level=INFO msg="pipeline exec complete" geode.statements=230
+time=2026-04-26T01:45:13.642Z level=INFO msg="seeded nodes" kind=drive count=230
+time=2026-04-26T01:45:13.642Z level=INFO msg="seeding nodes" kind=drive_item file=drive_items.jsonl
+time=2026-04-26T01:45:13.954Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=336 geode.total=1345 geode.workers=4
+time=2026-04-26T01:45:13.957Z level=INFO msg="pipeline exec start" geode.total=1345 geode.chunks=5 geode.chunk_size=336 geode.workers=4
+time=2026-04-26T01:45:35.951Z level=INFO msg="pipeline progress" geode.flushed=336 geode.total=1345
+time=2026-04-26T01:45:36.066Z level=INFO msg="pipeline progress" geode.flushed=672 geode.total=1345
+time=2026-04-26T01:45:36.068Z level=INFO msg="pipeline progress" geode.flushed=673 geode.total=1345
+time=2026-04-26T01:45:36.084Z level=INFO msg="pipeline progress" geode.flushed=1009 geode.total=1345
+time=2026-04-26T01:45:36.087Z level=INFO msg="pipeline progress" geode.flushed=1345 geode.total=1345
+time=2026-04-26T01:45:36.087Z level=INFO msg="pipeline exec complete" geode.statements=1345
+time=2026-04-26T01:45:36.087Z level=INFO msg="seeded nodes" kind=drive_item count=1345
+time=2026-04-26T01:45:36.087Z level=INFO msg="seeding nodes" kind=conditional_access_policy file=conditional_access_policies.jsonl
+time=2026-04-26T01:45:36.093Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=7 geode.total=28 geode.workers=4
+time=2026-04-26T01:45:36.093Z level=INFO msg="pipeline exec start" geode.total=28 geode.chunks=4 geode.chunk_size=7 geode.workers=4
+time=2026-04-26T01:45:36.565Z level=INFO msg="pipeline progress" geode.flushed=7 geode.total=28
+time=2026-04-26T01:45:36.566Z level=INFO msg="pipeline progress" geode.flushed=14 geode.total=28
+time=2026-04-26T01:45:36.567Z level=INFO msg="pipeline progress" geode.flushed=21 geode.total=28
+time=2026-04-26T01:45:36.572Z level=INFO msg="pipeline progress" geode.flushed=28 geode.total=28
+time=2026-04-26T01:45:36.572Z level=INFO msg="pipeline exec complete" geode.statements=28
+time=2026-04-26T01:45:36.572Z level=INFO msg="seeded nodes" kind=conditional_access_policy count=28
+time=2026-04-26T01:45:36.572Z level=INFO msg="seeding nodes" kind=audit_event file=audit_events.jsonl
+time=2026-04-26T01:45:36.822Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=621 geode.total=2484 geode.workers=4
+time=2026-04-26T01:45:36.822Z level=INFO msg="pipeline exec start" geode.total=2484 geode.chunks=4 geode.chunk_size=621 geode.workers=4
+time=2026-04-26T01:46:33.717Z level=INFO msg="pipeline progress" geode.flushed=621 geode.total=2484
+time=2026-04-26T01:46:33.793Z level=INFO msg="pipeline progress" geode.flushed=1242 geode.total=2484
+time=2026-04-26T01:46:33.815Z level=INFO msg="pipeline progress" geode.flushed=1863 geode.total=2484
+time=2026-04-26T01:46:33.848Z level=INFO msg="pipeline progress" geode.flushed=2484 geode.total=2484
+time=2026-04-26T01:46:33.849Z level=INFO msg="pipeline exec complete" geode.statements=2484
+time=2026-04-26T01:46:33.849Z level=INFO msg="seeded nodes" kind=audit_event count=2484
+time=2026-04-26T01:46:33.849Z level=INFO msg="seeding nodes" kind=compliance_policy file=compliance_policies.jsonl
+time=2026-04-26T01:46:33.849Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=6 geode.workers=4
+time=2026-04-26T01:46:33.849Z level=INFO msg="pipeline exec start" geode.total=6 geode.chunks=6 geode.chunk_size=1 geode.workers=4
+time=2026-04-26T01:46:33.935Z level=INFO msg="pipeline progress" geode.flushed=1 geode.total=6
+time=2026-04-26T01:46:33.935Z level=INFO msg="pipeline progress" geode.flushed=2 geode.total=6
+time=2026-04-26T01:46:33.935Z level=INFO msg="pipeline progress" geode.flushed=3 geode.total=6
+time=2026-04-26T01:46:33.945Z level=INFO msg="pipeline progress" geode.flushed=4 geode.total=6
+time=2026-04-26T01:46:33.978Z level=INFO msg="pipeline progress" geode.flushed=5 geode.total=6
+time=2026-04-26T01:46:33.983Z level=INFO msg="pipeline progress" geode.flushed=6 geode.total=6
+time=2026-04-26T01:46:33.983Z level=INFO msg="pipeline exec complete" geode.statements=6
+time=2026-04-26T01:46:33.984Z level=INFO msg="seeded nodes" kind=compliance_policy count=6
+time=2026-04-26T01:46:33.984Z level=INFO msg="seeding nodes" kind=service_principal file=service_principals.jsonl
+time=2026-04-26T01:46:34.194Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=269 geode.total=1078 geode.workers=4
+time=2026-04-26T01:46:34.194Z level=INFO msg="pipeline exec start" geode.total=1078 geode.chunks=5 geode.chunk_size=269 geode.workers=4
+time=2026-04-26T01:47:03.156Z level=INFO msg="pipeline progress" geode.flushed=269 geode.total=1078
+time=2026-04-26T01:47:03.157Z level=INFO msg="pipeline progress" geode.flushed=538 geode.total=1078
+time=2026-04-26T01:47:03.157Z level=INFO msg="pipeline progress" geode.flushed=807 geode.total=1078
+time=2026-04-26T01:47:03.163Z level=INFO msg="pipeline progress" geode.flushed=1076 geode.total=1078
+time=2026-04-26T01:47:03.241Z level=INFO msg="pipeline progress" geode.flushed=1078 geode.total=1078
+time=2026-04-26T01:47:03.243Z level=INFO msg="pipeline exec complete" geode.statements=1078
+time=2026-04-26T01:47:03.246Z level=INFO msg="seeded nodes" kind=service_principal count=1078
+time=2026-04-26T01:47:03.247Z level=INFO msg="seeding nodes" kind=tenant_setting file=tenant_settings.jsonl
+time=2026-04-26T01:47:03.248Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=6 geode.workers=4
+time=2026-04-26T01:47:03.248Z level=INFO msg="pipeline exec start" geode.total=6 geode.chunks=6 geode.chunk_size=1 geode.workers=4
+time=2026-04-26T01:47:03.388Z level=INFO msg="pipeline progress" geode.flushed=1 geode.total=6
+time=2026-04-26T01:47:03.389Z level=INFO msg="pipeline progress" geode.flushed=2 geode.total=6
+time=2026-04-26T01:47:03.393Z level=INFO msg="pipeline progress" geode.flushed=3 geode.total=6
+time=2026-04-26T01:47:03.400Z level=INFO msg="pipeline progress" geode.flushed=4 geode.total=6
+time=2026-04-26T01:47:03.441Z level=INFO msg="pipeline progress" geode.flushed=5 geode.total=6
+time=2026-04-26T01:47:03.444Z level=INFO msg="pipeline progress" geode.flushed=6 geode.total=6
+time=2026-04-26T01:47:03.444Z level=INFO msg="pipeline exec complete" geode.statements=6
+time=2026-04-26T01:47:03.444Z level=INFO msg="seeded nodes" kind=tenant_setting count=6
+time=2026-04-26T01:47:03.444Z level=INFO msg="seeding nodes" kind=directory_role file=directory_roles.jsonl
+time=2026-04-26T01:47:03.446Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=8 geode.total=35 geode.workers=4
+time=2026-04-26T01:47:03.446Z level=INFO msg="pipeline exec start" geode.total=35 geode.chunks=5 geode.chunk_size=8 geode.workers=4
+time=2026-04-26T01:47:04.058Z level=INFO msg="pipeline progress" geode.flushed=8 geode.total=35
+time=2026-04-26T01:47:04.059Z level=INFO msg="pipeline progress" geode.flushed=16 geode.total=35
+time=2026-04-26T01:47:04.059Z level=INFO msg="pipeline progress" geode.flushed=24 geode.total=35
+time=2026-04-26T01:47:04.064Z level=INFO msg="pipeline progress" geode.flushed=32 geode.total=35
+time=2026-04-26T01:47:04.133Z level=INFO msg="pipeline progress" geode.flushed=35 geode.total=35
+time=2026-04-26T01:47:04.133Z level=INFO msg="pipeline exec complete" geode.statements=35
+time=2026-04-26T01:47:04.133Z level=INFO msg="seeded nodes" kind=directory_role count=35
+time=2026-04-26T01:47:04.133Z level=INFO msg="seeding nodes" kind=subscription file=subscriptions.jsonl
+time=2026-04-26T01:47:04.134Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=6 geode.total=27 geode.workers=4
+time=2026-04-26T01:47:04.134Z level=INFO msg="pipeline exec start" geode.total=27 geode.chunks=5 geode.chunk_size=6 geode.workers=4
+time=2026-04-26T01:47:04.642Z level=INFO msg="pipeline progress" geode.flushed=6 geode.total=27
+time=2026-04-26T01:47:04.644Z level=INFO msg="pipeline progress" geode.flushed=12 geode.total=27
+time=2026-04-26T01:47:04.644Z level=INFO msg="pipeline progress" geode.flushed=18 geode.total=27
+time=2026-04-26T01:47:04.650Z level=INFO msg="pipeline progress" geode.flushed=24 geode.total=27
+time=2026-04-26T01:47:04.719Z level=INFO msg="pipeline progress" geode.flushed=27 geode.total=27
+time=2026-04-26T01:47:04.719Z level=INFO msg="pipeline exec complete" geode.statements=27
+time=2026-04-26T01:47:04.719Z level=INFO msg="seeded nodes" kind=subscription count=27
+time=2026-04-26T01:47:04.719Z level=INFO msg="seeding nodes" kind=resource_group file=resource_groups.jsonl
+time=2026-04-26T01:47:04.771Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=64 geode.total=256 geode.workers=4
+time=2026-04-26T01:47:04.772Z level=INFO msg="pipeline exec start" geode.total=256 geode.chunks=4 geode.chunk_size=64 geode.workers=4
+time=2026-04-26T01:47:12.637Z level=INFO msg="pipeline progress" geode.flushed=128 geode.total=256
+time=2026-04-26T01:47:12.637Z level=INFO msg="pipeline progress" geode.flushed=192 geode.total=256
+time=2026-04-26T01:47:12.636Z level=INFO msg="pipeline progress" geode.flushed=64 geode.total=256
+time=2026-04-26T01:47:12.643Z level=INFO msg="pipeline progress" geode.flushed=256 geode.total=256
+time=2026-04-26T01:47:12.644Z level=INFO msg="pipeline exec complete" geode.statements=256
+time=2026-04-26T01:47:12.645Z level=INFO msg="seeded nodes" kind=resource_group count=256
+time=2026-04-26T01:47:12.645Z level=INFO msg="seeding nodes" kind=azure_resource file=resources.jsonl
+time=2026-04-26T01:47:13.878Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=720 geode.total=2880 geode.workers=4
+time=2026-04-26T01:47:13.878Z level=INFO msg="pipeline exec start" geode.total=2880 geode.chunks=4 geode.chunk_size=720 geode.workers=4
+time=2026-04-26T01:48:42.511Z level=INFO msg="pipeline progress" geode.flushed=720 geode.total=2880
+time=2026-04-26T01:48:42.511Z level=INFO msg="pipeline progress" geode.flushed=1440 geode.total=2880
+time=2026-04-26T01:48:42.512Z level=INFO msg="pipeline progress" geode.flushed=2160 geode.total=2880
+time=2026-04-26T01:48:42.521Z level=INFO msg="pipeline progress" geode.flushed=2880 geode.total=2880
+time=2026-04-26T01:48:42.521Z level=INFO msg="pipeline exec complete" geode.statements=2880
+time=2026-04-26T01:48:42.521Z level=INFO msg="seeded nodes" kind=azure_resource count=2880
+time=2026-04-26T01:48:42.522Z level=INFO msg="seeding nodes" kind=security_alert file=security_alerts.jsonl
+time=2026-04-26T01:48:42.582Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=116 geode.total=465 geode.workers=4
+time=2026-04-26T01:48:42.582Z level=INFO msg="pipeline exec start" geode.total=465 geode.chunks=5 geode.chunk_size=116 geode.workers=4
+time=2026-04-26T01:48:49.904Z level=INFO msg="pipeline progress" geode.flushed=116 geode.total=465
+time=2026-04-26T01:48:49.905Z level=INFO msg="pipeline progress" geode.flushed=232 geode.total=465
+time=2026-04-26T01:48:49.964Z level=INFO msg="pipeline progress" geode.flushed=233 geode.total=465
+time=2026-04-26T01:48:49.986Z level=INFO msg="pipeline progress" geode.flushed=349 geode.total=465
+time=2026-04-26T01:48:49.990Z level=INFO msg="pipeline progress" geode.flushed=465 geode.total=465
+time=2026-04-26T01:48:49.990Z level=INFO msg="pipeline exec complete" geode.statements=465
+time=2026-04-26T01:48:49.990Z level=INFO msg="seeded nodes" kind=security_alert count=465
+time=2026-04-26T01:48:49.990Z level=INFO msg="seeding nodes" kind=role_definition file=role_definitions.jsonl
+time=2026-04-26T01:48:50.126Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=227 geode.total=911 geode.workers=4
+time=2026-04-26T01:48:50.126Z level=INFO msg="pipeline exec start" geode.total=911 geode.chunks=5 geode.chunk_size=227 geode.workers=4
+time=2026-04-26T01:49:14.800Z level=INFO msg="pipeline progress" geode.flushed=227 geode.total=911
+time=2026-04-26T01:49:14.882Z level=INFO msg="pipeline progress" geode.flushed=454 geode.total=911
+time=2026-04-26T01:49:14.884Z level=INFO msg="pipeline progress" geode.flushed=681 geode.total=911
+time=2026-04-26T01:49:14.926Z level=INFO msg="pipeline progress" geode.flushed=908 geode.total=911
+time=2026-04-26T01:49:14.955Z level=INFO msg="pipeline progress" geode.flushed=911 geode.total=911
+time=2026-04-26T01:49:14.955Z level=INFO msg="pipeline exec complete" geode.statements=911
+time=2026-04-26T01:49:14.955Z level=INFO msg="seeded nodes" kind=role_definition count=911
+time=2026-04-26T01:49:14.956Z level=INFO msg="seeding nodes" kind=app_role file=app_roles.jsonl
+time=2026-04-26T01:49:15.295Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=258 geode.total=1033 geode.workers=4
+time=2026-04-26T01:49:15.295Z level=INFO msg="pipeline exec start" geode.total=1033 geode.chunks=5 geode.chunk_size=258 geode.workers=4
+time=2026-04-26T01:49:46.138Z level=INFO msg="pipeline progress" geode.flushed=258 geode.total=1033
+time=2026-04-26T01:49:46.139Z level=INFO msg="pipeline progress" geode.flushed=516 geode.total=1033
+time=2026-04-26T01:49:46.142Z level=INFO msg="pipeline progress" geode.flushed=774 geode.total=1033
+time=2026-04-26T01:49:46.174Z level=INFO msg="pipeline progress" geode.flushed=1032 geode.total=1033
+time=2026-04-26T01:49:46.180Z level=INFO msg="pipeline progress" geode.flushed=1033 geode.total=1033
+time=2026-04-26T01:49:46.180Z level=INFO msg="pipeline exec complete" geode.statements=1033
+time=2026-04-26T01:49:46.180Z level=INFO msg="seeded nodes" kind=app_role count=1033
+time=2026-04-26T01:49:46.180Z level=INFO msg="seeding nodes" kind=auth_methods_policy file=auth_methods_policies.jsonl
+time=2026-04-26T01:49:46.180Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=4
+time=2026-04-26T01:49:46.180Z level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=4
+time=2026-04-26T01:49:46.217Z level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-26T01:49:46.217Z level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-26T01:49:46.217Z level=INFO msg="seeded nodes" kind=auth_methods_policy count=1
+time=2026-04-26T01:49:46.217Z level=INFO msg="seeding nodes" kind=pim_activation file=pim_activations.jsonl
+time=2026-04-26T01:49:46.228Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=18 geode.total=74 geode.workers=4
+time=2026-04-26T01:49:46.228Z level=INFO msg="pipeline exec start" geode.total=74 geode.chunks=5 geode.chunk_size=18 geode.workers=4
+time=2026-04-26T01:49:48.396Z level=INFO msg="pipeline progress" geode.flushed=18 geode.total=74
+time=2026-04-26T01:49:48.396Z level=INFO msg="pipeline progress" geode.flushed=36 geode.total=74
+time=2026-04-26T01:49:48.397Z level=INFO msg="pipeline progress" geode.flushed=54 geode.total=74
+time=2026-04-26T01:49:48.401Z level=INFO msg="pipeline progress" geode.flushed=72 geode.total=74
+time=2026-04-26T01:49:48.481Z level=INFO msg="pipeline progress" geode.flushed=74 geode.total=74
+time=2026-04-26T01:49:48.481Z level=INFO msg="pipeline exec complete" geode.statements=74
+time=2026-04-26T01:49:48.481Z level=INFO msg="seeded nodes" kind=pim_activation count=74
+time=2026-04-26T01:49:48.481Z level=INFO msg="seeding nodes" kind=access_review file=access_reviews.jsonl
+time=2026-04-26T01:49:48.481Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=4
+time=2026-04-26T01:49:48.481Z level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=4
+time=2026-04-26T01:49:48.509Z level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-26T01:49:48.509Z level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-26T01:49:48.509Z level=INFO msg="seeded nodes" kind=access_review count=1
+time=2026-04-26T01:49:48.509Z level=INFO msg="seeding nodes" kind=service_health_issue file=service_health_issues.jsonl
+time=2026-04-26T01:49:48.518Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=41 geode.total=166 geode.workers=4
+time=2026-04-26T01:49:48.519Z level=INFO msg="pipeline exec start" geode.total=166 geode.chunks=5 geode.chunk_size=41 geode.workers=4
+time=2026-04-26T01:49:51.212Z level=INFO msg="pipeline progress" geode.flushed=41 geode.total=166
+time=2026-04-26T01:49:51.213Z level=INFO msg="pipeline progress" geode.flushed=82 geode.total=166
+time=2026-04-26T01:49:51.298Z level=INFO msg="pipeline progress" geode.flushed=123 geode.total=166
+time=2026-04-26T01:49:51.313Z level=INFO msg="pipeline progress" geode.flushed=164 geode.total=166
+time=2026-04-26T01:49:51.319Z level=INFO msg="pipeline progress" geode.flushed=166 geode.total=166
+time=2026-04-26T01:49:51.319Z level=INFO msg="pipeline exec complete" geode.statements=166
+time=2026-04-26T01:49:51.319Z level=INFO msg="seeded nodes" kind=service_health_issue count=166
+time=2026-04-26T01:49:51.319Z level=INFO msg="seeding nodes" kind=oauth2_permission_grant file=oauth2_permission_grants.jsonl
+time=2026-04-26T01:49:51.327Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=14 geode.total=59 geode.workers=4
+time=2026-04-26T01:49:51.327Z level=INFO msg="pipeline exec start" geode.total=59 geode.chunks=5 geode.chunk_size=14 geode.workers=4
+time=2026-04-26T01:49:52.440Z level=INFO msg="pipeline progress" geode.flushed=14 geode.total=59
+time=2026-04-26T01:49:52.442Z level=INFO msg="pipeline progress" geode.flushed=28 geode.total=59
+time=2026-04-26T01:49:52.459Z level=INFO msg="pipeline progress" geode.flushed=42 geode.total=59
+time=2026-04-26T01:49:52.470Z level=INFO msg="pipeline progress" geode.flushed=56 geode.total=59
+time=2026-04-26T01:49:52.515Z level=INFO msg="pipeline progress" geode.flushed=59 geode.total=59
+time=2026-04-26T01:49:52.515Z level=INFO msg="pipeline exec complete" geode.statements=59
+time=2026-04-26T01:49:52.516Z level=INFO msg="seeded nodes" kind=oauth2_permission_grant count=59
+time=2026-04-26T01:49:52.516Z level=INFO msg="seeding nodes" kind=organizational_branding file=organizational_brandings.jsonl
+time=2026-04-26T01:49:52.516Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=1 geode.total=1 geode.workers=4
+time=2026-04-26T01:49:52.517Z level=INFO msg="pipeline exec start" geode.total=1 geode.chunks=1 geode.chunk_size=1 geode.workers=4
+time=2026-04-26T01:49:52.548Z level=INFO msg="pipeline progress" geode.flushed=1 geode.total=1
+time=2026-04-26T01:49:52.549Z level=INFO msg="pipeline exec complete" geode.statements=1
+time=2026-04-26T01:49:52.549Z level=INFO msg="seeded nodes" kind=organizational_branding count=1
+time=2026-04-26T01:49:53.040Z level=INFO msg="seeding edges" file=edges_activated_role.jsonl
+time=2026-04-26T01:49:53.055Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=16 geode.total=66 geode.workers=4
+time=2026-04-26T01:49:53.057Z level=INFO msg="pipeline exec start" geode.total=66 geode.chunks=5 geode.chunk_size=16 geode.workers=4
+time=2026-04-26T01:50:13.650Z level=INFO msg="pipeline progress" geode.flushed=16 geode.total=66
+time=2026-04-26T01:50:13.650Z level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=1 geode.statements=16 geode.elapsed=21s geode.stmts_per_sec=0.78 geode.suggested_workers=2
+time=2026-04-26T01:50:13.651Z level=INFO msg="pipeline progress" geode.flushed=32 geode.total=66
+time=2026-04-26T01:50:13.653Z level=INFO msg="pipeline progress" geode.flushed=48 geode.total=66
+time=2026-04-26T01:50:13.655Z level=INFO msg="pipeline progress" geode.flushed=64 geode.total=66
+time=2026-04-26T01:50:13.902Z level=INFO msg="pipeline progress" geode.flushed=66 geode.total=66
+time=2026-04-26T01:50:13.902Z level=INFO msg="pipeline exec complete" geode.statements=66
+time=2026-04-26T01:50:13.902Z level=INFO msg="seeded edges" file=edges_activated_role.jsonl count=66
+time=2026-04-26T01:50:13.902Z level=INFO msg="seeding edges" file=edges_app_role_assignment.jsonl
+time=2026-04-26T01:50:13.948Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=100 geode.total=402 geode.workers=4
+time=2026-04-26T01:50:13.959Z level=INFO msg="pipeline exec start" geode.total=402 geode.chunks=5 geode.chunk_size=100 geode.workers=4
+time=2026-04-26T01:54:52.014Z level=INFO msg="pipeline progress" geode.flushed=100 geode.total=402
+time=2026-04-26T01:54:52.014Z level=WARN msg="pipeline chunk is slow — consider reducing --workers" geode.chunk=2 geode.statements=100 geode.elapsed=4m38s geode.stmts_per_sec=0.36 geode.suggested_workers=2
+time=2026-04-26T01:54:52.020Z level=INFO msg="pipeline progress" geode.flushed=200 geode.total=402
+time=2026-04-26T01:54:52.025Z level=INFO msg="pipeline progress" geode.flushed=300 geode.total=402
+time=2026-04-26T01:54:52.025Z level=INFO msg="pipeline progress" geode.flushed=400 geode.total=402
+time=2026-04-26T01:54:53.339Z level=INFO msg="pipeline progress" geode.flushed=402 geode.total=402
+time=2026-04-26T01:54:53.340Z level=INFO msg="pipeline exec complete" geode.statements=402
+time=2026-04-26T01:54:53.340Z level=INFO msg="seeded edges" file=edges_app_role_assignment.jsonl count=402
+time=2026-04-26T01:54:53.340Z level=INFO msg="seeding edges" file=edges_audited.jsonl
+time=2026-04-26T01:54:53.375Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=227 geode.total=911 geode.workers=4
+time=2026-04-26T01:54:53.375Z level=INFO msg="pipeline exec start" geode.total=911 geode.chunks=5 geode.chunk_size=227 geode.workers=4
+time=2026-04-26T02:04:53.377Z level=ERROR msg="chunk failed" geode.chunk=2 geode.error="statement 170: driver: bad connection"
+time=2026-04-26T02:04:53.377Z level=ERROR msg="chunk failed" geode.chunk=4 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-26T02:04:53.377Z level=ERROR msg="chunk failed" geode.chunk=3 geode.error="statement 170: driver: bad connection"
+time=2026-04-26T02:04:53.377Z level=ERROR msg="chunk failed" geode.chunk=1 geode.error="statement 170: driver: bad connection"
+time=2026-04-26T02:04:53.378Z level=ERROR msg="chunk failed" geode.chunk=0 geode.error="statement 170: context deadline exceeded"
+time=2026-04-26T02:04:53.378Z level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 2: statement 170: driver: bad connection\nchunk 4: batch begin tx: sql: connection is already closed\nchunk 3: statement 170: driver: bad connection\nchunk 1: statement 170: driver: bad connection\nchunk 0: statement 170: context deadline exceeded" geode.statements=911 geode.chunk_size=200 geode.pause=2s
+time=2026-04-26T02:04:53.378Z level=INFO msg="seed exec start" geode.total=911 geode.chunk_size=200 geode.pause=2s
+time=2026-04-26T02:07:46.684Z level=INFO msg="seed progress" geode.flushed=200 geode.total=911
+INGEST_TIMED_OUT_OR_FAILED exit=124
+ingest end: 2026-04-26T02:09:08+00:00 wall_clock_s=1500
+repro done: 2026-04-26T02:09:13+00:00
