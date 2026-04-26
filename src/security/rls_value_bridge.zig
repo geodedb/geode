@@ -59,10 +59,15 @@ pub fn nodePropertiesToRLSRow(
     var row = std.StringHashMap(rls.Value).init(allocator);
     errdefer row.deinit();
 
+    // Pre-size to property count to eliminate per-put rehash. Saves the
+    // 0->16->32->... allocator calls observed in the H5a T2 stack
+    // (HashMap.allocate frame). Each rehash was an O(n) memcpy.
+    try row.ensureTotalCapacity(@as(u32, @intCast(properties.count())));
+
     var it = properties.iterator();
     while (it.next()) |entry| {
         const rls_val = propertyValueToRLS(entry.value_ptr.*);
-        try row.put(entry.key_ptr.*, rls_val);
+        row.putAssumeCapacityNoClobber(entry.key_ptr.*, rls_val);
     }
 
     return row;
