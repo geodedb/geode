@@ -1,5 +1,51 @@
 # Enterprise rwlock Fairness + Diagnostic Closure Implementation Plan
 
+> **PLAN CLOSED — 2026-04-25 (post-fix re-diagnosis).** The premise of
+> this plan ("the cascade is caused by `mg.rwlock` writer starvation
+> under sustained 16-way SHARED traffic") has been **falsified twice**:
+>
+> 1. **Part 1 of `docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md`**
+>    refuted the hypothesis with contaminated stacks (1838 threads,
+>    1802 of which were idle pool-leak workers), pointing instead at a
+>    per-connection thread-pool leak.
+> 2. **Part 2 of the same file** (added 2026-04-25 22:44 UTC, after the
+>    upstream graph-storage Phase 1 dep bump reduced NLWP to 97)
+>    refuted *both* the original rwlock hypothesis AND the mid-session
+>    "rwlock as the remaining cause" interpretation that appeared in
+>    `docs/performance/2026-04-25-shared-stream-pool/2026-04-25-graph-storage-bump-result.md`.
+>    With clean stacks, **zero threads are in any rwlock acquisition
+>    path** at cascade time. The frozen `mg_rwlock_exclusive_wait_ns_total`
+>    metric is a historical artifact, not a live signal of starvation.
+>
+> **What is now known about the cascade:** at trigger time the server
+> is in a no-progress state with all worker threads idle, all
+> stream-query handlers idle in `BufferedProtoReader.nextMessage`, and
+> the QUIC reactor running its 500 µs yield loop. The bottleneck is
+> upstream of the database — somewhere at the QUIC transport / client
+> protocol boundary. See Part 2 §"Recommended next investigation" in
+> `stacks-analysis.md` for the candidate hypotheses (QUIC flow control,
+> client retry storm, pinned-stream lifetime mismatch).
+>
+> **What stays from this plan:**
+> - **Task 4** (coord_apply_* counter registration via `registerWithRuntimeMetrics`)
+>   — committed at `aa9708d0`, valuable infrastructure regardless of
+>   the cascade root cause. Keep.
+> - **Task 6** (rwlock fairness regression test) — committed at
+>   `fb5b3ea9`. Documents the rwlock invariant. Keep.
+>
+> **What is dropped:** Tasks 1, 2, 3, 5, 7. Task 5 in particular
+> (apply writer-preferred / tryLock-with-backoff at each starved
+> EXCLUSIVE call site) is not actionable — there are no starved
+> EXCLUSIVE call sites to patch.
+>
+> **Next investigation thread:** A new plan should target the QUIC
+> transport layer per Part 2's recommended next steps (capture
+> connection-level send/recv window metrics during the 9-min hang,
+> instrument `BufferedProtoReader` delivery rate, bisect the 9-min
+> silence). That work is out of scope here.
+
+---
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Eliminate the residual `edges_contains` cascade (~10 min into the file under 16-way msft-graph ingest) by identifying every `mg.rwlock` EXCLUSIVE-acquirer that's being starved by sustained 16-way SHARED traffic, applying writer-preferred / tryLock-with-backoff semantics at each, and locking the result down with an integration test so the regression cannot reappear silently. Also resolves the orphan `coord_apply_*` counter registration so coordinator throughput is visible alongside `mg_rwlock_*` in the runtime_metrics output.

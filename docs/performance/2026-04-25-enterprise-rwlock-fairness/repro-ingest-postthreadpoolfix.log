@@ -1,0 +1,33 @@
+server_pid=639989
+ready after 2s
+{"status_class":"00000","ordered":false,"order_keys":[],"columns":[],"rows":[],"additional_statuses":[],"flagger_findings":["I:PropertyOrderingEnabled","U:NullsFirstPolicy"]}
+ingest start: 2026-04-25T22:19:53+00:00
+time=2026-04-25T22:19:53.848Z level=INFO msg="seed mode: parallel pipeline" workers=16 chunk_size=1000 serial_fallback=true
+time=2026-04-25T22:20:01.470Z level=INFO msg="pinned connections acquired" geode.count=16
+time=2026-04-25T22:20:01.471Z level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-25T22:20:01.951Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=38 geode.total=623 geode.workers=16
+time=2026-04-25T22:20:01.951Z level=INFO msg="pipeline exec start" geode.total=623 geode.chunks=17 geode.chunk_size=38 geode.workers=16
+time=2026-04-25T22:20:11.563Z level=INFO msg="pipeline progress" geode.flushed=38 geode.total=623
+time=2026-04-25T22:20:11.564Z level=INFO msg="pipeline progress" geode.flushed=76 geode.total=623
+time=2026-04-25T22:20:11.564Z level=INFO msg="pipeline progress" geode.flushed=114 geode.total=623
+time=2026-04-25T22:20:11.568Z level=INFO msg="pipeline progress" geode.flushed=152 geode.total=623
+time=2026-04-25T22:20:11.695Z level=INFO msg="pipeline progress" geode.flushed=190 geode.total=623
+time=2026-04-25T22:20:12.886Z level=INFO msg="pipeline progress" geode.flushed=205 geode.total=623
+time=2026-04-25T22:20:14.191Z level=INFO msg="pipeline progress" geode.flushed=243 geode.total=623
+time=2026-04-25T22:20:15.112Z level=INFO msg="pipeline progress" geode.flushed=281 geode.total=623
+time=2026-04-25T22:29:31.952Z level=ERROR msg="chunk failed" geode.chunk=15 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.953Z level=ERROR msg="chunk failed" geode.chunk=5 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.953Z level=ERROR msg="chunk failed" geode.chunk=14 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.953Z level=WARN msg="batch retry (pinned)" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3172: deadline exceeded" geode.backoff=1s
+time=2026-04-25T22:29:31.953Z level=ERROR msg="chunk failed" geode.chunk=7 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.956Z level=ERROR msg="chunk failed" geode.chunk=10 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.956Z level=ERROR msg="chunk failed" geode.chunk=13 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.956Z level=ERROR msg="chunk failed" geode.chunk=6 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:31.957Z level=ERROR msg="chunk failed" geode.chunk=9 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T22:29:32.954Z level=ERROR msg="chunk failed" geode.chunk=11 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-25T22:29:32.954Z level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 15: batch begin tx: context deadline exceeded\nchunk 5: batch begin tx: context deadline exceeded\nchunk 14: batch begin tx: context deadline exceeded\nchunk 7: batch begin tx: context deadline exceeded\nchunk 10: batch begin tx: context deadline exceeded\nchunk 13: batch begin tx: context deadline exceeded\nchunk 6: batch begin tx: context deadline exceeded\nchunk 9: batch begin tx: context deadline exceeded\nchunk 11: batch begin tx: sql: connection is already closed" geode.statements=623 geode.chunk_size=200 geode.pause=2s
+time=2026-04-25T22:29:32.954Z level=INFO msg="seed exec start" geode.total=623 geode.chunk_size=200 geode.pause=2s
+time=2026-04-25T22:39:32.955Z level=WARN msg="batch retry" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3172: deadline exceeded" geode.backoff=1s
+INGEST_TIMED_OUT_OR_FAILED exit=124
+ingest end: 2026-04-25T22:44:53+00:00 wall_clock_s=1500
+repro done: 2026-04-25T22:44:58+00:00

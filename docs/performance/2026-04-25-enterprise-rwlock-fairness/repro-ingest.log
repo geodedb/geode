@@ -1,0 +1,36 @@
+server_pid=1002436
+ready after 2s
+{"status_class":"00000","ordered":false,"order_keys":[],"columns":[],"rows":[],"additional_statuses":[],"flagger_findings":["I:PropertyOrderingEnabled","U:NullsFirstPolicy"]}
+ingest start: 2026-04-25T23:13:54+00:00
+time=2026-04-25T23:13:54.909Z level=INFO msg="seed mode: parallel pipeline" workers=16 chunk_size=1000 serial_fallback=true
+time=2026-04-25T23:14:03.471Z level=INFO msg="pinned connections acquired" geode.count=16
+time=2026-04-25T23:14:03.471Z level=INFO msg="seeding nodes" kind=user file=users.jsonl
+time=2026-04-25T23:14:03.713Z level=INFO msg="pipeline chunk size adjusted for parallelism" geode.requested=1000 geode.effective=38 geode.total=623 geode.workers=16
+time=2026-04-25T23:14:03.713Z level=INFO msg="pipeline exec start" geode.total=623 geode.chunks=17 geode.chunk_size=38 geode.workers=16
+time=2026-04-25T23:14:08.762Z level=INFO msg="pipeline progress" geode.flushed=38 geode.total=623
+time=2026-04-25T23:14:08.763Z level=INFO msg="pipeline progress" geode.flushed=76 geode.total=623
+time=2026-04-25T23:14:08.764Z level=INFO msg="pipeline progress" geode.flushed=114 geode.total=623
+time=2026-04-25T23:14:08.861Z level=INFO msg="pipeline progress" geode.flushed=152 geode.total=623
+time=2026-04-25T23:14:09.691Z level=INFO msg="pipeline progress" geode.flushed=167 geode.total=623
+time=2026-04-25T23:14:10.910Z level=INFO msg="pipeline progress" geode.flushed=205 geode.total=623
+time=2026-04-25T23:14:12.141Z level=INFO msg="pipeline progress" geode.flushed=243 geode.total=623
+time=2026-04-25T23:14:13.221Z level=INFO msg="pipeline progress" geode.flushed=281 geode.total=623
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=15 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=5 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=WARN msg="batch retry (pinned)" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3172: deadline exceeded" geode.backoff=1s
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=14 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=9 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=10 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=7 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:33.714Z level=WARN msg="batch retry (pinned)" geode.attempt=1 geode.error="batch begin tx: geode: transport read_length to 127.0.0.1:3172: deadline exceeded" geode.backoff=1s
+time=2026-04-25T23:23:33.714Z level=ERROR msg="chunk failed" geode.chunk=13 geode.error="batch begin tx: context deadline exceeded"
+time=2026-04-25T23:23:34.715Z level=ERROR msg="chunk failed" geode.chunk=6 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-25T23:23:34.715Z level=ERROR msg="chunk failed" geode.chunk=11 geode.error="batch begin tx: sql: connection is already closed"
+time=2026-04-25T23:23:34.715Z level=WARN msg="pipeline failed — retrying file in serial mode" geode.error="chunk 15: batch begin tx: context deadline exceeded\nchunk 5: batch begin tx: context deadline exceeded\nchunk 14: batch begin tx: context deadline exceeded\nchunk 9: batch begin tx: context deadline exceeded\nchunk 10: batch begin tx: context deadline exceeded\nchunk 7: batch begin tx: context deadline exceeded\nchunk 13: batch begin tx: context deadline exceeded\nchunk 6: batch begin tx: sql: connection is already closed\nchunk 11: batch begin tx: sql: connection is already closed" geode.statements=623 geode.chunk_size=200 geode.pause=2s
+time=2026-04-25T23:23:34.716Z level=INFO msg="seed exec start" geode.total=623 geode.chunk_size=200 geode.pause=2s
+time=2026-04-25T23:33:34.717Z level=WARN msg="pinned conns close error" geode.error="sql: connection is already closed"
+time=2026-04-25T23:33:34.717Z level=INFO msg="seed metrics written" path=/tmp/rwlock-fairness-data/seed-metrics.jsonl
+Error: seeding users.jsonl: batch begin tx: context deadline exceeded
+INGEST_TIMED_OUT_OR_FAILED exit=1
+ingest end: 2026-04-25T23:33:34+00:00 wall_clock_s=1180
+repro done: 2026-04-25T23:33:39+00:00
