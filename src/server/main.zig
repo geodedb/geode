@@ -91,6 +91,7 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 // Import QUIC connection-state aggregation for runtime_metrics gauges
 // (Task 4 of docs/superpowers/plans/2026-04-25-quic-cascade-investigation.md)
 const quic_metrics = @import("quic_connection_metrics.zig");
+const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
@@ -927,6 +928,7 @@ pub fn main() !void {
             quic_metrics.minFlowControlHeadroom,
             quic_metrics_ctx,
         );
+        try proto_reader_metrics.registerAll(metrics_registry);
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
         const MetricsCtx = struct {
