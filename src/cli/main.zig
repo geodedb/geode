@@ -1291,7 +1291,11 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
                 const current_fp = try session_storage.getSystemFingerprint(allocator);
                 defer allocator.free(current_fp);
 
-                const server_addr = server orelse "127.0.0.1:3141";
+                // See server_addr resolution at the bottom of cmdQuery: keep
+                // this fallback in sync so the saved-session match check
+                // doesn't fail when the harness is driving the query.
+                const env_server_creds = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
+                const server_addr = server orelse (env_server_creds orelse "127.0.0.1:3141");
                 const fp_match = std.mem.eql(u8, creds.system_fingerprint, current_fp);
                 const server_match = std.mem.eql(u8, creds.server, server_addr);
                 const now = compat_timestamp();
@@ -1342,9 +1346,22 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         }
     }
 
-    // Determine execution mode based on --server flag
-    // Default to connecting to localhost:3141 if no --server specified
-    const server_addr = server orelse "127.0.0.1:3141";
+    // Determine execution mode based on --server flag.  Resolution order:
+    //   1. --server flag (explicit)
+    //   2. --dsn flag (already applied to `server` above)
+    //   3. GEODE_SERVER_ADDRESS env var (set by the test harness on random ports)
+    //   4. 127.0.0.1:3141 (default)
+    // Mirrors `cmdAuthLogin` (line 3292) so harness-driven query invocations
+    // without `--server` find the right port. Without this, every spec test
+    // that runs `geode query` without an explicit --server hangs against
+    // 127.0.0.1:3141 (where no listener exists) and times out at 30 s.
+    const env_server_for_query = if (comptime builtin.os.tag != .windows) posixGetenv("GEODE_SERVER_ADDRESS") else null;
+    const server_addr = server orelse (env_server_for_query orelse "127.0.0.1:3141");
+    // When falling back to the env-var route, the harness uses self-signed
+    // certs; default insecure unless the user already opted in.
+    if (server == null and env_server_for_query != null and !insecure) {
+        insecure = true;
+    }
 
     // CANARY: REQ=REQ-CLI-CHUNKED-EXEC-004; FEATURE="ChunkedExecution"; ASPECT=BatchExecution; STATUS=IMPL; OWNER=cli; UPDATED=2026-02-13
     // Handle chunked execution for large files
