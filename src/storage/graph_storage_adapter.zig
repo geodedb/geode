@@ -698,7 +698,13 @@ fn removeIndexedNodePropertyFromEncoded(mg: *ManagedGraph, label_id: gs.LabelId,
 fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) !void {
     if (prop_head == 0 or label_ids.len == 0) return;
 
-    var iter = try mg.engine.getAllProperties(prop_head);
+    // Properties live on the same shard as the owning node. Routing via
+    // `mg.engine.getAllProperties(prop_head)` would hash the prop_head
+    // through `shardOfNode`, but prop pages are NOT shard-striped (each
+    // shard's FreeSpaceManager allocates page IDs 1, 2, 3, ... locally),
+    // so the routing would land on the wrong shard. Use the node's
+    // shard directly.
+    var iter = try mg.shardEngineForNode(node_id).getAllProperties(prop_head);
     defer iter.deinit();
     while (try iter.next()) |entry| {
         // Zero-copy path: hash the pre-encoded value bytes directly from the
@@ -713,7 +719,9 @@ fn addNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []cons
 fn removeNodePropertiesForLabels(mg: *ManagedGraph, node_id: u64, label_ids: []const gs.LabelId, prop_head: u64) void {
     if (prop_head == 0 or label_ids.len == 0) return;
 
-    var iter = mg.engine.getAllProperties(prop_head) catch return;
+    // Properties live on the node's shard — see addNodePropertiesForLabels
+    // for why `mg.engine.getAllProperties(prop_head)` would misroute.
+    var iter = mg.shardEngineForNode(node_id).getAllProperties(prop_head) catch return;
     defer iter.deinit();
     while (iter.next() catch return) |entry| {
         // Zero-copy path: hash the pre-encoded value bytes directly.
@@ -2214,7 +2222,10 @@ pub const StorageAdapter = struct {
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
 
-        const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
+        // Read the existing property via the node's shard. See
+        // addNodePropertiesForLabels for why mg.engine.getProperty
+        // would misroute.
+        const old_value = if (rec.prop_head != 0) try node_shard.getProperty(rec.prop_head, key, self.allocator) else null;
         defer {
             if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
         }
@@ -2288,7 +2299,8 @@ pub const StorageAdapter = struct {
         };
 
         for (entries) |entry| {
-            const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, entry.key, self.allocator) else null;
+            // Read via the node's shard — see addNodePropertiesForLabels.
+            const old_value = if (rec.prop_head != 0) try node_shard.getProperty(rec.prop_head, entry.key, self.allocator) else null;
             defer {
                 if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
             }
@@ -2336,7 +2348,8 @@ pub const StorageAdapter = struct {
         const node_shard = mg.shardEngineForNode(node_id);
         const label_ids = try node_shard.label_store.getLabels(rec.label_head, self.allocator);
         defer self.allocator.free(label_ids);
-        const old_value = if (rec.prop_head != 0) try mg.engine.getProperty(rec.prop_head, key, self.allocator) else null;
+        // Read via the node's shard — see addNodePropertiesForLabels.
+        const old_value = if (rec.prop_head != 0) try node_shard.getProperty(rec.prop_head, key, self.allocator) else null;
         defer {
             if (old_value) |val| freeOwnedStorageProperty(self.allocator, val);
         }
@@ -2372,7 +2385,9 @@ pub const StorageAdapter = struct {
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
         if (rec.prop_head == 0) return null;
-        return mg.engine.getProperty(rec.prop_head, key, allocator);
+        // Properties live on the same shard as the owning node — see
+        // addNodePropertiesForLabels for the routing rationale.
+        return mg.shardEngineForNode(node_id).getProperty(rec.prop_head, key, allocator);
     }
 
     /// Find all node IDs with the given label in a graph.
@@ -2790,7 +2805,8 @@ pub const StorageAdapter = struct {
         // page frames.  We decode the value inline (allocating only for
         // string/ext payloads that must outlive the iterator) instead of
         // the previous two-pass pattern (collect keys → re-fetch each).
-        var iter = try mg.engine.getAllProperties(rec.prop_head);
+        // Read via the node's shard — see addNodePropertiesForLabels.
+        var iter = try mg.shardEngineForNode(node_id).getAllProperties(rec.prop_head);
         defer iter.deinit();
 
         while (try iter.next()) |entry| {
