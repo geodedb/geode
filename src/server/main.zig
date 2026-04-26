@@ -88,6 +88,9 @@ const cli_args = @import("cli_args.zig");
 const server_init = @import("server_init.zig");
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = @import("quic_connection_handler.zig");
+// Import QUIC connection-state aggregation for runtime_metrics gauges
+// (Task 4 of docs/superpowers/plans/2026-04-25-quic-cascade-investigation.md)
+const quic_metrics = @import("quic_connection_metrics.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
@@ -879,10 +882,51 @@ pub fn main() !void {
         const runtime_metrics_mod = geode.runtime_metrics;
         const metrics_registry = try runtime_metrics_mod.Registry.init(gpa);
         runtime_metrics_mod.setGlobalRegistry(metrics_registry);
+
+        // Allocate the QUIC metrics context. Lives until server shutdown
+        // so the gauge callbacks can dereference it from the emit loop.
+        // Declared BEFORE the registry-deinit defer so on LIFO unwind it
+        // runs AFTER metrics_registry.deinit() — by which point no gauge
+        // callbacks can fire against this freed pointer.
+        const quic_metrics_ctx = try gpa.create(quic_metrics.Ctx);
+        defer gpa.destroy(quic_metrics_ctx);
+        quic_metrics_ctx.* = .{ .transport = &transport };
+
         defer {
             runtime_metrics_mod.setGlobalRegistry(null);
             metrics_registry.deinit();
         }
+
+        try metrics_registry.registerGauge(
+            "quic_active_connections",
+            quic_metrics.activeConnections,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_total_bytes_in_flight",
+            quic_metrics.totalBytesInFlight,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_total_cwnd_bytes",
+            quic_metrics.totalCongestionWindow,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_min_smoothed_rtt_ns",
+            quic_metrics.minSmoothedRttNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_max_smoothed_rtt_ns",
+            quic_metrics.maxSmoothedRttNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_min_flow_control_headroom",
+            quic_metrics.minFlowControlHeadroom,
+            quic_metrics_ctx,
+        );
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
         const MetricsCtx = struct {
