@@ -556,6 +556,14 @@ pub const ManagedGraph = struct {
     rwlock_shared_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Diagnostic: cumulative wall-time (ns) all EXCLUSIVE acquires waited.
     rwlock_exclusive_wait_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    // Hold-time counters (added 2026-04-26 for the rwlock-hold-time investigation
+    // plan that follows the QUIC cascade Phase 4 H5 verdict). Cumulative ns
+    // counts time the SHARED lock was actually held (separate from
+    // rwlock_shared_wait_ns_total which counts time spent WAITING to acquire).
+    // max_hold_ns_observed is racy-write — diagnostic only, occasional lost
+    // update under concurrent release is acceptable.
+    rwlock_shared_hold_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rwlock_shared_max_hold_ns_observed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
