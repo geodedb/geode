@@ -1,0 +1,31 @@
+=== bench-merge perf-branch (origin/perf/rcu-merge-prop-index, RCU enabled) ===
+--- ROUND 0 (warmup) ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      4726ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      204ns
+--- ROUND 1 ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      5727ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      220ns
+--- ROUND 2 ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      5298ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      246ns
+--- ROUND 3 ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      5662ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      233ns
+--- ROUND 4 ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      5652ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      233ns
+--- ROUND 5 ---
+=== Benchmark: bulk_merge_insert ===
+  Avg per op:      5726ns
+=== Benchmark: bulk_merge_update ===
+  Avg per op:      233ns

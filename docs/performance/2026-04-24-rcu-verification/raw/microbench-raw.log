@@ -1,0 +1,72 @@
+WARMUP NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=19.22 ops_per_sec=10406319
+WARMUP NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=23.77 ops_per_sec=8414477
+ROUND 1 NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=13.35 ops_per_sec=14985208
+ROUND 1 NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=23.62 ops_per_sec=8467735
+ROUND 2 NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=19.20 ops_per_sec=10416559
+ROUND 2 NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=24.10 ops_per_sec=8297966
+ROUND 3 NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=18.65 ops_per_sec=10721258
+ROUND 3 NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=25.07 ops_per_sec=7978551
+ROUND 4 NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=18.18 ops_per_sec=10998739
+ROUND 4 NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=23.33 ops_per_sec=8572077
+ROUND 5 NATIVE_BENCH mode=baseline threads=1 ops=200000 elapsed_ms=14.49 ops_per_sec=13802143
+ROUND 5 NATIVE_BENCH mode=rcu threads=1 ops=200000 elapsed_ms=23.00 ops_per_sec=8694202
+WARMUP NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=20.23 ops_per_sec=39543991
+WARMUP NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=77.61 ops_per_sec=10307790
+ROUND 1 NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=18.55 ops_per_sec=43135105
+ROUND 1 NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=75.59 ops_per_sec=10582873
+ROUND 2 NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=19.98 ops_per_sec=40032204
+ROUND 2 NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=79.34 ops_per_sec=10083024
+ROUND 3 NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=18.95 ops_per_sec=42225862
+ROUND 3 NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=79.96 ops_per_sec=10005345
+ROUND 4 NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=20.23 ops_per_sec=39544853
+ROUND 4 NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=76.67 ops_per_sec=10434694
+ROUND 5 NATIVE_BENCH mode=baseline threads=4 ops=800000 elapsed_ms=20.04 ops_per_sec=39926854
+ROUND 5 NATIVE_BENCH mode=rcu threads=4 ops=800000 elapsed_ms=81.53 ops_per_sec=9812039
+WARMUP NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=16.22 ops_per_sec=98619092
+WARMUP NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=158.79 ops_per_sec=10076281
+ROUND 1 NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=20.11 ops_per_sec=79560884
+ROUND 1 NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=148.81 ops_per_sec=10751878
+ROUND 2 NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=19.04 ops_per_sec=84022537
+ROUND 2 NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=293.01 ops_per_sec=5460488
+ROUND 3 NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=18.55 ops_per_sec=86262637
+ROUND 3 NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=156.67 ops_per_sec=10212510
+ROUND 4 NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=21.08 ops_per_sec=75903723
+ROUND 4 NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=147.77 ops_per_sec=10827583
+ROUND 5 NATIVE_BENCH mode=baseline threads=8 ops=1600000 elapsed_ms=20.59 ops_per_sec=77700127
+ROUND 5 NATIVE_BENCH mode=rcu threads=8 ops=1600000 elapsed_ms=149.20 ops_per_sec=10723883
+WARMUP NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=22.50 ops_per_sec=142244943
+WARMUP NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=294.68 ops_per_sec=10859119
+ROUND 1 NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=22.37 ops_per_sec=143018390
+ROUND 1 NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=306.00 ops_per_sec=10457506
+ROUND 2 NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=21.25 ops_per_sec=150588483
+ROUND 2 NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=502.24 ops_per_sec=6371410
+ROUND 3 NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=21.52 ops_per_sec=148732875
+ROUND 3 NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=308.62 ops_per_sec=10368848
+ROUND 4 NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=24.30 ops_per_sec=131682772
+ROUND 4 NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=297.34 ops_per_sec=10762202
+ROUND 5 NATIVE_BENCH mode=baseline threads=16 ops=3200000 elapsed_ms=22.44 ops_per_sec=142571910
+ROUND 5 NATIVE_BENCH mode=rcu threads=16 ops=3200000 elapsed_ms=309.71 ops_per_sec=10332128
+WARMUP NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=34.84 ops_per_sec=183694875
+WARMUP NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=810.70 ops_per_sec=7894385
+ROUND 1 NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=34.15 ops_per_sec=187383164
+ROUND 1 NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=995.02 ops_per_sec=6432046
+ROUND 2 NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=30.11 ops_per_sec=212572148
+ROUND 2 NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=528.96 ops_per_sec=12099248
+ROUND 3 NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=33.64 ops_per_sec=190232715
+ROUND 3 NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=898.28 ops_per_sec=7124711
+ROUND 4 NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=33.10 ops_per_sec=193325790
+ROUND 4 NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=888.08 ops_per_sec=7206592
+ROUND 5 NATIVE_BENCH mode=baseline threads=32 ops=6400000 elapsed_ms=33.99 ops_per_sec=188307715
+ROUND 5 NATIVE_BENCH mode=rcu threads=32 ops=6400000 elapsed_ms=492.06 ops_per_sec=13006463
+WARMUP NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=41.23 ops_per_sec=271641443
+WARMUP NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=696.30 ops_per_sec=16085130
+ROUND 1 NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=40.81 ops_per_sec=274459103
+ROUND 1 NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=652.22 ops_per_sec=17172000
+ROUND 2 NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=42.14 ops_per_sec=265768237
+ROUND 2 NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=704.16 ops_per_sec=15905523
+ROUND 3 NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=39.55 ops_per_sec=283158241
+ROUND 3 NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=997.98 ops_per_sec=11222658
+ROUND 4 NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=42.96 ops_per_sec=260718086
+ROUND 4 NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=1118.57 ops_per_sec=10012821
+ROUND 5 NATIVE_BENCH mode=baseline threads=56 ops=11200000 elapsed_ms=40.27 ops_per_sec=278143883
+ROUND 5 NATIVE_BENCH mode=rcu threads=56 ops=11200000 elapsed_ms=803.13 ops_per_sec=13945383

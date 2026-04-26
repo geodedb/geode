@@ -1,0 +1,3 @@
+metric	rounds	median_ns_per_op	min	max	spread_pct	samples
+bulk_merge_insert	5	5662	5298	5727	7.6	[5727, 5298, 5662, 5652, 5726]
+bulk_merge_update	5	233	220	246	11.2	[220, 246, 233, 233, 233]

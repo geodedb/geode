@@ -1,0 +1,3 @@
+metric	main_median	perf_median	delta_pct	main_samples	perf_samples
+bulk_merge_insert	6034	5662	-6.2%	[6034, 5451, 4515, 7218, 6094]	[5727, 5298, 5662, 5652, 5726]
+bulk_merge_update	203	233	+14.8%	[203, 162, 144, 217, 206]	[220, 246, 233, 233, 233]
