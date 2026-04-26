@@ -3251,6 +3251,15 @@ pub const StorageAdapter = struct {
                 reg.register("mg_rwlock_shared_acquired_total", &mg.rwlock_shared_acquired_total) catch {};
                 reg.register("mg_rwlock_shared_wait_ns_total", &mg.rwlock_shared_wait_ns_total) catch {};
                 reg.register("mg_rwlock_exclusive_wait_ns_total", &mg.rwlock_exclusive_wait_ns_total) catch {};
+                // Guard: rwlock_shared_hold_ns_total counts hold-time at 6 production
+                // SHARED-acquire sites in this file. The 2 acquireShardWriteLock*
+                // helpers (test-only currently) increment _acquired_total but NOT
+                // _hold_ns_total. If those helpers ever gain production callers, the
+                // derived metric `avg_hold_ns_per_acquire = hold_ns_total / acquired_total`
+                // will silently understate. See Task 2 commit a25a7a05 for the NOTE
+                // comments at those acquireShardWriteLock* sites.
+                reg.register("mg_rwlock_shared_hold_ns_total", &mg.rwlock_shared_hold_ns_total) catch {};
+                reg.register("mg_rwlock_shared_max_hold_ns_observed", &mg.rwlock_shared_max_hold_ns_observed) catch {};
             }
         }
         self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
