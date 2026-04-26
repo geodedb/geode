@@ -3282,6 +3282,7 @@ REQ-PERF-QUERY-ARENA-001,PerQueryArenaPool,ScratchAllocator,TESTED,,,engine,2026
 REQ-PERF-QUERY-OPT-001,Performance,QueryOptimization,TESTED,,,perf,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-PERF-QUIC-READLINE-001,BufferedProtoReader,TransportHotPath,IMPL,,,wire,2026-02-02,src/server/quic_connection_handler.zig
 REQ-PERF-RWLOCK-FAIRNESS-001,MgRwLockFairness,ExclusiveAcquireUnderLoad,TESTED,,,perf,2026-04-25,tests/test_rwlock_fairness_under_load.zig
+REQ-PERF-RWLOCK-HOLD-TIME-001,MgRwLockSharedHoldTimeAtomics,AtomicReadWrite,TESTED,,,perf,2026-04-25,tests/test_graph_storage_adapter_metrics.zig
 REQ-PERF-SESSION-ADMISSION-001,ConnectionAdmissionParallelism,RegressionRepro,IMPL,,,transport,2026-04-16,tests/test_session_admission_parallelism.sh
 REQ-PERF-SESSION-ADMISSION-002,ConnectionAdmissionLaneWiring,SourceAudit,IMPL,,,transport,2026-04-16,tests/test_thread_pool_admission_lane.sh
 REQ-PERF-SESSION-ADMISSION-003,ConnectionAdmissionLaneAPI,LaneParallelismBuild,IMPL,,,transport,2026-04-16,build.zig

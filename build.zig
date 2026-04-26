@@ -3408,6 +3408,19 @@ pub fn build(b: *std.Build) void {
     const runtime_metrics_step = b.step("test-runtime-metrics", "Run runtime_metrics registry tests");
     runtime_metrics_step.dependOn(&run_runtime_metrics_tests.step);
 
+    // Hold-time atomics unit test for `ManagedGraph.rwlock_shared_hold_ns_total`
+    // and `rwlock_shared_max_hold_ns_observed`. Manually exercises the wrap
+    // pattern that the 6 production SHARED-acquire sites in
+    // graph_storage_adapter.zig use, to verify the field reads/writes work as
+    // the next phase's bisection assumes.
+    const gsa_metrics_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_storage_adapter_metrics.zig"), .target = target, .optimize = optimize });
+    gsa_metrics_mod.addImport("geode", root_mod);
+    const gsa_metrics_tests = b.addTest(.{ .root_module = gsa_metrics_mod });
+    const run_gsa_metrics_tests = b.addRunArtifact(gsa_metrics_tests);
+    test_step.dependOn(&run_gsa_metrics_tests.step);
+    const gsa_metrics_step = b.step("test-graph-storage-adapter-metrics", "Hold-time atomics unit test");
+    gsa_metrics_step.dependOn(&run_gsa_metrics_tests.step);
+
     const rwlock_fairness_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rwlock_fairness_under_load.zig"), .target = target, .optimize = optimize });
     rwlock_fairness_mod.addImport("geode", root_mod);
     const rwlock_fairness_tests = b.addTest(.{ .root_module = rwlock_fairness_mod });
