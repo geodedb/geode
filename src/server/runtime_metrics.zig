@@ -17,9 +17,19 @@ pub const Counter = struct {
     ptr: *std.atomic.Value(u64),
 };
 
+/// `name` must outlive the registry. `callback` is invoked at snapshot
+/// time and must be cheap (no I/O, no allocations, no locks held longer
+/// than a single field read). Returns the current value as a u64.
+pub const Gauge = struct {
+    name: []const u8,
+    callback: *const fn (ctx: *anyopaque) u64,
+    ctx: *anyopaque,
+};
+
 pub const Registry = struct {
     allocator: std.mem.Allocator,
     counters: std.ArrayList(Counter),
+    gauges: std.ArrayList(Gauge),
     mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator) !*Registry {
@@ -27,12 +37,14 @@ pub const Registry = struct {
         self.* = .{
             .allocator = allocator,
             .counters = std.ArrayList(Counter).empty,
+            .gauges = std.ArrayList(Gauge).empty,
         };
         return self;
     }
 
     pub fn deinit(self: *Registry) void {
         self.counters.deinit(self.allocator);
+        self.gauges.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -41,6 +53,22 @@ pub const Registry = struct {
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
         try self.counters.append(self.allocator, .{ .name = name, .ptr = ptr });
+    }
+
+    pub fn registerGauge(
+        self: *Registry,
+        name: []const u8,
+        callback: *const fn (ctx: *anyopaque) u64,
+        ctx: *anyopaque,
+    ) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        try self.gauges.append(self.allocator, .{
+            .name = name,
+            .callback = callback,
+            .ctx = ctx,
+        });
     }
 
     pub fn snapshotInto(
@@ -61,6 +89,17 @@ pub const Registry = struct {
             try out.appendSlice(allocator, c.name);
             try out.append(allocator, '=');
             const val = c.ptr.load(.acquire);
+            const str = try std.fmt.allocPrint(allocator, "{d}", .{val});
+            defer allocator.free(str);
+            try out.appendSlice(allocator, str);
+        }
+        for (self.gauges.items) |g| {
+            if (!first) try out.append(allocator, ' ');
+            first = false;
+
+            try out.appendSlice(allocator, g.name);
+            try out.append(allocator, '=');
+            const val = g.callback(g.ctx);
             const str = try std.fmt.allocPrint(allocator, "{d}", .{val});
             defer allocator.free(str);
             try out.appendSlice(allocator, str);
