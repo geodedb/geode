@@ -28,3 +28,37 @@ test "register + snapshot emits all counters" {
     try std.testing.expect(std.mem.indexOf(u8, out, "apply_ops_total=7") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "apply_batches_total=2") != null);
 }
+
+test "registerGauge: snapshot emits gauge value after counters" {
+    const allocator = std.testing.allocator;
+    var registry = try runtime_metrics.Registry.init(allocator);
+    defer registry.deinit();
+
+    // Counter (existing path).
+    var counter_atomic = std.atomic.Value(u64).init(7);
+    try registry.register("test_counter", &counter_atomic);
+
+    // Gauge (new path) with a static-context callback.
+    const GaugeFn = struct {
+        fn read(ctx_ptr: *anyopaque) u64 {
+            _ = ctx_ptr;
+            return 42;
+        }
+    };
+    var dummy_ctx: u8 = 0;
+    try registry.registerGauge("test_gauge", GaugeFn.read, @ptrCast(&dummy_ctx));
+
+    var buf: std.ArrayList(u8) = .empty;
+    defer buf.deinit(allocator);
+    try registry.snapshotInto(allocator, &buf);
+
+    const out = buf.items;
+    try std.testing.expect(std.mem.indexOf(u8, out, "test_counter=7") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "test_gauge=42") != null);
+    // snapshotInto contract: counters first, then gauges.
+    const counter_pos = std.mem.indexOf(u8, out, "test_counter=").?;
+    const gauge_pos = std.mem.indexOf(u8, out, "test_gauge=").?;
+    try std.testing.expect(counter_pos < gauge_pos);
+    // Pairs are space-separated.
+    try std.testing.expect(std.mem.indexOf(u8, out, "test_counter=7 test_gauge=42") != null);
+}
