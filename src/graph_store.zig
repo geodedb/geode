@@ -5527,7 +5527,7 @@ pub fn acquireGraphWriteLockCancelable(graph_name: []const u8, deadline_mono_ns:
 ///
 /// CANARY: REQ=REQ-PERF-HANDLER-LOCK-HOLD-001; FEATURE="HandlerLockHoldScope"; ASPECT=SnapshotCapture; STATUS=TESTED; TEST=tests/test_handler_lock_hold_scope.zig; OWNER=transport; UPDATED=2026-04-18
 pub fn snapshotUnderReadLock(allocator: std.mem.Allocator, graph_name: []const u8) !QueryReadSession {
-    const handle = acquireGraphReadLock(graph_name);
+    const handle = acquireGraphReadLockTagged(graph_name, .snapshot);
     defer releaseGraphLock(handle);
 
     // `QueryReadSession.initIfAvailable` clones nodes/edges/id-maps from the
@@ -5968,7 +5968,7 @@ pub fn stopPersistenceThread(allocator: std.mem.Allocator) void {
         }
         if (g_wal_checkpoint_fn) |checkpoint_fn| {
             // P1: Use per-graph read lock for final WAL checkpoint; fall back to global.
-            const ckpt_handle = acquireGraphReadLock(DEFAULT_GRAPH_NAME);
+            const ckpt_handle = acquireGraphReadLockTagged(DEFAULT_GRAPH_NAME, .misc);
             checkpoint_fn(store_ptr);
             releaseGraphLock(ckpt_handle);
         } else {
@@ -6019,7 +6019,7 @@ fn persistenceLoop() void {
                     if (g_wal_checkpoint_fn) |checkpoint_fn| {
                         // Acquire a read lock on the default graph while running the
                         // WAL checkpoint (which reads store state).
-                        const ckpt_handle = acquireGraphReadLock(DEFAULT_GRAPH_NAME);
+                        const ckpt_handle = acquireGraphReadLockTagged(DEFAULT_GRAPH_NAME, .misc);
                         checkpoint_fn(store_ptr);
                         releaseGraphLock(ckpt_handle);
                     }
@@ -6072,7 +6072,7 @@ fn persistSplitPhase(store_ptr: *GraphStore) void {
         var it = store_ptr.graphs.iterator();
         while (it.next()) |entry| {
             const gname = entry.key_ptr.*;
-            const lock_handle = acquireGraphReadLock(gname);
+            const lock_handle = acquireGraphReadLockTagged(gname, .misc);
             store_ptr.cleanupLegacySidecarsForGraph(gname);
             releaseGraphLock(lock_handle);
         }

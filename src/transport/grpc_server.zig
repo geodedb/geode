@@ -183,7 +183,7 @@ fn rebuildPendingIndexes(
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
 
-    const rebuild_lock = graph_store.acquireGraphReadLock(graph_name);
+    const rebuild_lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
     defer graph_store.releaseGraphLock(rebuild_lock);
 
     const store = graph_store.getGlobalStore(allocator);
@@ -2064,7 +2064,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 } else if (analysis.is_point_read) {
                     // GAP-0805: zero-copy point-read view scoped by the
                     // shared read lock (handle kept alive until defer).
-                    graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(allocator);
                     if (graph_store.PointReadView.init(store_ref)) |view| {
                         point_read_view = view;
@@ -2080,7 +2080,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                                 read_session.?.store(),
                             );
                         } else |_| {
-                            graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
                 } else {
@@ -2096,7 +2096,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                         // Snapshot path unavailable (e.g. legacy no-adapter
                         // test path): fall back to the wide-scope shared
                         // reader lock, same semantics as GAP-0752.
-                        graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                     }
                 }
             }
@@ -2905,7 +2905,7 @@ fn handleBackup(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 {
 
     // GAP-0255: Acquire shared store lock for backup consistency (parity with QUIC handler).
     // P1: Per-graph locking — back up with a read lock on the default graph.
-    const backup_lock_handle = graph_store.acquireGraphReadLock(graph_store.DEFAULT_GRAPH_NAME);
+    const backup_lock_handle = graph_store.acquireGraphReadLockTagged(graph_store.DEFAULT_GRAPH_NAME, .misc);
     defer graph_store.releaseGraphLock(backup_lock_handle);
 
     const backup_dir = "./server_backups";

@@ -200,7 +200,7 @@ fn rebuildPendingIndexes(
     if (pending_index_rebuilds.count() == 0) return;
     const manager = index_manager.getGlobalIndexManager() orelse return;
 
-    const rebuild_lock = graph_store.acquireGraphReadLock(graph_name);
+    const rebuild_lock = graph_store.acquireGraphReadLockTagged(graph_name, .misc);
     defer graph_store.releaseGraphLock(rebuild_lock);
 
     const store = graph_store.getGlobalStore(allocator);
@@ -579,7 +579,7 @@ fn executeBulkMatchCreateEdge(
     // Non-coordinator path: use the legacy SHARED-lock endpoint
     // resolve + per-op write lock.  Used only when GEODE_GROUP_COMMIT=0.
     const resolved = blk: {
-        const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
+        const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_edge);
         defer graph_store.releaseGraphLock(read_handle);
         const s = adapter.lookupNodeByMergeKey(
             query_graph_name,
@@ -760,7 +760,7 @@ fn executeBulkSimpleMerge(
     // the regular executor emits for a no-RETURN hit-path MERGE.
     var found_in_phase1 = false;
     {
-        const read_handle = graph_store.acquireGraphReadLock(query_graph_name);
+        const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
         const res = adapter.lookupNodeByMergeKey(
             query_graph_name,
@@ -3165,7 +3165,7 @@ fn handleClientMessage(
                     // point-read execute window, backed by a zero-copy view.
                     // `graph_lock_handle` keeps the lock alive until the
                     // defer block releases it.
-                    graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                    graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .point_read);
                     const store_ref = graph_store.getWritableGlobalStore(gpa);
                     if (graph_store.PointReadView.init(store_ref)) |view| {
                         point_read_view = view;
@@ -3183,7 +3183,7 @@ fn handleClientMessage(
                                 read_session.?.store(),
                             );
                         } else |_| {
-                            graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                            graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                         }
                     }
                 } else {
@@ -3199,7 +3199,7 @@ fn handleClientMessage(
                         // Snapshot path unavailable (e.g. legacy no-adapter
                         // test path): fall back to the wide-scope shared
                         // reader lock, same semantics as GAP-0752.
-                        graph_lock_handle = graph_store.acquireGraphReadLock(query_graph_name);
+                        graph_lock_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .fallback);
                     }
                 }
             }
@@ -3472,7 +3472,7 @@ fn handleClientMessage(
                                         // P1: Acquire per-graph read lock while materializing nodes to
                                         // prevent data races with concurrent ingest holding the
                                         // write lock (same protection as the PULL handler).
-                                        const inline_lock = graph_store.acquireGraphReadLock(query_graph_name);
+                                        const inline_lock = graph_store.acquireGraphReadLockTagged(query_graph_name, .misc);
                                         var page_result = active_stream.buildNextPage(gpa, inline_max) catch |err| {
                                             graph_store.releaseGraphLock(inline_lock);
                                             // Inline page failed (e.g. concurrent ingest modified
@@ -3696,7 +3696,7 @@ fn handleClientMessage(
                 // P1: Acquire per-graph read lock while materializing nodes to prevent
                 // data races with concurrent ingest holding the write lock.
                 const pull_graph_name = state.current_graph orelse graph_store.DEFAULT_GRAPH_NAME;
-                const pull_lock = graph_store.acquireGraphReadLock(pull_graph_name);
+                const pull_lock = graph_store.acquireGraphReadLockTagged(pull_graph_name, .misc);
                 var page_result = active_stream.buildNextPage(gpa, page_size) catch |err| {
                     graph_store.releaseGraphLock(pull_lock);
                     // Node disappeared during concurrent ingest — send empty
