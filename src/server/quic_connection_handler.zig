@@ -59,6 +59,7 @@ fn posixGetenv(name: [*:0]const u8) ?[:0]const u8 {
 const builtin = @import("builtin");
 const geode = @import("geode");
 const quic_transport = @import("transport/quic");
+const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 const query_plan_cache = geode.query_plan_cache;
 // Per-mutation wall-clock timing instrumentation (Task 1, throughput plan).
 const mutation_timing = geode.mutation_timing;
@@ -1000,6 +1001,7 @@ const BufferedProtoReader = struct {
                     // Consume bytes
                     self.start_index += 4 + msg_len;
                     self.compactBuffer();
+                    _ = proto_reader_metrics.messages_delivered_total.fetchAdd(1, .monotonic);
                     return msg;
                 }
             }
@@ -1008,6 +1010,7 @@ const BufferedProtoReader = struct {
             const n = self.stream.read(&self.read_buf) catch |err| {
                 if (err == error.WouldBlock) {
                     would_block_attempts += 1;
+                    _ = proto_reader_metrics.would_block_loop_iterations_total.fetchAdd(1, .monotonic);
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
@@ -1035,12 +1038,14 @@ const BufferedProtoReader = struct {
             if (n == 0) {
                 if (self.start_index == self.buffer.items.len) {
                     // Clean EOF
+                    _ = proto_reader_metrics.eof_total.fetchAdd(1, .monotonic);
                     return null; // Return optional null for EOF
                 }
                 // Partial message EOF
                 return error.UnexpectedEndOfStream;
             }
 
+            _ = proto_reader_metrics.bytes_read_total.fetchAdd(@as(u64, n), .monotonic);
             try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
         }
     }
