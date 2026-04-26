@@ -1352,10 +1352,10 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 // Execute MATCH + CALL pattern with node binding
 // CANARY: REQ=REQ-MULTI-GRAPH-010; FEATURE="MultiGraphIsolation"; ASPECT=MatchCallFiltering; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
 pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context: ExecutionContext) !ExecutionResult {
-    // Per-call row buffer — these call sites are not in a tight
-    // per-node loop, so allocate-on-call is acceptable. The
-    // per-node-loop sites in executeMultiNodeMatch use the
-    // reusable buffer pattern instead.
+    // Per-function reusable RLS row buffer. Shared across every
+    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
+    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
+    // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
     const store = graph_store.getWritableGlobalStore(allocator);
@@ -2315,10 +2315,10 @@ fn computeMultiNodeAggregation(allocator: std.mem.Allocator, expr: ast.Expr, gro
 // e.g., MATCH (p:Person)-[:WORKS_FOR]->(c:Company), (p)-[:PURCHASED]->(pr:Product)
 // This function joins chains on shared variables
 fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, current_graph: ?[]const u8) !ExecutionResult {
-    // Per-call row buffer — these call sites are not in a tight
-    // per-node loop, so allocate-on-call is acceptable. The
-    // per-node-loop sites in executeMultiNodeMatch use the
-    // reusable buffer pattern instead.
+    // Per-function reusable RLS row buffer. Shared across every
+    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
+    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
+    // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
     const store = graph_store.getGlobalStore(allocator);
@@ -2534,6 +2534,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 const to_node = store.nodes.getPtr(edge_ptr.to_id) orelse continue;
 
                 if (rel_dir == .right or rel_dir == .undirected) {
+                    // rls_row_local aliasing: each passesRLSFilter call
+                    // clears + refills the buffer; left-to-right `and`
+                    // short-circuit ensures the from_node result is
+                    // computed before the buffer is reused for to_node.
                     if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, from_node);
@@ -2544,6 +2548,8 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                     }
                 }
                 if (rel_dir == .left or rel_dir == .undirected) {
+                    // rls_row_local aliasing: see note on the parallel
+                    // .right/.undirected branch above.
                     if (std.mem.eql(u8, from_node.graph_name, filter_graph) and std.mem.eql(u8, to_node.graph_name, filter_graph) and passesTenantFilter(from_node.*, filter_tenant) and passesTenantFilter(to_node.*, filter_tenant) and passesRLSFilter(&rls_row_local, from_node.*) and passesRLSFilter(&rls_row_local, to_node.*)) {
                         var binding = MatchBinding.init(allocator);
                         if (hop.left.name) |v| try binding.vars.put(v, to_node);
@@ -3031,10 +3037,10 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
 // e.g., MATCH (p:Person) OPTIONAL MATCH (p)-[:WORKS_FOR]->(c:Company) RETURN p.name, c.name
 fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
     _ = inline_let_bindings;
-    // Per-call row buffer — these call sites are not in a tight
-    // per-node loop, so allocate-on-call is acceptable. The
-    // per-node-loop sites in executeMultiNodeMatch use the
-    // reusable buffer pattern instead.
+    // Per-function reusable RLS row buffer. Shared across every
+    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
+    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
+    // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
     const store = graph_store.getGlobalStore(allocator);
@@ -5125,10 +5131,10 @@ fn executeMultiHopGroupBy(
 ) !?ExecutionResult {
     if (chain.hops.len <= 1) return null;
 
-    // Per-call row buffer — these call sites are not in a tight
-    // per-node loop, so allocate-on-call is acceptable. The
-    // per-node-loop sites in executeMultiNodeMatch use the
-    // reusable buffer pattern instead.
+    // Per-function reusable RLS row buffer. Shared across every
+    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
+    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
+    // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
 
@@ -5442,10 +5448,10 @@ fn executeMultiHopGroupBy(
 // Execute MATCH query with graph isolation - only matches nodes in the specified graph
 // CANARY: REQ=REQ-REFACTOR-MATCH-007; FEATURE="MatchOperationsRefactor"; ASPECT=RefactoredFunction; STATUS=IMPL; OWNER=engine; UPDATED=2026-01-30
 pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_names: []const []const u8, param_values: []const Value, inline_let_bindings: []ast.LetBinding, current_graph: ?[]const u8) !ExecutionResult {
-    // Per-call row buffer — these call sites are not in a tight
-    // per-node loop, so allocate-on-call is acceptable. The
-    // per-node-loop sites in executeMultiNodeMatch use the
-    // reusable buffer pattern instead.
+    // Per-function reusable RLS row buffer. Shared across every
+    // passesRLSFilter call site in this function; nodePropertiesToRLSRowInto
+    // (Tasks 1-2 of the H5a fix) clears + refills the buffer per call so
+    // the per-node init/deinit pair is amortized away.
     var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
     defer rls_row_local.deinit();
     // GAP-0753: Prefer the handler-installed `QueryReadSession` snapshot
