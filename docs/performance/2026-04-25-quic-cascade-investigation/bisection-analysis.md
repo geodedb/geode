@@ -5,7 +5,7 @@ Final task of the 9-task QUIC cascade investigation plan
 
 Source artifacts (all committed at `a7b55acd`):
 
-- `repro-server.log` — 305 `info: metrics:` lines emitted at a fixed 5 s
+- `repro-server.log` — 300 `info: metrics:` lines emitted at a fixed 5 s
   cadence (see `src/server/main.zig:947-964`).
 - `repro-ingest.log` — controller log with wall-clock timestamps.
 - `cascade-stacks.txt` — `gdb thread apply all bt` of all 97 server threads
@@ -156,12 +156,13 @@ during Task 6's review is not materialising in this run.
 ### H1 — Flow-control deadlock
 
 **Signature:** `quic_min_flow_control_headroom = 0` at T1 and stays 0 to T2.
-**Verdict: REFUTED.** `quic_min_flow_control_headroom` stays pinned at the
-8388608 = 8 MiB initial value across **all 305 metric emissions** — across
-T0, T1, the entire 10-minute hang, T2, and the 1500 s timeout window. Flow
-control is never exhausted and bytes_in_flight is essentially zero
-throughout (occasional small blips of 99 / 236 / 263 bytes near other
-metric lines). There is no flow-control bottleneck.
+**Verdict: REFUTED.** `quic_min_flow_control_headroom` stays **≥ 8388372
+(within 236 B of the full 8 MiB initial value) across all 300 metric
+emissions** — across T0, T1, the entire 10-minute hang, T2, and the 1500 s
+timeout window. The dip to 8388372 is < 0.003% of the window and corresponds
+to the brief `bytes_in_flight` blips at the tail of the run (99 / 236 / 263
+bytes seen near other metric lines). Flow control is never meaningfully
+exhausted. There is no flow-control bottleneck.
 
 ### H2 — Congestion-control collapse
 
@@ -205,6 +206,37 @@ The handler threads were still alive at this snapshot — the four threads
 T19, T20, T23, T89 are all still spinning in `acquireGraphWriteLockCancelable`.
 H4 is what the cascade looks like from the client's perspective; H5 below
 is what caused it.
+
+### Cross-cutting timing observation — the 10-minute clocks
+
+The exact 10:00 Δ between T1 (last forward progress) and T2 (cascade
+trigger) coincides with **two separate 10-minute clocks** in the system:
+
+1. **The Go controller's per-statement context deadline.** The cascade
+   surfaces in the client log as `chunk failed: statement 170: context
+   deadline exceeded` — that is a Go SQL driver `context.WithTimeout` firing,
+   not a QUIC protocol error.
+2. **The server's `--idle-timeout 600000` flag** (10 minutes), set by the
+   repro script `/tmp/run-quic-investigation-repro.sh:27`. When a QUIC
+   connection sees no application traffic for 600 s, the server tears it
+   down — which would produce exactly the 4 → 2 active-connection drop
+   and EOF tick we see at T2.
+
+These two timeouts are NOT necessarily causally linked. The Go context
+deadline can fire while the server is healthy (slow query, fast network);
+the server idle-timeout can fire while the client is healthy (long client
+wait between statements, fast server). But the **exact 10:00 match across
+both** deserves explicit acknowledgement so a future reader doesn't
+mis-ascribe one or the other to the cascade root cause without checking.
+
+The H5 verdict (rwlock-saturation chokepoint) holds regardless of which
+clock fires first: the server is too slow to make forward progress
+**either way**, and whichever 10-minute timer trips first is just the
+proximate trip wire — not the underlying defect. To distinguish the two
+clocks empirically, the recommended next investigation should **log the
+server's last-activity-time per stream around the cascade trigger** to
+confirm whether the server-side idle-timeout actually fires (its teardown
+signature in the QUIC layer would differ from a client-initiated close).
 
 ### H5 — Other (rwlock saturation as wall-clock chokepoint)
 
