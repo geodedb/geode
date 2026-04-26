@@ -207,6 +207,26 @@ T19, T20, T23, T89 are all still spinning in `acquireGraphWriteLockCancelable`.
 H4 is what the cascade looks like from the client's perspective; H5 below
 is what caused it.
 
+**Controller-side error mix at T2 (sharper than "all chunks deadline-out
+simultaneously").** `repro-ingest.log:286-291` shows the cascade is staged,
+not simultaneous: only **chunk 0** hits `statement 170: context deadline
+exceeded` (the true 10-minute deadline fire); **chunks 1, 2, 3** all hit
+`statement 170: driver: bad connection`; **chunk 4** hits
+`batch begin tx: sql: connection is already closed`. This is the
+pinned-pool's shared-state cascade visible through the Go `database/sql`
+driver: chunk 0's per-statement context deadline trips first, the QUIC
+connection chunk 0 was pinned to closes (server- or client-initiated),
+and chunks 1-4 then discover the dead connection on their next exec
+attempt and fail almost simultaneously (all five errors land in the same
+1 ms wall-clock window). This actually **strengthens** H4's "pinned-stream
+lifecycle mismatch" framing — the connection-close visibly cascaded
+across all chunks via the pinned-pool's shared per-connection state, so
+the controller's pipeline fail-fast logic surfaces all five chunks as
+"failed" within one emit window even though only one of them actually
+hit its own deadline. Substance unchanged: H5 is still the chokepoint
+that put chunk 0 onto the deadline path; H4 is still the downstream
+symptom signature.
+
 ### Cross-cutting timing observation — the 10-minute clocks
 
 The exact 10:00 Δ between T1 (last forward progress) and T2 (cascade
@@ -364,6 +384,15 @@ the duration of the scan.
 (`Connection.rtt_app.smoothed_rtt_ns` returns `undefined` before first
 sample; gauge callback should fall back to 0).
 
-**Tertiary**: revisit the `NoHandshakeKeys` regression (Task 1 left this
-INDETERMINATE and it surfaced again here at workers=4; under heavier
-workers=16 it blocked the run entirely).
+**Tertiary**: empirically disambiguate the two 10-minute clocks
+(controller's per-statement context deadline vs. server's
+`--idle-timeout 600000`). Log server-side last-activity-time per stream
+across the cascade window; the server-initiated idle-timeout teardown
+would carry a distinct QUIC `CONNECTION_CLOSE` frame signature relative
+to a client-initiated close. Cheap to add and resolves the residual
+ambiguity flagged in the cross-cutting timing section above. Doesn't
+change the H5 verdict but tightens the H4 narrative.
+
+**Quaternary**: revisit the `NoHandshakeKeys` regression (Task 1 left
+this INDETERMINATE and it surfaced again here at workers=4; under
+heavier workers=16 it blocked the run entirely).
