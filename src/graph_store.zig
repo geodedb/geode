@@ -5338,6 +5338,18 @@ pub fn getGlobalAdapter() ?*graph_storage_adapter.StorageAdapter {
     return global_adapter;
 }
 
+/// Identifies the call site that acquired a per-graph SHARED rwlock,
+/// so per-acquisition hold-time data can be attributed to the right
+/// counter. Added 2026-04-26 to drive the H5a residual-bisection.
+pub const LockSiteTag = enum {
+    snapshot, // graph_store.snapshotUnderReadLock — clone-then-release
+    point_read, // PointReadView path — held across short execute
+    bulk_merge, // executeBulkSimpleMerge Phase 1 lookup
+    bulk_edge, // executeBulkMatchCreateEdge Phase 1 lookup
+    fallback, // acquireGraphReadLock fallback (snapshot unavailable)
+    misc, // catchall — unrecategorized callers
+};
+
 /// Opaque handle returned by per-graph lock helpers.  Callers pass this back
 /// to the corresponding release function.  When `managed_graph` is non-null
 /// the per-graph path was used; when null the global rwlock was used instead.
@@ -5365,6 +5377,7 @@ pub const GraphLockHandle = struct {
     /// per-graph SHARED hold-time counters get accurate per-acquisition timing.
     /// Zero when `managed_graph == null` (fallback path; no per-graph lock taken).
     hold_start_ns: u64 = 0,
+    site_tag: LockSiteTag = .misc, // for per-site hold-time attribution
 };
 
 /// Acquire a shared (read) lock scoped to `graph_name`.  If the per-graph
@@ -5388,6 +5401,15 @@ pub fn acquireGraphReadLock(graph_name: []const u8) GraphLockHandle {
         .is_write = false,
         .holds_global_store_lock = true,
     };
+}
+
+/// Tagged variant of `acquireGraphReadLock`. Identical semantics but
+/// records the call-site tag on the returned handle so per-site SHARED
+/// hold-time counters get accurate attribution at release time.
+pub fn acquireGraphReadLockTagged(graph_name: []const u8, tag: LockSiteTag) GraphLockHandle {
+    var handle = acquireGraphReadLock(graph_name);
+    handle.site_tag = tag;
+    return handle;
 }
 
 /// Acquire an exclusive (write) lock scoped to `graph_name`.
@@ -5531,7 +5553,7 @@ pub fn releaseGraphLock(handle: GraphLockHandle) void {
             if (handle.is_write) {
                 adapter.releaseGraphWriteLock(mg);
             } else {
-                adapter.releaseGraphReadLock(mg, handle.hold_start_ns);
+                adapter.releaseGraphReadLock(mg, handle.hold_start_ns, handle.site_tag);
             }
         }
     }

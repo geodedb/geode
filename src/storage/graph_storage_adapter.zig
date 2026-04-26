@@ -569,6 +569,16 @@ pub const ManagedGraph = struct {
     /// for an instrumentation counter.
     rwlock_shared_max_hold_ns_observed: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
 
+    // Per-site hold-time decomposition (added 2026-04-26 for the H5a
+    // residual-bisection). The aggregate counter above sums all sites;
+    // these break it out by call-site tag so we can identify which
+    // acquirer is the long-hold offender without re-running gdb.
+    rwlock_shared_hold_snapshot_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rwlock_shared_hold_point_read_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rwlock_shared_hold_bulk_merge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rwlock_shared_hold_bulk_edge_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    rwlock_shared_hold_fallback_ns_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+
     /// Obtain the vtable-based `GraphStorage` interface for direct low-level
     /// access to the engine.
     pub fn storage(self: *ManagedGraph) gs.GraphStorage {
@@ -3260,6 +3270,11 @@ pub const StorageAdapter = struct {
                 // comments at those acquireShardWriteLock* sites.
                 reg.register("mg_rwlock_shared_hold_ns_total", &mg.rwlock_shared_hold_ns_total) catch {};
                 reg.register("mg_rwlock_shared_max_hold_ns_observed", &mg.rwlock_shared_max_hold_ns_observed) catch {};
+                reg.register("mg_rwlock_shared_hold_snapshot_ns_total", &mg.rwlock_shared_hold_snapshot_ns_total) catch {};
+                reg.register("mg_rwlock_shared_hold_point_read_ns_total", &mg.rwlock_shared_hold_point_read_ns_total) catch {};
+                reg.register("mg_rwlock_shared_hold_bulk_merge_ns_total", &mg.rwlock_shared_hold_bulk_merge_ns_total) catch {};
+                reg.register("mg_rwlock_shared_hold_bulk_edge_ns_total", &mg.rwlock_shared_hold_bulk_edge_ns_total) catch {};
+                reg.register("mg_rwlock_shared_hold_fallback_ns_total", &mg.rwlock_shared_hold_fallback_ns_total) catch {};
             }
         }
         self.upsertRegistryEntryLocked(name, graph_uuid, 0, 0);
@@ -3588,14 +3603,31 @@ pub const StorageAdapter = struct {
         return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
-    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64) void {
+    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64, site_tag: graph_store.LockSiteTag) void {
         const _hold_ns = monoNanosNow() -| hold_start_ns;
         _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
         const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
         if (_hold_ns > _cur_max) {
             mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
         }
+        switch (site_tag) {
+            .snapshot => _ = mg.rwlock_shared_hold_snapshot_ns_total.fetchAdd(_hold_ns, .monotonic),
+            .point_read => _ = mg.rwlock_shared_hold_point_read_ns_total.fetchAdd(_hold_ns, .monotonic),
+            .bulk_merge => _ = mg.rwlock_shared_hold_bulk_merge_ns_total.fetchAdd(_hold_ns, .monotonic),
+            .bulk_edge => _ = mg.rwlock_shared_hold_bulk_edge_ns_total.fetchAdd(_hold_ns, .monotonic),
+            .fallback => _ = mg.rwlock_shared_hold_fallback_ns_total.fetchAdd(_hold_ns, .monotonic),
+            .misc => {}, // intentionally not decomposed
+        }
         mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    /// Test helper: look up a `*ManagedGraph` by name without acquiring
+    /// the per-graph rwlock. Used by regression tests that need to read
+    /// per-graph counters directly.
+    pub fn lookupManagedGraph(self: *StorageAdapter, name: []const u8) !*ManagedGraph {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        return self.engines.get(name) orelse error.GraphNotFound;
     }
 
     /// Acquire an exclusive (write) lock on the named graph.
@@ -3890,7 +3922,7 @@ pub const StorageAdapter = struct {
         errdefer {
             while (acquired > 0) {
                 acquired -= 1;
-                self.releaseGraphReadLock(handles[acquired].mg, handles[acquired].hold_start_ns);
+                self.releaseGraphReadLock(handles[acquired].mg, handles[acquired].hold_start_ns, .misc);
             }
             allocator.free(handles);
         }
@@ -3911,7 +3943,7 @@ pub const StorageAdapter = struct {
     /// Release all locks acquired by acquireMultiGraphReadLocks and free the slice.
     pub fn releaseMultiGraphReadLocks(self: *StorageAdapter, allocator: std.mem.Allocator, handles: []GraphLockHandle) void {
         for (handles) |h| {
-            self.releaseGraphReadLock(h.mg, h.hold_start_ns);
+            self.releaseGraphReadLock(h.mg, h.hold_start_ns, .misc);
         }
         allocator.free(handles);
     }
@@ -4470,7 +4502,7 @@ test "StorageAdapter: acquireGraphReadLock and releaseGraphReadLock" {
     // Acquire a shared read lock and verify we get back a valid ManagedGraph.
     const acq = try adapter.acquireGraphReadLock("lock_test_graph");
     try std.testing.expectEqualStrings("lock_test_graph", acq.mg.name);
-    adapter.releaseGraphReadLock(acq.mg, acq.hold_start_ns);
+    adapter.releaseGraphReadLock(acq.mg, acq.hold_start_ns, .misc);
 
     // Error on nonexistent graph.
     try std.testing.expectError(error.GraphNotFound, adapter.acquireGraphReadLock("no_such_graph"));
