@@ -1331,6 +1331,18 @@ pub const StorageAdapter = struct {
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
         const io = std.Io.Threaded.global_single_threaded.io();
 
+        // Hold-time instrumentation pattern. Three shapes appear in this file:
+        //   1. defer-after-defer (canonical) — see below; LIFO unwind runs the
+        //      hold-measure BEFORE the unlock so the held duration is captured
+        //      to the moment of release.
+        //   2. inline before explicit unlockShared — used inside checkpointAll's
+        //      for-loops (~lines 2881, 2914) where the unlock is not a defer.
+        //   3. cross-function via ReadLockAcquisition.hold_start_ns — used by
+        //      acquireGraphReadLock / releaseGraphReadLock (line ~3552) where
+        //      the lock crosses a function boundary; timestamp is plumbed back
+        //      via the returned struct (or GraphLockHandle.hold_start_ns at
+        //      higher layers).
+        // All three measure: release_ts - acquire_ts, monotonic-ns, saturating.
         const _t_start = monoNanosNow();
         mg.rwlock.lockSharedUncancelable(io);
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
@@ -4166,6 +4178,11 @@ pub fn acquireShardWriteLock(mg: *ManagedGraph, key: u64) void {
     mg.rwlock.lockSharedUncancelable(io);
     _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
     _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+    // NOTE: SHARED hold-time NOT measured here. The matching
+    // releaseShardWriteLock would need to be plumbed with a hold_start_ns
+    // parameter (same pattern as releaseGraphReadLock at line ~3570).
+    // Currently test-only; if promoted to production callers, instrument
+    // before metric `avg_shared_hold_ns_per_acq` is consumed.
     const idx = sharded_store.shardIndex(key);
     mg.shard_locks[idx].lockUncancelable(io);
 }
@@ -4194,6 +4211,11 @@ pub fn acquireShardWriteLockCancelable(
     mg.rwlock.lockSharedUncancelable(io);
     _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
     _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+    // NOTE: SHARED hold-time NOT measured here. The matching
+    // releaseShardWriteLock would need to be plumbed with a hold_start_ns
+    // parameter (same pattern as releaseGraphReadLock at line ~3570).
+    // Currently test-only; if promoted to production callers, instrument
+    // before metric `avg_shared_hold_ns_per_acq` is consumed.
     errdefer mg.rwlock.unlockShared(io);
     const idx = sharded_store.shardIndex(key);
     if (mg.shard_locks[idx].tryLock(io)) return;
