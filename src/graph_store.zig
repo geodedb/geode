@@ -5360,6 +5360,11 @@ pub const GraphLockHandle = struct {
     /// false (the normal case after R6), the global lock was taken SHARED
     /// — release via `releaseStoreLock` rather than `releaseStoreWriteLock`.
     global_lock_is_exclusive: bool = false,
+    /// Monotonic-ns timestamp captured at SHARED-lock acquire on the per-graph
+    /// rwlock.  Passed back to `StorageAdapter.releaseGraphReadLock` so the
+    /// per-graph SHARED hold-time counters get accurate per-acquisition timing.
+    /// Zero when `managed_graph == null` (fallback path; no per-graph lock taken).
+    hold_start_ns: u64 = 0,
 };
 
 /// Acquire a shared (read) lock scoped to `graph_name`.  If the per-graph
@@ -5369,11 +5374,12 @@ pub const GraphLockHandle = struct {
 pub fn acquireGraphReadLock(graph_name: []const u8) GraphLockHandle {
     acquireStoreLock();
     if (global_adapter) |adapter| {
-        if (adapter.acquireGraphReadLock(graph_name)) |mg| {
+        if (adapter.acquireGraphReadLock(graph_name)) |acq| {
             return .{
-                .managed_graph = mg,
+                .managed_graph = acq.mg,
                 .is_write = false,
                 .holds_global_store_lock = true,
+                .hold_start_ns = acq.hold_start_ns,
             };
         } else |_| {}
     }
@@ -5525,7 +5531,7 @@ pub fn releaseGraphLock(handle: GraphLockHandle) void {
             if (handle.is_write) {
                 adapter.releaseGraphWriteLock(mg);
             } else {
-                adapter.releaseGraphReadLock(mg);
+                adapter.releaseGraphReadLock(mg, handle.hold_start_ns);
             }
         }
     }

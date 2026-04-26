@@ -1336,6 +1336,15 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+            }
+        }
 
         const idx = sharded_store.shardIndex(reserved_id);
         mg.shard_locks[idx].lockUncancelable(io);
@@ -1396,6 +1405,15 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+            }
+        }
 
         if (src_shard == dst_shard) {
             mg.shard_locks[src_shard].lockUncancelable(io);
@@ -1479,6 +1497,15 @@ pub const StorageAdapter = struct {
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
         defer mg.rwlock.unlockShared(io);
+        const _hold_start = monoNanosNow();
+        defer {
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+            }
+        }
 
         // Probe phase: shared lock on merge-index, fast return on hit.
         mg.merge_prop_index_lock.lockSharedUncancelable(io);
@@ -2856,6 +2883,7 @@ pub const StorageAdapter = struct {
             mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
             _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+            const _hold_start = monoNanosNow();
             mg.engine.checkpoint() catch |err| {
                 log.warn("checkpoint failed for graph '{s}': {}", .{ mg.name, err });
             };
@@ -2867,6 +2895,12 @@ pub const StorageAdapter = struct {
                 self.allocator.free(dir_path);
             } else |err| {
                 log.warn("failed to build graph dir path for property index persist '{s}': {}", .{ mg.name, err });
+            }
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
             }
             mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
@@ -2882,6 +2916,7 @@ pub const StorageAdapter = struct {
             mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
             _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
+            const _hold_start = monoNanosNow();
             var nc: u64 = 0;
             var ec: u64 = 0;
             for (mg.engine.shards) |shard| {
@@ -2894,6 +2929,12 @@ pub const StorageAdapter = struct {
                 .node_count = nc,
                 .edge_count = ec,
             };
+            const _hold_ns = monoNanosNow() -| _hold_start;
+            _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+            const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+            if (_hold_ns > _cur_max) {
+                mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+            }
             mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
         }
         {
@@ -3504,8 +3545,14 @@ pub const StorageAdapter = struct {
     // ------------------------------------------------------------------
 
     /// Acquire a shared (read) lock on the named graph.
-    /// Caller MUST call releaseGraphReadLock when done.
-    pub fn acquireGraphReadLock(self: *StorageAdapter, graph_name: []const u8) !*ManagedGraph {
+    /// Caller MUST call releaseGraphReadLock when done, passing back the
+    /// `hold_start_ns` value from the returned `ReadLockAcquisition` so the
+    /// per-graph SHARED hold-time counters get accurate per-acquisition
+    /// timing data (see `ManagedGraph.rwlock_shared_hold_ns_total`).
+    pub fn acquireGraphReadLock(
+        self: *StorageAdapter,
+        graph_name: []const u8,
+    ) !ReadLockAcquisition {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         const mg = self.engines.get(graph_name) orelse {
             self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -3516,10 +3563,17 @@ pub const StorageAdapter = struct {
         mg.rwlock.lockSharedUncancelable(std.Io.Threaded.global_single_threaded.io());
         _ = mg.rwlock_shared_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
         _ = mg.rwlock_shared_acquired_total.fetchAdd(1, .monotonic);
-        return mg;
+        const hold_start_ns = monoNanosNow();
+        return .{ .mg = mg, .hold_start_ns = hold_start_ns };
     }
 
-    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph) void {
+    pub fn releaseGraphReadLock(_: *StorageAdapter, mg: *ManagedGraph, hold_start_ns: u64) void {
+        const _hold_ns = monoNanosNow() -| hold_start_ns;
+        _ = mg.rwlock_shared_hold_ns_total.fetchAdd(_hold_ns, .monotonic);
+        const _cur_max = mg.rwlock_shared_max_hold_ns_observed.load(.monotonic);
+        if (_hold_ns > _cur_max) {
+            mg.rwlock_shared_max_hold_ns_observed.store(_hold_ns, .monotonic);
+        }
         mg.rwlock.unlockShared(std.Io.Threaded.global_single_threaded.io());
     }
 
@@ -3815,14 +3869,18 @@ pub const StorageAdapter = struct {
         errdefer {
             while (acquired > 0) {
                 acquired -= 1;
-                self.releaseGraphReadLock(handles[acquired].mg);
+                self.releaseGraphReadLock(handles[acquired].mg, handles[acquired].hold_start_ns);
             }
             allocator.free(handles);
         }
 
         for (sorted) |name| {
-            const mg = try self.acquireGraphReadLock(name);
-            handles[acquired] = .{ .graph_name = name, .mg = mg };
+            const acq = try self.acquireGraphReadLock(name);
+            handles[acquired] = .{
+                .graph_name = name,
+                .mg = acq.mg,
+                .hold_start_ns = acq.hold_start_ns,
+            };
             acquired += 1;
         }
 
@@ -3832,16 +3890,26 @@ pub const StorageAdapter = struct {
     /// Release all locks acquired by acquireMultiGraphReadLocks and free the slice.
     pub fn releaseMultiGraphReadLocks(self: *StorageAdapter, allocator: std.mem.Allocator, handles: []GraphLockHandle) void {
         for (handles) |h| {
-            self.releaseGraphReadLock(h.mg);
+            self.releaseGraphReadLock(h.mg, h.hold_start_ns);
         }
         allocator.free(handles);
     }
 };
 
 /// Handle returned by acquireMultiGraphReadLocks, pairing a graph name with its locked ManagedGraph.
+/// Carries `hold_start_ns` so the per-graph SHARED hold-time counters can be updated at release.
 pub const GraphLockHandle = struct {
     graph_name: []const u8,
     mg: *ManagedGraph,
+    hold_start_ns: u64,
+};
+
+/// Result of `StorageAdapter.acquireGraphReadLock` — a locked `ManagedGraph`
+/// plus the monotonic-ns timestamp of the acquire so the matching
+/// `releaseGraphReadLock` can update the per-graph SHARED hold-time counters.
+pub const ReadLockAcquisition = struct {
+    mg: *ManagedGraph,
+    hold_start_ns: u64,
 };
 
 /// CLOCK_MONOTONIC nanoseconds; used by the cancelable write-lock path (R2).
@@ -4369,9 +4437,9 @@ test "StorageAdapter: acquireGraphReadLock and releaseGraphReadLock" {
     _ = try adapter.getOrCreateGraph("lock_test_graph");
 
     // Acquire a shared read lock and verify we get back a valid ManagedGraph.
-    const mg = try adapter.acquireGraphReadLock("lock_test_graph");
-    try std.testing.expectEqualStrings("lock_test_graph", mg.name);
-    adapter.releaseGraphReadLock(mg);
+    const acq = try adapter.acquireGraphReadLock("lock_test_graph");
+    try std.testing.expectEqualStrings("lock_test_graph", acq.mg.name);
+    adapter.releaseGraphReadLock(acq.mg, acq.hold_start_ns);
 
     // Error on nonexistent graph.
     try std.testing.expectError(error.GraphNotFound, adapter.acquireGraphReadLock("no_such_graph"));
