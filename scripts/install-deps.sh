@@ -24,11 +24,14 @@ echo "→ Updating package lists..."
 sudo apt-get update
 
 # Install prerequisite packages
+# Note: software-properties-common (for add-apt-repository) is intentionally
+# omitted — no script in this repo adds PPAs anymore (libmsquic was the only
+# user, and it's gone per Issue #381). The package is also not present in
+# default Debian trixie repos, which broke `make deps` on Debian 13.
 echo "→ Installing prerequisite packages..."
 sudo apt-get install -y \
     wget \
     apt-transport-https \
-    software-properties-common \
     build-essential \
     git \
     curl
