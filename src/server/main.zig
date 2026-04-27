@@ -834,15 +834,26 @@ pub fn main() !void {
         const stream_pool = try thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 64,
             .queue_capacity = 256,
-            // No deinit timeout: the pool lives as long as the server.
-            // On shutdown the queue should be empty; if any task is
-            // genuinely stuck the operator wants to know about it.
+            // 2026-04-27: cap deinit at 2s instead of the upstream 30s
+            // default.  These pools live for the full server lifetime
+            // so on shutdown the queue should already be empty (active
+            // connections drained their handlers via the per-connection
+            // `acceptor_done` wait added the same day).  Anything still
+            // running 2s after SIGTERM is genuinely stuck and the
+            // harness's `restart_server` path can't afford to wait the
+            // full 30s — it loses WAL state and surfaces as data-loss
+            // failures (`regression_issue_539_wal_recovery_checkpoint`,
+            // `fle_large_data_stress_verification`).  The pool emits a
+            // diagnostic warning if it hits the deadline so an operator
+            // still sees the problem.
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
         });
         defer stream_pool.deinit();
 
         const acceptor_pool = try thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 4,
             .queue_capacity = 64,
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
         });
         defer acceptor_pool.deinit();
 
@@ -983,6 +994,11 @@ pub fn main() !void {
         const poll_pool = thread_pool.ThreadPool.init(gpa, .{
             .num_threads = 1,
             .queue_capacity = 4,
+            // 2026-04-27: same shutdown-budget cap as stream_pool /
+            // acceptor_pool — see the comment at stream_pool's init for
+            // the full rationale (data-loss on harness `restart_server`
+            // when shutdown waits the upstream 30s default).
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
         }) catch |err| {
             log.err("Failed to initialize poll loop pool", &.{Attr.string("error", @errorName(err))});
             return;

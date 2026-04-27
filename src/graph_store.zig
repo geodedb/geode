@@ -5997,6 +5997,14 @@ pub fn startPersistenceThread(interval_ms: u64) void {
     const pool = pooled.ThreadPool.init(global_allocator(), .{
         .num_threads = 1,
         .queue_capacity = 4,
+        // 2026-04-27: cap deinit at 2s.  The persistence loop polls
+        // every `g_persist_interval_ms` (default 5s) and only exits
+        // between sleeps, so without a tight cap the upstream 30s
+        // default dominates server shutdown — measured 29s empty-server
+        // SIGTERM latency before the harness force-killed mid-flush
+        // (`regression_issue_539_wal_recovery_checkpoint`,
+        // `fle_large_data_stress_verification`).
+        .deinit_timeout_ns = 2 * std.time.ns_per_s,
     }) catch return;
     errdefer pool.deinit();
     pool.submitBlocking(.{
