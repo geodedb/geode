@@ -13,15 +13,17 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 - **Pass Rate**: ~97% (varies by test run)
 - **Skipped**: ~120 tests (intentionally skipped due to known limitations documented below)
 
-## Open — Concurrency
+## Recently Fixed — Concurrency
 
-### `test-two-phase-edge-lock` :: "two-phase lock: 16 threads beat single-thread by >= 4x" ❌ FAILING (April 2026)
+### `test-two-phase-edge-lock` :: "two-phase lock: 16 threads beat single-thread by >= 4x" ✅ FIXED (2026-04-27)
 
-- **Test**: `tests/bulk_ingest/test_two_phase_edge_lock.zig:197`
-- **Symptom**: `error.EdgeSlotMappingMissing` from `requireEdgeSlot`; `expected 800, found 434–663` (lost edges scale with thread count)
-- **Pre-existing** on `main`; not caused by the 2026-04-27 IdMap `std.Io.Mutex` hardening
-- **Root cause**: `GraphStore.createEdgeWithGraphAndTenant` (`src/graph_store.zig:2982-2992`) silently swallows errors from the adapter `createEdgeFn` and continues to write the edge into `self.edges` without inserting the IdMap mapping. The follow-up `setEdgePropertiesBatch` then fails to resolve the edge slot
-- **Full bug report**: [docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md](bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md) (proposed Tier-1 fix is ~10 LoC; subsequent investigation needed for the now-surfaced underlying engine error)
+- **Test**: `tests/bulk_ingest/test_two_phase_edge_lock.zig:207`
+- **Was**: `error.EdgeSlotMappingMissing` from `requireEdgeSlot`; `expected 800, found 434–663` under 16-thread contention
+- **Two-part fix landed in the same commit**:
+  1. `GraphStore.createEdgeWithGraphAndTenant` (`src/graph_store.zig:2975`) no longer swallows errors from `vt.createEdgeFn` — the silent `catch break :blk null` arms are now `try` / `return error.{Source,Target}NodeNotFound`.
+  2. `StorageAdapter.createEdge` (`src/storage/graph_storage_adapter.zig:2105`) only takes the per-shard `addEdgeTxn` fast path when `shardOfNode(from) == shardOfNode(to)`; cross-shard edges fall through to `ShardedGraphEngine.addEdge` → `crossShardAddEdge` (2PC) instead of the broken per-shard route.
+- **Verification**: 3/3 tests pass deterministically; 800/800 parallel edges; throughput within 1.5× of the single-thread baseline.
+- **Full bug report**: [docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md](bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md) (now marked RESOLVED).
 
 ## Recently Fixed Issues
 

@@ -157,14 +157,19 @@ fn sleepNs(ns: u64) void {
 // ----------------------------------------------------------------------
 // Throughput: 16 concurrent threads beat a single thread by ≥ 4×.
 //
-// KNOWN FAILURE (2026-04-27, OPEN): under 16-thread contention, this
-// test exposes a pre-existing concurrency bug in
-// `GraphStore.createEdgeWithGraphAndTenant` — the adapter `createEdgeFn`
-// error is silently swallowed (`catch break :blk null` at
-// src/graph_store.zig:2986), the edge is still written to `self.edges`
-// without an IdMap entry, and the follow-up `setEdgePropertiesBatch`
-// trips `error.EdgeSlotMappingMissing`. Symptom: `expected 800, found
-// 434-663`. Full bug report and proposed Tier-1 fix in
+// History (2026-04-27, RESOLVED): under 16-thread contention this test
+// previously exposed a pair of co-existing bugs that lost ~150 edges
+// per 800-edge run:
+//   1. `GraphStore.createEdgeWithGraphAndTenant` swallowed adapter
+//      errors via `catch break :blk null`, so a failed engine insert
+//      still landed the edge in `self.edges` with no IdMap mapping —
+//      the follow-up `setEdgePropertiesBatch` then tripped
+//      `error.EdgeSlotMappingMissing`.
+//   2. `StorageAdapter.createEdge` took the per-shard `addEdgeTxn`
+//      fast path even for cross-shard edges; the engine's
+//      `node_store.getNode(to)` then failed with `NodeNotFound`
+//      because the target lived on a different shard.
+// Both fixes landed together. Full report and resolution in
 // docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md.
 // ----------------------------------------------------------------------
 

@@ -1,8 +1,29 @@
 # Bug: Concurrent bulk-edge insert silently drops IdMap mapping → `EdgeSlotMappingMissing`
 
-**Status:** OPEN — pre-existing on `main` (reproduces both with and without the
-2026-04-27 IdMap mutex hardening; mutex makes the symptom worse but is not
-causal).
+**Status:** **RESOLVED** 2026-04-27 — two-part fix landed:
+
+1. `src/graph_store.zig` `createEdgeWithGraphAndTenant`: replaced the silent
+   `catch break :blk null` arms with `try` /
+   `return error.{Source,Target}NodeNotFound` so engine errors propagate to the
+   caller instead of being swallowed (the Tier-1 fix from §5.1).
+2. `src/storage/graph_storage_adapter.zig` `createEdge`: gated the per-shard
+   `addEdgeTxn` fast path on `shardOfNode(from) == shardOfNode(to)`.  Cross-
+   shard edges now fall through to `ShardedGraphEngine.addEdge` →
+   `crossShardAddEdge` (2PC), which is the correct routing for that case.
+
+The Tier-1 fix surfaced the underlying bug (per §6 step 2): the per-shard
+`addEdgeTxn` fast path was being taken for cross-shard edges, where the
+target node lives on a different shard's `node_store` and the engine's
+`getNode(to)` returns null → `error.NodeNotFound`.  The (now-deleted) silent
+fallback was the only thing masking this in the bulk-ingest path.
+
+After the combined fix, `zig build test-two-phase-edge-lock` passes
+deterministically (3/3 tests, 800/800 parallel edges, throughput within
+1.5× of the single-thread baseline) across repeated runs.
+
+**Original status:** OPEN — pre-existing on `main` (reproduces both with and
+without the 2026-04-27 IdMap mutex hardening; mutex makes the symptom worse
+but is not causal).
 
 **Discovered:** 2026-04-27 while running `zig build test-two-phase-edge-lock`
 during the post-IdMap-mutex unit-test pass.

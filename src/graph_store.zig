@@ -2973,6 +2973,21 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
+        // Bug fix 2026-04-27 (docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md):
+        // The previous code used `catch break :blk null` on every step inside
+        // this block, including on `vt.createEdgeFn`.  Under multi-threaded
+        // contention the engine call can return errors (slot collision,
+        // transient `GraphNotFound` during registry rehash, OOM during shard
+        // grow, etc.).  Swallowing them caused the edge to land in
+        // `self.edges` without an IdMap entry, and the next call to
+        // `setEdgePropertiesBatch` then tripped `error.EdgeSlotMappingMissing`
+        // — losing 100+ edges per 800 inserts in the 16-thread bulk path.
+        //
+        // Only the `vt == null` arm is a legitimate fallback (used by tests
+        // and very-early-boot paths that pre-populate the in-memory store
+        // before the adapter is wired).  Every other failure must propagate.
+        // See `createEdgeWithIdInternal` (~50 lines below) for the reference
+        // pattern.
         const adapter_edge: ?struct {
             vt: AdapterVTable,
             from_slot: u64,
@@ -2980,10 +2995,10 @@ pub const GraphStore = struct {
             edge_slot: u64,
         } = blk: {
             const vt = global_vtable orelse break :blk null;
-            const im = self.getOrCreateIdMap(graph_name) catch break :blk null;
-            const from_slot = im.nodeSlot(@as(u128, from_id)) orelse break :blk null;
-            const to_slot = im.nodeSlot(@as(u128, to_id)) orelse break :blk null;
-            const edge_slot = vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type) catch break :blk null;
+            const im = try self.getOrCreateIdMap(graph_name);
+            const from_slot = im.nodeSlot(@as(u128, from_id)) orelse return error.SourceNodeNotFound;
+            const to_slot = im.nodeSlot(@as(u128, to_id)) orelse return error.TargetNodeNotFound;
+            const edge_slot = try vt.createEdgeFn(vt.ctx, graph_name, from_slot, to_slot, edge_type);
             break :blk .{
                 .vt = vt,
                 .from_slot = from_slot,

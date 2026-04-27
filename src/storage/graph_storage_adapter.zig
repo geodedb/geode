@@ -2112,12 +2112,24 @@ pub const StorageAdapter = struct {
         // engine's `addEdge` auto-commit variant costs ~10 ms on SSD —
         // dominant in workloads with thousands of edges per batch (msft-
         // graph edges_signed_in_to / located_at have 8K+ rows each).
-        // R10: join the active statement/session txn if it is on the same shard
-        // as from_id (edge txns are pinned to the source-node's shard).
-        const stmt_txn = currentStatementTxnForGraph(graph_name);
-        if (stmt_txn) |s| {
-            if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                return mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+        //
+        // R10 + 2026-04-27 fix: the per-shard `addEdgeTxn` fast path is
+        // only safe when BOTH endpoints live on the same shard.  The
+        // per-shard engine's `addEdgeTxn` does `node_store.getNode(to)`
+        // on the from-shard's node_store — for a cross-shard edge that
+        // returns null and surfaces as `error.NodeNotFound`.  When
+        // from/to are on different shards, fall through to
+        // `ShardedGraphEngine.addEdge`, which routes to the 2PC
+        // `crossShardAddEdge` path that prepares + commits on both
+        // shards correctly.  See
+        // docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md §3.2.
+        const same_shard = gs.shard_count.shardOfNode(from_id) == gs.shard_count.shardOfNode(to_id);
+        if (same_shard) {
+            const stmt_txn = currentStatementTxnForGraph(graph_name);
+            if (stmt_txn) |s| {
+                if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
+                    return mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                }
             }
         }
         return mg.engine.addEdge(from_id, to_id, rel_type);
