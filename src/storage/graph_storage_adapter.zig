@@ -86,7 +86,14 @@ const NodePropertyExactIndex = struct {
         const io = std.Io.Threaded.global_single_threaded.io();
         self.mutex.lockUncancelable(io);
         defer self.mutex.unlock(io);
+        self.clearLocked();
+    }
 
+    /// Caller must hold `self.mutex`.  Used by `loadFromFile`, which
+    /// already locks the mutex before calling — going through `clear()`
+    /// there would self-deadlock (`std.Io.Mutex` is non-reentrant).
+    /// See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
+    fn clearLocked(self: *NodePropertyExactIndex) void {
         var it = self.postings.iterator();
         while (it.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
@@ -247,7 +254,10 @@ const NodePropertyExactIndex = struct {
 
         const entry_count = reader.takeInt(u64, .little) catch return false;
 
-        self.clear();
+        // We already hold `self.mutex` (line 227) — using `clear()` would
+        // re-enter the same non-reentrant `std.Io.Mutex` and deadlock.
+        // See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
+        self.clearLocked();
 
         var i: u64 = 0;
         while (i < entry_count) : (i += 1) {

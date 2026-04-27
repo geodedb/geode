@@ -3566,6 +3566,24 @@ pub fn build(b: *std.Build) void {
     const merge_prop_index_step = b.step("test-merge-prop-index-concurrent", "Regression: 16 concurrent setNodeProperty calls do not race on merge_prop_index");
     merge_prop_index_step.dependOn(&run_merge_prop_index_tests.step);
 
+    // Bug fix 2026-04-27: regression test for the adapter-restart
+    // deadlock in `NodePropertyExactIndex.loadFromFile` (called
+    // `clear()` while holding its own non-reentrant `std.Io.Mutex`).
+    // See docs/bugs/2026-04-27-adapter-restart-deadlock.md.
+    const adapter_registry_restart_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_adapter_registry_restart.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    adapter_registry_restart_test_mod.addImport("geode", root_mod);
+    adapter_registry_restart_test_mod.addImport("graph_storage", graph_storage_mod);
+    const adapter_registry_restart_tests = b.addTest(.{ .root_module = adapter_registry_restart_test_mod });
+    const run_adapter_registry_restart_tests = b.addRunArtifact(adapter_registry_restart_tests);
+    test_step.dependOn(&run_adapter_registry_restart_tests.step);
+    const adapter_registry_restart_step = b.step("test-adapter-registry-restart", "Regression: NodePropertyExactIndex.loadFromFile self-deadlock on adapter reopen");
+    adapter_registry_restart_step.dependOn(&run_adapter_registry_restart_tests.step);
+
     // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
     // Level 1 regression — contract tests for the future
     // `StorageAdapter.setEdgePropertiesBatch` helper.  See
