@@ -2583,7 +2583,45 @@ pub const StorageAdapter = struct {
             if (own_txn) try from_shard.commitTxn(local_txn);
             return;
         }
-        try mg.engine.setEdgeProperty(from_id, to_id, edge_id, key, storage_val);
+
+        // No active statement txn — open a local txn on the source shard
+        // and replicate the same cross-shard-aware logic above.
+        // The fallback `mg.engine.setEdgeProperty(from_id, to_id, edge_id, ...)`
+        // routes to `shards[shardOfNode(from)].setEdgeProperty(...)`, whose
+        // `engine_edge_props.setEdgeProperty` does
+        // `engine.node_store.getNode(to)` against the SOURCE shard. For
+        // cross-shard edges (from and to on different shards) the to node
+        // does not exist on from_shard, so the call raises NodeNotFound and
+        // every inline `CREATE (a)-[:R]->(b) RETURN ...` (where the
+        // persistEdgePublicId post-hook is the only setter) crashes.
+        const fb_edge_entry = from_shard.edge_index.get(edge_id) orelse return error.EdgeNotFound;
+        if (fb_edge_entry.from != from_id or fb_edge_entry.neighbor != to_id) return error.EdgeNotFound;
+
+        const fb_from_rec = (try from_shard.node_store.getNode(from_id)) orelse return error.NodeNotFound;
+        const fb_found_prop_head = fb_edge_entry.prop_head;
+
+        const fb_local_txn = try from_shard.beginTxn();
+        errdefer from_shard.abortTxn(fb_local_txn) catch {};
+
+        const fb_new_head_u64 = try from_shard.putPropertyTxn(@as(u64, fb_found_prop_head), key, storage_val, fb_local_txn);
+        const fb_new_head: u32 = std.math.cast(u32, fb_new_head_u64) orelse return error.Overflow;
+
+        if (fb_new_head != fb_found_prop_head) {
+            _ = try from_shard.adj_out.updateEdgePropHead(fb_from_rec.out_head, edge_id, fb_new_head);
+            const fb_to_shard = mg.shardEngineForNode(to_id);
+            const fb_to_rec = (try fb_to_shard.node_store.getNode(to_id)) orelse return error.NodeNotFound;
+            _ = try fb_to_shard.adj_in.updateEdgePropHead(fb_to_rec.in_head, edge_id, fb_new_head);
+
+            if (from_shard.edge_index.getPtr(edge_id)) |idx_entry| {
+                idx_entry.prop_head = fb_new_head;
+            }
+        }
+
+        if (fb_found_prop_head != 0 and fb_found_prop_head != fb_new_head) {
+            from_shard.property_index.removeChain(fb_found_prop_head);
+        }
+        try from_shard.refreshPropertyChainIndex(fb_new_head_u64);
+        try from_shard.commitTxn(fb_local_txn);
     }
 
     /// Set or remove multiple properties on an edge under a single mutex
