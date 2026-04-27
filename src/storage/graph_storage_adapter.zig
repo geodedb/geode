@@ -2368,7 +2368,15 @@ pub const StorageAdapter = struct {
         rec.prop_head = new_prop_head;
         try node_shard.putNodeTxn(node_id, rec, txn);
 
-        try mg.engine.commitTxn(txn);
+        // Commit on the SAME per-shard engine that started the txn.
+        // `mg.engine.commitTxn(txn)` (ShardedGraphEngine) decodes a shard
+        // index from the high bits of `txn`, but `node_shard.beginTxn()`
+        // returns a RAW local txn id (no shard-index bits encoded), so
+        // routing through mg.engine.commitTxn would land on the wrong
+        // shard and raise `error.TxnNotFound`. Mirrors setNodeProperty /
+        // setNodePropertiesBatch / setEdgeProperty which already commit
+        // through node_shard / from_shard directly.
+        try node_shard.commitTxn(txn);
 
         for (label_ids) |label_id| {
             try addIndexedNodeProperty(mg, label_id, node_id, key, .null);
