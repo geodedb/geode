@@ -1358,6 +1358,15 @@ const StreamAcceptorContext = struct {
     conn: *quic_transport.QuicConnection,
     conn_state: *SharedConnState,
     shutdown: *std.atomic.Value(bool),
+    /// Set by the acceptor immediately before its loop returns.  The owning
+    /// `handleQuicConnection` frame busy-waits on this in its shutdown
+    /// defer so its stack-allocated `acceptor_shutdown` / `acceptor_ctx`
+    /// stay live until the worker thread has actually finished reading
+    /// them.  Without this the worker can `@atomicLoad` from a popped
+    /// stack frame and segfault — repro: a wrong-password query that
+    /// drops the connection while the acceptor loop is mid-tick (regress
+    /// `distributed_auth_enforcement.yml::dist-auth-nonexistent-user-rejected`).
+    done: *std.atomic.Value(bool),
     stream_pool: *pooled.ThreadPool,
 };
 
@@ -1496,7 +1505,15 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
     const conn = ctx.conn;
     const conn_state = ctx.conn_state;
     const shutdown = ctx.shutdown;
+    const done = ctx.done;
     const stream_pool = ctx.stream_pool;
+    // Note: ctx is allocated on the owning `handleQuicConnection` stack
+    // frame.  The owning frame's defer waits on `done` before unwinding,
+    // so it is safe to keep dereferencing `ctx` until the moment we
+    // store true into `done`.  After that point we MUST NOT touch
+    // `ctx` again — the stack may pop in between this store and the
+    // function return.
+    defer done.store(true, .release);
     while (!shutdown.load(.acquire)) {
         // Check if connection is still alive
         if (conn.isDrained()) break;
@@ -1982,6 +1999,7 @@ pub fn handleQuicConnection(
     // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
 
     var acceptor_shutdown = std.atomic.Value(bool).init(false);
+    var acceptor_done = std.atomic.Value(bool).init(false);
 
     var acceptor_ctx = StreamAcceptorContext{
         .allocator = gpa,
@@ -1989,6 +2007,7 @@ pub fn handleQuicConnection(
         .conn = conn,
         .conn_state = &conn_state,
         .shutdown = &acceptor_shutdown,
+        .done = &acceptor_done,
         .stream_pool = stream_pool,
     };
     acceptor_pool.submitBlocking(.{
@@ -2002,7 +2021,32 @@ pub fn handleQuicConnection(
         return;
     };
     defer {
+        // 2026-04-27 UAF fix: signal shutdown, then wait for the worker
+        // to actually exit before unwinding this frame.  `acceptor_ctx`
+        // and `acceptor_shutdown` live on this stack frame; if we
+        // returned while the loop was still running, its next
+        // `@atomicLoad(&acceptor_shutdown)` would touch popped-stack
+        // memory and segfault.  Repro:
+        //   distributed_auth_enforcement.yml::dist-auth-nonexistent-user-rejected
+        // (a failing-auth query that races connection teardown).
+        // The worker checks `shutdown` every ~1 ms (its idle nanosleep),
+        // so the wait normally completes in ≤ 2 ms.  The bounded ceiling
+        // is here as a safety valve only — log if we hit it.
         acceptor_shutdown.store(true, .release);
+        const wait_deadline_ns: u64 = 5 * std.time.ns_per_s;
+        const wait_start = compat_milliTimestamp();
+        while (!acceptor_done.load(.acquire)) {
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_us };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            const elapsed_ms: u64 = @intCast(@max(0, compat_milliTimestamp() - wait_start));
+            if (elapsed_ms * std.time.ns_per_ms > wait_deadline_ns) {
+                log.err("acceptor thread did not exit within deadline; bailing despite UAF risk", &.{
+                    Attr.int("waited_ms", @intCast(elapsed_ms)),
+                });
+                break;
+            }
+        }
     }
 
     // ── Phase 3: First stream query loop (inline) ────────────────────────
