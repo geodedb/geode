@@ -3549,6 +3549,23 @@ pub fn build(b: *std.Build) void {
     const two_phase_edge_step = b.step("test-two-phase-edge-lock", "Run Task 15/16 two-phase lock tests for the bulk MATCH+CREATE edge path");
     two_phase_edge_step.dependOn(&run_two_phase_edge_tests.step);
 
+    // Bug fix 2026-04-27: regression test for the merge_prop_index race
+    // (concurrent `setNodeProperty` from N shard workers tripping the
+    // HashMap pointer_stability assertion).  See
+    // docs/bugs/2026-04-27-merge-prop-index-race.md.
+    const merge_prop_index_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_merge_prop_index_concurrent.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    merge_prop_index_test_mod.addImport("geode", root_mod);
+    const merge_prop_index_tests = b.addTest(.{ .root_module = merge_prop_index_test_mod });
+    const run_merge_prop_index_tests = b.addRunArtifact(merge_prop_index_tests);
+    test_step.dependOn(&run_merge_prop_index_tests.step);
+    const merge_prop_index_step = b.step("test-merge-prop-index-concurrent", "Regression: 16 concurrent setNodeProperty calls do not race on merge_prop_index");
+    merge_prop_index_step.dependOn(&run_merge_prop_index_tests.step);
+
     // Task #34: bulk-edge ingest slowness on edges_app_role_assignment.jsonl.
     // Level 1 regression — contract tests for the future
     // `StorageAdapter.setEdgePropertiesBatch` helper.  See

@@ -470,6 +470,19 @@ pub const GraphStore = struct {
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
     merge_prop_index: std.StringHashMap(u64),
+    // Bug fix 2026-04-27: serialize all `merge_prop_index` access.  The
+    // group-commit shard workers (`group_commit.applyShardBatch`) call
+    // `bulkInsertNodeWithReservedId` from N threads concurrently — each
+    // worker eventually reaches `setNodeProperty` →
+    // `addToMergePropertyIndex` and races on `merge_prop_index.put`.
+    // The HashMap's pointer_stability assertion catches concurrent
+    // mutations and panics with "reached unreachable code".  This mutex
+    // is acquired by `addToMergePropertyIndex`,
+    // `removeFromMergePropertyIndex`,
+    // `removeAllMergePropertyIndexEntries`, and `lookupMergeCandidate`
+    // — every access is leaf-level so there is no nesting / lock-order
+    // risk.  Tier 1 per CLAUDE.md (alongside store_mutex).
+    merge_prop_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-001; FEATURE="EdgeTypeIndex"; ASPECT=EdgeTypeLookup; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
     // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
@@ -1654,6 +1667,10 @@ pub const GraphStore = struct {
 
     /// Insert an entry into the merge property index for each label on the node.
     fn addToMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue, node_id: u64) !void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.merge_prop_index_mutex.lockUncancelable(io);
+        defer self.merge_prop_index_mutex.unlock(io);
+
         var buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
@@ -1670,6 +1687,10 @@ pub const GraphStore = struct {
 
     /// Remove entries from the merge property index for each label on the node.
     fn removeFromMergePropertyIndex(self: *GraphStore, graph_name: []const u8, labels: []const []const u8, prop_key: []const u8, prop_value: PropertyValue) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.merge_prop_index_mutex.lockUncancelable(io);
+        defer self.merge_prop_index_mutex.unlock(io);
+
         var buf: [1024]u8 = undefined;
         for (labels) |label| {
             const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse continue;
@@ -1681,6 +1702,10 @@ pub const GraphStore = struct {
 
     /// Remove ALL merge property index entries for a node (used during node deletion).
     fn removeAllMergePropertyIndexEntries(self: *GraphStore, node: *const Node) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.merge_prop_index_mutex.lockUncancelable(io);
+        defer self.merge_prop_index_mutex.unlock(io);
+
         var buf: [1024]u8 = undefined;
         var prop_iter = node.properties.iterator();
         while (prop_iter.next()) |prop_entry| {
@@ -1709,10 +1734,23 @@ pub const GraphStore = struct {
     /// Returns `.found` with the node_id when a verified match exists,
     /// `.not_found` when the index is authoritative and no match exists,
     /// or `.not_indexable` when the key could not be built (caller must scan).
-    pub fn lookupMergeCandidate(self: *const GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
+    ///
+    /// Bug fix 2026-04-27: takes `*GraphStore` (not `*const`) so we can
+    /// hold `merge_prop_index_mutex` during the read.  Concurrent
+    /// `merge_prop_index.put` from another shard worker would otherwise
+    /// race the `.get` here (HashMap pointer_stability assertion fires
+    /// on concurrent rehash).  All callers already pass `*GraphStore`.
+    pub fn lookupMergeCandidate(self: *GraphStore, graph_name: []const u8, label: []const u8, prop_key: []const u8, prop_value: PropertyValue, out_node_id: *u64) MergeLookupResult {
         var buf: [1024]u8 = undefined;
         const probe = buildMergeIndexKey(&buf, graph_name, label, prop_key, prop_value) orelse return .not_indexable;
-        const node_id = self.merge_prop_index.get(probe) orelse return .not_found;
+
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.merge_prop_index_mutex.lockUncancelable(io);
+        const node_id = self.merge_prop_index.get(probe) orelse {
+            self.merge_prop_index_mutex.unlock(io);
+            return .not_found;
+        };
+        self.merge_prop_index_mutex.unlock(io);
         // Verify node still exists (index could be stale after a failed delete)
         if (self.nodes.get(node_id)) |node| {
             if (std.mem.eql(u8, node.graph_name, graph_name)) {
