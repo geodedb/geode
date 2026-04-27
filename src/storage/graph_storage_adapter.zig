@@ -2824,9 +2824,17 @@ pub const StorageAdapter = struct {
     /// `prop_head` instead of looking up a node record — edge property
     /// heads come directly from the `EdgeEntry` returned by the
     /// adjacency iterator.
+    ///
+    /// `from_id` is the source node's id (edges live on the source's
+    /// shard). Required because prop_head IDs are NOT shard-striped
+    /// (FreeSpaceManager hands out 1, 2, 3, ... per shard), so routing
+    /// via `mg.engine.getAllProperties(prop_head)` would land on the
+    /// wrong shard. See `addNodePropertiesForLabels` for the same fix
+    /// on the node side (commit 2385894c).
     pub fn getAllEdgeProperties(
         self: *StorageAdapter,
         graph_name: []const u8,
+        from_id: u64,
         prop_head: u32,
         allocator: Allocator,
     ) !std.StringHashMap(gs.PropertyValue) {
@@ -2843,8 +2851,9 @@ pub const StorageAdapter = struct {
 
         const prop_head_u64: u64 = @intCast(prop_head);
 
-        // Single-pass zero-copy iteration (see getAllNodeProperties).
-        var iter = try mg.engine.getAllProperties(prop_head_u64);
+        // Route via the source node's shard — same per-shard engine
+        // that wrote the property pages.
+        var iter = try mg.shardEngineForNode(from_id).getAllProperties(prop_head_u64);
         defer iter.deinit();
 
         while (try iter.next()) |entry| {

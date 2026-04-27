@@ -4714,7 +4714,14 @@ pub const GraphStore = struct {
                     };
 
                     if (edge_entry.prop_head != 0) {
-                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, edge_entry.prop_head, self.allocator);
+                        // Pass the source-node SLOT id (shard-striped) so
+                        // adapter.getAllEdgeProperties routes via the
+                        // correct per-shard engine. node_uuid is the
+                        // public id (not stripe-aligned) and would
+                        // misroute through shardOfNode(uuid). See
+                        // graph_storage_adapter.getAllEdgeProperties for
+                        // why prop_head alone is the wrong key.
+                        var edge_storage_props = try adapter.getAllEdgeProperties(graph_name, slot_id, edge_entry.prop_head, self.allocator);
                         defer {
                             var edge_sp_iter = edge_storage_props.iterator();
                             while (edge_sp_iter.next()) |sp_entry| {

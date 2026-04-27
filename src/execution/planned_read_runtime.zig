@@ -1526,7 +1526,10 @@ fn edgeMatchesPattern(
 
     if (pattern.props == null) return true;
 
-    var props = try adapter.getAllEdgeProperties(graph_name, edge.prop_head, allocator);
+    // Pass the source-node SLOT id (shard-striped) so the adapter routes
+    // via the per-shard engine that owns the edge's property pages. See
+    // graph_storage_adapter.getAllEdgeProperties.
+    var props = try adapter.getAllEdgeProperties(graph_name, edge.actual_from_slot, edge.prop_head, allocator);
     defer freeStoragePropertyMap(allocator, &props);
 
     return propsMatch(allocator, pattern.props.?, &props, param_names, param_values, context);
@@ -1683,7 +1686,9 @@ fn materializeEdge(allocator: std.mem.Allocator, graph_name: []const u8, edge_st
         scratch.free(edge.graph_name);
     }
 
-    var props = try adapter.getAllEdgeProperties(graph_name, edge_step.prop_head, scratch);
+    // Source-node SLOT id (shard-striped) for correct routing — see
+    // graph_storage_adapter.getAllEdgeProperties.
+    var props = try adapter.getAllEdgeProperties(graph_name, edge_step.actual_from_slot, edge_step.prop_head, scratch);
     defer freeStoragePropertyMap(scratch, &props);
 
     var iter = props.iterator();
