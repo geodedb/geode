@@ -33,8 +33,12 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
     errdefer diagnostics.deinit(allocator);
 
-    // Parse the document using outcome to get better error info
-    const outcome = try geode.parseGqlOutcome(doc.text, allocator, .{});
+    // Parse the document using outcome to get better error info.
+    // ParseOutcome owns its own memory (Ok arena, Err msg) — defer
+    // deinit so the duped Err.msg returned after the parser arena is
+    // freed (lib.zig parseGqlOutcome) gets released.
+    var outcome = try geode.parseGqlOutcome(doc.text, allocator, .{});
+    defer outcome.deinit();
 
     switch (outcome) {
         .Err => |err_info| {
@@ -85,10 +89,9 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
             try diagnostics.append(allocator, diag);
         },
         .Ok => |result| {
-            defer {
-                var res = result;
-                res.deinit();
-            }
+            // Arena cleanup is handled by the top-level
+            // `defer outcome.deinit()` above, which routes to
+            // ParseResult.deinit() for the .Ok variant.
 
             // Check for double-dash comments (Geode extension - supported but non-standard)
             if (result.has_double_dash_comment) {

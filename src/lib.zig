@@ -596,7 +596,30 @@ pub fn parseGqlOptions(src: []const u8, allocator: std.mem.Allocator, opts: Pars
 
 pub const ParseOutcome = union(enum) {
     Ok: ParseResult,
-    Err: struct { msg: []const u8, line: u32, column: u32, token: @import("gql_lib").token.TokenKind, has_double_dash_comment: bool, has_unwind: bool = false },
+    Err: struct {
+        msg: []const u8,
+        line: u32,
+        column: u32,
+        token: @import("gql_lib").token.TokenKind,
+        has_double_dash_comment: bool,
+        has_unwind: bool = false,
+        // Outer allocator that owns `msg`. Set when `parseGqlOutcome`
+        // duped the message out of the (now-freed) parser arena;
+        // null when `msg` is a static literal.
+        msg_allocator: ?std.mem.Allocator = null,
+    },
+
+    /// Free any memory owned by this outcome. Safe to call on both
+    /// variants. Mirrors `ParseResult.deinit`.
+    pub fn deinit(self: *ParseOutcome) void {
+        switch (self.*) {
+            .Ok => |*ok| ok.deinit(),
+            .Err => |*err| {
+                if (err.msg_allocator) |a| a.free(err.msg);
+                err.msg_allocator = null;
+            },
+        }
+    }
 };
 
 // Parse but capture parser error details instead of throwing; allocation errors still throw.
@@ -605,13 +628,33 @@ pub fn parseGqlOutcome(src: []const u8, allocator: std.mem.Allocator, opts: Pars
     var lx = Lexer{ .src = src };
     var p = Parser{ .lx = &lx, .arena = &arena, .cur = lx.next(), .strict_order_keys = opts.strict_order_keys, .ident_order_only = opts.ident_order_only, .forbid_orderby_calls = opts.forbid_orderby_calls, .forbid_orderby_paths = opts.forbid_orderby_paths, .ts_extensions = opts.ts_extensions };
     const program = p.parseProgram() catch {
-        const msg = p.last_error orelse "parse error";
+        const raw_msg = p.last_error orelse "parse error";
         const loc = p.cur.loc;
         const kind = p.cur.kind;
         const has_dd = lx.has_double_dash_comment;
         const has_uw = p.has_unwind;
+        // CRITICAL: dupe msg to the OUTER allocator BEFORE arena.deinit().
+        // The parser's `last_error` is allocated via
+        // `self.arena.allocator()` (see Parser.expect / unexpected), so
+        // freeing the arena while returning a slice into it produces a
+        // use-after-free that segfaults the moment the caller reads
+        // `msg` (e.g. LSP provideDiagnostics doing
+        // `try allocator.dupe(u8, err_info.msg)`).
+        const has_dynamic_msg = p.last_error != null;
+        const owned_msg: []const u8 = if (has_dynamic_msg)
+            try allocator.dupe(u8, raw_msg)
+        else
+            raw_msg; // static literal "parse error" — safe across deinit.
         arena.deinit();
-        return .{ .Err = .{ .msg = msg, .line = loc.line, .column = loc.column, .token = kind, .has_double_dash_comment = has_dd, .has_unwind = has_uw } };
+        return .{ .Err = .{
+            .msg = owned_msg,
+            .line = loc.line,
+            .column = loc.column,
+            .token = kind,
+            .has_double_dash_comment = has_dd,
+            .has_unwind = has_uw,
+            .msg_allocator = if (has_dynamic_msg) allocator else null,
+        } };
     };
     return .{ .Ok = .{ .program = program, .arena = arena, .last_error = p.last_error, .has_double_solidus_comment = lx.has_double_solidus_comment, .has_double_dash_comment = lx.has_double_dash_comment, .has_unwind = p.has_unwind } };
 }
