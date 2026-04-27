@@ -656,6 +656,22 @@ fn unionArmsAreParallelEligible(union_query: ast.UnionQuery, context: ExecutionC
         if (tail.operation != .union_op) return false;
     }
 
+    // 2026-04-27: the first arm must NOT publish `variable_bindings`
+    // for the parallel path to be safe.  If arm 0 is a CREATE / MERGE
+    // (or any CREATE-then-RETURN-then-UNION chain), subsequent arms
+    // expect to see arm-0's bindings via the shared-bindings branch in
+    // the serial path below.  The parallel runner uses
+    // `executeQueryNoLimitWithContext` which deliberately does NOT
+    // forward bindings (each arm runs in its own thread/context), so
+    // the tails would resolve free identifiers (`b`, `c`, …) to NULL
+    // and silently produce wrong rows.  Repro:
+    //   `geodetestlab-cli/specs/geode_regression_tests.yml`
+    //   `order-by-node-property` —
+    //   `CREATE (a:P {…}), (b:P {…}), (c:P {…}) RETURN a.name UNION ALL …`
+    // expects rows for a/b/c but only the first arm's row had values.
+    if (union_query.first.create_pattern != null) return false;
+    if (union_query.first.merge_statement != null) return false;
+
     // Cost model: if EVERY arm has a predictably small anchor posting-list,
     // serial execution is cheaper than thread-spawn.
     const current_graph = if (context.session_state) |session| session.graph else null;
@@ -811,6 +827,17 @@ fn tryParallelUnion(
 
     // Join all workers.
     for (threads) |*t| t.join();
+    // 2026-04-27: clear `spawned` so the outer errdefer (which re-joins
+    // `threads[0..spawned]` and was wired up to clean up partial-spawn
+    // failures) does NOT double-join the threads we just finished
+    // joining.  Thread.join → posix.pthread_join with .SRCH (no such
+    // thread) is `unreachable`, panics with "reached unreachable code"
+    // on the second call.  Repro: the `union-column-count-mismatch`
+    // test in `gql_set_operations_comprehensive.yml` returns
+    // `error.UnionColumnCountMismatch` from the merge loop below, which
+    // unwinds through this errdefer and previously crashed the server
+    // (panic stack rooted at `set_operations.zig:786 in tryParallelUnion`).
+    spawned = 0;
 
     // Propagate the first error, if any.
     for (jobs) |*job| {
