@@ -69,6 +69,15 @@ const FileHeader = extern struct {
 pub const IdMap = struct {
     allocator: Allocator,
 
+    // Mutex protecting the maps below. Required because the per-graph
+    // mg.rwlock does NOT cover IdMap (it sits on the GraphStore, not on
+    // ManagedGraph), so concurrent bulk-ingest (e.g. test_two_phase_edge_lock
+    // 16-thread case) was racing on `std.AutoHashMap.put` and producing
+    // `error.EdgeSlotMappingMissing` for edges whose UUID→slot mapping was
+    // lost in the race. Reads also lock so they see a consistent snapshot
+    // (Zig HashMap is not safe for concurrent readers + writers).
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+
     // Node mappings
     node_uuid_to_slot: std.AutoHashMap(u128, u64),
     node_slot_to_uuid: std.AutoHashMap(u64, u128),
@@ -100,6 +109,17 @@ pub const IdMap = struct {
         self.edge_slot_to_uuid.deinit();
     }
 
+    // Acquire/release the IdMap mutex using the global single-threaded IO,
+    // matching the pattern used by `LabelPosting` (graph_store.zig) and other
+    // leaf mutexes in this codebase.
+    inline fn lockMu(self: *IdMap) void {
+        self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    inline fn unlockMu(self: *IdMap) void {
+        self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
+
     // ------------------------------------------------------------------
     // Node operations
     // ------------------------------------------------------------------
@@ -107,6 +127,8 @@ pub const IdMap = struct {
     /// Insert a new node mapping. Returns the allocated slot ID.
     /// If the UUID already exists, returns the existing slot.
     pub fn insertNode(self: *IdMap, uuid: u128) !u64 {
+        self.lockMu();
+        defer self.unlockMu();
         if (self.node_uuid_to_slot.get(uuid)) |existing| {
             return existing;
         }
@@ -119,6 +141,8 @@ pub const IdMap = struct {
 
     /// Insert a node mapping with a specific slot ID (used during load).
     pub fn insertNodeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
+        self.lockMu();
+        defer self.unlockMu();
         try self.node_uuid_to_slot.put(uuid, slot);
         try self.node_slot_to_uuid.put(slot, uuid);
         if (slot >= self.next_node_slot) {
@@ -127,17 +151,23 @@ pub const IdMap = struct {
     }
 
     /// Look up the slot ID for a node UUID.
-    pub fn nodeSlot(self: *const IdMap, uuid: u128) ?u64 {
+    pub fn nodeSlot(self: *IdMap, uuid: u128) ?u64 {
+        self.lockMu();
+        defer self.unlockMu();
         return self.node_uuid_to_slot.get(uuid);
     }
 
     /// Look up the UUID for a node slot ID.
-    pub fn nodeUuid(self: *const IdMap, slot: u64) ?u128 {
+    pub fn nodeUuid(self: *IdMap, slot: u64) ?u128 {
+        self.lockMu();
+        defer self.unlockMu();
         return self.node_slot_to_uuid.get(slot);
     }
 
     /// Remove a node mapping by UUID.
     pub fn removeNode(self: *IdMap, uuid: u128) bool {
+        self.lockMu();
+        defer self.unlockMu();
         const slot = self.node_uuid_to_slot.get(uuid) orelse return false;
         _ = self.node_uuid_to_slot.remove(uuid);
         _ = self.node_slot_to_uuid.remove(slot);
@@ -151,6 +181,8 @@ pub const IdMap = struct {
     /// Insert a new edge mapping. Returns the allocated slot ID.
     /// If the UUID already exists, returns the existing slot.
     pub fn insertEdge(self: *IdMap, uuid: u128) !u64 {
+        self.lockMu();
+        defer self.unlockMu();
         if (self.edge_uuid_to_slot.get(uuid)) |existing| {
             return existing;
         }
@@ -163,6 +195,8 @@ pub const IdMap = struct {
 
     /// Insert an edge mapping with a specific slot ID (used during load).
     pub fn insertEdgeWithSlot(self: *IdMap, uuid: u128, slot: u64) !void {
+        self.lockMu();
+        defer self.unlockMu();
         try self.edge_uuid_to_slot.put(uuid, slot);
         try self.edge_slot_to_uuid.put(slot, uuid);
         if (slot >= self.next_edge_slot) {
@@ -171,17 +205,23 @@ pub const IdMap = struct {
     }
 
     /// Look up the slot ID for an edge UUID.
-    pub fn edgeSlot(self: *const IdMap, uuid: u128) ?u64 {
+    pub fn edgeSlot(self: *IdMap, uuid: u128) ?u64 {
+        self.lockMu();
+        defer self.unlockMu();
         return self.edge_uuid_to_slot.get(uuid);
     }
 
     /// Look up the UUID for an edge slot ID.
-    pub fn edgeUuid(self: *const IdMap, slot: u64) ?u128 {
+    pub fn edgeUuid(self: *IdMap, slot: u64) ?u128 {
+        self.lockMu();
+        defer self.unlockMu();
         return self.edge_slot_to_uuid.get(slot);
     }
 
     /// Remove an edge mapping by UUID.
     pub fn removeEdge(self: *IdMap, uuid: u128) bool {
+        self.lockMu();
+        defer self.unlockMu();
         const slot = self.edge_uuid_to_slot.get(uuid) orelse return false;
         _ = self.edge_uuid_to_slot.remove(uuid);
         _ = self.edge_slot_to_uuid.remove(slot);

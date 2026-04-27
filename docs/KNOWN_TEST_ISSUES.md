@@ -13,6 +13,16 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 - **Pass Rate**: ~97% (varies by test run)
 - **Skipped**: ~120 tests (intentionally skipped due to known limitations documented below)
 
+## Open — Concurrency
+
+### `test-two-phase-edge-lock` :: "two-phase lock: 16 threads beat single-thread by >= 4x" ❌ FAILING (April 2026)
+
+- **Test**: `tests/bulk_ingest/test_two_phase_edge_lock.zig:197`
+- **Symptom**: `error.EdgeSlotMappingMissing` from `requireEdgeSlot`; `expected 800, found 434–663` (lost edges scale with thread count)
+- **Pre-existing** on `main`; not caused by the 2026-04-27 IdMap `std.Io.Mutex` hardening
+- **Root cause**: `GraphStore.createEdgeWithGraphAndTenant` (`src/graph_store.zig:2982-2992`) silently swallows errors from the adapter `createEdgeFn` and continues to write the edge into `self.edges` without inserting the IdMap mapping. The follow-up `setEdgePropertiesBatch` then fails to resolve the edge slot
+- **Full bug report**: [docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md](bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md) (proposed Tier-1 fix is ~10 LoC; subsequent investigation needed for the now-surfaced underlying engine error)
+
 ## Recently Fixed Issues
 
 ### WITH + Aggregation + WHERE ✅ FIXED (January 2026)

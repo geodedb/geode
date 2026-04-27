@@ -156,6 +156,16 @@ fn sleepNs(ns: u64) void {
 
 // ----------------------------------------------------------------------
 // Throughput: 16 concurrent threads beat a single thread by ≥ 4×.
+//
+// KNOWN FAILURE (2026-04-27, OPEN): under 16-thread contention, this
+// test exposes a pre-existing concurrency bug in
+// `GraphStore.createEdgeWithGraphAndTenant` — the adapter `createEdgeFn`
+// error is silently swallowed (`catch break :blk null` at
+// src/graph_store.zig:2986), the edge is still written to `self.edges`
+// without an IdMap entry, and the follow-up `setEdgePropertiesBatch`
+// trips `error.EdgeSlotMappingMissing`. Symptom: `expected 800, found
+// 434-663`. Full bug report and proposed Tier-1 fix in
+// docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md.
 // ----------------------------------------------------------------------
 
 const thread_count: usize = 16;
