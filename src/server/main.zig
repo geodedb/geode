@@ -44,6 +44,7 @@ fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ Environ
 }
 
 const builtin = @import("builtin");
+const build_options = @import("build_options");
 const posix = std.posix;
 const geode = @import("geode");
 const impl_flagger = geode.impl_flagger;
@@ -575,6 +576,56 @@ pub fn main() !void {
     const disable_estimates = init_ctx.env_config.disable_estimates;
     const compact_profile = init_ctx.env_config.compact_profile;
     memcurve_profile = init_ctx.env_config.memcurve_profile;
+
+    // CANARY: REQ=REQ-OTEL-METRICS-002; FEATURE="OTel Instrumentation"; ASPECT=ServerInit; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+    //
+    // Initialise the OTel MeterProvider BEFORE the legacy Prometheus
+    // metrics server starts up — Task 7 reroutes /metrics to render
+    // through the OTel exporter, and that exporter needs the global
+    // provider to be live the moment the HTTP listener starts accepting.
+    const otel_metrics_facade = @import("../monitoring/otel_metrics.zig");
+    const otel_resource_mod = @import("../monitoring/otel_resource.zig");
+
+    // Per-process instance_id. Use uuidv4 if v7 is unavailable; either
+    // is acceptable as a unique identifier — v7's k-sortable property is
+    // a "nice to have" for observability tools, not a correctness need.
+    var instance_id_buf: [36]u8 = undefined;
+    const instance_id: []const u8 = blk: {
+        const uuid_lib = @import("uuid");
+        // Try v7 first if exposed; fall back to v4. Both produce a
+        // 36-char canonical string.
+        const id = if (@hasDecl(uuid_lib, "newV7"))
+            uuid_lib.newV7() catch uuid_lib.newV4() catch unreachable
+        else
+            uuid_lib.newV4() catch unreachable;
+        _ = id.toString(&instance_id_buf);
+        break :blk instance_id_buf[0..];
+    };
+
+    const cluster_token = getEnvVarOwned(gpa, "GEODE_CLUSTER_TOKEN") catch null;
+    defer if (cluster_token) |t| gpa.free(t);
+    const node_id = getEnvVarOwned(gpa, "GEODE_NODE_ID") catch null;
+    defer if (node_id) |n| gpa.free(n);
+    const cluster_name = getEnvVarOwned(gpa, "GEODE_CLUSTER_NAME") catch null;
+    defer if (cluster_name) |c| gpa.free(c);
+    const env_name = getEnvVarOwned(gpa, "OTEL_DEPLOYMENT_ENVIRONMENT") catch null;
+    defer if (env_name) |e| gpa.free(e);
+
+    const node_role: otel_resource_mod.NodeRole = if (cluster_token != null) .leader else .standalone;
+
+    otel_metrics_facade.init(gpa, .{
+        .service_version = build_options.version,
+        .instance_id = instance_id,
+        .node_role = node_role,
+        .cluster_name = cluster_name,
+        .node_id = node_id,
+        .deployment_environment = env_name,
+    }) catch |err| {
+        log.warn("Failed to initialise OTel metrics", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+    defer otel_metrics_facade.shutdown();
 
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
     // GAP-0166: Initialize Prometheus metrics server if enabled via environment
