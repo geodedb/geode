@@ -211,11 +211,61 @@ release:
 
 install: release install-tuning
 	@echo "=== Installing geode from current branch ==="
-	sudo systemctl stop geode
-	@sleep 2
-	sudo cp zig-out/bin/geode /usr/bin/geode
-	sudo systemctl start geode
+	@# Create geode group/user if missing (fresh install)
+	@if ! getent group geode >/dev/null 2>&1; then \
+		echo "Creating geode group..."; \
+		sudo groupadd --system geode; \
+	fi
+	@if ! getent passwd geode >/dev/null 2>&1; then \
+		echo "Creating geode user..."; \
+		sudo useradd --system --gid geode --no-create-home \
+			--home-dir /var/lib/geode \
+			--shell /usr/sbin/nologin \
+			--comment "Geode Graph Database" geode; \
+	fi
+	@# Create required directories (fresh install)
+	@sudo mkdir -p /var/lib/geode /var/log/geode /etc/geode/certs
+	@sudo chown -R geode:geode /var/lib/geode /var/log/geode /etc/geode
+	@sudo chmod 750 /var/lib/geode /var/log/geode
+	@sudo chmod 755 /etc/geode/certs
+	@# Stop service only if it is active (avoids failure on fresh installs)
+	@if systemctl is-active --quiet geode.service 2>/dev/null; then \
+		echo "Stopping geode.service..."; \
+		sudo systemctl stop geode.service; \
+		sleep 2; \
+	fi
+	sudo install -m 0755 zig-out/bin/geode /usr/bin/geode
+	@# Install systemd unit if missing or out-of-date
+	@if [ ! -f /lib/systemd/system/geode.service ] || \
+		! sudo cmp -s deployment/systemd/geode.service /lib/systemd/system/geode.service; then \
+		echo "Installing geode.service unit..."; \
+		sudo install -m 0644 deployment/systemd/geode.service /lib/systemd/system/geode.service; \
+		sudo systemctl daemon-reload; \
+	fi
+	@# Generate self-signed TLS cert if none present (fresh install)
+	@if [ ! -f /etc/geode/certs/server.crt ] || [ ! -f /etc/geode/certs/server.key ]; then \
+		if command -v openssl >/dev/null 2>&1; then \
+			echo "Generating self-signed TLS certificate (replace before production)..."; \
+			sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+				-keyout /etc/geode/certs/server.key \
+				-out /etc/geode/certs/server.crt \
+				-days 365 -subj "/CN=localhost" \
+				-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" 2>/dev/null; \
+			sudo chown geode:geode /etc/geode/certs/server.crt /etc/geode/certs/server.key; \
+			sudo chmod 644 /etc/geode/certs/server.crt; \
+			sudo chmod 600 /etc/geode/certs/server.key; \
+		else \
+			echo "Warning: openssl not found — geode will not start until /etc/geode/certs/server.{crt,key} exist."; \
+		fi; \
+	fi
+	@# Enable + (re)start the service
+	@sudo systemctl enable geode.service >/dev/null 2>&1 || true
+	sudo systemctl restart geode.service
 	@echo "✓ geode installed and restarted"
+	@echo ""
+	@echo "Status:    sudo systemctl status geode"
+	@echo "Logs:      sudo journalctl -u geode -f"
+	@echo "Admin pw:  sudo journalctl -u geode | grep 'Generated admin password'"
 
 # Apply the canonical zig-quic sysctl tuning. Unconditional on developer hosts;
 # idempotent and "only raise, never lower" at runtime. Drop-in at
