@@ -2182,20 +2182,36 @@ pub fn handleQuicConnection(
         }
         acceptor_ctx.release();
     }
-    acceptor_pool.submitBlocking(.{
+    // 2026-04-28 ROOT-CAUSE FIX: use submit() (default lane, ~63 workers)
+    // not submitBlocking() (blocking lane, ONLY 1 WORKER).  submitBlocking's
+    // name describes the backpressure policy (block if queue full), not the
+    // lane — but its implementation routes to `.lane = .blocking` which has
+    // a single dedicated worker.  With 8 active conns the previous code
+    // serialized all acceptors through that one worker; the first acceptor
+    // (whose conn was still actively reading its first stream) never exited,
+    // and the other 7 acceptor tasks sat in the blocking-lane queue forever
+    // — owners spinning on `done.load()=false` because their acceptor's
+    // `done.store(true)` was waiting in the queue.  Symptom in production:
+    //
+    //   WARN acceptor still running after shutdown signal elapsed_ms=300000+
+    //
+    // The default lane has ~63 workers (acceptor_pool num_threads=64 minus
+    // 1 reserved for the blocking lane) and a 256-task queue.  With ≤ 16
+    // production conns we never come close to saturating it.  If submit()
+    // does return false on queue-full we fall back to single-stream mode
+    // like the previous error path.
+    if (!acceptor_pool.submit(.{
         .context = @ptrCast(acceptor_ctx),
         .callback = runStreamAcceptorLoop,
-    }) catch |err| {
-        log.warn("Failed to start stream acceptor, single-stream mode", &.{
-            Attr.string("error", @errorName(err)),
-        });
+    })) {
+        log.warn("Failed to start stream acceptor (queue full), single-stream mode", &.{});
         // The acceptor's ref will never be released because its task
         // never starts.  Drop it here so the deferred owner release
         // brings the refcount to zero and frees the heap struct.
         acceptor_ctx.release();
         runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
         return;
-    };
+    }
     acceptor_submitted = true;
 
     // ── Phase 3: First stream query loop (inline) ────────────────────────
