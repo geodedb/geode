@@ -2463,6 +2463,9 @@ pub fn build(b: *std.Build) void {
     geode_exe.root_module.addImport("otel_resource", otel_resource_mod_for_exe);
     geode_exe.root_module.addImport("otel_metrics", otel_metrics_mod_for_exe);
     geode_exe.root_module.addImport("otel_prometheus_responder", otel_prom_resp_mod_for_exe);
+    // Task 9 (OTel): wire otel_metrics into transport_quic_mod so quic.zig can
+    // call recordTransportConnection* via @import("otel_metrics").
+    transport_quic_mod.addImport("otel_metrics", otel_metrics_mod_for_exe);
 
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });

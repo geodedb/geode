@@ -64,3 +64,33 @@ test "server lifecycle metrics register" {
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_config_reload_count") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_shutdown_count") != null);
 }
+
+test "transport metrics register and increment" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordTransportConnectionOpened(.quic);
+    otel_metrics.recordTransportConnectionClosed("client_close");
+    otel_metrics.recordTransportHandshake(0.012, .success, null);
+    otel_metrics.recordTransportRequest("MATCH", 0.034, .success, null);
+    otel_metrics.recordTransportBytes(.transmit, 1024);
+    otel_metrics.recordTransportTimeout(.handshake);
+    otel_metrics.incTransportInflight("MATCH");
+    otel_metrics.decTransportInflight("MATCH");
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    for ([_][]const u8{
+        "geode_transport_connection_opened",
+        "geode_transport_connection_closed",
+        "geode_transport_handshake_duration",
+        "geode_transport_request_duration",
+        "geode_transport_bytes",
+        "geode_transport_timeout_count",
+    }) |name| {
+        try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+    }
+}

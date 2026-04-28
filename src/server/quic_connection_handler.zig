@@ -1676,11 +1676,26 @@ fn runStreamQueryLoop(
             continue;
         };
 
-        handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
-            log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
-            sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch return;
-            continue;
-        };
+        {
+            // OTel transport request instrumentation. op_name is "QUERY" for
+            // all requests at this layer; Task 10 will refine per parsed type.
+            const om = @import("otel_metrics");
+            const op_name: []const u8 = "QUERY";
+            om.incTransportInflight(op_name);
+            defer om.decTransportInflight(op_name); // ALWAYS runs, including the catch-return path
+            const t0_ns = @import("otel").internal.clock.unixNanoNow();
+            handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
+                const elapsed_ns = @import("otel").internal.clock.unixNanoNow() - t0_ns;
+                const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+                om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
+                log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
+                sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
+                continue;
+            };
+            const elapsed_ns = @import("otel").internal.clock.unixNanoNow() - t0_ns;
+            const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            om.recordTransportRequest(op_name, dur_s, .success, null);
+        }
 
         if (conn_state) |shared| {
             shared.syncGraphFromState(state) catch |err| {

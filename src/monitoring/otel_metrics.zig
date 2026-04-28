@@ -108,6 +108,9 @@ pub fn shutdown() void {
     g_uptime_start_ns = 0;
     g_config_reload_counter = null;
     g_shutdown_counter = null;
+    // Transport metrics state reset.
+    g_transport = null;
+    g_active_connections_provider = null;
     g_allocator = null;
 }
 
@@ -298,4 +301,170 @@ pub fn recordShutdown(reason: ShutdownReason) void {
     ensureLifecycleCounters() catch return;
     const reason_attr = attrs.Entry{ .key = "geode.shutdown.reason", .value = .{ .string = shutdownReasonName(reason) } };
     g_shutdown_counter.?.add(1, &.{reason_attr});
+}
+
+// -------------------------------------------------------------------------
+// QUIC transport metrics — geode.transport.* per docs/otel-updates.md §4.2.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-004; FEATURE="OTel Instrumentation"; ASPECT=Transport; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+pub const TransportProtocol = enum { quic, tcp };
+pub const NetworkDirection = enum { transmit, receive };
+pub const TimeoutKind = enum { request, connection, handshake };
+
+const TransportMetrics = struct {
+    connection_opened: otel.api.metrics.Counter,
+    connection_closed: otel.api.metrics.Counter,
+    handshake_duration: otel.api.metrics.Histogram,
+    request_duration: otel.api.metrics.Histogram,
+    request_inflight: otel.api.metrics.UpDownCounter,
+    bytes: otel.api.metrics.Counter,
+    timeout_count: otel.api.metrics.Counter,
+};
+
+var g_transport: ?TransportMetrics = null;
+
+fn ensureTransport() !*TransportMetrics {
+    if (g_transport) |*t| return t;
+    const m = meter();
+    g_transport = TransportMetrics{
+        .connection_opened = try m.counter(.{
+            .name = "geode.transport.connection.opened",
+            .unit = "{connection}",
+            .kind = .counter,
+            .description = "Accepted/opened QUIC connections",
+        }),
+        .connection_closed = try m.counter(.{
+            .name = "geode.transport.connection.closed",
+            .unit = "{connection}",
+            .kind = .counter,
+            .description = "Closed QUIC connections",
+        }),
+        .handshake_duration = try m.histogram(.{
+            .name = "geode.transport.handshake.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "QUIC/TLS handshake duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_db_client_duration },
+        }),
+        .request_duration = try m.histogram(.{
+            .name = "geode.transport.request.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "End-to-end server request handling duration",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .request_inflight = try m.upDownCounter(.{
+            .name = "geode.transport.request.inflight",
+            .unit = "{request}",
+            .kind = .up_down_counter,
+            .description = "Currently active protocol requests",
+        }),
+        .bytes = try m.counter(.{
+            .name = "geode.transport.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Bytes sent or received over QUIC",
+        }),
+        .timeout_count = try m.counter(.{
+            .name = "geode.transport.timeout.count",
+            .unit = "{timeout}",
+            .kind = .counter,
+            .description = "Request, connection, or handshake timeouts",
+        }),
+    };
+    return &g_transport.?;
+}
+
+pub fn recordTransportConnectionOpened(proto: TransportProtocol) void {
+    const t = ensureTransport() catch return;
+    t.connection_opened.add(1, &.{attrs.Entry{ .key = "geode.transport.protocol", .value = .{ .string = @tagName(proto) } }});
+}
+
+pub fn recordTransportConnectionClosed(reason: []const u8) void {
+    const t = ensureTransport() catch return;
+    t.connection_closed.add(1, &.{attrs.Entry{ .key = "geode.close.reason", .value = .{ .string = reason } }});
+}
+
+// NOTE: recordTransportHandshake and recordTransportTimeout are
+// currently exposed but have no production call sites — the vendor
+// QUIC library does not surface a TLS-handshake-completion callback
+// or a per-timeout hook. They are smoke-tested for forward compatibility
+// when the vendor lib gains these hooks. Do not assume they are dead
+// code.
+
+pub fn recordTransportHandshake(duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const t = ensureTransport() catch return;
+    var buf: [3]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.transport.protocol", .value = .{ .string = "quic" } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    t.handshake_duration.record(duration_s, buf[0..n]);
+}
+
+pub fn recordTransportRequest(op_name: []const u8, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const t = ensureTransport() catch return;
+    var buf: [3]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "db.operation.name", .value = .{ .string = op_name } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    t.request_duration.record(duration_s, buf[0..n]);
+}
+
+pub fn incTransportInflight(op_name: []const u8) void {
+    const t = ensureTransport() catch return;
+    t.request_inflight.add(1, &.{.{ .key = "db.operation.name", .value = .{ .string = op_name } }});
+}
+
+pub fn decTransportInflight(op_name: []const u8) void {
+    const t = ensureTransport() catch return;
+    t.request_inflight.add(-1, &.{.{ .key = "db.operation.name", .value = .{ .string = op_name } }});
+}
+
+pub fn recordTransportBytes(direction: NetworkDirection, n_bytes: u64) void {
+    const t = ensureTransport() catch return;
+    t.bytes.add(n_bytes, &.{.{ .key = "network.io.direction", .value = .{ .string = @tagName(direction) } }});
+}
+
+pub fn recordTransportTimeout(kind: TimeoutKind) void {
+    const t = ensureTransport() catch return;
+    t.timeout_count.add(1, &.{.{ .key = "geode.timeout.kind", .value = .{ .string = @tagName(kind) } }});
+}
+
+// Observable gauge for current active connection count. Caller (transport
+// init) MUST call `registerTransportConnectionGauge` once after `listen()`.
+var g_active_connections_provider: ?*const fn () i64 = null;
+
+pub fn registerTransportConnectionGauge(provider_fn: *const fn () i64) !void {
+    g_active_connections_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.transport.connection.count",
+            .unit = "{connection}",
+            .kind = .observable_gauge,
+            .description = "Current number of active QUIC connections",
+        },
+        observeActiveConnections,
+        null,
+    );
+}
+
+fn observeActiveConnections(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_active_connections_provider) |fnp| {
+        observer.observeInt(fnp(), &.{.{ .key = "geode.transport.protocol", .value = .{ .string = "quic" } }});
+    }
 }

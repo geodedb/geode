@@ -48,6 +48,16 @@ pub const QuicError = error{
     InvalidState,
 };
 
+// Module-level pointer set by listen() so the OTel gauge callback can read
+// the current connection count without holding a reference to the transport.
+// Single-writer (listen() runs once at startup), multiple readers (gauge callback).
+var g_quic_transport_instance: ?*QuicTransport = null;
+
+fn activeConnectionCountProvider() i64 {
+    if (g_quic_transport_instance) |t| return @intCast(t.getConnectionCount());
+    return 0;
+}
+
 inline fn debugLog(comptime fmt: []const u8, args: anytype) void {
     _ = fmt;
     _ = args;
@@ -186,6 +196,13 @@ pub const QuicTransport = struct {
     }
 
     pub fn deinit(self: *QuicTransport) void {
+        // Clear the module-global pointer first so the OTel observable gauge
+        // callback (registered via registerTransportConnectionGauge) cannot
+        // observe a half-torn-down transport. otel_metrics.shutdown() also
+        // nulls its provider pointer, but symmetry here prevents a latent
+        // test-only race.
+        g_quic_transport_instance = null;
+
         // GAP-0203: Process any deferred connection cleanups first.
         // These are inner connections queued by handler threads via destroyConnection().
         self.drainPendingDestroy();
@@ -362,6 +379,10 @@ pub const QuicTransport = struct {
         });
         // Startup banner for operational tooling (JSON on stderr)
         std.debug.print("{{\"component\":\"transport\",\"transport\":\"quic\",\"tls\":\"true\",\"port\":{d},\"library\":\"vendor/quic\",\"api\":\"native-endpoint\",\"status\":\"listening\"}}\n", .{self.config.port});
+        // Register OTel observable gauge for active connection count.
+        // Set module-level pointer so the callback can read getConnectionCount().
+        g_quic_transport_instance = self;
+        @import("otel_metrics").registerTransportConnectionGauge(activeConnectionCountProvider) catch {};
     }
 
     pub fn poll(self: *QuicTransport, timeout_ms: u32) !void {
@@ -427,6 +448,7 @@ pub const QuicTransport = struct {
             self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
             try self.connections.append(self.allocator, wrapper);
+            @import("otel_metrics").recordTransportConnectionOpened(.quic);
             return wrapper;
         }
         return QuicError.InvalidState;
@@ -475,6 +497,7 @@ pub const QuicTransport = struct {
     /// GAP-0202: Thread-safe connection removal for async connection handling
     /// GAP-0203: Defer inner connection deinit to main thread to prevent use-after-free
     pub fn destroyConnection(self: *QuicTransport, conn: *QuicConnection) void {
+        @import("otel_metrics").recordTransportConnectionClosed("destroy");
         // GAP-0202: Lock mutex for thread-safe list modification
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         // Remove connection from the tracked list using O(1) swapRemove
@@ -699,7 +722,11 @@ pub const QuicStream = struct {
     pub fn write(self: *QuicStream, data: []const u8) !usize {
         // QUIC library v0.1.10: writeStream is internally thread-safe
         // (per-connection mutex protects stream state). No PollSync needed.
-        return self.connection.writeStream(self.stream_id, data, false);
+        const written = try self.connection.writeStream(self.stream_id, data, false);
+        if (written > 0) {
+            @import("otel_metrics").recordTransportBytes(.transmit, written);
+        }
+        return written;
     }
 
     pub fn writeAll(self: *QuicStream, data: []const u8) !void {
@@ -731,7 +758,11 @@ pub const QuicStream = struct {
     pub fn read(self: *QuicStream, buffer: []u8) !usize {
         // QUIC library v0.1.10: readStream is internally thread-safe
         // (per-connection mutex protects stream reassembly buffers).
-        return self.connection.readStream(self.stream_id, buffer);
+        const n_read = try self.connection.readStream(self.stream_id, buffer);
+        if (n_read > 0) {
+            @import("otel_metrics").recordTransportBytes(.receive, n_read);
+        }
+        return n_read;
     }
 
     pub fn readLine(self: *QuicStream, max_size: usize) ![]u8 {
