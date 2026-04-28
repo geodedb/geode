@@ -89,6 +89,20 @@
             .hash = "slog-0.1.0-SamEDyVLBgDLhCULhAYXGTkLtFFch_zMfAj8MRz2E3Cb",
         },
 
+        // OpenTelemetry client library — metrics, tracing, logs surface.
+        // Pinned commit 20078af2 (2026-04-28). Intended for production use:
+        // /metrics (rendered via otel.exporters.prometheus) and OTLP/HTTP push.
+        // Build flags `use_devnw_grpc`, `use_devnw_protobuf`, `use_devnw_pool`
+        // are LEFT DEFAULT-OFF — turning them on pulls otel's pinned versions
+        // of grpc_zig / protobuf / thread_pool into the module graph and
+        // collides with geode's own pins (Zig 0.16 forbids overlapping
+        // module paths). OTLP/HTTP transport works on stdlib std.http.Client
+        // alone; gRPC OTLP is gated on resolving the pin conflict.
+        .otel = .{
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#20078af231c069d88eaeb79dcf950b94366be624",
+            .hash = "otel-0.1.0-B0v3lsl9MwCHrG8GDrxdFebugqjybfr4KAiplOJKCRG7",
+        },
+
         // Configuration management - XDG compliant, multi-format support
         .config = .{
             .url = "git+https://gitlab.com/devnw/zig/config.git#7eda77bda98f5bf48570f43ec292ec9219f71480",
