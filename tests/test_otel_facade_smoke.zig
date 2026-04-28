@@ -204,3 +204,21 @@ test "graph metrics register" {
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_graph_node_operation_count") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_graph_edge_operation_count") != null);
 }
+
+test "index and vector metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordIndexLookup(.btree, 0.0001, .success);
+    otel_metrics.recordIndexUpdate(.btree, .create, 0.0002);
+    otel_metrics.recordHnswSearch(.cosine, 0.001);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_lookup_duration") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_lookup_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_update_duration") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_vector_hnsw_search_duration") != null);
+}

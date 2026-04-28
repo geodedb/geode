@@ -1,4 +1,6 @@
 const std = @import("std");
+const otel = @import("otel");
+const otel_metrics = @import("otel_metrics");
 
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
@@ -515,6 +517,7 @@ pub const IndexManager = struct {
     ) !void {
         if (self.property_indexes.getPtr(index_name)) |index| {
             index.statistics.write_count += 1;
+            const t0 = otel.internal.clock.unixNanoNow();
 
             switch (index.type) {
                 .btree => {
@@ -524,12 +527,16 @@ pub const IndexManager = struct {
                         const key_copy = try self.allocator.dupe(u8, key);
                         try tree.insert(key_copy, node_id);
                         index.statistics.entries += 1;
+                        const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                        otel_metrics.recordIndexUpdate(.btree, .create, elapsed_s);
                     }
                 },
                 .hash => {
                     if (index.hash_index) |*hash| {
                         try self.insertIntoHashIndex(hash, key, node_id);
                         index.statistics.entries += 1;
+                        const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                        otel_metrics.recordIndexUpdate(.hash, .create, elapsed_s);
                     }
                 },
                 else => {},
@@ -567,6 +574,7 @@ pub const IndexManager = struct {
         index_name: []const u8,
         key: []const u8,
     ) !?u64 {
+        const t0 = otel.internal.clock.unixNanoNow();
         if (self.property_indexes.getPtr(index_name)) |index| {
             index.statistics.read_count += 1;
 
@@ -578,10 +586,14 @@ pub const IndexManager = struct {
                         if (tree.search(key)) |value| {
                             index.statistics.cache_hits += 1;
                             self.statistics.index_hits += 1;
+                            const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                            otel_metrics.recordIndexLookup(.btree, elapsed_s, .success);
                             return value;
                         }
                         index.statistics.cache_misses += 1;
                         self.statistics.index_misses += 1;
+                        const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                        otel_metrics.recordIndexLookup(.btree, elapsed_s, .error_);
                     }
                 },
                 .hash => {
@@ -589,8 +601,12 @@ pub const IndexManager = struct {
                         if (self.lookupInHashIndex(hash, key)) |value| {
                             index.statistics.cache_hits += 1;
                             self.statistics.index_hits += 1;
+                            const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                            otel_metrics.recordIndexLookup(.hash, elapsed_s, .success);
                             return value;
                         }
+                        const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                        otel_metrics.recordIndexLookup(.hash, elapsed_s, .error_);
                     }
                 },
                 else => {},
@@ -873,15 +889,20 @@ pub const IndexManager = struct {
         query_vector: []const f32,
         k: usize,
     ) ![]struct { id: u64, score: f64 } {
+        const t0 = otel.internal.clock.unixNanoNow();
         if (self.vector_indexes.get(index_name)) |vector_idx| {
             const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
             const raw_results = try hnsw_index.knnSearch(query_vector, @intCast(k));
+            const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+            otel_metrics.recordHnswSearch(.l2, elapsed_s);
             return try mapSearchResults(self.allocator, raw_results);
         } else if (self.property_indexes.getPtr(index_name)) |index| {
             if (index.vector_index) |vector_idx| {
                 const hnsw_index: *hnsw.Hnsw = @ptrCast(@alignCast(vector_idx));
                 index.statistics.read_count += 1;
                 const raw_results = try hnsw_index.knnSearch(query_vector, @intCast(k));
+                const elapsed_s = @as(f64, @floatFromInt(otel.internal.clock.unixNanoNow() -| t0)) / @as(f64, std.time.ns_per_s);
+                otel_metrics.recordHnswSearch(.l2, elapsed_s);
                 return try mapSearchResults(self.allocator, raw_results);
             }
         }

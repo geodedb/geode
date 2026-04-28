@@ -125,6 +125,9 @@ pub fn shutdown() void {
     g_graph = null;
     g_node_count_provider = null;
     g_edge_count_provider = null;
+    // Index + vector metrics state reset.
+    g_index = null;
+    g_index_count_provider = null;
     g_allocator = null;
 }
 
@@ -1193,5 +1196,136 @@ pub fn recordEdgeMutation(op: GraphMutation, namespace: []const u8, outcome: Out
         .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
         .{ .key = "db.namespace", .value = .{ .string = namespace } },
         .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+// -------------------------------------------------------------------------
+// Index + vector metrics — geode.index.* per spec §4.7 P0.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-009; FEATURE="OTel Instrumentation"; ASPECT=IndexVector; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Index structure types tracked by geode.index.* metrics.
+pub const IndexType = enum { btree, hash, full_text, spatial, vector_hnsw, interval };
+
+/// Distance metrics used by HNSW vector searches.
+pub const VectorMetric = enum { l2, cosine, dot, hamming, jaccard, manhattan };
+
+fn indexTypeName(t: IndexType) []const u8 {
+    return switch (t) {
+        .btree => "btree",
+        .hash => "hash",
+        .full_text => "full_text",
+        .spatial => "spatial",
+        .vector_hnsw => "vector_hnsw",
+        .interval => "interval",
+    };
+}
+
+fn vectorMetricName(m: VectorMetric) []const u8 {
+    return switch (m) {
+        .l2 => "l2",
+        .cosine => "cosine",
+        .dot => "dot",
+        .hamming => "hamming",
+        .jaccard => "jaccard",
+        .manhattan => "manhattan",
+    };
+}
+
+const IndexMetrics = struct {
+    lookup_duration: otel.api.metrics.Histogram,
+    lookup_count: otel.api.metrics.Counter,
+    update_duration: otel.api.metrics.Histogram,
+    hnsw_search_duration: otel.api.metrics.Histogram,
+};
+
+var g_index: ?IndexMetrics = null;
+var g_index_count_provider: ?*const fn () i64 = null;
+
+fn ensureIndex() !*IndexMetrics {
+    if (g_index) |*idx| return idx;
+    const m = meter();
+    g_index = IndexMetrics{
+        .lookup_duration = try m.histogram(.{
+            .name = "geode.index.lookup.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Index point-lookup duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .lookup_count = try m.counter(.{
+            .name = "geode.index.lookup.count",
+            .unit = "{lookup}",
+            .kind = .counter,
+            .description = "Total index point-lookups by type and outcome",
+        }),
+        .update_duration = try m.histogram(.{
+            .name = "geode.index.update.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Index insert/update/delete duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .hnsw_search_duration = try m.histogram(.{
+            .name = "geode.index.vector.hnsw.search.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "HNSW approximate nearest-neighbour search duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_db_client_duration },
+        }),
+    };
+    return &g_index.?;
+}
+
+fn observeIndexCount(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_index_count_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+/// Register an observable gauge that reports the total number of live indexes.
+/// `provider_fn` MUST be a module-lifetime function pointer; called on each
+/// Prometheus scrape. Idempotent — duplicate registrations are silently ignored
+/// by the OTel SDK.
+pub fn registerIndexCountGauge(provider_fn: *const fn () i64) !void {
+    g_index_count_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.index.count",
+            .unit = "{index}",
+            .kind = .observable_gauge,
+            .description = "Total number of live indexes per index type",
+        },
+        observeIndexCount,
+        null,
+    );
+}
+
+/// Record a completed index point-lookup. Also bumps geode.index.lookup.count
+/// so count and duration are always correlated (per spec §4.7).
+pub fn recordIndexLookup(idx_type: IndexType, duration_s: f64, outcome: Outcome) void {
+    const idx = ensureIndex() catch return;
+    const type_attr = attrs.Entry{ .key = "geode.index.type", .value = .{ .string = indexTypeName(idx_type) } };
+    const outcome_attr = attrs.Entry{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    idx.lookup_duration.record(duration_s, &.{ type_attr, outcome_attr });
+    idx.lookup_count.add(1, &.{ type_attr, outcome_attr });
+}
+
+/// Record a completed index insert/update/delete.
+pub fn recordIndexUpdate(idx_type: IndexType, op: GraphMutation, duration_s: f64) void {
+    const idx = ensureIndex() catch return;
+    idx.update_duration.record(duration_s, &.{
+        .{ .key = "geode.index.type", .value = .{ .string = indexTypeName(idx_type) } },
+        .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
+    });
+}
+
+/// Record a completed HNSW approximate-nearest-neighbour search.
+pub fn recordHnswSearch(metric: VectorMetric, duration_s: f64) void {
+    const idx = ensureIndex() catch return;
+    idx.hnsw_search_duration.record(duration_s, &.{
+        .{ .key = "geode.vector.metric", .value = .{ .string = vectorMetricName(metric) } },
     });
 }
