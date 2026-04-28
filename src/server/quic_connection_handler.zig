@@ -1722,7 +1722,23 @@ pub fn handleQuicConnection(
     var poll_attempts: usize = 0;
     var backoff_us: u64 = 100; // Start at 100μs
     const max_backoff_us: u64 = 10_000; // Cap at 10ms (reduced from 50ms)
-    const max_total_wait_ms: u64 = 500;
+    // 2026-04-28: bumped from 500ms → 30s.  Under 16-way concurrent client
+    // fan-out (msft-graph parallel pipeline), the QUIC main poll thread
+    // takes longer than 500ms to land STREAM frames on every accepted
+    // connection.  Connections 5-16 bailed here and `defer
+    // transport.destroyConnection` quietly tore them down — but the
+    // QUIC `closeConnection` path does NOT reliably send a
+    // CONNECTION_CLOSE frame to the peer (`catch {}` at the call
+    // site), so the client sat in `BeginTx` waiting for a stream the
+    // server had abandoned.  Symptom: msft-graph stalls at
+    // `flushed=281` with `quic_active_connections=4` even though the
+    // client logged "pinned connections acquired count=16".  30s
+    // matches the typical client-side connect/idle timeout and gives
+    // the server's poll thread plenty of slack at high fan-out
+    // without disabling the safety check entirely (a truly idle
+    // client will still get reaped, just by the QUIC layer's
+    // 300s idle timeout instead).
+    const max_total_wait_ms: u64 = 30_000;
     var total_waited_us: u64 = 0;
     while (total_waited_us < max_total_wait_ms * 1000) : (poll_attempts += 1) {
         if (conn.inner.hasIncomingStreams()) break;

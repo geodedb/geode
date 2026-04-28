@@ -850,9 +850,19 @@ pub fn main() !void {
         });
         defer stream_pool.deinit();
 
+        // 2026-04-28: bumped from 4 → 64 threads.  Each accepted QUIC
+        // connection submits ONE long-lived `runStreamAcceptorLoop` task
+        // (an infinite poll loop that exits only when its connection
+        // tears down).  With only 4 acceptor threads any concurrent
+        // client fan-out > 4 would queue acceptor loops behind already-
+        // running ones — they would never start, and the queued
+        // connections' client-initiated streams would never get
+        // accepted server-side.  64 covers realistic client fan-out
+        // without burning CPU since acceptors spend ~all their time in
+        // `nanosleep(100µs)` polling.
         const acceptor_pool = try thread_pool.ThreadPool.init(gpa, .{
-            .num_threads = 4,
-            .queue_capacity = 64,
+            .num_threads = 64,
+            .queue_capacity = 256,
             .deinit_timeout_ns = 2 * std.time.ns_per_s,
         });
         defer acceptor_pool.deinit();
