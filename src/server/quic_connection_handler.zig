@@ -1614,13 +1614,26 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 continue;
             }
         } else {
-            // No stream pending — poll and back off
-            transport.poll(0) catch {};
-            {
-                const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
-            }
+            // No stream pending — sleep and re-check shutdown.
+            //
+            // 2026-04-28: removed `transport.poll(0)` from this branch.
+            // The dedicated server poll thread (`runPollLoopTask` in
+            // main.zig) is the single owner of packet delivery; calling
+            // poll(0) here just contends with the poll thread and with
+            // every other connection's acceptor on `ep.mu`.  Under heavy
+            // close-churn (e.g. 16 client connections all closing at
+            // once when an msft-graph file boundary tears them down),
+            // that contention blocked individual acceptors inside
+            // poll(0) for >5 seconds — long enough to miss the
+            // `acceptor_shutdown` signal and trip the
+            // "acceptor thread did not exit within deadline; bailing
+            // despite UAF risk" guard in handleQuicConnection's defer,
+            // and ultimately crash the server.  Just sleeping here is
+            // both correct (the poll thread keeps running) and lets the
+            // loop re-check `shutdown` every ~1 ms.
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
         }
     }
 }
