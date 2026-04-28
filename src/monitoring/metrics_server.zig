@@ -187,12 +187,32 @@ pub const MetricsServer = struct {
     }
 
     /// Serve `GET /metrics` — Prometheus text exposition format 0.0.4.
+    ///
+    /// When the OTel MeterProvider is initialised, renders via the OTel
+    /// Prometheus exporter. Falls back to the legacy MetricsCollector on
+    /// error or when the provider is not yet initialised (e.g. during
+    /// early startup or in tests that only exercise the legacy path).
     fn serveMetrics(self: *MetricsServer, stream: std.Io.net.Stream) !void {
         const io = self.threaded.?.io();
+        const otel_resp = @import("otel_prometheus_responder");
 
         var body: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 2048);
         defer body.deinit();
-        try self.collector.exportMetrics(&body.writer);
+
+        if (otel_resp.isAvailable()) {
+            otel_resp.renderInto(self.allocator, &body.writer) catch |err| {
+                std.log.warn("OTel /metrics render failed, falling back to legacy collector: {s}", .{@errorName(err)});
+                // Deinit the partially-written buffer and reinit so we don't
+                // mix partial OTel output with the full legacy payload.
+                // std.Io.Writer.Allocating has no clearRetainingCapacity, so
+                // deinit+reinit is the safest reset pattern.
+                body.deinit();
+                body = try .initCapacity(self.allocator, 2048);
+                try self.collector.exportMetrics(&body.writer);
+            };
+        } else {
+            try self.collector.exportMetrics(&body.writer);
+        }
         const body_bytes = body.written();
 
         var header_buf: [256]u8 = undefined;

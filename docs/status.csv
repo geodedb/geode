@@ -3074,6 +3074,7 @@ REQ-OPTIMIZER-FILTER-003,Cryptographic Filter Detection,Graph,TESTED,,,optimizer
 REQ-OPTIONAL-MATCH-COUNT-001,OptionalMatchCount,WithAggregation,TESTED,,,engine,2025-12-23,src/execution.zig
 REQ-OTEL-FACADE-001,OTel Instrumentation,Facade,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-002,OTel Instrumentation,ServerInit,TESTED,,,monitoring,2026-04-28,src/server/main.zig
+REQ-OTEL-PROMETHEUS-RESPONDER-001,OTel Instrumentation,PrometheusBridge,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_prometheus_responder.zig
 REQ-OVERFLOW-SAFE-SUM-005,OverflowSafeSum,IntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-OVERFLOW-SAFE-SUM-006,OverflowSafeSum,ExtIntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-PARSER-001,ParserSupport,SyntaxValidation,TESTED,,,parser,2026-01-15,tests/test_gap_0193_final_batch.zig

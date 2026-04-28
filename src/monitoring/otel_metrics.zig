@@ -18,11 +18,12 @@
 
 const std = @import("std");
 const otel = @import("otel");
-// Path-relative import: otel_resource.zig lives next to this file in
-// src/monitoring/. If the build system places them in separate modules
-// and path-relative resolution fails, fall back to addImport("otel_resource",
-// otel_resource_mod) in build.zig and switch to @import("otel_resource").
-const otel_resource = @import("otel_resource.zig");
+// Named import: otel_resource is wired as a named dep in build.zig for
+// all module contexts that use otel_metrics (test + production). This
+// avoids "file exists in two modules" errors when otel_metrics.zig is
+// declared as a named module root and otel_resource.zig is simultaneously
+// the root of a peer module.
+const otel_resource = @import("otel_resource");
 
 const Resource = otel.sdk.resource.Resource;
 const MeterProvider = otel.sdk.metrics.MeterProvider;

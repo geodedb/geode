@@ -2290,10 +2290,26 @@ pub fn build(b: *std.Build) void {
     // its own `test-metrics-server` step, fold into the main test step.
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-001; FEATURE="Prometheus Metrics Endpoint"; ASPECT=LifetimeRegressionBuild; STATUS=IMPL; OWNER=monitoring; UPDATED=2026-04-16
     const prometheus_mod_for_metrics_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/prometheus.zig"), .target = target, .optimize = optimize });
+    // otel_prometheus_responder is imported by metrics_server.serveMetrics.
+    // All three monitoring modules use named imports and are wired as separate
+    // named module instances. otel_metrics uses @import("otel_resource") and
+    // @import("otel"); otel_prometheus_responder uses @import("otel_metrics")
+    // and @import("otel").
+    const otel_resource_mod_for_ms_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_ms_tests.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_ms_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_ms_tests.addImport("otel", otel_mod);
+    otel_metrics_mod_for_ms_tests.addImport("otel_resource", otel_resource_mod_for_ms_tests);
+    const otel_resp_mod_for_ms_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_prometheus_responder.zig"), .target = target, .optimize = optimize });
+    otel_resp_mod_for_ms_tests.addImport("otel", otel_mod);
+    otel_resp_mod_for_ms_tests.addImport("otel_metrics", otel_metrics_mod_for_ms_tests);
     // metrics_server.zig calls std.c.getenv, which requires explicit libc link.
     const metrics_server_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/metrics_server.zig"), .target = target, .optimize = optimize, .link_libc = true });
     metrics_server_mod_for_tests.addImport("prometheus.zig", prometheus_mod_for_metrics_tests);
     metrics_server_mod_for_tests.addImport("transport/thread_pool", thread_pool_mod);
+    metrics_server_mod_for_tests.addImport("otel_prometheus_responder", otel_resp_mod_for_ms_tests);
+    // otel_prometheus_responder is wired as a named module above; its transitive
+    // deps (otel, otel_metrics) resolve through otel_resp_mod_for_ms_tests itself.
     const metrics_server_lifetime_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_metrics_server_lifecycle.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     metrics_server_lifetime_tests.root_module.addImport("prometheus", prometheus_mod_for_metrics_tests);
     metrics_server_lifetime_tests.root_module.addImport("metrics_server", metrics_server_mod_for_tests);
@@ -2429,6 +2445,24 @@ pub fn build(b: *std.Build) void {
     // Add audit CLI module for verification functionality
     const audit_mod = b.createModule(.{ .root_source_file = b.path("src/cli/geode_audit_verify.zig"), .target = target, .optimize = optimize });
     geode_exe.root_module.addImport("audit_cli", audit_mod);
+
+    // Task 7 (OTel instrumentation plan): server/main.zig and
+    // monitoring/otel_prometheus_responder.zig use named @import("otel_metrics")
+    // and @import("otel_resource"). Wire dedicated module instances for
+    // geode_exe.root_module so the imports resolve without path-relative
+    // conflicts. otel_metrics.zig uses @import("otel") and path-relative
+    // @import("otel_resource.zig"); otel_resource.zig uses @import("otel").
+    const otel_resource_mod_for_exe = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_exe.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_exe = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_exe.addImport("otel", otel_mod);
+    otel_metrics_mod_for_exe.addImport("otel_resource", otel_resource_mod_for_exe);
+    const otel_prom_resp_mod_for_exe = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_prometheus_responder.zig"), .target = target, .optimize = optimize });
+    otel_prom_resp_mod_for_exe.addImport("otel", otel_mod);
+    otel_prom_resp_mod_for_exe.addImport("otel_metrics", otel_metrics_mod_for_exe);
+    geode_exe.root_module.addImport("otel_resource", otel_resource_mod_for_exe);
+    geode_exe.root_module.addImport("otel_metrics", otel_metrics_mod_for_exe);
+    geode_exe.root_module.addImport("otel_prometheus_responder", otel_prom_resp_mod_for_exe);
 
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
@@ -3955,16 +3989,33 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_otel_resource_tests.step);
 
     // Task 4 (OTel instrumentation plan): otel_metrics facade unit tests.
+    // otel_metrics.zig now uses named @import("otel_resource") so both
+    // otel_resource and otel_metrics are wired as separate modules. This
+    // avoids "file exists in two modules" errors when otel_prometheus_responder
+    // also uses otel_metrics as a named dep in the Task 7 block below.
     const otel_metrics_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
     otel_metrics_mod.addImport("otel", otel_mod);
-    // otel_metrics.zig uses path-relative @import("otel_resource.zig") which
-    // resolves within the same source tree, so no named import is needed for
-    // otel_resource. If that path-relative import ever breaks, add:
-    //   otel_metrics_mod.addImport("otel_resource", otel_resource_mod);
+    otel_metrics_mod.addImport("otel_resource", otel_resource_mod);
     const otel_metrics_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_facade_smoke.zig"), .target = target, .optimize = optimize });
     otel_metrics_test_mod.addImport("otel", otel_mod);
     otel_metrics_test_mod.addImport("otel_metrics", otel_metrics_mod);
     const otel_metrics_tests = b.addTest(.{ .root_module = otel_metrics_test_mod });
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     test_step.dependOn(&run_otel_metrics_tests.step);
+
+    // Task 7 (OTel instrumentation plan): /metrics OTel-exporter parity test.
+    // All three monitoring modules use named imports and are wired as separate
+    // named module instances so parity test + metrics_server test can share
+    // the same otel_metrics_mod instance without path-relative conflicts.
+    const otel_prometheus_responder_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_prometheus_responder.zig"), .target = target, .optimize = optimize });
+    otel_prometheus_responder_mod.addImport("otel", otel_mod);
+    otel_prometheus_responder_mod.addImport("otel_metrics", otel_metrics_mod);
+    // The parity test imports otel_metrics directly (for initForTesting/shutdown/meter).
+    const otel_prom_parity_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_prometheus_parity.zig"), .target = target, .optimize = optimize });
+    otel_prom_parity_test_mod.addImport("otel", otel_mod);
+    otel_prom_parity_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    otel_prom_parity_test_mod.addImport("otel_prometheus_responder", otel_prometheus_responder_mod);
+    const otel_prom_parity_tests = b.addTest(.{ .root_module = otel_prom_parity_test_mod });
+    const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
+    test_step.dependOn(&run_otel_prom_parity_tests.step);
 }

@@ -583,8 +583,8 @@ pub fn main() !void {
     // metrics server starts up — Task 7 reroutes /metrics to render
     // through the OTel exporter, and that exporter needs the global
     // provider to be live the moment the HTTP listener starts accepting.
-    const otel_metrics_facade = @import("../monitoring/otel_metrics.zig");
-    const otel_resource_mod = @import("../monitoring/otel_resource.zig");
+    const otel_metrics_facade = @import("otel_metrics");
+    const otel_resource_mod = @import("otel_resource");
 
     // Per-process instance_id. Use uuidv4 if v7 is unavailable; either
     // is acceptable as a unique identifier — v7's k-sortable property is
