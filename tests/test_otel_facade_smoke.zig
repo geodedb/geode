@@ -311,3 +311,26 @@ test "CDC and analytics metrics register" {
         "geode_analytics_event_processing_duration",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
+
+test "backup and restore metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordBackup(.full, 1.5, .success, null);
+    otel_metrics.recordBackupBytes(.full, 1048576);
+    otel_metrics.recordRestore(2.0, .success, null);
+    otel_metrics.recordRestoreBytes(1048576);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_backup_count",
+        "geode_backup_duration",
+        "geode_backup_bytes",
+        "geode_restore_count",
+        "geode_restore_duration",
+        "geode_restore_bytes",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

@@ -141,6 +141,8 @@ pub fn shutdown() void {
     g_cdc_queue_depth_provider = null;
     g_analytics = null;
     g_analytics_queue_depth_provider = null;
+    // Backup + restore metrics state reset.
+    g_backup = null;
     g_allocator = null;
 }
 
@@ -2025,4 +2027,137 @@ pub fn recordAnalyticsProcessing(event_type: []const u8, duration_s: f64) void {
     a.processing_duration.record(duration_s, &.{
         .{ .key = "geode.analytics.event_type", .value = .{ .string = event_type } },
     });
+}
+
+// -------------------------------------------------------------------------
+// Backup + restore metrics — geode.backup.* / geode.restore.* per §4.12 P0.
+// CANARY: REQ=REQ-OTEL-METRICS-013; FEATURE="OTel Instrumentation"; ASPECT=Backup; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+// -------------------------------------------------------------------------
+
+/// Backup kind: full snapshot, incremental (delta since last backup), or
+/// differential (delta since last full backup).
+pub const BackupKind = enum { full, incremental, differential };
+
+/// Object-store provider backing the backup destination.
+pub const ObjectStoreProvider = enum { s3, do_spaces, gcs, azure_blob, file };
+
+const BackupMetrics = struct {
+    // geode.backup.count — total completed backup operations
+    backup_count: otel.api.metrics.Counter,
+    // geode.backup.duration — wall-clock backup duration in seconds
+    backup_duration: otel.api.metrics.Histogram,
+    // geode.backup.bytes — bytes written to the backup store
+    backup_bytes: otel.api.metrics.Counter,
+    // geode.restore.count — total completed restore operations
+    restore_count: otel.api.metrics.Counter,
+    // geode.restore.duration — wall-clock restore duration in seconds
+    restore_duration: otel.api.metrics.Histogram,
+    // geode.restore.bytes — bytes read from the backup store during restore
+    restore_bytes: otel.api.metrics.Counter,
+};
+
+var g_backup: ?BackupMetrics = null;
+
+fn ensureBackup() !*BackupMetrics {
+    if (g_backup) |*b| return b;
+    const m = meter();
+    g_backup = BackupMetrics{
+        .backup_count = try m.counter(.{
+            .name = "geode.backup.count",
+            .unit = "{backup}",
+            .kind = .counter,
+            .description = "Total backup operations completed, partitioned by kind and outcome",
+        }),
+        .backup_duration = try m.histogram(.{
+            .name = "geode.backup.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Wall-clock duration of backup operations in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .backup_bytes = try m.counter(.{
+            .name = "geode.backup.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Total bytes written to the backup store, partitioned by backup kind",
+        }),
+        .restore_count = try m.counter(.{
+            .name = "geode.restore.count",
+            .unit = "{restore}",
+            .kind = .counter,
+            .description = "Total restore operations completed, partitioned by outcome",
+        }),
+        .restore_duration = try m.histogram(.{
+            .name = "geode.restore.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Wall-clock duration of restore operations in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .restore_bytes = try m.counter(.{
+            .name = "geode.restore.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Total bytes read from the backup store during a restore",
+        }),
+    };
+    return &g_backup.?;
+}
+
+// ---- Backup + restore public API ----
+
+/// Record a completed backup operation.
+/// Also bumps `geode.backup.count`.  `kind` is the backup strategy;
+/// `duration_s` is total wall-clock time; `outcome` is the result;
+/// `error_type` MUST be null on success and a low-cardinality classifier
+/// (e.g. "StorageError", "NetworkTimeout") on failure — NEVER pass
+/// a file path, bucket name, or user-supplied string here.
+pub fn recordBackup(kind: BackupKind, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const b = ensureBackup() catch return;
+    var buf: [3]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.backup.kind", .value = .{ .string = @tagName(kind) } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    b.backup_count.add(1, buf[0..n]);
+    b.backup_duration.record(duration_s, buf[0..n]);
+}
+
+/// Record bytes written to the backup store for a single backup operation.
+/// `kind` is the backup strategy; `n_bytes` is the raw payload size in bytes.
+pub fn recordBackupBytes(kind: BackupKind, n_bytes: u64) void {
+    const b = ensureBackup() catch return;
+    b.backup_bytes.add(n_bytes, &.{
+        .{ .key = "geode.backup.kind", .value = .{ .string = @tagName(kind) } },
+    });
+}
+
+/// Record a completed restore operation.
+/// Also bumps `geode.restore.count`.  `duration_s` is total wall-clock time;
+/// `outcome` is the result; `error_type` follows the same rules as
+/// `recordBackup` — low-cardinality only, never user data.
+pub fn recordRestore(duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const b = ensureBackup() catch return;
+    var buf: [2]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    b.restore_count.add(1, buf[0..n]);
+    b.restore_duration.record(duration_s, buf[0..n]);
+}
+
+/// Record bytes read from the backup store during a single restore operation.
+/// `n_bytes` is the raw payload size in bytes.
+pub fn recordRestoreBytes(n_bytes: u64) void {
+    const b = ensureBackup() catch return;
+    b.restore_bytes.add(n_bytes, &.{});
 }
