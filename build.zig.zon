@@ -63,14 +63,20 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // Updated 2026-04-28: v0.1.14 — coalesce server Initial+Handshake into a
-        // 1200-byte datagram (fixes 'sendHandshakePackets failed: NoHandshakeKeys'
-        // stall), exact varint Length projection for coalesced datagram pad, TLS
-        // bumped to 7d9efd3 (Phase 22 10-item gap slate close).
-        // Previous: 2026-04-21 v0.1.12 — pulls in tls v0.1.2 transitively.
+        // Updated 2026-04-28 (later): bump to 4b246b2 — sendHandshakePackets
+        // now drives the TLS state machine via pollCrypto BEFORE checking
+        // hs_tx_keys.  Fixes a benign race that capped concurrent client
+        // fan-out at c=4: under msft-graph --workers 16, the keys check
+        // raced the install callback and lost on 12 of 16 connections,
+        // leaving them in TLS-incomplete state and stalling the seed at
+        // flushed=281 with quic_active_connections=4.  Reordering lets
+        // pollCrypto fire the install callback before the check.
+        // Earlier 2026-04-28: v0.1.14 (67720c1) — coalesce server
+        // Initial+Handshake into a 1200-byte datagram, exact varint Length
+        // projection for coalesced datagram pad, TLS bumped to 7d9efd3.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#67720c1dab939ade8871596499d298f0641eb4ee",
-            .hash = "quic-0.1.14-gBIqUbCvOADZ683t4VVduun0sFMkG0GKSi4pY9GMh5Vf",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#4b246b2743212f3c007abb3b4541a2534f17e628",
+            .hash = "quic-0.1.14-gBIqUeC4OACPS7NwD4FKRCTnMZ6GHSEE6fF2L0NxxCMP",
         },
 
         // =======================================================================
@@ -139,8 +145,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpPSQBAA4Zy82lVlAlkoeUV2QnorS8S2SnikRq2Ci",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#b680223048ab442e1fe417829727ef72800c58ba",
-            .hash = "geode_client_zig-0.2.1-8ysbV04QCQD5URT5jyxFmfEue08inonpUFqri3NnnsVH",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#0ecf87c19fa1c8def213df8c3d37020786cd14b4",
+            .hash = "geode_client_zig-0.2.1-8ysbV7QQCQAX2OUPbSMuk6stfPHoJ3_FwIKYn6bExEis",
         },
 
         // =======================================================================
