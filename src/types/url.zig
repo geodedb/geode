@@ -45,6 +45,7 @@ pub const Url = struct {
         return std.fmt.allocPrint(allocator, "{f}", .{advanced_types.Url{
             .raw = "",
             .scheme = self.scheme,
+            .userinfo = null,
             .host = self.host,
             .port = self.port,
             .path = self.path,

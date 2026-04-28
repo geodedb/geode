@@ -19,8 +19,8 @@ set -euo pipefail
 
 GEODE_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 ZON="$GEODE_ROOT/build.zig.zon"
-ZIG_BASE="/home/benji/src/devnw/zig"
-CLIENT_BASE="/home/benji/src/devnw/codepros/geode"
+ZIG_BASE="${ZIG_BASE:-$HOME/src/devnw/zig}"
+CLIENT_BASE="${CLIENT_BASE:-$HOME/src/devnw/codepros/geode}"
 
 # Map of zon dep names → local repo paths and remote URL bases
 declare -A REPO_MAP=(

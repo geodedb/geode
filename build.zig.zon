@@ -25,6 +25,11 @@
 
         // TOML v1.1.0 parser
         .toml = .{
+            // Pinned to v0.1.0 — toml v0.2.0 made Value.array a raw ArrayList
+            // (without .items.len indirection), and the `config` dep at the
+            // current pin still calls `arr.items.len` from convertTomlValue,
+            // which fails to compile against v0.2.0. Bump in lockstep with
+            // a config dep update.
             .url = "git+https://gitlab.com/devnw/zig/toml.git#535e23e893d2a402f7b63bf6d95b2e15b5ecc8e7",
             .hash = "toml-0.1.0-MHnSh18vAgDJpxCvZrTGhXaQ-ZYx-SJL-oJr1Tn0ZRWk",
         },
@@ -58,12 +63,14 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // Updated 2026-04-21: v0.1.12 — pulls in tls v0.1.2 transitively.
-        // Previous: 2026-03-27 v0.1.11+ (split endpoint mutex, ACK data race fix,
-        // bytes_in_flight leak fix, narrow handshake locks).
+        // Updated 2026-04-28: v0.1.14 — coalesce server Initial+Handshake into a
+        // 1200-byte datagram (fixes 'sendHandshakePackets failed: NoHandshakeKeys'
+        // stall), exact varint Length projection for coalesced datagram pad, TLS
+        // bumped to 7d9efd3 (Phase 22 10-item gap slate close).
+        // Previous: 2026-04-21 v0.1.12 — pulls in tls v0.1.2 transitively.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#c7808ed93ba939febee3ae6de4c0a61f4b0b9b25",
-            .hash = "quic-0.1.11-gBIqUaSsNwA7iXj1KIrXsebs6BObfFf7Rf4geAhkZy2O",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#67720c1dab939ade8871596499d298f0641eb4ee",
+            .hash = "quic-0.1.14-gBIqUbCvOADZ683t4VVduun0sFMkG0GKSi4pY9GMh5Vf",
         },
 
         // =======================================================================
@@ -100,6 +107,10 @@
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
         .thread_pool = .{
+            // Pinned to v0.2.0 to match transitive deps (quic 0.1.14 → tls 0.2.0
+            // → thread_pool 0.2.0). Bumping to 0.2.1 here causes "file exists in
+            // modules 'build_options0' and 'build_options4'" since Zig refuses
+            // overlapping module paths from multiple versions of the same dep.
             .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#ee8440f69012cad49fa1d5f22fe18c68f944d9ab",
             .hash = "thread_pool-0.2.0-11B1Bj_edQCU0Y_-zzOoXuytAgqEkDkfuw2nB-YxUmEL",
         },
@@ -116,20 +127,20 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#f18747d87010afc0517a0f0e40cb00fd352e4191",
-            .hash = "protobuf-3.0.0-0e82akVdKQBR-5UyQkdGI2f9WiRtiENLEMw_nH7HusOd",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#e702c880a2bb5126a5348147b4265b76ed2761c2",
+            .hash = "protobuf-3.0.0-0e82albaKQCZtz_8e_Wn_MfZmzkRHRMCEhQLn8Fl2GDl",
         },
 
         // gRPC for Zig
         // Updated 2026-02-11: concurrent connections, HPACK Huffman, TLS errdefer
         // GAP-0443: Use git+https URL with full commit hash for supply chain auditability
         .grpc_zig = .{
-            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#78d5f40a5264b993f35911cd232c3851407a0990",
-            .hash = "grpc_zig-0.1.0-7FnvpPS-AQAcOiKlDGx-6R8JkhFAx5S3p8MsyDyPznOY",
+            .url = "git+https://gitlab.com/devnw/zig/grpc-zig.git#1775cc78aed2eb76032d6127b4fea5fa04302927",
+            .hash = "grpc_zig-0.1.0-7FnvpPSQBAA4Zy82lVlAlkoeUV2QnorS8S2SnikRq2Ci",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#64a81cac05b7d6239c5f41f00cf9c0ca7f750cd4",
-            .hash = "geode_client_zig-0.2.1-8ysbVxIQCQBd4Uuxfahr2k6HxU4LbrQC1No3Zy6Bh9eB",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#b680223048ab442e1fe417829727ef72800c58ba",
+            .hash = "geode_client_zig-0.2.1-8ysbV04QCQD5URT5jyxFmfEue08inonpUFqri3NnnsVH",
         },
 
         // =======================================================================
@@ -138,8 +149,8 @@
 
         // UUID - RFC 9562 compliant (V1-V8), k-sortable V7, injectable generator
         .uuid = .{
-            .url = "git+https://gitlab.com/devnw/zig/uuid.git#cede45bed26d9e1c11cb0234fb0014807c9c8bef",
-            .hash = "uuid-0.1.0-tL1irrcPDAAPFdwSHWfwiKCC9lvvYGu6U0XH8efaTXP_",
+            .url = "git+https://gitlab.com/devnw/zig/uuid.git#ed2eea20409a425326335d2a16f6eaac47bd6d64",
+            .hash = "uuid-0.1.0-tL1irmtqFQA4j422J3WfsQrWJTLUOrvXlpmZCKXeftk9",
         },
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
@@ -189,8 +200,8 @@
 
         // Advanced Types - Network, vector, geographic, URL, range value types
         .advanced_types = .{
-            .url = "git+https://gitlab.com/devnw/zig/advanced-types.git#52cce4dfdb1304c4dc29755bb03d31ef5a19cdfa",
-            .hash = "advanced_types-0.1.0-pbHnCtw-AgDAdsufaeR7F6-jj8PERUbCIvO_O8zHX7VX",
+            .url = "git+https://gitlab.com/devnw/zig/advanced-types.git#7861b2ca7851fed5ba9fcf42750e41c070c81791",
+            .hash = "advanced_types-0.1.0-pbHnCsviAgAwhdbQhsZ2h8mgMLmvHpWNNaQmptlbL55X",
         },
 
         // FLE - Field-level encryption with AEAD, HKDF, blind indices
