@@ -193,6 +193,15 @@ pub fn build(b: *std.Build) void {
     const slog_mod = slog_dep.module("slogz");
     slog_mod.addImport("json", json_mod);
 
+    // OpenTelemetry — metrics + tracing facade. Default-off transitive
+    // flags keep grpc_zig/protobuf/thread_pool pin conflicts out of the
+    // module graph; OTLP/HTTP works on stdlib std.http.Client alone.
+    const otel_dep = b.dependency("otel", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const otel_mod = otel_dep.module("otel");
+
     // Configuration management - XDG compliant, multi-format support
     const config_dep = b.dependency("config", .{
         .target = target,
@@ -425,6 +434,7 @@ pub fn build(b: *std.Build) void {
 
     // Phase 3 External Library Imports (integration libraries)
     root_mod.addImport("slog", slog_mod);
+    root_mod.addImport("otel", otel_mod);
     root_mod.addImport("config", config_mod);
     root_mod.addImport("logging", logging_mod);
 
@@ -491,6 +501,7 @@ pub fn build(b: *std.Build) void {
 
     // Phase 3 External Library Imports for CLI (integration libraries)
     geode_exe.root_module.addImport("slog", slog_mod);
+    geode_exe.root_module.addImport("otel", otel_mod);
     geode_exe.root_module.addImport("config", config_mod);
 
     // Phase 4 External Library Imports for CLI (application libraries)
