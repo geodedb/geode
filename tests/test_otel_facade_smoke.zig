@@ -185,3 +185,22 @@ test "storage and WAL metrics register" {
         "geode_wal_replay_record_count",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
+
+test "graph metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordNodeMutation(.create, "default", .success);
+    otel_metrics.recordNodeMutation(.update, "default", .success);
+    otel_metrics.recordNodeMutation(.delete, "default", .success);
+    otel_metrics.recordEdgeMutation(.create, "default", .success);
+    otel_metrics.recordEdgeMutation(.update, "default", .success);
+    otel_metrics.recordEdgeMutation(.delete, "default", .success);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_graph_node_operation_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_graph_edge_operation_count") != null);
+}

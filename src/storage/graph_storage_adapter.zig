@@ -1272,6 +1272,8 @@ pub const StorageAdapter = struct {
 
         if (own_txn) try node_shard.commitTxn(local_txn);
         _ok_12 = true;
+        // OTel Task 13: graph data model mutation counter.
+        _om12.recordNodeMutation(.create, graph_name, .success);
         return node_id;
     }
 
@@ -2181,6 +2183,9 @@ pub const StorageAdapter = struct {
         errdefer shard.abortTxn(txn) catch {};
         try shard.deleteNodeTxn(node_id, txn);
         try shard.commitTxn(txn);
+        // OTel Task 13: graph data model mutation counter.
+        const _om13dn = @import("otel_metrics");
+        _om13dn.recordNodeMutation(.delete, graph_name, .success);
     }
 
     /// Retrieve the string labels for a node. Caller owns the returned
@@ -2254,12 +2259,16 @@ pub const StorageAdapter = struct {
                 if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
                     const _edge_id = try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
                     _ok_12e = true;
+                    // OTel Task 13: graph data model mutation counter (fast path).
+                    _om12e.recordEdgeMutation(.create, graph_name, .success);
                     return _edge_id;
                 }
             }
         }
         const _edge_id2 = try mg.engine.addEdge(from_id, to_id, rel_type);
         _ok_12e = true;
+        // OTel Task 13: graph data model mutation counter.
+        _om12e.recordEdgeMutation(.create, graph_name, .success);
         return _edge_id2;
     }
 
@@ -2279,6 +2288,10 @@ pub const StorageAdapter = struct {
     /// (regression test: `2pc-rollback-edge-create-undone` in
     /// `geodetestlab-cli/specs/distributed_2pc_undo.yml`).
     pub fn deleteEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, edge_id: u64) !void {
+        // OTel Task 13: graph data model mutation counter (delete edge).
+        const _om13de = @import("otel_metrics");
+        var _ok_13de = false;
+        defer if (_ok_13de) _om13de.recordEdgeMutation(.delete, graph_name, .success);
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -2290,13 +2303,16 @@ pub const StorageAdapter = struct {
             if (currentStatementTxnForGraph(graph_name)) |s| {
                 if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
                     try mg.shardEngineForNode(from_id).removeEdgeTxn(from_id, to_id, edge_id, local);
+                    _ok_13de = true;
                     return;
                 }
             }
             try mg.engine.removeEdge(from_id, to_id, edge_id);
+            _ok_13de = true;
             return;
         }
         try removeCrossShardEdge(mg, from_id, to_id, edge_id);
+        _ok_13de = true;
     }
 
     /// Iterate all outgoing edges from a node without materializing them.

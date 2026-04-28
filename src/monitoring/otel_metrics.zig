@@ -121,6 +121,10 @@ pub fn shutdown() void {
     g_storage_disk_usage_provider = null;
     g_wal = null;
     g_wal_size_provider = null;
+    // Graph data model metrics state reset.
+    g_graph = null;
+    g_node_count_provider = null;
+    g_edge_count_provider = null;
     g_allocator = null;
 }
 
@@ -1069,4 +1073,125 @@ pub fn recordWalReplay(duration_s: f64, outcome: Outcome) void {
 pub fn recordWalReplayRecord() void {
     const w = ensureWal() catch return;
     w.replay_record_count.add(1, &.{});
+}
+
+// -------------------------------------------------------------------------
+// Graph data model metrics — geode.graph.* per spec §4.4 P0.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-008; FEATURE="OTel Instrumentation"; ASPECT=GraphDataModel; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Mutation kind for node/edge operation counters.
+pub const GraphMutation = enum { create, update, delete };
+
+fn graphMutationName(m: GraphMutation) []const u8 {
+    return switch (m) {
+        .create => "create",
+        .update => "update",
+        .delete => "delete",
+    };
+}
+
+const GraphMetrics = struct {
+    node_op_count: otel.api.metrics.Counter,
+    edge_op_count: otel.api.metrics.Counter,
+};
+
+var g_graph: ?GraphMetrics = null;
+
+// Observable gauge function pointers — set by registerXxxCountGauge.
+var g_node_count_provider: ?*const fn () i64 = null;
+var g_edge_count_provider: ?*const fn () i64 = null;
+
+fn ensureGraph() !*GraphMetrics {
+    if (g_graph) |*g| return g;
+    const m = meter();
+    g_graph = GraphMetrics{
+        .node_op_count = try m.counter(.{
+            .name = "geode.graph.node.operation.count",
+            .unit = "{operation}",
+            .kind = .counter,
+            .description = "Total node create/update/delete operations by graph and outcome",
+        }),
+        .edge_op_count = try m.counter(.{
+            .name = "geode.graph.edge.operation.count",
+            .unit = "{operation}",
+            .kind = .counter,
+            .description = "Total edge create/update/delete operations by graph and outcome",
+        }),
+    };
+    return &g_graph.?;
+}
+
+fn observeNodeCount(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_node_count_provider) |fnp| {
+        observer.observeInt(fnp(), &.{.{ .key = "db.namespace", .value = .{ .string = "default" } }});
+    }
+}
+
+fn observeEdgeCount(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_edge_count_provider) |fnp| {
+        observer.observeInt(fnp(), &.{.{ .key = "db.namespace", .value = .{ .string = "default" } }});
+    }
+}
+
+/// Register an observable gauge reporting the current live node count.
+/// `provider_fn` is called on each Prometheus scrape; it MUST be a
+/// module-lifetime function pointer (no closure captures). The gauge emits
+/// `db.namespace = "default"` unless the adapter wires a per-graph variant.
+///
+/// Production-only path: call once from StorageAdapter after engine init.
+/// Unit tests exercise the operation counters instead (see smoke test).
+pub fn registerNodeCountGauge(provider_fn: *const fn () i64) !void {
+    g_node_count_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.graph.node.count",
+            .unit = "{node}",
+            .kind = .observable_gauge,
+            .description = "Current number of live nodes per graph namespace",
+        },
+        observeNodeCount,
+        null,
+    );
+}
+
+/// Register an observable gauge reporting the current live edge count.
+/// Same lifetime and threading rules as `registerNodeCountGauge`.
+pub fn registerEdgeCountGauge(provider_fn: *const fn () i64) !void {
+    g_edge_count_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.graph.edge.count",
+            .unit = "{edge}",
+            .kind = .observable_gauge,
+            .description = "Current number of live edges per graph namespace",
+        },
+        observeEdgeCount,
+        null,
+    );
+}
+
+/// Record a node mutation (create/update/delete). `namespace` is the graph
+/// name; defaults to `"default"` when the caller does not have a name.
+pub fn recordNodeMutation(op: GraphMutation, namespace: []const u8, outcome: Outcome) void {
+    const g = ensureGraph() catch return;
+    g.node_op_count.add(1, &.{
+        .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
+        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Record an edge mutation (create/update/delete). Same attribute semantics as
+/// `recordNodeMutation`.
+pub fn recordEdgeMutation(op: GraphMutation, namespace: []const u8, outcome: Outcome) void {
+    const g = ensureGraph() catch return;
+    g.edge_op_count.add(1, &.{
+        .{ .key = "geode.graph.operation", .value = .{ .string = graphMutationName(op) } },
+        .{ .key = "db.namespace", .value = .{ .string = namespace } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
 }
