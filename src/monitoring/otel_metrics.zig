@@ -115,6 +115,12 @@ pub fn shutdown() void {
     g_query = null;
     // Transaction metrics state reset.
     g_transaction = null;
+    // Storage + WAL metrics state reset.
+    g_storage = null;
+    g_storage_file_size_provider = null;
+    g_storage_disk_usage_provider = null;
+    g_wal = null;
+    g_wal_size_provider = null;
     g_allocator = null;
 }
 
@@ -792,4 +798,275 @@ pub fn recordLockWait(lock_type: LockType, duration_s: f64, outcome: Outcome) vo
         .{ .key = "geode.lock.type", .value = .{ .string = @tagName(lock_type) } },
         .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
     });
+}
+
+// -------------------------------------------------------------------------
+// Storage + WAL metrics — geode.storage.* / geode.wal.* per §4.5 P0.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-007; FEATURE="OTel Instrumentation"; ASPECT=StorageWAL; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+pub const StorageOp = enum { read_node, write_node, read_edge, write_edge, scan, compact };
+pub const StorageIoDir = enum { read, write };
+pub const CacheOutcome = enum { hit, miss, evicted };
+pub const WalRecordType = enum { node_create, node_update, node_delete, edge_create, edge_update, edge_delete, txn_begin, txn_commit, txn_abort, checkpoint };
+pub const WalIoDir = enum { write, replay };
+
+const StorageMetrics = struct {
+    op_count: otel.api.metrics.Counter,
+    op_duration: otel.api.metrics.Histogram,
+    bytes: otel.api.metrics.Counter,
+    page_cache_lookup: otel.api.metrics.Counter,
+};
+
+const WalMetrics = struct {
+    record_count: otel.api.metrics.Counter,
+    bytes: otel.api.metrics.Counter,
+    append_duration: otel.api.metrics.Histogram,
+    flush_duration: otel.api.metrics.Histogram,
+    fsync_duration: otel.api.metrics.Histogram,
+    replay_duration: otel.api.metrics.Histogram,
+    replay_record_count: otel.api.metrics.Counter,
+};
+
+var g_storage: ?StorageMetrics = null;
+var g_wal: ?WalMetrics = null;
+
+// Observable gauge function pointers — set by registerXxxGauge.
+var g_storage_file_size_provider: ?*const fn () i64 = null;
+var g_storage_disk_usage_provider: ?*const fn () i64 = null;
+var g_wal_size_provider: ?*const fn () i64 = null;
+
+fn ensureStorage() !*StorageMetrics {
+    if (g_storage) |*s| return s;
+    const m = meter();
+    g_storage = StorageMetrics{
+        .op_count = try m.counter(.{
+            .name = "geode.storage.operation.count",
+            .unit = "{operation}",
+            .kind = .counter,
+            .description = "Total storage operations by type and outcome",
+        }),
+        .op_duration = try m.histogram(.{
+            .name = "geode.storage.operation.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Storage operation duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .bytes = try m.counter(.{
+            .name = "geode.storage.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Bytes read or written by the storage engine",
+        }),
+        .page_cache_lookup = try m.counter(.{
+            .name = "geode.storage.page.cache.lookup",
+            .unit = "{lookup}",
+            .kind = .counter,
+            .description = "Page cache lookups by outcome (hit/miss/evicted)",
+        }),
+    };
+    return &g_storage.?;
+}
+
+fn ensureWal() !*WalMetrics {
+    if (g_wal) |*w| return w;
+    const m = meter();
+    g_wal = WalMetrics{
+        .record_count = try m.counter(.{
+            .name = "geode.wal.record.count",
+            .unit = "{record}",
+            .kind = .counter,
+            .description = "WAL records written by type",
+        }),
+        .bytes = try m.counter(.{
+            .name = "geode.wal.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Bytes written to or replayed from the WAL",
+        }),
+        .append_duration = try m.histogram(.{
+            .name = "geode.wal.append.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "WAL record append duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .flush_duration = try m.histogram(.{
+            .name = "geode.wal.flush.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "WAL buffer flush duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .fsync_duration = try m.histogram(.{
+            .name = "geode.wal.fsync.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "WAL fsync duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .replay_duration = try m.histogram(.{
+            .name = "geode.wal.replay.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "WAL full-replay duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .replay_record_count = try m.counter(.{
+            .name = "geode.wal.replay.record.count",
+            .unit = "{record}",
+            .kind = .counter,
+            .description = "Records processed during WAL replay",
+        }),
+    };
+    return &g_wal.?;
+}
+
+// ---- Observable gauge observers ----
+
+fn observeStorageFileSize(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_storage_file_size_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+fn observeStorageDiskUsage(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_storage_disk_usage_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+fn observeWalSize(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_wal_size_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+// ---- Storage public API ----
+
+/// Record a completed storage operation. Bumps both the count and duration.
+pub fn recordStorageOp(op: StorageOp, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const s = ensureStorage() catch return;
+    var buf: [3]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.storage.operation", .value = .{ .string = @tagName(op) } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    s.op_count.add(1, buf[0..n]);
+    s.op_duration.record(duration_s, buf[0..n]);
+}
+
+/// Record bytes transferred by the storage layer.
+pub fn recordStorageBytes(direction: StorageIoDir, n_bytes: u64) void {
+    const s = ensureStorage() catch return;
+    s.bytes.add(n_bytes, &.{.{ .key = "geode.io.direction", .value = .{ .string = @tagName(direction) } }});
+}
+
+/// Record a page-cache lookup result.
+pub fn recordPageCacheLookup(outcome: CacheOutcome) void {
+    const s = ensureStorage() catch return;
+    s.page_cache_lookup.add(1, &.{.{ .key = "geode.cache.outcome", .value = .{ .string = @tagName(outcome) } }});
+}
+
+/// Register an observable gauge that reports total on-disk file size for the
+/// storage engine. `provider_fn` must be a module-lifetime function pointer
+/// returning the current size in bytes; called on each Prometheus scrape.
+pub fn registerStorageFileSizeGauge(provider_fn: *const fn () i64) !void {
+    g_storage_file_size_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.storage.file.size",
+            .unit = "By",
+            .kind = .observable_gauge,
+            .description = "Total size of storage data files in bytes",
+        },
+        observeStorageFileSize,
+        null,
+    );
+}
+
+/// Register an observable gauge reporting total disk space consumed by the
+/// storage directory (data + indexes + WAL).
+pub fn registerStorageDiskUsageGauge(provider_fn: *const fn () i64) !void {
+    g_storage_disk_usage_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.storage.disk.usage",
+            .unit = "By",
+            .kind = .observable_gauge,
+            .description = "Total disk space used by the storage directory in bytes",
+        },
+        observeStorageDiskUsage,
+        null,
+    );
+}
+
+// ---- WAL public API ----
+
+/// Record a WAL record write (bumps geode.wal.record.count).
+pub fn recordWalRecord(rec_type: WalRecordType) void {
+    const w = ensureWal() catch return;
+    w.record_count.add(1, &.{.{ .key = "geode.wal.record.type", .value = .{ .string = @tagName(rec_type) } }});
+}
+
+/// Record bytes written to or replayed from the WAL.
+pub fn recordWalBytes(direction: WalIoDir, n_bytes: u64) void {
+    const w = ensureWal() catch return;
+    w.bytes.add(n_bytes, &.{.{ .key = "geode.io.direction", .value = .{ .string = @tagName(direction) } }});
+}
+
+/// Record a WAL record append duration.
+pub fn recordWalAppend(duration_s: f64, outcome: Outcome) void {
+    const w = ensureWal() catch return;
+    w.append_duration.record(duration_s, &.{.{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } }});
+}
+
+/// Record a WAL buffer flush duration (write-behind to OS page cache).
+pub fn recordWalFlush(duration_s: f64, outcome: Outcome) void {
+    const w = ensureWal() catch return;
+    w.flush_duration.record(duration_s, &.{.{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } }});
+}
+
+/// Record a WAL fsync duration (durable write to storage device).
+pub fn recordWalFsync(duration_s: f64, outcome: Outcome) void {
+    const w = ensureWal() catch return;
+    w.fsync_duration.record(duration_s, &.{.{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } }});
+}
+
+/// Register an observable gauge that reports the current logical WAL size
+/// (bytes since last checkpoint).
+pub fn registerWalSizeGauge(provider_fn: *const fn () i64) !void {
+    g_wal_size_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.wal.size",
+            .unit = "By",
+            .kind = .observable_gauge,
+            .description = "Current WAL size (bytes since last checkpoint)",
+        },
+        observeWalSize,
+        null,
+    );
+}
+
+/// Record a full WAL replay (crash-recovery or CDC) duration.
+pub fn recordWalReplay(duration_s: f64, outcome: Outcome) void {
+    const w = ensureWal() catch return;
+    w.replay_duration.record(duration_s, &.{.{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } }});
+}
+
+/// Increment the count of records processed during WAL replay.
+pub fn recordWalReplayRecord() void {
+    const w = ensureWal() catch return;
+    w.replay_record_count.add(1, &.{});
 }

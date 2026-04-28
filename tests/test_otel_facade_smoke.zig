@@ -151,3 +151,37 @@ test "transaction metrics register" {
         "geode_transaction_lock_wait_duration",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
+
+test "storage and WAL metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordStorageOp(.read_node, 0.0001, .success, null);
+    otel_metrics.recordStorageBytes(.read, 4096);
+    otel_metrics.recordPageCacheLookup(.hit);
+    otel_metrics.recordWalRecord(.node_create);
+    otel_metrics.recordWalBytes(.write, 256);
+    otel_metrics.recordWalAppend(0.0002, .success);
+    otel_metrics.recordWalFlush(0.001, .success);
+    otel_metrics.recordWalFsync(0.005, .success);
+    otel_metrics.recordWalReplay(0.05, .success);
+    otel_metrics.recordWalReplayRecord();
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_storage_operation_count",
+        "geode_storage_operation_duration",
+        "geode_storage_bytes",
+        "geode_storage_page_cache_lookup",
+        "geode_wal_record_count",
+        "geode_wal_bytes",
+        "geode_wal_append_duration",
+        "geode_wal_flush_duration",
+        "geode_wal_fsync_duration",
+        "geode_wal_replay_duration",
+        "geode_wal_replay_record_count",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

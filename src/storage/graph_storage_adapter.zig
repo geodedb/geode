@@ -1205,6 +1205,14 @@ pub const StorageAdapter = struct {
     /// The graph is created on-demand if it does not exist. Returns the
     /// new node ID.
     pub fn createNode(self: *StorageAdapter, graph_name: []const u8, labels: []const []const u8) !u64 {
+        // OTel Task 12: record write_node op duration + outcome.
+        const _om12 = @import("otel_metrics");
+        const _t0_12 = @import("otel").internal.clock.unixNanoNow();
+        var _ok_12 = false;
+        defer {
+            const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12)) / @as(f64, std.time.ns_per_s);
+            _om12.recordStorageOp(.write_node, _dur, if (_ok_12) .success else .error_, null);
+        }
         const mg = try self.getOrCreateGraph(graph_name);
 
         // R7 (2026-04-22): batch every sub-op (putNode + per-label addLabel)
@@ -1263,6 +1271,7 @@ pub const StorageAdapter = struct {
         }
 
         if (own_txn) try node_shard.commitTxn(local_txn);
+        _ok_12 = true;
         return node_id;
     }
 
@@ -2210,6 +2219,14 @@ pub const StorageAdapter = struct {
 
     /// Create an edge between two nodes. Returns the edge ID.
     pub fn createEdge(self: *StorageAdapter, graph_name: []const u8, from_id: u64, to_id: u64, label: []const u8) !u64 {
+        // OTel Task 12: record write_edge op duration + outcome.
+        const _om12e = @import("otel_metrics");
+        const _t0_12e = @import("otel").internal.clock.unixNanoNow();
+        var _ok_12e = false;
+        defer {
+            const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12e)) / @as(f64, std.time.ns_per_s);
+            _om12e.recordStorageOp(.write_edge, _dur, if (_ok_12e) .success else .error_, null);
+        }
         const mg = try self.getOrCreateGraph(graph_name);
         const rel_type = try mg.label_dict.getOrCreate(label);
 
@@ -2235,11 +2252,15 @@ pub const StorageAdapter = struct {
             const stmt_txn = currentStatementTxnForGraph(graph_name);
             if (stmt_txn) |s| {
                 if (shardLocalTxnForNode(s.txn_id, from_id)) |local| {
-                    return mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                    const _edge_id = try mg.shardEngineForNode(from_id).addEdgeTxn(from_id, to_id, rel_type, local);
+                    _ok_12e = true;
+                    return _edge_id;
                 }
             }
         }
-        return mg.engine.addEdge(from_id, to_id, rel_type);
+        const _edge_id2 = try mg.engine.addEdge(from_id, to_id, rel_type);
+        _ok_12e = true;
+        return _edge_id2;
     }
 
     /// Delete an edge by its endpoints and edge ID.
@@ -2523,6 +2544,14 @@ pub const StorageAdapter = struct {
 
     /// Get a property from a node, returned in graph-storage representation.
     pub fn getNodeProperty(self: *StorageAdapter, graph_name: []const u8, node_id: u64, key: []const u8, allocator: Allocator) !?gs.PropertyValue {
+        // OTel Task 12: record read_node op duration + outcome.
+        const _om12r = @import("otel_metrics");
+        const _t0_12r = @import("otel").internal.clock.unixNanoNow();
+        var _ok_12r = false;
+        defer {
+            const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12r)) / @as(f64, std.time.ns_per_s);
+            _om12r.recordStorageOp(.read_node, _dur, if (_ok_12r) .success else .error_, null);
+        }
         const mg = blk: {
             self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
             defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -2530,10 +2559,15 @@ pub const StorageAdapter = struct {
         };
         const rec = try mg.engine.getNode(node_id) orelse return error.NodeNotFound;
 
-        if (rec.prop_head == 0) return null;
+        if (rec.prop_head == 0) {
+            _ok_12r = true;
+            return null;
+        }
         // Properties live on the same shard as the owning node — see
         // addNodePropertiesForLabels for the routing rationale.
-        return mg.shardEngineForNode(node_id).getProperty(rec.prop_head, key, allocator);
+        const _prop = try mg.shardEngineForNode(node_id).getProperty(rec.prop_head, key, allocator);
+        _ok_12r = true;
+        return _prop;
     }
 
     /// Find all node IDs with the given label in a graph.

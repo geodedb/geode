@@ -1003,6 +1003,15 @@ pub fn build(b: *std.Build) void {
     graph_store_unit_tests.root_module.addImport("hnsw_lib", hnsw_ext_mod);
     graph_store_unit_tests.root_module.addImport("transport/thread_pool", thread_pool_mod);
     graph_store_unit_tests.root_module.addImport("thread_pool", thread_pool_ext_mod);
+    // Task 12 (OTel): graph_storage_adapter.zig now uses @import("otel_metrics") and
+    // @import("otel") for storage op instrumentation; wire dedicated module instances.
+    const otel_resource_mod_for_gs_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_gs_tests.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_gs_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_gs_tests.addImport("otel", otel_mod);
+    otel_metrics_mod_for_gs_tests.addImport("otel_resource", otel_resource_mod_for_gs_tests);
+    graph_store_unit_tests.root_module.addImport("otel", otel_mod);
+    graph_store_unit_tests.root_module.addImport("otel_metrics", otel_metrics_mod_for_gs_tests);
     graph_store_unit_tests.root_module.link_libc = true;
     const run_graph_store_unit_tests = b.addRunArtifact(graph_store_unit_tests);
 

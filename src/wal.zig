@@ -210,6 +210,21 @@ pub const WriteAheadLog = struct {
     /// Append a WAL record and return the assigned LSN.
     /// Thread-safe: the external WAL library handles locking internally.
     pub fn appendRecord(self: *WriteAheadLog, txn_id: u64, record: WalRecord) !u64 {
+        // OTel Task 12: record WAL append duration + record type count.
+        const _om12w = @import("otel_metrics");
+        const _t0_12w = @import("otel").internal.clock.unixNanoNow();
+        const _rec_type: _om12w.WalRecordType = switch (record) {
+            .CreateNode => .node_create,
+            .CreateEdge => .edge_create,
+            .SetNodeProperty, .AddNodeLabel => .node_update,
+            .RemoveNodeProperty, .RemoveNodeLabel => .node_update,
+            .SetEdgeProperty => .edge_update,
+            .RemoveEdgeProperty => .edge_update,
+            .DeleteNode => .node_delete,
+            .DeleteEdge => .edge_delete,
+        };
+        _om12w.recordWalRecord(_rec_type);
+
         // #692: Use a stack buffer for small records (majority of mutations
         // are under 256 bytes) to avoid a heap allocation per WAL append.
         // The FixedBufferAllocator serves from the stack; if the record
@@ -219,10 +234,13 @@ pub const WriteAheadLog = struct {
         const stack_alloc = fba.allocator();
 
         // Try stack-backed path first; fall back to heap on overflow.
-        return self.appendRecordWithAllocator(stack_alloc, txn_id, record) catch |err| switch (err) {
-            error.OutOfMemory => self.appendRecordWithAllocator(self.allocator, txn_id, record),
-            else => err,
+        const _lsn = self.appendRecordWithAllocator(stack_alloc, txn_id, record) catch |err| switch (err) {
+            error.OutOfMemory => try self.appendRecordWithAllocator(self.allocator, txn_id, record),
+            else => return err,
         };
+        const _append_dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12w)) / @as(f64, std.time.ns_per_s);
+        _om12w.recordWalAppend(_append_dur, .success);
+        return _lsn;
     }
 
     fn appendRecordWithAllocator(self: *WriteAheadLog, alloc: std.mem.Allocator, txn_id: u64, record: WalRecord) !u64 {
@@ -240,11 +258,18 @@ pub const WriteAheadLog = struct {
 
     /// Flush WAL to disk (fsync)
     pub fn sync(self: *WriteAheadLog) !void {
+        // OTel Task 12: record WAL fsync duration.
+        const _om12s = @import("otel_metrics");
+        const _t0_12s = @import("otel").internal.clock.unixNanoNow();
+        var _fsync_ok = true;
         self.inner.sync() catch |err| {
+            _fsync_ok = false;
             log.warn("WAL fsync failed — CDC/audit events may be lost", &.{
                 Attr.string("error", @errorName(err)),
             });
         };
+        const _fsync_dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12s)) / @as(f64, std.time.ns_per_s);
+        _om12s.recordWalFsync(_fsync_dur, if (_fsync_ok) .success else .error_);
     }
 
     /// DEPRECATED: Crash recovery is now handled by the graph-storage engine's

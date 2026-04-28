@@ -3079,6 +3079,7 @@ REQ-OTEL-METRICS-004,OTel Instrumentation,Transport,TESTED,,,monitoring,2026-04-
 REQ-OTEL-METRICS-005,OTel Instrumentation,QueryLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-006,OTel Instrumentation,TransactionLifecycle,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-METRICS-006,OTel Instrumentation,TransactionLifecycle,TESTED,,,monitoring,2026-04-28,src/transactions/manager.zig
+REQ-OTEL-METRICS-007,OTel Instrumentation,StorageWAL,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_metrics.zig
 REQ-OTEL-PROMETHEUS-RESPONDER-001,OTel Instrumentation,PrometheusBridge,TESTED,,,monitoring,2026-04-28,src/monitoring/otel_prometheus_responder.zig
 REQ-OVERFLOW-SAFE-SUM-005,OverflowSafeSum,IntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
 REQ-OVERFLOW-SAFE-SUM-006,OverflowSafeSum,ExtIntOverflow,TESTED,,,aggregation,2025-12-27,src/execution/aggregation_evaluation.zig
