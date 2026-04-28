@@ -41,6 +41,8 @@ const mfa_policy = @import("mfa_policy");
 const cli_dispatcher = @import("cli_dispatcher.zig");
 const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
+const auth_graph_manager_mod = @import("auth_graph_manager");
+const geode_auth = @import("geode_auth");
 
 // CANARY: REQ=REQ-USER-CREATE-PASSWORD-001; FEATURE="CLI Password Security"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gap_153_154_password_security.yml; OWNER=cli; UPDATED=2026-02-24
 // GAP-0154 FIX: Production builds require explicit passwords or generate random ones
@@ -831,7 +833,39 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
             std.process.exit(@intFromEnum(ExitCode.general_error));
         }
         if (mgr.storage.getUserByUsername(username)) |existing| {
-            try mgr.storage.updateUser(existing.id, null, final_new, null, null, null);
+            // Resolve the HMAC signing key the SAME way the server does so the
+            // chain stays single-source-of-truth. Without this, mgr.storage
+            // mutates the user record but the per-record HMAC + chain seal
+            // never get re-signed, and the next server start fails with
+            // error.AuthChainTampered (verifyChain at server_init.zig:314).
+            // Mirror initCliAuthManager's data_dir fallback so .geode_hmac_key
+            // is found at the default /var/lib/geode location when --data-dir
+            // is omitted. std.posix.getenv was removed in Zig 0.16; use
+            // std.c.getenv directly via a NUL-terminated key.
+            const resolved_data_dir: ?[]const u8 = blk: {
+                if (data_dir) |d| break :blk d;
+                const ptr = std.c.getenv("GEODE_DATA_DIR");
+                if (ptr) |p| break :blk std.mem.span(p);
+                break :blk "/var/lib/geode";
+            };
+            var kr = auth_graph_manager_mod.AuthGraphManager.resolveHmacKey(allocator, resolved_data_dir) catch {
+                std.debug.print("Error: could not resolve HMAC key (set GEODE_AUTH_HMAC_KEY/GEODE_TDE_KEY or place .geode_hmac_key in the data dir)\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.general_error));
+            };
+            const password_hash = try geode_auth.hashPasswordArgon2id(allocator, final_new);
+            defer allocator.free(password_hash);
+            _ = try mgr.updateUserPassword(&kr.key, existing.id, password_hash);
+            // Clear the password_reset_required flag — the operator just reset
+            // the password, so the next login should NOT bounce the user back
+            // through another reset flow.
+            var record = mgr.storage.user_cache.get(existing.id) orelse return error.UserNotFound;
+            if (record.password_reset_required) {
+                record.password_reset_required = false;
+                record.updated_at = compat_milliTimestamp();
+                try mgr.storage.user_cache.put(existing.id, record);
+                try mgr.storage.upsertUserNode(record);
+                _ = try mgr.updateUserPassword(&kr.key, existing.id, password_hash);
+            }
         }
         printOut("Password reset for user '{s}'\n", .{username});
         return;

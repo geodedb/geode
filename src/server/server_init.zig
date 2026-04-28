@@ -312,6 +312,48 @@ pub fn initialize(
 
                 // Verify HMAC chain integrity
                 agm.verifyChain(&kr.key) catch |err| {
+                    // Operator escape hatch: GEODE_AUTH_RESEAL_CHAIN=1 forces a
+                    // re-seal of the chain from the currently-loaded records.
+                    // Use this after offline maintenance (e.g. an out-of-band
+                    // password reset that bypassed the HMAC update path) when
+                    // the operator is confident the records on disk are
+                    // authentic and only the seal/per-record HMAC is stale.
+                    // Logs a loud warning so audit trails capture the reseal.
+                    const reseal_env = getEnvVarOwned(allocator, "GEODE_AUTH_RESEAL_CHAIN") catch null;
+                    if (reseal_env) |env_val| {
+                        defer allocator.free(env_val);
+                        const truthy = std.mem.eql(u8, env_val, "1") or
+                            std.ascii.eqlIgnoreCase(env_val, "true") or
+                            std.ascii.eqlIgnoreCase(env_val, "yes");
+                        if (truthy) {
+                            log.warn("AUTH CHAIN RESEAL REQUESTED - re-signing all records (manual operator override)", &.{
+                                Attr.string("verify_error", @errorName(err)),
+                                Attr.string("key_source", kr.key_id),
+                            });
+                            agm.sealChain(&kr.key) catch |seal_err| {
+                                log.err("AUTH CHAIN RESEAL FAILED", &.{
+                                    Attr.string("error", @errorName(seal_err)),
+                                });
+                                agm.deinit();
+                                return error.AuthChainTampered;
+                            };
+                            log.warn("AUTH CHAIN RESEALED - unset GEODE_AUTH_RESEAL_CHAIN before next start", &.{});
+                            // Re-verify so we fail loudly if the reseal is
+                            // still wrong (e.g. records mutated by another
+                            // process between seal and verify).
+                            agm.verifyChain(&kr.key) catch |verify_err| {
+                                log.err("AUTH CHAIN RESEAL DID NOT REPAIR CHAIN", &.{
+                                    Attr.string("error", @errorName(verify_err)),
+                                });
+                                agm.deinit();
+                                return error.AuthChainTampered;
+                            };
+                            log.info("Auth HMAC chain verified successfully after reseal", &.{
+                                Attr.string("key_source", kr.key_id),
+                            });
+                            break :agm_blk agm;
+                        }
+                    }
                     log.err("AUTH TAMPER DETECTED - auth chain verification failed", &.{
                         Attr.string("error", @errorName(err)),
                         Attr.string("key_source", kr.key_id),
