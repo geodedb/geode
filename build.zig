@@ -3943,4 +3943,14 @@ pub fn build(b: *std.Build) void {
     });
     const run_zig_client_tests = b.addRunArtifact(zig_client_tests);
     test_clients_step.dependOn(&run_zig_client_tests.step);
+
+    // Task 3 (OTel instrumentation plan): otel_resource builder unit tests.
+    const otel_resource_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod.addImport("otel", otel_mod);
+    const otel_resource_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_resource_attrs.zig"), .target = target, .optimize = optimize });
+    otel_resource_test_mod.addImport("otel", otel_mod);
+    otel_resource_test_mod.addImport("otel_resource", otel_resource_mod);
+    const otel_resource_tests = b.addTest(.{ .root_module = otel_resource_test_mod });
+    const run_otel_resource_tests = b.addRunArtifact(otel_resource_tests);
+    test_step.dependOn(&run_otel_resource_tests.step);
 }
