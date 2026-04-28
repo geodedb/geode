@@ -34,3 +34,13 @@ test "facade meter is non-null after init" {
     const c = try m.counter(.{ .name = "geode.smoke.test", .kind = .counter });
     c.add(1, &.{});
 }
+
+test "bucket profiles match spec" {
+    try std.testing.expectEqualSlices(f64, &.{ 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10 }, otel_metrics.buckets_db_client_duration);
+    try std.testing.expectEqualSlices(f64, &.{ 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60 }, otel_metrics.buckets_query_duration);
+    try std.testing.expectEqualSlices(f64, &.{ 0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1 }, otel_metrics.buckets_storage_io_duration);
+    try std.testing.expectEqualSlices(f64, &.{ 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 30 }, otel_metrics.buckets_lock_wait_duration);
+    try std.testing.expectEqualSlices(f64, &.{ 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 }, otel_metrics.buckets_rows);
+    try std.testing.expectEqualSlices(f64, &.{ 128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864 }, otel_metrics.buckets_bytes);
+    try std.testing.expectEqualSlices(f64, &.{ 0, 1, 2, 5, 10, 20, 50, 100, 500, 1000, 10000 }, otel_metrics.buckets_graph_degree);
+}

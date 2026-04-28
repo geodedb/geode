@@ -130,3 +130,21 @@ pub fn meter() Meter {
     // `scope`; all function pointers default to their noop variants.
     return .{ .scope = .{ .name = SCOPE_NAME } };
 }
+
+// -------------------------------------------------------------------------
+// Histogram bucket profiles per docs/otel-updates.md §2.
+//
+// These are the seven canonical bucket sets every OTel histogram in Geode
+// should reference, so panel-template aggregation across instruments stays
+// consistent. Use the slice that matches the metric's domain: durations
+// land in the *_duration profiles (seconds), payloads in `buckets_bytes`
+// or `buckets_rows`, and graph fan-out in `buckets_graph_degree`.
+// -------------------------------------------------------------------------
+
+pub const buckets_db_client_duration: []const f64 = &.{ 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 10 };
+pub const buckets_query_duration: []const f64 = &.{ 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60 };
+pub const buckets_storage_io_duration: []const f64 = &.{ 0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1 };
+pub const buckets_lock_wait_duration: []const f64 = &.{ 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5, 30 };
+pub const buckets_rows: []const f64 = &.{ 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
+pub const buckets_bytes: []const f64 = &.{ 128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864 };
+pub const buckets_graph_degree: []const f64 = &.{ 0, 1, 2, 5, 10, 20, 50, 100, 500, 1000, 10000 };
