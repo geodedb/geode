@@ -938,6 +938,17 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 }
 
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
+    const om = @import("otel_metrics");
+    const qt: om.QueryType = .read; // simplified — Task 10 follow-up: classify from stmt
+    om.incQueryActive(qt);
+    defer om.decQueryActive(qt);
+    const t0_exec = @import("otel").internal.clock.unixNanoNow();
+    var exec_outcome: om.Outcome = .success;
+    errdefer exec_outcome = .error_;
+    defer {
+        const dur_s = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
+        om.recordQueryExecution("STATEMENT", "STATEMENT", qt, dur_s, exec_outcome, null);
+    }
     switch (stmt) {
         .Query => |q| {
             // Validate: OFFSET requires ORDER BY (US001) - only if strict validation enabled

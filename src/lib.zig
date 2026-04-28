@@ -84,13 +84,22 @@ pub const ParseOptions = struct {
 
 pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !ParseResult {
     _ = options;
+    const om = @import("otel_metrics");
+    const t0 = @import("otel").internal.clock.unixNanoNow();
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
 
     var lexer = Lexer{ .src = source };
     var parser = Parser{ .lx = &lexer, .arena = &arena, .cur = lexer.next() };
 
-    const program = try parser.parseProgram();
+    const program = parser.parseProgram() catch |err| {
+        const dur_s = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+        om.recordQueryParse(dur_s, .error_, @errorName(err));
+        om.recordQueryParseError(@errorName(err));
+        return err;
+    };
+    const dur_s_ok = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0)) / 1_000_000_000.0;
+    om.recordQueryParse(dur_s_ok, .success, null);
 
     // ISO/IEC 39075:2024 RQ-0012: reject programs containing visually
     // confusable identifiers (e.g., Latin a vs Cyrillic а). The skeleton

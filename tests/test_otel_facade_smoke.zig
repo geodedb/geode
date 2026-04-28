@@ -94,3 +94,31 @@ test "transport metrics register and increment" {
         try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
     }
 }
+
+test "query metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.incQueryActive(.read);
+    otel_metrics.recordQueryExecution("MATCH", "MATCH Person", .read, 0.012, .success, null);
+    otel_metrics.recordQueryParse(0.0001, .success, null);
+    otel_metrics.recordQueryParseError("SyntaxError");
+    otel_metrics.recordQueryPlan("MATCH", 0.0005, "cbo");
+    otel_metrics.recordQueryRowsReturned("MATCH", "MATCH Person", 42);
+    otel_metrics.recordQueryTimeout("MATCH", .request);
+    otel_metrics.decQueryActive(.read);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_query_count",
+        "geode_query_execution_duration",
+        "geode_query_parse_duration",
+        "geode_query_parse_error_count",
+        "geode_query_plan_duration",
+        "geode_query_rows_returned",
+        "geode_query_timeout_count",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

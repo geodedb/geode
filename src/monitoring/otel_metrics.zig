@@ -111,6 +111,8 @@ pub fn shutdown() void {
     // Transport metrics state reset.
     g_transport = null;
     g_active_connections_provider = null;
+    // Query metrics state reset.
+    g_query = null;
     g_allocator = null;
 }
 
@@ -467,4 +469,156 @@ fn observeActiveConnections(_: ?*anyopaque, observer: otel.api.metrics.Observer)
     if (g_active_connections_provider) |fnp| {
         observer.observeInt(fnp(), &.{.{ .key = "geode.transport.protocol", .value = .{ .string = "quic" } }});
     }
+}
+
+// -------------------------------------------------------------------------
+// Query lifecycle metrics — geode.query.* per docs/otel-updates.md §4.3.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-005; FEATURE="OTel Instrumentation"; ASPECT=QueryLifecycle; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+pub const QueryType = enum { read, write, ddl, admin, algorithm, ml, analytics };
+
+const QueryMetrics = struct {
+    count: otel.api.metrics.Counter,
+    active: otel.api.metrics.UpDownCounter,
+    execution_duration: otel.api.metrics.Histogram,
+    parse_duration: otel.api.metrics.Histogram,
+    parse_error_count: otel.api.metrics.Counter,
+    plan_duration: otel.api.metrics.Histogram,
+    rows_returned: otel.api.metrics.Histogram,
+    timeout_count: otel.api.metrics.Counter,
+};
+
+var g_query: ?QueryMetrics = null;
+
+fn ensureQuery() !*QueryMetrics {
+    if (g_query) |*q| return q;
+    const m = meter();
+    g_query = QueryMetrics{
+        .count = try m.counter(.{
+            .name = "geode.query.count",
+            .unit = "{query}",
+            .kind = .counter,
+            .description = "Total number of queries executed",
+        }),
+        .active = try m.upDownCounter(.{
+            .name = "geode.query.active",
+            .unit = "{query}",
+            .kind = .up_down_counter,
+            .description = "Number of queries currently executing",
+        }),
+        .execution_duration = try m.histogram(.{
+            .name = "geode.query.execution.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "End-to-end query execution duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .parse_duration = try m.histogram(.{
+            .name = "geode.query.parse.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "GQL parse duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .parse_error_count = try m.counter(.{
+            .name = "geode.query.parse.error.count",
+            .unit = "{error}",
+            .kind = .counter,
+            .description = "Number of GQL parse errors",
+        }),
+        .plan_duration = try m.histogram(.{
+            .name = "geode.query.plan.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Query plan compilation duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .rows_returned = try m.histogram(.{
+            .name = "geode.query.rows.returned",
+            .unit = "{row}",
+            .kind = .histogram,
+            .description = "Number of rows returned per query",
+            .explicit_buckets = .{ .boundaries = buckets_rows },
+        }),
+        .timeout_count = try m.counter(.{
+            .name = "geode.query.timeout.count",
+            .unit = "{timeout}",
+            .kind = .counter,
+            .description = "Number of query timeouts",
+        }),
+    };
+    return &g_query.?;
+}
+
+pub fn incQueryActive(qt: QueryType) void {
+    const q = ensureQuery() catch return;
+    q.active.add(1, &.{.{ .key = "geode.query.type", .value = .{ .string = @tagName(qt) } }});
+}
+
+pub fn decQueryActive(qt: QueryType) void {
+    const q = ensureQuery() catch return;
+    q.active.add(-1, &.{.{ .key = "geode.query.type", .value = .{ .string = @tagName(qt) } }});
+}
+
+/// Record a completed query execution. Also bumps geode.query.count so the
+/// count and duration sample are always correlated (per spec §4.3).
+pub fn recordQueryExecution(op: []const u8, summary: []const u8, qt: QueryType, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    _ = summary;
+    const q = ensureQuery() catch return;
+    var buf: [4]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "db.operation.name", .value = .{ .string = op } };
+    n += 1;
+    buf[n] = .{ .key = "geode.query.type", .value = .{ .string = @tagName(qt) } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    q.count.add(1, buf[0..n]);
+    q.execution_duration.record(duration_s, buf[0..n]);
+}
+
+pub fn recordQueryParse(duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const q = ensureQuery() catch return;
+    var buf: [2]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    q.parse_duration.record(duration_s, buf[0..n]);
+}
+
+pub fn recordQueryParseError(error_type: []const u8) void {
+    const q = ensureQuery() catch return;
+    q.parse_error_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
+}
+
+pub fn recordQueryPlan(op: []const u8, duration_s: f64, planner_strategy: []const u8) void {
+    const q = ensureQuery() catch return;
+    q.plan_duration.record(duration_s, &.{
+        .{ .key = "db.operation.name", .value = .{ .string = op } },
+        .{ .key = "geode.planner.strategy", .value = .{ .string = planner_strategy } },
+    });
+}
+
+pub fn recordQueryRowsReturned(op: []const u8, summary: []const u8, rows: u64) void {
+    _ = summary;
+    const q = ensureQuery() catch return;
+    q.rows_returned.record(@floatFromInt(rows), &.{.{ .key = "db.operation.name", .value = .{ .string = op } }});
+}
+
+pub fn recordQueryTimeout(op: []const u8, kind: TimeoutKind) void {
+    const q = ensureQuery() catch return;
+    q.timeout_count.add(1, &.{
+        .{ .key = "db.operation.name", .value = .{ .string = op } },
+        .{ .key = "geode.timeout.kind", .value = .{ .string = @tagName(kind) } },
+    });
 }

@@ -2466,6 +2466,10 @@ pub fn build(b: *std.Build) void {
     // Task 9 (OTel): wire otel_metrics into transport_quic_mod so quic.zig can
     // call recordTransportConnection* via @import("otel_metrics").
     transport_quic_mod.addImport("otel_metrics", otel_metrics_mod_for_exe);
+    // Task 10 (OTel): wire otel_metrics into root_mod so execution.zig and lib.zig
+    // can call recordQueryParse / incQueryActive / recordQueryExecution via
+    // @import("otel_metrics").
+    root_mod.addImport("otel_metrics", otel_metrics_mod_for_exe);
 
     // Remote KMS CANARY tests (generate, attest, privileged unwrap). Reuse transport/vendored QUIC modules.
     const remote_kms_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_remote_kms.zig"), .target = target, .optimize = optimize }) });
