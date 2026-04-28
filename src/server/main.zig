@@ -627,6 +627,13 @@ pub fn main() !void {
     };
     defer otel_metrics_facade.shutdown();
 
+    otel_metrics_facade.registerServerLifecycle(0) catch |err| {
+        log.warn("Failed to register server lifecycle metrics", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+    otel_metrics_facade.recordServerHealth("server", true);
+
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
     // GAP-0166: Initialize Prometheus metrics server if enabled via environment
     // Default port is 9090 for Prometheus metrics endpoint

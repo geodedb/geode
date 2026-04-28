@@ -44,3 +44,23 @@ test "bucket profiles match spec" {
     try std.testing.expectEqualSlices(f64, &.{ 128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864 }, otel_metrics.buckets_bytes);
     try std.testing.expectEqualSlices(f64, &.{ 0, 1, 2, 5, 10, 20, 50, 100, 500, 1000, 10000 }, otel_metrics.buckets_graph_degree);
 }
+
+test "server lifecycle metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    try otel_metrics.registerServerLifecycle(0);
+    otel_metrics.recordServerHealth("storage", true);
+    otel_metrics.recordConfigReload(.success, null);
+    otel_metrics.recordShutdown(.graceful);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_uptime") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_health") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_config_reload_count") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "geode_server_shutdown_count") != null);
+}

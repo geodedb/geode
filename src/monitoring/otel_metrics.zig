@@ -102,6 +102,12 @@ pub fn shutdown() void {
         if (g_allocator) |a| a.destroy(r);
         g_resource = null;
     }
+    // Lifecycle state cleanup — must happen before nulling g_allocator.
+    if (g_allocator) |a| g_health_states.deinit(a);
+    g_health_states = .{};
+    g_uptime_start_ns = 0;
+    g_config_reload_counter = null;
+    g_shutdown_counter = null;
     g_allocator = null;
 }
 
@@ -149,3 +155,147 @@ pub const buckets_lock_wait_duration: []const f64 = &.{ 0.0001, 0.0005, 0.001, 0
 pub const buckets_rows: []const f64 = &.{ 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000 };
 pub const buckets_bytes: []const f64 = &.{ 128, 512, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864 };
 pub const buckets_graph_degree: []const f64 = &.{ 0, 1, 2, 5, 10, 20, 50, 100, 500, 1000, 10000 };
+
+// -------------------------------------------------------------------------
+// Server lifecycle metrics — geode.server.* per docs/otel-updates.md §4.1.
+// -------------------------------------------------------------------------
+
+const attrs = otel.internal.attributes;
+
+// CANARY: REQ=REQ-OTEL-METRICS-003; FEATURE="OTel Instrumentation"; ASPECT=ServerLifecycle; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+pub const Outcome = enum {
+    success,
+    error_,
+    timeout,
+    cancelled,
+    partial_success,
+};
+
+fn outcomeName(o: Outcome) []const u8 {
+    return switch (o) {
+        .success => "success",
+        .error_ => "error",
+        .timeout => "timeout",
+        .cancelled => "cancelled",
+        .partial_success => "partial_success",
+    };
+}
+
+pub const ShutdownReason = enum { graceful, forced, panic_ };
+
+fn shutdownReasonName(r: ShutdownReason) []const u8 {
+    return switch (r) {
+        .graceful => "graceful",
+        .forced => "forced",
+        .panic_ => "panic",
+    };
+}
+
+// Nanosecond timestamp of process start, set by registerServerLifecycle.
+var g_uptime_start_ns: u64 = 0;
+var g_health_states: std.StringHashMapUnmanaged(bool) = .{};
+var g_health_mu: std.Io.Mutex = std.Io.Mutex.init;
+
+var g_config_reload_counter: ?otel.api.metrics.Counter = null;
+var g_shutdown_counter: ?otel.api.metrics.Counter = null;
+
+/// Register the two observable lifecycle gauges (uptime, health). Must be
+/// called once at server startup AFTER `init()`. Idempotent — second call is
+/// a no-op (the OTel SDK rejects duplicate instrument registrations).
+/// `start_time_ms` is unused (kept for API compatibility); pass 0.
+pub fn registerServerLifecycle(start_time_ms: i64) !void {
+    _ = start_time_ms;
+    g_uptime_start_ns = otel.internal.clock.unixNanoNow();
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.server.uptime",
+            .unit = "s",
+            .kind = .observable_gauge,
+            .description = "Seconds since process start",
+        },
+        observeUptime,
+        null,
+    );
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.server.health",
+            .unit = "1",
+            .kind = .observable_gauge,
+            .description = "1 healthy, 0 unhealthy per component",
+        },
+        observeHealth,
+        null,
+    );
+}
+
+fn observeUptime(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    const now_ns = otel.internal.clock.unixNanoNow();
+    const elapsed_ns = if (now_ns >= g_uptime_start_ns) now_ns - g_uptime_start_ns else 0;
+    const seconds: f64 = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, std.time.ns_per_s);
+    observer.observeDouble(seconds, &.{});
+}
+
+fn observeHealth(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_health_mu.lockUncancelable(io);
+    defer g_health_mu.unlock(io);
+    var it = g_health_states.iterator();
+    while (it.next()) |kv| {
+        const v: f64 = if (kv.value_ptr.*) 1.0 else 0.0;
+        const component_attr = attrs.Entry{ .key = "geode.component", .value = .{ .string = kv.key_ptr.* } };
+        observer.observeDouble(v, &.{component_attr});
+    }
+}
+
+/// Record/update a component's health state. The component name MUST be a
+/// string literal or have process-lifetime storage — the HashMap stores the
+/// pointer, not a copy.
+pub fn recordServerHealth(component: []const u8, healthy: bool) void {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    g_health_mu.lockUncancelable(io);
+    defer g_health_mu.unlock(io);
+    if (g_allocator) |alloc| {
+        g_health_states.put(alloc, component, healthy) catch {};
+    }
+}
+
+fn ensureLifecycleCounters() !void {
+    const m = meter();
+    if (g_config_reload_counter == null) {
+        g_config_reload_counter = try m.counter(.{
+            .name = "geode.server.config.reload.count",
+            .unit = "{reload}",
+            .kind = .counter,
+            .description = "Config reload attempts",
+        });
+    }
+    if (g_shutdown_counter == null) {
+        g_shutdown_counter = try m.counter(.{
+            .name = "geode.server.shutdown.count",
+            .unit = "{shutdown}",
+            .kind = .counter,
+            .description = "Graceful or forced shutdowns",
+        });
+    }
+}
+
+pub fn recordConfigReload(outcome: Outcome, error_type: ?[]const u8) void {
+    ensureLifecycleCounters() catch return;
+    var buf: [2]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    g_config_reload_counter.?.add(1, buf[0..n]);
+}
+
+pub fn recordShutdown(reason: ShutdownReason) void {
+    ensureLifecycleCounters() catch return;
+    const reason_attr = attrs.Entry{ .key = "geode.shutdown.reason", .value = .{ .string = shutdownReasonName(reason) } };
+    g_shutdown_counter.?.add(1, &.{reason_attr});
+}
