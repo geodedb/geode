@@ -1587,6 +1587,7 @@ pub const StorageAdapter = struct {
         merge_key: []const u8,
         merge_value: graph_store.PropertyValue,
         on_create_props: []const PropKV,
+        apply_on_match: bool,
     ) !u64 {
         const mg = try self.getOrCreateGraph(graph_name);
         const store = graph_store.getGlobalStore(graph_store.global_allocator());
@@ -1608,18 +1609,24 @@ pub const StorageAdapter = struct {
         }
 
         // Probe phase: shared lock on merge-index, fast return on hit.
-        mg.merge_prop_index_lock.lockSharedUncancelable(io);
-        var probe_id: u64 = 0;
-        const probe = store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id);
-        mg.merge_prop_index_lock.unlockShared(io);
-        switch (probe) {
-            .found => return probe_id,
-            .not_indexable => return error.MergeValueNotIndexable,
-            .not_found => {},
+        // For apply_on_match (bare-SET MERGE) we skip the early return
+        // and fall through to the exclusive-lock branch so the SET
+        // clauses commit under the same merge_prop_index_lock that
+        // the create branch uses.
+        if (!apply_on_match) {
+            mg.merge_prop_index_lock.lockSharedUncancelable(io);
+            var probe_id: u64 = 0;
+            const probe = store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &probe_id);
+            mg.merge_prop_index_lock.unlockShared(io);
+            switch (probe) {
+                .found => return probe_id,
+                .not_indexable => return error.MergeValueNotIndexable,
+                .not_found => {},
+            }
         }
 
-        // Insert phase: take the shard lock for the reserved id plus
-        // the merge-index lock EXCLUSIVE.  Re-probe under the
+        // Insert / upsert phase: take the shard lock for the reserved
+        // id plus the merge-index lock EXCLUSIVE.  Re-probe under the
         // exclusive lock so concurrent MERGEs for the same key
         // serialise correctly.
         const idx = sharded_store.shardIndex(reserved_id);
@@ -1631,7 +1638,20 @@ pub const StorageAdapter = struct {
 
         var reprobe_id: u64 = 0;
         switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &reprobe_id)) {
-            .found => return reprobe_id,
+            .found => {
+                if (apply_on_match) {
+                    // Bare-SET upsert: apply the SET clauses to the
+                    // existing node under the exclusive merge_prop_index
+                    // lock so any prop that ALSO happens to be a merge
+                    // key (e.g. node_id itself) updates atomically.
+                    try store.setNodeProperty(reprobe_id, merge_key, merge_value);
+                    for (on_create_props) |kv| {
+                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                        try store.setNodeProperty(reprobe_id, kv.key, kv.value);
+                    }
+                }
+                return reprobe_id;
+            },
             .not_indexable => return error.MergeValueNotIndexable,
             .not_found => {},
         }
@@ -1947,6 +1967,7 @@ pub const StorageAdapter = struct {
         merge_value: graph_store.PropertyValue,
         on_create_props: []const PropKV,
         txn_id_opt: ?u64,
+        apply_on_match: bool,
     ) !u64 {
         _ = txn_id_opt; // reserved for future extensions; thread-local is source of truth.
 
@@ -1958,17 +1979,25 @@ pub const StorageAdapter = struct {
         // branch is unexpected — surface a distinct error so a
         // test / trace can differentiate "real miss" from "misclassified
         // fast-path candidate".
+        //
+        // When `apply_on_match` is true (bare-`SET` MERGE per GAP #59) we
+        // skip the lock-free Phase-1 fast return so the SET clauses
+        // commit inside the statement txn (single WAL fsync) along with
+        // the merge-prop index update.
         var existing_id: u64 = undefined;
-        switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
-            .found => return existing_id,
-            .not_found => {},
-            .not_indexable => return error.MergeValueNotIndexable,
+        if (!apply_on_match) {
+            switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
+                .found => return existing_id,
+                .not_found => {},
+                .not_indexable => return error.MergeValueNotIndexable,
+            }
         }
 
-        // Phase 2: no node yet — insert.  Match the executor's R8/R9
-        // fsync batching: join an open session/statement txn or open one
-        // so the createNode + N × setNodeProperty commit with a single
-        // WAL fsync.  See `bulkInsertNode` for the full rationale.
+        // Phase 2: no node yet (or apply_on_match) — insert / upsert.
+        // Match the executor's R8/R9 fsync batching: join an open
+        // session/statement txn or open one so the createNode + N ×
+        // setNodeProperty commit with a single WAL fsync.  See
+        // `bulkInsertNode` for the full rationale.
         var stmt_txn: StatementTxn = undefined;
         var stmt_txn_open = false;
         const session_covers = if (sessionEngineTxnGraph()) |g|
@@ -1989,14 +2018,22 @@ pub const StorageAdapter = struct {
         }
         errdefer if (stmt_txn_open) stmt_txn.abort();
 
-        // Concurrent-MERGE safety re-check: another thread that raced
-        // through Phase 1 with us may have committed the new node before
-        // we opened our statement txn.  Re-probe; if a peer won the
-        // race, return their id without inserting.  The graph-store
-        // mutex serialises the probe, so this double-check catches the
-        // narrow window between our own Phase 1 miss and createNodeWithGraph.
+        // Re-probe under the txn.  For ON-CREATE-SET-only callers this
+        // catches the narrow Phase-1-miss/Phase-2-hit race; for
+        // apply_on_match callers this is the only probe (Phase 1 was
+        // skipped) and on hit we apply the SET clauses to the existing
+        // node before returning (true upsert semantics).
         switch (store.lookupMergeCandidate(graph_name, label, merge_key, merge_value, &existing_id)) {
             .found => {
+                if (apply_on_match) {
+                    try store.setNodeProperty(existing_id, merge_key, merge_value);
+                    for (on_create_props) |kv| {
+                        if (std.mem.eql(u8, kv.key, merge_key)) continue;
+                        try store.setNodeProperty(existing_id, kv.key, kv.value);
+                    }
+                    if (stmt_txn_open) try stmt_txn.commit();
+                    return existing_id;
+                }
                 if (stmt_txn_open) stmt_txn.abort();
                 return existing_id;
             },

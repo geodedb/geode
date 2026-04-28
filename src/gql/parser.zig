@@ -4573,11 +4573,16 @@ pub const Parser = struct {
         }
 
         // Handle bare SET (applies to both create and match paths) - GAP #59
+        // Track the bare-SET case so the bulk fast path can recognise that
+        // on_create and on_match carry the same clauses by construction and
+        // accept the MERGE despite on_match being non-empty.
+        var set_is_bare = false;
         if (self.cur.kind == .SET) {
             self.advance();
             const clauses = try self.parseSetClauses();
             try on_create.appendSlice(self.arena.allocator(), clauses);
             try on_match.appendSlice(self.arena.allocator(), clauses);
+            set_is_bare = true;
         }
 
         // Optional RETURN clause
@@ -4600,6 +4605,7 @@ pub const Parser = struct {
             .pattern = pattern,
             .on_create = try on_create.toOwnedSlice(self.arena.allocator()),
             .on_match = try on_match.toOwnedSlice(self.arena.allocator()),
+            .set_is_bare = set_is_bare,
             .return_clause = return_clause,
         } };
     }

@@ -150,10 +150,17 @@ pub const SimpleNodeMergeSpec = struct {
     /// The merge value expression (literal or bound parameter).  The
     /// dispatcher must `evalExpr` this at call time.
     merge_value: *const ast.Expr,
-    /// Flat list of `n.prop = literal_or_param` pairs from the
-    /// `ON CREATE SET` clause.  Empty slice when the MERGE has no
-    /// `ON CREATE SET` trailer.
+    /// Flat list of `n.prop = literal_or_param` pairs from the SET clauses.
+    /// For `ON CREATE SET` only: applied on create branch only.
+    /// For bare `SET` (`apply_on_match = true`): same payload applies on
+    /// both create and match — the parser duplicated it into `on_match`,
+    /// and the detector recognises this via `MergeStatement.set_is_bare`.
+    /// Empty slice when the MERGE has no SET trailer.
     on_create_props: []const PropExpr,
+    /// True when `on_create_props` should also be applied to a node found
+    /// via the merge key (bare-`SET` MERGE per GAP #59).  False for the
+    /// classic `ON CREATE SET`-only shape, which is a no-op on match.
+    apply_on_match: bool = false,
 };
 
 /// Inspect `program` and return the bulk-ingest shape we can fast-path, or
@@ -272,8 +279,13 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
     // No RETURN — RETURN materialisation requires the regular executor.
     if (m.return_clause != null) return null;
 
-    // No ON MATCH SET — fast path is create-or-no-op only.
-    if (m.on_match.len != 0) return null;
+    // ON MATCH SET handling: the classic fast path is create-or-no-op only,
+    // but a bare `SET` after MERGE (GAP #59) duplicates the same clauses
+    // into both `on_create` and `on_match` and sets `set_is_bare = true`.
+    // Accept that case and let the executor apply the clauses on the match
+    // branch as well.  Reject any other `on_match` shape (an explicit
+    // `ON MATCH SET` clause whose payload may diverge from `on_create`).
+    if (m.on_match.len != 0 and !m.set_is_bare) return null;
 
     // Exactly one chain in the MERGE pattern.
     if (m.pattern.chains.len != 1) return null;
@@ -340,6 +352,7 @@ fn buildSimpleNodeMergeSpec(m: ast.MergeStatement) ?SimpleNodeMergeSpec {
         .merge_key = merge_prop.key,
         .merge_value = merge_prop.value,
         .on_create_props = buf[0..n_set],
+        .apply_on_match = m.set_is_bare and m.on_match.len > 0,
     };
 }
 

@@ -128,6 +128,7 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
             .{ .key = "name", .value = .{ .String = "alpha" } },
         },
         null,
+        false,
     );
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -145,6 +146,7 @@ test "bulkMergeNode returns existing id + does not duplicate posting" {
             .{ .key = "name", .value = .{ .String = "Bob" } },
         },
         null,
+        false,
     );
     try testing.expectEqual(first_id, second_id);
     try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "Widget"));
@@ -175,6 +177,7 @@ test "bulkMergeNode inserts label + merge key + all ON CREATE props" {
             .{ .key = "age", .value = .{ .Int = 30 } },
         },
         null,
+        false,
     );
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -230,6 +233,7 @@ test "bulkMergeNode parity with executor path" {
             .{ .key = "age", .value = .{ .Int = 30 } },
         },
         null,
+        false,
     );
 
     const store = graph_store.getGlobalStore(testing.allocator);
@@ -298,6 +302,7 @@ fn concurrentMergeWorker(ctx: *RaceWorkerCtx) void {
         .{ .String = "X" },
         &.{},
         null,
+        false,
     ) catch {
         _ = ctx.errored.fetchAdd(1, .monotonic);
         return;
@@ -371,4 +376,238 @@ test "concurrent MERGE on same key inserts exactly one node" {
     );
     try testing.expect(res == .found);
     try testing.expectEqual(first_id, verify_id);
+}
+
+// ----------------------------------------------------------------------
+// 5. Bare-SET MERGE upsert via apply_on_match=true.
+//
+// Covers the GAP #59 case where the user wrote `MERGE (...) SET ...`
+// (no ON CREATE / ON MATCH qualifier).  The parser duplicates the SET
+// clauses into both `on_create` and `on_match` and sets
+// `set_is_bare = true`; the bulk fast-path detector forwards that to
+// the spec as `apply_on_match = true`, and the executor calls
+// bulkMergeNode with the new flag so existing nodes are upserted
+// instead of treated as no-ops on the match branch.
+// ----------------------------------------------------------------------
+
+test "bulkMergeNode apply_on_match creates missing node with props" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+
+    const node_id = try adapter.bulkMergeNode(
+        "default",
+        "User",
+        "node_id",
+        .{ .String = "u1" },
+        &.{
+            .{ .key = "name", .value = .{ .String = "alice" } },
+            .{ .key = "age", .value = .{ .Int = 30 } },
+        },
+        null,
+        true, // apply_on_match
+    );
+
+    const store = graph_store.getGlobalStore(testing.allocator);
+    const node = store.nodes.getPtr(node_id) orelse return error.NodeMissing;
+
+    try testing.expectEqual(@as(usize, 1), node.labels.len);
+    try testing.expectEqualStrings("User", node.labels[0]);
+
+    const node_id_prop = node.properties.get("node_id") orelse return error.MissingNodeId;
+    try testing.expectEqualStrings("u1", node_id_prop.String);
+    const name_prop = node.properties.get("name") orelse return error.MissingName;
+    try testing.expectEqualStrings("alice", name_prop.String);
+    const age_prop = node.properties.get("age") orelse return error.MissingAge;
+    try testing.expectEqual(@as(i64, 30), age_prop.Int);
+
+    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
+}
+
+test "bulkMergeNode apply_on_match updates existing node (true upsert)" {
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
+
+    // First call: create the node with name=alice.
+    const first_id = try adapter.bulkMergeNode(
+        "default",
+        "User",
+        "node_id",
+        .{ .String = "u1" },
+        &.{
+            .{ .key = "name", .value = .{ .String = "alice" } },
+        },
+        null,
+        true,
+    );
+
+    // Second call with the same merge key but different name — apply_on_match
+    // must overwrite the existing prop instead of returning early like the
+    // ON-CREATE-SET-only path does.
+    const second_id = try adapter.bulkMergeNode(
+        "default",
+        "User",
+        "node_id",
+        .{ .String = "u1" },
+        &.{
+            .{ .key = "name", .value = .{ .String = "bob" } },
+            .{ .key = "email", .value = .{ .String = "bob@example.com" } },
+        },
+        null,
+        true,
+    );
+
+    try testing.expectEqual(first_id, second_id);
+    try testing.expectEqual(@as(usize, 1), labelPostingLen(store, "default", "User"));
+
+    const node = store.nodes.getPtr(first_id) orelse return error.NodeMissing;
+
+    // Property MUST have been updated (this is the bug we are fixing —
+    // bulkMergeNode without apply_on_match would still report 'alice').
+    const name_prop = node.properties.get("name") orelse return error.MissingName;
+    try testing.expectEqualStrings("bob", name_prop.String);
+
+    // New prop added on the upsert is also present.
+    const email_prop = node.properties.get("email") orelse return error.MissingEmail;
+    try testing.expectEqualStrings("bob@example.com", email_prop.String);
+}
+
+test "bulkMergeNode apply_on_match=false preserves ON CREATE SET no-op semantics" {
+    // Regression guard — the new apply_on_match parameter MUST default to
+    // create-or-no-op on `false` so explicit ON CREATE SET clients are
+    // unaffected by this fix.
+    var h = try Harness.init(testing.allocator);
+    defer h.deinit();
+
+    const adapter = graph_store.getGlobalAdapter() orelse return error.AdapterNotInitialized;
+    const store = graph_store.getGlobalStore(testing.allocator);
+
+    const first_id = try adapter.bulkMergeNode(
+        "default",
+        "User",
+        "node_id",
+        .{ .String = "u2" },
+        &.{
+            .{ .key = "name", .value = .{ .String = "alice" } },
+        },
+        null,
+        false, // ON CREATE SET-only semantics
+    );
+
+    const second_id = try adapter.bulkMergeNode(
+        "default",
+        "User",
+        "node_id",
+        .{ .String = "u2" },
+        &.{
+            // These would be applied on match ONLY if apply_on_match=true.
+            .{ .key = "name", .value = .{ .String = "bob" } },
+        },
+        null,
+        false,
+    );
+
+    try testing.expectEqual(first_id, second_id);
+    const node = store.nodes.getPtr(first_id) orelse return error.NodeMissing;
+    const name_prop = node.properties.get("name") orelse return error.MissingName;
+    // On-match is a no-op: original "alice" must remain.
+    try testing.expectEqualStrings("alice", name_prop.String);
+}
+
+// ----------------------------------------------------------------------
+// 6. End-to-end: bare SET MERGE through the parser → detector path.
+//
+// Verifies that the parser flags `set_is_bare = true` for a bare SET,
+// the detector accepts it (vs. rejecting on `on_match.len != 0`), and
+// the resulting spec carries `apply_on_match = true`.  This is the
+// regression test for the msft-graph seed-stall — it locks in the
+// classification at the AST/spec layer so any future detector change
+// that skips the bare-SET case fails fast here, before silently
+// dropping seeds back to the slow path.
+// ----------------------------------------------------------------------
+
+test "parser marks bare SET MERGE with set_is_bare=true" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var parsed = try geode.parseGql(
+        "MERGE (n:User {node_id: 'u1'}) SET n.name = 'alice', n.age = 30",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.program.statements.len);
+    const merge = switch (parsed.program.statements[0]) {
+        .Merge => |m| m,
+        else => return error.WrongStatementKind,
+    };
+
+    try testing.expect(merge.set_is_bare);
+    // Parser duplicated the bare SET into both clauses.
+    try testing.expectEqual(@as(usize, 2), merge.on_create.len);
+    try testing.expectEqual(@as(usize, 2), merge.on_match.len);
+}
+
+test "parser leaves set_is_bare=false for explicit ON CREATE SET" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var parsed = try geode.parseGql(
+        "MERGE (n:User {node_id: 'u1'}) ON CREATE SET n.name = 'alice'",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    const merge = switch (parsed.program.statements[0]) {
+        .Merge => |m| m,
+        else => return error.WrongStatementKind,
+    };
+    try testing.expect(!merge.set_is_bare);
+    try testing.expectEqual(@as(usize, 1), merge.on_create.len);
+    try testing.expectEqual(@as(usize, 0), merge.on_match.len);
+}
+
+test "bulk fast-path detector accepts bare SET, sets apply_on_match=true" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var parsed = try geode.parseGql(
+        "MERGE (n:User {node_id: 'u1'}) SET n.name = 'alice'",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    const spec_opt = geode.bulk_ingest.matchSimpleNodeMergeSpec(&parsed.program);
+    const spec = spec_opt orelse return error.DetectorRejectedBareSet;
+    try testing.expect(spec.apply_on_match);
+    try testing.expectEqualStrings("User", spec.label);
+    try testing.expectEqualStrings("node_id", spec.merge_key);
+    try testing.expectEqual(@as(usize, 1), spec.on_create_props.len);
+    try testing.expectEqualStrings("name", spec.on_create_props[0].key);
+}
+
+test "bulk fast-path detector rejects explicit ON MATCH SET" {
+    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var parsed = try geode.parseGql(
+        "MERGE (n:User {node_id: 'u1'}) ON CREATE SET n.a = 1 ON MATCH SET n.a = 2",
+        arena.allocator(),
+    );
+    defer parsed.deinit();
+
+    // Explicit ON MATCH SET (where on_match.len != 0 AND set_is_bare=false)
+    // has divergent payloads; fast path can't currently express that, so
+    // the detector must continue to reject it and fall back to the slow
+    // executor.
+    const spec_opt = geode.bulk_ingest.matchSimpleNodeMergeSpec(&parsed.program);
+    try testing.expect(spec_opt == null);
 }

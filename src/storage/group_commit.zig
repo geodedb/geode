@@ -90,6 +90,11 @@ pub const ApplyOp = union(enum) {
         result: ApplyResult,
         /// Reserved by Phase 2.2 stage-1 workers — see bulk_insert_node.
         assigned_id: u64 = 0,
+        /// True when the originating MERGE was a bare-`SET` form
+        /// (GAP #59) — the SET clauses must apply on both create and
+        /// match branches.  Forwarded to
+        /// `bulkMergeNodeWithReservedId(..., apply_on_match = true)`.
+        apply_on_match: bool = false,
     },
 
     pub fn resultPtr(self: *ApplyOp) *ApplyResult {
@@ -436,6 +441,7 @@ pub const ShardedCoordinator = struct {
                         p.merge_key,
                         p.merge_value,
                         p.on_create_props,
+                        p.apply_on_match,
                     )) |id| {
                         res.node_or_edge_id = id;
                     } else |e| {

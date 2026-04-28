@@ -369,6 +369,13 @@ pub const MergeStatement = struct {
     pattern: GraphPattern,
     on_create: []SetClause = &.{},
     on_match: []SetClause = &.{},
+    // True when the user wrote a bare `SET` after MERGE (applies on both
+    // create and match paths, GAP #59). The parser also duplicates the
+    // clauses into `on_create` and `on_match` for slow-path consumers, so
+    // `on_create == on_match` by construction when this is true.
+    // Bulk fast path uses this to recognise a write-on-both-branches MERGE
+    // that would otherwise be rejected by the `on_match.len != 0` guard.
+    set_is_bare: bool = false,
     return_clause: ?ReturnClause = null,
 };
 

@@ -758,8 +758,14 @@ fn executeBulkSimpleMerge(
     // exists, we're done: ON MATCH is a no-op (detector rejected
     // `ON MATCH SET`) and we send back the same 0-row response shape
     // the regular executor emits for a no-RETURN hit-path MERGE.
+    //
+    // For bare-`SET` MERGE (`spec.apply_on_match = true`) we skip
+    // Phase 1 entirely — the SET clauses must apply on the match
+    // branch, which requires the same write-side critical section as
+    // the create branch.  Going straight to Phase 2 keeps the apply
+    // atomic with the merge_prop_index update.
     var found_in_phase1 = false;
-    {
+    if (!spec.apply_on_match) {
         const read_handle = graph_store.acquireGraphReadLockTagged(query_graph_name, .bulk_merge);
         defer graph_store.releaseGraphLock(read_handle);
         const res = adapter.lookupNodeByMergeKey(
@@ -787,6 +793,8 @@ fn executeBulkSimpleMerge(
         // re-probes the index inside the write critical section in both
         // paths so a concurrent writer that won the Phase 1 race is
         // detected and we return their id without double-inserting.
+        // For `apply_on_match` the same call also applies the SET
+        // clauses to an existing match before returning (true upsert).
         if (group_commit.isEnabled()) {
             const coord = group_commit.getOrStartCoordinator(
                 graph_store.global_allocator(),
@@ -805,6 +813,7 @@ fn executeBulkSimpleMerge(
                 .merge_value = merge_value_pv,
                 .on_create_props = kvs,
                 .result = .{},
+                .apply_on_match = spec.apply_on_match,
             } };
             _ = coord.submit(&op) catch |err| {
                 const info = proto_util.mapError(err);
@@ -836,6 +845,7 @@ fn executeBulkSimpleMerge(
                 merge_value_pv,
                 kvs,
                 null,
+                spec.apply_on_match,
             );
             _ = node_id_res catch |err| {
                 graph_store.releaseGraphLock(lock_handle);
@@ -849,11 +859,10 @@ fn executeBulkSimpleMerge(
             mut_sample.markLockReleased();
         }
     } else {
-        // Phase 1 hit: the merge id is already in the store.  ON MATCH
-        // is a no-op (detector rejected `ON MATCH SET`), so there is
-        // nothing to do beyond closing out the timing sample — the
-        // caller sent no RETURN clause, so the wire response does not
-        // need to reference the matched id.
+        // Phase 1 hit on the ON-CREATE-SET-only path: the merge id is
+        // already in the store, ON MATCH is a no-op, nothing to apply.
+        // (The bare-SET / apply_on_match case never enters this branch —
+        // it skipped Phase 1 above and always took the write path.)
         mut_sample.markExecuteDone();
     }
 
