@@ -288,3 +288,26 @@ test "distributed and cluster metrics register" {
         "geode_distributed_query_partial_failure_count",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
+
+test "CDC and analytics metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordCdcEvent(.node_change, .success);
+    otel_metrics.recordCdcSinkError(.kafka, "ConnectionRefused");
+    otel_metrics.recordCdcEventDropped("queue_full");
+    otel_metrics.recordAnalyticsEvent("aggregate", .success);
+    otel_metrics.recordAnalyticsProcessing("aggregate", 0.005);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_cdc_event_count",
+        "geode_cdc_sink_error_count",
+        "geode_cdc_event_dropped",
+        "geode_analytics_event_count",
+        "geode_analytics_event_processing_duration",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

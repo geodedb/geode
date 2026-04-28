@@ -135,6 +135,12 @@ pub fn shutdown() void {
     g_distributed = null;
     g_cluster_node_count_provider = null;
     g_shard_count_provider = null;
+    // CDC + analytics metrics state reset.
+    g_cdc = null;
+    g_cdc_lag_provider = null;
+    g_cdc_queue_depth_provider = null;
+    g_analytics = null;
+    g_analytics_queue_depth_provider = null;
     g_allocator = null;
 }
 
@@ -1792,4 +1798,231 @@ pub fn recordDistributedFanout(level: ConsistencyLevel, shards: u64) void {
 pub fn recordPartialFailure(error_type: []const u8) void {
     const d = ensureDistributed() catch return;
     d.partial_failure_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
+}
+
+// -------------------------------------------------------------------------
+// CDC + real-time analytics metrics — geode.cdc.* / geode.analytics.* per
+// spec §4.10 P0.
+//
+// CDC metrics track change-data-capture event throughput, pipeline lag,
+// queue health, and sink delivery errors.  Analytics metrics track
+// real-time aggregation event throughput, queue depth, and processing
+// latency.
+//
+// Privacy / cardinality: event_type and sink_type are enums (bounded).
+// drop reason and error_type MUST be low-cardinality literals.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-012; FEATURE="OTel Instrumentation"; ASPECT=CdcAnalytics; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Kind of CDC event that was emitted.
+pub const CdcEventType = enum { node_change, edge_change, schema_change, txn_marker };
+
+/// Downstream sink type that a CDC event is delivered to.
+pub const SinkType = enum { kafka, http_webhook, file, s3 };
+
+const CdcMetrics = struct {
+    // geode.cdc.event.count — events emitted by type and outcome
+    event_count: otel.api.metrics.Counter,
+    // geode.cdc.sink.error.count — delivery errors per sink
+    sink_error_count: otel.api.metrics.Counter,
+    // geode.cdc.event.dropped — events dropped before delivery
+    event_dropped: otel.api.metrics.Counter,
+};
+
+var g_cdc: ?CdcMetrics = null;
+
+// Observable gauge function pointers for CDC lag and queue depth.
+var g_cdc_lag_provider: ?*const fn () f64 = null;
+var g_cdc_queue_depth_provider: ?*const fn () i64 = null;
+
+fn ensureCdc() !*CdcMetrics {
+    if (g_cdc) |*c| return c;
+    const m = meter();
+    g_cdc = CdcMetrics{
+        .event_count = try m.counter(.{
+            .name = "geode.cdc.event.count",
+            .unit = "{event}",
+            .kind = .counter,
+            .description = "Total CDC events emitted by event type and outcome",
+        }),
+        .sink_error_count = try m.counter(.{
+            .name = "geode.cdc.sink.error.count",
+            .unit = "{error}",
+            .kind = .counter,
+            .description = "CDC delivery errors per sink type and error classifier",
+        }),
+        .event_dropped = try m.counter(.{
+            .name = "geode.cdc.event.dropped",
+            .unit = "{event}",
+            .kind = .counter,
+            .description = "CDC events dropped before delivery (queue overflow, serialization error, etc.)",
+        }),
+    };
+    return &g_cdc.?;
+}
+
+fn observeCdcLag(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_cdc_lag_provider) |fnp| {
+        observer.observeDouble(fnp(), &.{});
+    }
+}
+
+fn observeCdcQueueDepth(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_cdc_queue_depth_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+// ---- CDC public API ----
+
+/// Record a CDC event emission.
+/// `event_type` is a bounded enum — no document content flows here.
+/// `outcome` is `.success` for events acknowledged by the sink, `.error_`
+/// when the sink rejected or the delivery timed out.
+pub fn recordCdcEvent(event_type: CdcEventType, outcome: Outcome) void {
+    const c = ensureCdc() catch return;
+    c.event_count.add(1, &.{
+        .{ .key = "geode.cdc.event_type", .value = .{ .string = @tagName(event_type) } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Register an observable gauge reporting the current CDC pipeline lag in
+/// seconds (wall-clock delay between event creation and sink acknowledgement).
+/// `provider_fn` MUST be a module-lifetime pointer; called on each scrape.
+pub fn registerCdcLagGauge(provider_fn: *const fn () f64) !void {
+    g_cdc_lag_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.cdc.lag",
+            .unit = "s",
+            .kind = .observable_gauge,
+            .description = "Current CDC pipeline lag in seconds (event creation to sink acknowledgement)",
+        },
+        observeCdcLag,
+        null,
+    );
+}
+
+/// Register an observable gauge reporting the current CDC in-flight queue
+/// depth (events buffered pending delivery to sink).
+/// `provider_fn` MUST be a module-lifetime pointer; called on each scrape.
+pub fn registerCdcQueueDepthGauge(provider_fn: *const fn () i64) !void {
+    g_cdc_queue_depth_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.cdc.queue.depth",
+            .unit = "{event}",
+            .kind = .observable_gauge,
+            .description = "Current number of CDC events buffered in the delivery queue",
+        },
+        observeCdcQueueDepth,
+        null,
+    );
+}
+
+/// Record a CDC sink delivery error.
+/// `sink` is an enum (bounded).  `error_type` MUST be a low-cardinality
+/// classifier (e.g. "ConnectionRefused", "SerializationFailed").  NEVER
+/// pass a topic name, URL, or document content here.
+pub fn recordCdcSinkError(sink: SinkType, error_type: []const u8) void {
+    const c = ensureCdc() catch return;
+    c.sink_error_count.add(1, &.{
+        .{ .key = "geode.sink.type", .value = .{ .string = @tagName(sink) } },
+        .{ .key = "error.type", .value = .{ .string = error_type } },
+    });
+}
+
+/// Record a CDC event that was dropped before delivery.
+/// `reason` MUST be a low-cardinality classifier (e.g. "queue_full",
+/// "serialization_error").  NEVER pass document content here.
+pub fn recordCdcEventDropped(reason: []const u8) void {
+    const c = ensureCdc() catch return;
+    c.event_dropped.add(1, &.{.{ .key = "geode.drop.reason", .value = .{ .string = reason } }});
+}
+
+// ---- Real-time analytics metrics ----
+
+const AnalyticsMetrics = struct {
+    // geode.analytics.event.count — analytics events processed by type
+    event_count: otel.api.metrics.Counter,
+    // geode.analytics.event.processing.duration — event processing latency
+    processing_duration: otel.api.metrics.Histogram,
+};
+
+var g_analytics: ?AnalyticsMetrics = null;
+
+// Observable gauge function pointer for analytics queue depth.
+var g_analytics_queue_depth_provider: ?*const fn () i64 = null;
+
+fn ensureAnalytics() !*AnalyticsMetrics {
+    if (g_analytics) |*a| return a;
+    const m = meter();
+    g_analytics = AnalyticsMetrics{
+        .event_count = try m.counter(.{
+            .name = "geode.analytics.event.count",
+            .unit = "{event}",
+            .kind = .counter,
+            .description = "Total real-time analytics events processed by event type and outcome",
+        }),
+        .processing_duration = try m.histogram(.{
+            .name = "geode.analytics.event.processing.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Real-time analytics event processing latency in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+    };
+    return &g_analytics.?;
+}
+
+fn observeAnalyticsQueueDepth(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_analytics_queue_depth_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+// ---- Analytics public API ----
+
+/// Record a real-time analytics event processed by the streaming engine.
+/// `event_type` MUST be a low-cardinality classifier (e.g. "aggregate",
+/// "pattern_match", "anomaly").  NEVER pass query text or document content.
+pub fn recordAnalyticsEvent(event_type: []const u8, outcome: Outcome) void {
+    const a = ensureAnalytics() catch return;
+    a.event_count.add(1, &.{
+        .{ .key = "geode.analytics.event_type", .value = .{ .string = event_type } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Register an observable gauge reporting the current analytics event queue
+/// depth (events buffered pending processing).
+/// `provider_fn` MUST be a module-lifetime pointer; called on each scrape.
+pub fn registerAnalyticsQueueGauge(provider_fn: *const fn () i64) !void {
+    g_analytics_queue_depth_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.analytics.event.queue.depth",
+            .unit = "{event}",
+            .kind = .observable_gauge,
+            .description = "Current number of analytics events buffered pending processing",
+        },
+        observeAnalyticsQueueDepth,
+        null,
+    );
+}
+
+/// Record the processing duration for a real-time analytics event.
+/// `event_type` MUST be a low-cardinality classifier (same domain as
+/// `recordAnalyticsEvent`).  `duration_s` is wall-clock seconds from
+/// event ingestion to completion.
+pub fn recordAnalyticsProcessing(event_type: []const u8, duration_s: f64) void {
+    const a = ensureAnalytics() catch return;
+    a.processing_duration.record(duration_s, &.{
+        .{ .key = "geode.analytics.event_type", .value = .{ .string = event_type } },
+    });
 }
