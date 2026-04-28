@@ -266,3 +266,25 @@ test "security metrics register without identifier leakage" {
         try std.testing.expect(std.mem.indexOf(u8, body, needle) == null);
     }
 }
+
+test "distributed and cluster metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordShardQuery(0, .success);
+    otel_metrics.recordDistributedQuery(.strong, 0.05, .success);
+    otel_metrics.recordDistributedFanout(.strong, 4);
+    otel_metrics.recordPartialFailure("ShardUnavailable");
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_shard_query_count",
+        "geode_distributed_query_count",
+        "geode_distributed_query_duration",
+        "geode_distributed_query_fanout",
+        "geode_distributed_query_partial_failure_count",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

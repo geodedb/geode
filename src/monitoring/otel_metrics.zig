@@ -131,6 +131,10 @@ pub fn shutdown() void {
     // Security / RLS / audit / TDE metrics state reset.
     g_security = null;
     g_audit_queue_depth_provider = null;
+    // Distributed + cluster metrics state reset.
+    g_distributed = null;
+    g_cluster_node_count_provider = null;
+    g_shard_count_provider = null;
     g_allocator = null;
 }
 
@@ -1602,4 +1606,190 @@ pub fn recordTdeBytes(op: CryptoOp, n_bytes: u64) void {
 pub fn recordTdeError(error_type: []const u8) void {
     const s = ensureSecurity() catch return;
     s.tde_error_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
+}
+
+// -------------------------------------------------------------------------
+// Distributed + cluster metrics — geode.cluster.* / geode.shard.* /
+// geode.distributed.* per spec §4.9 P0.
+//
+// Cluster metrics are registered unconditionally so the facade API is
+// always available. The caller is responsible for guarding emission behind
+// an `GEODE_CLUSTER_TOKEN` check at the call site — when running in
+// single-node mode the record* functions simply never get called.
+//
+// Privacy / cardinality rule: `node_id_low_card` MUST be a stable, bounded
+// identifier such as "node-1", "node-2" (ordinal or role-based). It MUST
+// NOT be a UUID, IP address, or any other unbounded value.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-011; FEATURE="OTel Instrumentation"; ASPECT=DistributedCluster; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Distributed query consistency model.
+pub const ConsistencyLevel = enum { eventual, strong, linearizable };
+
+const DistributedMetrics = struct {
+    // geode.shard.query.count — per-shard query counter
+    shard_query_count: otel.api.metrics.Counter,
+    // geode.distributed.query.count — cluster-wide distributed query counter
+    dist_query_count: otel.api.metrics.Counter,
+    // geode.distributed.query.duration — distributed query end-to-end latency
+    dist_query_duration: otel.api.metrics.Histogram,
+    // geode.distributed.query.fanout — number of shards contacted per query
+    dist_query_fanout: otel.api.metrics.Histogram,
+    // geode.distributed.query.partial_failure.count
+    partial_failure_count: otel.api.metrics.Counter,
+    // geode.cluster.node.health — per-node health (1 = healthy, 0 = unhealthy)
+    node_health: otel.api.metrics.Counter,
+};
+
+var g_distributed: ?DistributedMetrics = null;
+
+// Observable gauge function pointers for the two cluster-level gauges.
+var g_cluster_node_count_provider: ?*const fn () i64 = null;
+var g_shard_count_provider: ?*const fn () i64 = null;
+
+fn ensureDistributed() !*DistributedMetrics {
+    if (g_distributed) |*d| return d;
+    const m = meter();
+    g_distributed = DistributedMetrics{
+        .shard_query_count = try m.counter(.{
+            .name = "geode.shard.query.count",
+            .unit = "{query}",
+            .kind = .counter,
+            .description = "Total queries routed to each shard by outcome",
+        }),
+        .dist_query_count = try m.counter(.{
+            .name = "geode.distributed.query.count",
+            .unit = "{query}",
+            .kind = .counter,
+            .description = "Total distributed (multi-shard) queries by consistency level and outcome",
+        }),
+        .dist_query_duration = try m.histogram(.{
+            .name = "geode.distributed.query.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "End-to-end distributed query duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .dist_query_fanout = try m.histogram(.{
+            .name = "geode.distributed.query.fanout",
+            .unit = "{shard}",
+            .kind = .histogram,
+            .description = "Number of shards contacted per distributed query",
+            .explicit_buckets = .{ .boundaries = buckets_rows },
+        }),
+        .partial_failure_count = try m.counter(.{
+            .name = "geode.distributed.query.partial_failure.count",
+            .unit = "{failure}",
+            .kind = .counter,
+            .description = "Distributed queries that completed with one or more shard failures",
+        }),
+        .node_health = try m.counter(.{
+            .name = "geode.cluster.node.health",
+            .unit = "1",
+            .kind = .counter,
+            .description = "Cluster node health state change events (1=healthy, 0=unhealthy transitions)",
+        }),
+    };
+    return &g_distributed.?;
+}
+
+fn observeClusterNodeCount(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_cluster_node_count_provider) |fnp| {
+        observer.observeInt(fnp(), &.{.{ .key = "geode.cluster.role", .value = .{ .string = "any" } }});
+    }
+}
+
+fn observeShardCount(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_shard_count_provider) |fnp| {
+        observer.observeInt(fnp(), &.{.{ .key = "geode.cluster.role", .value = .{ .string = "any" } }});
+    }
+}
+
+/// Register an observable gauge that reports the current cluster node count.
+/// `provider_fn` MUST be a module-lifetime function pointer; called on each
+/// Prometheus scrape. Idempotent — duplicate registrations are ignored by
+/// the OTel SDK. Only call when `GEODE_CLUSTER_TOKEN` is set.
+pub fn registerClusterNodeCountGauge(provider_fn: *const fn () i64) !void {
+    g_cluster_node_count_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.cluster.node.count",
+            .unit = "{node}",
+            .kind = .observable_gauge,
+            .description = "Current number of nodes in the cluster",
+        },
+        observeClusterNodeCount,
+        null,
+    );
+}
+
+/// Register an observable gauge that reports the current shard count.
+/// `provider_fn` MUST be a module-lifetime function pointer; called on each
+/// Prometheus scrape. Only call when `GEODE_CLUSTER_TOKEN` is set.
+pub fn registerShardCountGauge(provider_fn: *const fn () i64) !void {
+    g_shard_count_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.shard.count",
+            .unit = "{shard}",
+            .kind = .observable_gauge,
+            .description = "Current number of active shards in the cluster",
+        },
+        observeShardCount,
+        null,
+    );
+}
+
+/// Record a cluster node health state change.
+/// `node_id_low_card` MUST be a stable, bounded identifier (e.g. "node-1").
+/// It MUST NOT be a UUID, IP address, or other unbounded value.
+/// Call whenever a health check transitions a node between states.
+pub fn recordClusterNodeHealth(node_id_low_card: []const u8, healthy: bool) void {
+    const d = ensureDistributed() catch return;
+    const v: i64 = if (healthy) 1 else 0;
+    d.node_health.add(v, &.{.{ .key = "geode.cluster.node_id", .value = .{ .string = node_id_low_card } }});
+}
+
+/// Record a query routed to a specific shard.
+/// `shard_id` is bounded (≤32 per Geode spec) so it is safe as an attribute.
+pub fn recordShardQuery(shard_id: u32, outcome: Outcome) void {
+    const d = ensureDistributed() catch return;
+    var shard_buf: [12]u8 = undefined;
+    const shard_str = std.fmt.bufPrint(&shard_buf, "shard-{d}", .{shard_id}) catch "shard-?";
+    d.shard_query_count.add(1, &.{
+        .{ .key = "geode.shard.id", .value = .{ .string = shard_str } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Record a completed distributed (multi-shard) query. Bumps both the counter
+/// and the latency histogram so they remain correlated per spec §4.9.
+pub fn recordDistributedQuery(level: ConsistencyLevel, duration_s: f64, outcome: Outcome) void {
+    const d = ensureDistributed() catch return;
+    const level_attr = attrs.Entry{ .key = "geode.consistency.level", .value = .{ .string = @tagName(level) } };
+    const outcome_attr = attrs.Entry{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    d.dist_query_count.add(1, &.{ level_attr, outcome_attr });
+    d.dist_query_duration.record(duration_s, &.{ level_attr, outcome_attr });
+}
+
+/// Record the shard fan-out for a distributed query.
+/// `shards` is the number of shards contacted; `level` is the consistency
+/// model that determined the fan-out set.
+pub fn recordDistributedFanout(level: ConsistencyLevel, shards: u64) void {
+    const d = ensureDistributed() catch return;
+    d.dist_query_fanout.record(@floatFromInt(shards), &.{
+        .{ .key = "geode.consistency.level", .value = .{ .string = @tagName(level) } },
+    });
+}
+
+/// Record a partial failure on a distributed query (one or more shards failed
+/// but the query still returned a result).
+/// `error_type` MUST be a low-cardinality classifier (e.g. "ShardUnavailable",
+/// "ShardTimeout"). NEVER pass a node ID or query text here.
+pub fn recordPartialFailure(error_type: []const u8) void {
+    const d = ensureDistributed() catch return;
+    d.partial_failure_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
 }
