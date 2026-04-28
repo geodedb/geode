@@ -1786,8 +1786,14 @@ pub fn handleQuicConnection(
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
-    // Use destroyConnection to properly remove from transport list, close, and free resources
-    defer transport.destroyConnection(conn);
+    // 2026-04-28: conn destruction is gated on `destroy_conn`.  The acceptor
+    // wait defer (later in this function) clears it if the acceptor doesn't
+    // exit within the bounded deadline — leaving the conn alive (a leak)
+    // is preferable to freeing it under a still-running acceptor whose
+    // next `tryAcceptStream` would UAF.  The QUIC library will eventually
+    // idle-timeout the leaked conn at the protocol layer.
+    var destroy_conn: bool = true;
+    defer if (destroy_conn) transport.destroyConnection(conn);
     log.debug("Entering handleQuicConnection", &.{});
 
     // Wait for incoming STREAM frames with handler-driven polling.
@@ -2121,26 +2127,36 @@ pub fn handleQuicConnection(
     defer {
         // Owner side of the lifetime contract:
         //   1. Signal `shutdown=true` so the acceptor exits its loop.
-        //   2. Wait for `done=true` so we know the acceptor is no longer
-        //      dereferencing `conn` (which the next-firing defer at
-        //      line ~1728 will destroy).
-        //   3. Release our refcount.  If the acceptor already released
-        //      its own (i.e., its task ran to completion), this is the
-        //      last release and frees the heap struct.  If the
-        //      acceptor's task never started (submit failed), we hold
-        //      the only ref and free it here.
+        //   2. Wait up to `wait_deadline_ms` for `done=true` so we know
+        //      the acceptor is no longer dereferencing `conn` (which the
+        //      destroy_conn-gated defer would otherwise free).
+        //   3. If the acceptor exited cleanly within the deadline:
+        //      release our refcount; conn destruction proceeds normally.
+        //   4. If the deadline expires (the acceptor is genuinely
+        //      stuck): clear `destroy_conn` so conn is LEAKED instead
+        //      of freed under the still-running acceptor.  Release our
+        //      refcount.  The acceptor will eventually exit on its own
+        //      (it sees `shutdown=true` once unblocked) and drop the
+        //      last ref, freeing the heap struct.  The conn struct
+        //      leaks but the QUIC protocol-level idle timeout (300 s
+        //      default) reaps the underlying connection eventually.
         //
-        // No deadline — the acceptor's idle wait is 1 ms, so it sees
-        // `shutdown=true` within ~1 ms in the normal case.  If for some
-        // reason it doesn't exit within 5 s, we LOG (every 1 s after
-        // the initial ceiling) but keep waiting.  This is a deliberate
-        // tradeoff: better to hang ONE connection-handler thread than
-        // to UAF-segfault the entire process.  If you see the warning
-        // logs in production, root-cause why the acceptor is stuck —
-        // it should never be.
+        // Why not wait forever?  The pre-deadline version (b6ec55c3)
+        // hung connection-handler threads indefinitely under heavy
+        // ep.mu contention — visible in production as
+        //     WARN acceptor still running after shutdown signal elapsed_ms=300000+
+        // bursts on PID 2625755 with quic_active_connections=8.  See
+        // tests/test_acceptor_owner_bail.zig for the contract this fix
+        // pins.
+        //
+        // Why not free conn anyway?  The acceptor's tryAcceptStream
+        // dereferences `conn`; if conn were freed, the next iteration
+        // segfaults at conn.quic_connection access (the same UAF that
+        // motivated the heap-allocated ctx in the first place).
         if (acceptor_submitted) {
             acceptor_ctx.shutdown.store(true, .release);
             const wait_warn_ms: i64 = 5_000;
+            const wait_deadline_ms: i64 = 30_000;
             const wait_start = compat_milliTimestamp();
             var last_warn_ms: i64 = wait_start;
             while (!acceptor_ctx.done.load(.acquire)) {
@@ -2149,6 +2165,13 @@ pub fn handleQuicConnection(
                 _ = std.os.linux.nanosleep(&req, &rem);
                 const now = compat_milliTimestamp();
                 const elapsed = now - wait_start;
+                if (elapsed > wait_deadline_ms) {
+                    log.err("acceptor wait deadline exceeded; leaking conn to avoid UAF", &.{
+                        Attr.int("elapsed_ms", @intCast(elapsed)),
+                    });
+                    destroy_conn = false;
+                    break;
+                }
                 if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {
                     log.warn("acceptor still running after shutdown signal", &.{
                         Attr.int("elapsed_ms", @intCast(elapsed)),
@@ -4635,4 +4658,75 @@ test "StreamAcceptorContext: concurrent release from two threads is safe" {
         // Both threads have released; refcount should have hit zero and
         // freed.  The testing allocator catches any leak / double-free.
     }
+}
+
+// 2026-04-28 — owner-bails-before-acceptor regression.
+//
+// Pre-fix (b6ec55c3): the owner's wait-for-done loop had no deadline, so a
+// stuck acceptor wedged the connection-handler thread forever.  Live repro
+// on PID 2625755: 8 active conns, owner threads spinning at line 2150 with
+// `elapsed_ms` climbing past 300 s, the main accept loop starved on
+// ep.mu.  Post-fix: the owner waits up to 30 s, then bails and releases
+// its ref.  The struct stays alive (refcount still 1 from the acceptor's
+// ref) and is freed when the acceptor eventually exits.
+//
+// This test simulates the bail by having the OWNER release its ref WITHOUT
+// waiting for done, then the acceptor continues using `ctx.shutdown` and
+// `ctx.done` safely from a separate thread, eventually releases its own
+// ref, and the heap struct is freed cleanly.  The testing allocator's
+// leak detector catches any UAF or leak.
+test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or leak" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_0000_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_0000_2000);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_0000_3000);
+
+    const Acceptor = struct {
+        fn run(c: *StreamAcceptorContext) void {
+            // Spin-loop emulating the real acceptor: read shutdown each
+            // iteration, sleep briefly, exit when shutdown=true.  This
+            // path runs AFTER the owner has released its ref (refcount=1),
+            // so any access to a freed struct would crash here.
+            var spins: usize = 0;
+            while (!c.shutdown.load(.acquire)) {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                spins += 1;
+                if (spins > 10_000) {
+                    // Safety: bail if shutdown never arrives (test bug).
+                    break;
+                }
+            }
+            // Mirror the real defer order: store done=true, then release.
+            c.done.store(true, .release);
+            c.release();
+        }
+    };
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    // Spawn the acceptor with refcount=2 (owner+acceptor).
+    const accept_thread = try std.Thread.spawn(.{}, Acceptor.run, .{ctx});
+
+    // Owner side: simulate the bail path.  Signal shutdown, then release
+    // WITHOUT waiting for done.  The acceptor continues to read `shutdown`
+    // and write `done`/`refcount` after this point.
+    ctx.shutdown.store(true, .release);
+    ctx.release();
+
+    // Refcount is now 1 (acceptor still holds its ref).  The acceptor
+    // will see shutdown=true on its next iteration and exit cleanly.
+    accept_thread.join();
+    // After join, the acceptor has fully exited (its release() ran and
+    // freed the struct because refcount went 1 -> 0).  Any leak or
+    // double-free here would surface via the testing allocator.
 }
