@@ -122,3 +122,32 @@ test "query metrics register" {
         "geode_query_timeout_count",
     }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
 }
+
+test "transaction metrics register" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.incTransactionActive(.snapshot);
+    otel_metrics.recordTransactionBegin(.snapshot);
+    otel_metrics.recordTransactionCommit(.snapshot, 0.005, .success);
+    otel_metrics.recordTransactionAbort(.conflict, "WriteWriteConflict");
+    otel_metrics.recordTransactionTimeout(.snapshot);
+    otel_metrics.recordSerializationConflict("rw_dependency");
+    otel_metrics.recordDeadlock("oldest_first");
+    otel_metrics.recordLockWait(.exclusive, 0.001, .success);
+    otel_metrics.decTransactionActive(.snapshot);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+    for ([_][]const u8{
+        "geode_transaction_count",
+        "geode_transaction_commit_duration",
+        "geode_transaction_abort_count",
+        "geode_transaction_timeout_count",
+        "geode_transaction_serialization_conflict_count",
+        "geode_transaction_deadlock_count",
+        "geode_transaction_lock_wait_duration",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+}

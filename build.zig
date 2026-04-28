@@ -2039,6 +2039,17 @@ pub fn build(b: *std.Build) void {
     const run_lsp_tests = b.addRunArtifact(lsp_tests);
     test_step.dependOn(&run_lsp_tests.step);
 
+    // Task 11 (OTel): shared otel_metrics instance for all txn test modules.
+    // manager.zig uses @import("otel_metrics") so every txn_mod_for_* instance
+    // must have it wired, otherwise the compiler rejects the unknown import.
+    // Declared here (before the if (!is_windows) block) so fuzz txn module can
+    // also reference it.
+    const otel_resource_mod_for_txn_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_txn_tests.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_txn_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_txn_tests.addImport("otel", otel_mod);
+    otel_metrics_mod_for_txn_tests.addImport("otel_resource", otel_resource_mod_for_txn_tests);
+
     if (!is_windows) {
         const parser_fuzz_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("fuzz/targets/parser_fuzz.zig"), .target = target, .optimize = .Debug }) });
         parser_fuzz_tests.root_module.addImport("geode", root_mod);
@@ -2055,6 +2066,7 @@ pub fn build(b: *std.Build) void {
         txn_mod_for_fuzz.addImport("mvcc_adv", mvcc_adv_mod_for_fuzz);
         txn_mod_for_fuzz.addImport("range_tracker", range_tracker_mod_for_fuzz);
         txn_mod_for_fuzz.addImport("shard_worker_tls", shard_worker_tls_mod);
+        txn_mod_for_fuzz.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
         txn_sequence_fuzz_tests.root_module.addImport("txn", txn_mod_for_fuzz);
         const run_txn_sequence_fuzz = b.addRunArtifact(txn_sequence_fuzz_tests);
         test_e2e_step.dependOn(&run_txn_sequence_fuzz.step);
@@ -2131,6 +2143,7 @@ pub fn build(b: *std.Build) void {
     const range_tracker_mod_for_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/range_tracker.zig"), .target = target, .optimize = optimize });
     txn_mod_for_tests.addImport("range_tracker", range_tracker_mod_for_tests);
     txn_mod_for_tests.addImport("shard_worker_tls", shard_worker_tls_mod);
+    txn_mod_for_tests.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const mvcc_adv_integration_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_mvcc_adv_integration.zig"), .target = target, .optimize = optimize }) });
     mvcc_adv_integration_tests.root_module.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     mvcc_adv_integration_tests.root_module.addImport("txn", txn_mod_for_tests);
@@ -2143,12 +2156,14 @@ pub fn build(b: *std.Build) void {
     txn_mod_for_phantom_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_mod_for_phantom_tests.addImport("range_tracker", range_tracker_mod_for_tests);
     txn_mod_for_phantom_tests.addImport("shard_worker_tls", shard_worker_tls_mod);
+    txn_mod_for_phantom_tests.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const phantom_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_anomaly.zig"), .target = target, .optimize = optimize }) });
     // Range-based phantom detection tests
     const txn_mod_for_phantom_range_tests = b.createModule(.{ .root_source_file = b.path("src/transactions/manager.zig"), .target = target, .optimize = optimize });
     txn_mod_for_phantom_range_tests.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_mod_for_phantom_range_tests.addImport("range_tracker", range_tracker_mod_for_tests);
     txn_mod_for_phantom_range_tests.addImport("shard_worker_tls", shard_worker_tls_mod);
+    txn_mod_for_phantom_range_tests.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const phantom_range_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_phantom_range.zig"), .target = target, .optimize = optimize }) });
     phantom_range_tests.root_module.addImport("txn", txn_mod_for_phantom_range_tests);
     const planner_enumerator_mod = b.createModule(.{ .root_source_file = b.path("src/planner/enumerator.zig"), .target = target, .optimize = optimize });
@@ -2159,6 +2174,7 @@ pub fn build(b: *std.Build) void {
     txn_manager_mod_for_write_skew.addImport("mvcc_adv", mvcc_adv_mod_for_tests);
     txn_manager_mod_for_write_skew.addImport("range_tracker", range_tracker_mod_for_tests);
     txn_manager_mod_for_write_skew.addImport("shard_worker_tls", shard_worker_tls_mod);
+    txn_manager_mod_for_write_skew.addImport("otel_metrics", otel_metrics_mod_for_txn_tests);
     const write_skew_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_txn_write_skew.zig"), .target = target, .optimize = optimize }) });
     write_skew_tests.root_module.addImport("txn", txn_manager_mod_for_write_skew);
     const redo_delta_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/canary_storage_redo_delta.zig"), .target = target, .optimize = optimize }) });
@@ -2466,6 +2482,9 @@ pub fn build(b: *std.Build) void {
     // Task 9 (OTel): wire otel_metrics into transport_quic_mod so quic.zig can
     // call recordTransportConnection* via @import("otel_metrics").
     transport_quic_mod.addImport("otel_metrics", otel_metrics_mod_for_exe);
+    // Task 11 (OTel): wire otel_metrics into txn_mod so manager.zig can call
+    // transaction lifecycle metrics (begin/commit/rollback) via @import("otel_metrics").
+    txn_mod.addImport("otel_metrics", otel_metrics_mod_for_exe);
     // Task 10 (OTel): wire otel_metrics into root_mod so execution.zig and lib.zig
     // can call recordQueryParse / incQueryActive / recordQueryExecution via
     // @import("otel_metrics").

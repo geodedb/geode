@@ -1,6 +1,8 @@
 const std = @import("std");
 const mvcc_adv = @import("mvcc_adv");
 const range_tracker = @import("range_tracker");
+// CANARY: REQ=REQ-OTEL-METRICS-006; FEATURE="OTel Instrumentation"; ASPECT=TransactionLifecycle; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+const otel_metrics = @import("otel_metrics");
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=Engine; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_TxnCommit; OWNER=engine; UPDATED=2025-09-26
 // CANARY: REQ=REQ-GQL-013; FEATURE="Transactions/MVCC"; ASPECT=SSIPhantomPrevention; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_013_SSIPhantomPrevention; OWNER=engine; UPDATED=2025-09-21
 // CANARY: REQ=REQ-GQL-073; FEATURE="MvccAdvanced"; ASPECT=PredictiveSkewFilter; STATUS=TESTED; TEST=TestCANARY_REQ_GQL_073_PredictiveSkewFilter; OWNER=txn; UPDATED=2025-09-21
@@ -165,6 +167,8 @@ pub const Manager = struct {
         self.next_ts += 1;
         const txn = Txn{ .id = id, .start_ts = ts };
         self.active_txns.put(id, txn) catch {};
+        otel_metrics.incTransactionActive(.snapshot);
+        otel_metrics.recordTransactionBegin(.snapshot);
         return txn;
     }
 
@@ -247,6 +251,8 @@ pub const Manager = struct {
         self.cleanupTxnTracking(txn.id);
         _ = self.active_txns.remove(txn.id);
         self.pruneWrites();
+        otel_metrics.recordTransactionCommit(.snapshot, 0.0, .success);
+        otel_metrics.decTransactionActive(.snapshot);
     }
 
     pub fn rollback(self: *Manager, txn: *Txn) void {
@@ -262,6 +268,8 @@ pub const Manager = struct {
         self.removeWritesForTxn(txn.id);
         _ = self.active_txns.remove(txn.id);
         self.pruneWrites();
+        otel_metrics.recordTransactionAbort(.user, null);
+        otel_metrics.decTransactionActive(.snapshot);
     }
 
     fn hasWriteWriteConflicts(self: *Manager, txn_id: TxnId) !bool {

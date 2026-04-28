@@ -113,6 +113,8 @@ pub fn shutdown() void {
     g_active_connections_provider = null;
     // Query metrics state reset.
     g_query = null;
+    // Transaction metrics state reset.
+    g_transaction = null;
     g_allocator = null;
 }
 
@@ -620,5 +622,174 @@ pub fn recordQueryTimeout(op: []const u8, kind: TimeoutKind) void {
     q.timeout_count.add(1, &.{
         .{ .key = "db.operation.name", .value = .{ .string = op } },
         .{ .key = "geode.timeout.kind", .value = .{ .string = @tagName(kind) } },
+    });
+}
+
+// -------------------------------------------------------------------------
+// Transaction lifecycle metrics — geode.transaction.* per §4.6.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-006; FEATURE="OTel Instrumentation"; ASPECT=TransactionLifecycle; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+pub const IsolationLevel = enum {
+    read_committed,
+    snapshot,
+    serializable_snapshot,
+    repeatable_read,
+    read_uncommitted,
+    serializable,
+};
+
+pub const AbortReason = enum {
+    user,
+    conflict,
+    timeout,
+    deadlock,
+    system_error,
+};
+
+pub const LockType = enum {
+    row,
+    predicate,
+    range,
+    exclusive,
+    shared,
+};
+
+const TransactionMetrics = struct {
+    count: otel.api.metrics.Counter,
+    active: otel.api.metrics.UpDownCounter,
+    duration: otel.api.metrics.Histogram,
+    commit_duration: otel.api.metrics.Histogram,
+    abort_count: otel.api.metrics.Counter,
+    timeout_count: otel.api.metrics.Counter,
+    serialization_conflict_count: otel.api.metrics.Counter,
+    deadlock_count: otel.api.metrics.Counter,
+    lock_wait_duration: otel.api.metrics.Histogram,
+};
+
+var g_transaction: ?TransactionMetrics = null;
+
+fn ensureTransaction() !*TransactionMetrics {
+    if (g_transaction) |*t| return t;
+    const m = meter();
+    g_transaction = TransactionMetrics{
+        .count = try m.counter(.{
+            .name = "geode.transaction.count",
+            .unit = "{transaction}",
+            .kind = .counter,
+            .description = "Total number of transactions begun",
+        }),
+        .active = try m.upDownCounter(.{
+            .name = "geode.transaction.active",
+            .unit = "{transaction}",
+            .kind = .up_down_counter,
+            .description = "Number of currently active transactions",
+        }),
+        .duration = try m.histogram(.{
+            .name = "geode.transaction.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Total transaction duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .commit_duration = try m.histogram(.{
+            .name = "geode.transaction.commit.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Transaction commit phase duration in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_query_duration },
+        }),
+        .abort_count = try m.counter(.{
+            .name = "geode.transaction.abort.count",
+            .unit = "{transaction}",
+            .kind = .counter,
+            .description = "Number of aborted transactions",
+        }),
+        .timeout_count = try m.counter(.{
+            .name = "geode.transaction.timeout.count",
+            .unit = "{timeout}",
+            .kind = .counter,
+            .description = "Number of transaction timeouts",
+        }),
+        .serialization_conflict_count = try m.counter(.{
+            .name = "geode.transaction.serialization_conflict.count",
+            .unit = "{conflict}",
+            .kind = .counter,
+            .description = "Number of serialization conflicts",
+        }),
+        .deadlock_count = try m.counter(.{
+            .name = "geode.transaction.deadlock.count",
+            .unit = "{deadlock}",
+            .kind = .counter,
+            .description = "Number of deadlocks detected",
+        }),
+        .lock_wait_duration = try m.histogram(.{
+            .name = "geode.transaction.lock.wait.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Time spent waiting to acquire locks in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_lock_wait_duration },
+        }),
+    };
+    return &g_transaction.?;
+}
+
+pub fn incTransactionActive(level: IsolationLevel) void {
+    const t = ensureTransaction() catch return;
+    t.active.add(1, &.{.{ .key = "geode.transaction.isolation_level", .value = .{ .string = @tagName(level) } }});
+}
+
+pub fn decTransactionActive(level: IsolationLevel) void {
+    const t = ensureTransaction() catch return;
+    t.active.add(-1, &.{.{ .key = "geode.transaction.isolation_level", .value = .{ .string = @tagName(level) } }});
+}
+
+pub fn recordTransactionBegin(level: IsolationLevel) void {
+    const t = ensureTransaction() catch return;
+    t.count.add(1, &.{.{ .key = "geode.transaction.isolation_level", .value = .{ .string = @tagName(level) } }});
+}
+
+pub fn recordTransactionCommit(level: IsolationLevel, duration_s: f64, outcome: Outcome) void {
+    const t = ensureTransaction() catch return;
+    const level_attr = attrs.Entry{ .key = "geode.transaction.isolation_level", .value = .{ .string = @tagName(level) } };
+    const outcome_attr = attrs.Entry{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    t.commit_duration.record(duration_s, &.{ level_attr, outcome_attr });
+    t.duration.record(duration_s, &.{ level_attr, outcome_attr });
+}
+
+pub fn recordTransactionAbort(reason: AbortReason, error_type: ?[]const u8) void {
+    const t = ensureTransaction() catch return;
+    var buf: [2]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.transaction.abort_reason", .value = .{ .string = @tagName(reason) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    t.abort_count.add(1, buf[0..n]);
+}
+
+pub fn recordTransactionTimeout(level: IsolationLevel) void {
+    const t = ensureTransaction() catch return;
+    t.timeout_count.add(1, &.{.{ .key = "geode.transaction.isolation_level", .value = .{ .string = @tagName(level) } }});
+}
+
+pub fn recordSerializationConflict(conflict_type: []const u8) void {
+    const t = ensureTransaction() catch return;
+    t.serialization_conflict_count.add(1, &.{.{ .key = "geode.conflict.type", .value = .{ .string = conflict_type } }});
+}
+
+pub fn recordDeadlock(victim_policy: []const u8) void {
+    const t = ensureTransaction() catch return;
+    t.deadlock_count.add(1, &.{.{ .key = "geode.deadlock.victim_policy", .value = .{ .string = victim_policy } }});
+}
+
+pub fn recordLockWait(lock_type: LockType, duration_s: f64, outcome: Outcome) void {
+    const t = ensureTransaction() catch return;
+    t.lock_wait_duration.record(duration_s, &.{
+        .{ .key = "geode.lock.type", .value = .{ .string = @tagName(lock_type) } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
     });
 }
