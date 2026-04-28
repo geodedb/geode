@@ -3009,6 +3009,7 @@ fn cmdShell(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     // CANARY: REQ=REQ-SHELL-INTERRUPT-012; FEATURE="SourceInterrupt"; ASPECT=SignalInstall; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
     // Install signal handlers for Ctrl+C detection before starting REPL
     geode.repl.platform.installSignalHandlers();
+    defer geode.repl.platform.restoreSignalHandlers();
 
     // Otherwise try to run the real REPL
     const options = repl_loop.ReplLoop.Options{
@@ -3079,11 +3080,12 @@ fn cmdAuth(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void
 // CANARY: REQ=REQ-M4.4-CLI-MAIN-ENTRY-001; FEATURE="CLI Modularization"; ASPECT=MinimalEntryPoint; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-11-12
 // Phase 4 M4.4: Minimal main() entry point - delegates to cli_dispatcher for all routing
 pub fn main(proc_init: std.process.Init.Minimal) !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{ .stack_trace_frames = 8 }){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     execution.initEvaluator();
+    defer execution.cleanupCatalogInstance();
 
     const raw_argv = proc_init.args.vector;
     const argv = try allocator.alloc([:0]u8, raw_argv.len);
