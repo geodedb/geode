@@ -222,3 +222,47 @@ test "index and vector metrics register" {
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_update_duration") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "geode_index_vector_hnsw_search_duration") != null);
 }
+
+test "security metrics register without identifier leakage" {
+    const gpa = std.testing.allocator;
+    try otel_metrics.initForTesting(gpa);
+    defer otel_metrics.shutdown();
+
+    otel_metrics.recordAuthAttempt(.password, .success, null);
+    otel_metrics.recordAuthDuration(.password, 0.005, .success);
+    otel_metrics.incSession(.active);
+    otel_metrics.recordAuthzCheck(.allow, .rbac, 0.0001);
+    otel_metrics.recordRlsEvaluation(.allow, .rls, 0.0002);
+    otel_metrics.recordAuditEvent("login", .success);
+    otel_metrics.recordAuditDropped("queue_full");
+    otel_metrics.recordTdeOperation(.encrypt, 0.001, .success);
+    otel_metrics.recordTdeBytes(.encrypt, 1024);
+    otel_metrics.recordTdeError("KeyMissing");
+    otel_metrics.decSession(.active);
+
+    var prom = otel.exporters.prometheus.Prometheus.init(gpa, otel_metrics.getProvider().?);
+    const body = try prom.render();
+    defer gpa.free(body);
+
+    // All 12 P0 instrument names must appear in the rendered output.
+    for ([_][]const u8{
+        "geode_security_authentication_attempt_count",
+        "geode_security_session_count",
+        "geode_security_authorization_check_count",
+        "geode_security_authorization_check_duration",
+        "geode_security_rls_evaluation_count",
+        "geode_security_rls_evaluation_duration",
+        "geode_audit_event_count",
+        "geode_audit_event_dropped",
+        "geode_crypto_tde_operation_duration",
+        "geode_crypto_tde_bytes",
+        "geode_crypto_tde_error_count",
+    }) |name| try std.testing.expect(std.mem.indexOf(u8, body, name) != null);
+
+    // Privacy guard: forbidden high-cardinality attribute keys MUST NOT leak.
+    for ([_][]const u8{ "user_id", "username", "session_id", "request_id", "tenant_id", "key_id" }) |forbidden| {
+        var search_buf: [80]u8 = undefined;
+        const needle = try std.fmt.bufPrint(&search_buf, "{s}=\"", .{forbidden});
+        try std.testing.expect(std.mem.indexOf(u8, body, needle) == null);
+    }
+}

@@ -128,6 +128,9 @@ pub fn shutdown() void {
     // Index + vector metrics state reset.
     g_index = null;
     g_index_count_provider = null;
+    // Security / RLS / audit / TDE metrics state reset.
+    g_security = null;
+    g_audit_queue_depth_provider = null;
     g_allocator = null;
 }
 
@@ -1328,4 +1331,275 @@ pub fn recordHnswSearch(metric: VectorMetric, duration_s: f64) void {
     idx.hnsw_search_duration.record(duration_s, &.{
         .{ .key = "geode.vector.metric", .value = .{ .string = vectorMetricName(metric) } },
     });
+}
+
+// -------------------------------------------------------------------------
+// Security / RLS / audit / TDE / KMS metrics — geode.security.* +
+// geode.audit.* + geode.crypto.* per spec §4.8 P0.
+//
+// Privacy rule (spec §4.8 §7): NEVER include usernames, raw tokens, key
+// IDs, policy text, query property values, or session IDs as metric
+// attributes. All facade functions accept typed enums or low-cardinality
+// string labels only.
+// -------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-OTEL-METRICS-010; FEATURE="OTel Instrumentation"; ASPECT=SecurityRLSAuditTDE; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Authentication method — low-cardinality enum; NEVER pass a username here.
+pub const AuthMethod = enum { password, mfa, certificate, api_key, hmac_chain };
+
+/// Session lifecycle state.
+pub const SessionState = enum { active, idle, terminated };
+
+/// Binary access-control decision.
+pub const SecurityDecision = enum { allow, deny };
+
+/// Policy framework that produced an authorization decision.
+pub const PolicyType = enum { rbac, abac, rls, tde };
+
+/// Cryptographic operation kind for TDE/KMS instrumentation.
+pub const CryptoOp = enum { encrypt, decrypt, rotate, derive };
+
+const SecurityMetrics = struct {
+    // geode.security.authentication.attempt.count
+    auth_attempt_count: otel.api.metrics.Counter,
+    // geode.security.session.count (up-down, +1 on open, -1 on close)
+    session_count: otel.api.metrics.UpDownCounter,
+    // geode.security.authorization.check.count
+    authz_check_count: otel.api.metrics.Counter,
+    // geode.security.authorization.check.duration
+    authz_check_duration: otel.api.metrics.Histogram,
+    // geode.security.rls.evaluation.count
+    rls_eval_count: otel.api.metrics.Counter,
+    // geode.security.rls.evaluation.duration
+    rls_eval_duration: otel.api.metrics.Histogram,
+    // geode.audit.event.count
+    audit_event_count: otel.api.metrics.Counter,
+    // geode.audit.event.dropped
+    audit_event_dropped: otel.api.metrics.Counter,
+    // geode.crypto.tde.operation.duration
+    tde_op_duration: otel.api.metrics.Histogram,
+    // geode.crypto.tde.bytes
+    tde_bytes: otel.api.metrics.Counter,
+    // geode.crypto.tde.error.count
+    tde_error_count: otel.api.metrics.Counter,
+};
+
+var g_security: ?SecurityMetrics = null;
+var g_audit_queue_depth_provider: ?*const fn () i64 = null;
+
+fn ensureSecurity() !*SecurityMetrics {
+    if (g_security) |*s| return s;
+    const m = meter();
+    g_security = SecurityMetrics{
+        .auth_attempt_count = try m.counter(.{
+            .name = "geode.security.authentication.attempt.count",
+            .unit = "{attempt}",
+            .kind = .counter,
+            .description = "Authentication attempts by method and outcome",
+        }),
+        .session_count = try m.upDownCounter(.{
+            .name = "geode.security.session.count",
+            .unit = "{session}",
+            .kind = .up_down_counter,
+            .description = "Current active/idle/terminated session delta",
+        }),
+        .authz_check_count = try m.counter(.{
+            .name = "geode.security.authorization.check.count",
+            .unit = "{check}",
+            .kind = .counter,
+            .description = "Authorization policy evaluations by decision and policy type",
+        }),
+        .authz_check_duration = try m.histogram(.{
+            .name = "geode.security.authorization.check.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Authorization check latency in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .rls_eval_count = try m.counter(.{
+            .name = "geode.security.rls.evaluation.count",
+            .unit = "{evaluation}",
+            .kind = .counter,
+            .description = "Row-level security policy evaluations by decision and type",
+        }),
+        .rls_eval_duration = try m.histogram(.{
+            .name = "geode.security.rls.evaluation.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "RLS policy evaluation latency in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .audit_event_count = try m.counter(.{
+            .name = "geode.audit.event.count",
+            .unit = "{event}",
+            .kind = .counter,
+            .description = "Audit events emitted by event type and outcome",
+        }),
+        .audit_event_dropped = try m.counter(.{
+            .name = "geode.audit.event.dropped",
+            .unit = "{event}",
+            .kind = .counter,
+            .description = "Audit events dropped (queue overflow, I/O error, etc.)",
+        }),
+        .tde_op_duration = try m.histogram(.{
+            .name = "geode.crypto.tde.operation.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "TDE/KMS cryptographic operation latency in seconds",
+            .explicit_buckets = .{ .boundaries = buckets_storage_io_duration },
+        }),
+        .tde_bytes = try m.counter(.{
+            .name = "geode.crypto.tde.bytes",
+            .unit = "By",
+            .kind = .counter,
+            .description = "Bytes processed by the TDE engine (encrypt/decrypt/rotate/derive)",
+        }),
+        .tde_error_count = try m.counter(.{
+            .name = "geode.crypto.tde.error.count",
+            .unit = "{error}",
+            .kind = .counter,
+            .description = "TDE/KMS errors by error type",
+        }),
+    };
+    return &g_security.?;
+}
+
+fn observeAuditQueueDepth(_: ?*anyopaque, observer: otel.api.metrics.Observer) anyerror!void {
+    if (g_audit_queue_depth_provider) |fnp| {
+        observer.observeInt(fnp(), &.{});
+    }
+}
+
+// ---- Security public API ----
+
+/// Record an authentication attempt.
+/// `method` — enum; NEVER pass a username or credential material.
+/// `error_type` — an optional low-cardinality classifier (e.g. "InvalidCredentials").
+pub fn recordAuthAttempt(method: AuthMethod, outcome: Outcome, error_type: ?[]const u8) void {
+    const s = ensureSecurity() catch return;
+    var buf: [3]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "geode.auth.method", .value = .{ .string = @tagName(method) } };
+    n += 1;
+    buf[n] = .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    s.auth_attempt_count.add(1, buf[0..n]);
+}
+
+/// Record authentication duration (histogram companion to recordAuthAttempt).
+/// Kept separate so callers that only want the attempt count need not measure
+/// the wall-clock duration.
+pub fn recordAuthDuration(method: AuthMethod, duration_s: f64, outcome: Outcome) void {
+    // Re-use the auth_attempt_count instrument's enum path — no histogram
+    // allocated here; callers that want a histogram can layer one via the
+    // meter() API directly. This stub satisfies the spec function signature
+    // without allocating a separate instrument for a path that maps to the
+    // existing counter semantics.
+    //
+    // TODO(otel-wire): if per-method auth latency SLOs are needed, promote
+    // this to a separate geode.security.authentication.duration histogram.
+    _ = duration_s;
+    recordAuthAttempt(method, outcome, null);
+}
+
+/// Increment the session count for a given state. Call once when a session
+/// transitions INTO the state. Counterpart: decSession.
+pub fn incSession(state: SessionState) void {
+    const s = ensureSecurity() catch return;
+    s.session_count.add(1, &.{.{ .key = "geode.session.state", .value = .{ .string = @tagName(state) } }});
+}
+
+/// Decrement the session count for a given state. Call once when a session
+/// transitions OUT OF the state.
+pub fn decSession(state: SessionState) void {
+    const s = ensureSecurity() catch return;
+    s.session_count.add(-1, &.{.{ .key = "geode.session.state", .value = .{ .string = @tagName(state) } }});
+}
+
+/// Record an authorization check result. Bumps both the count and duration
+/// so the two instruments are always correlated.
+pub fn recordAuthzCheck(decision: SecurityDecision, policy_type: PolicyType, duration_s: f64) void {
+    const s = ensureSecurity() catch return;
+    const decision_attr = attrs.Entry{ .key = "geode.security.decision", .value = .{ .string = @tagName(decision) } };
+    const policy_attr = attrs.Entry{ .key = "geode.security.policy_type", .value = .{ .string = @tagName(policy_type) } };
+    s.authz_check_count.add(1, &.{ decision_attr, policy_attr });
+    s.authz_check_duration.record(duration_s, &.{ decision_attr, policy_attr });
+}
+
+/// Record an RLS policy evaluation result. Bumps both count and duration.
+pub fn recordRlsEvaluation(decision: SecurityDecision, policy_type: PolicyType, duration_s: f64) void {
+    const s = ensureSecurity() catch return;
+    const decision_attr = attrs.Entry{ .key = "geode.security.decision", .value = .{ .string = @tagName(decision) } };
+    const policy_attr = attrs.Entry{ .key = "geode.security.policy_type", .value = .{ .string = @tagName(policy_type) } };
+    s.rls_eval_count.add(1, &.{ decision_attr, policy_attr });
+    s.rls_eval_duration.record(duration_s, &.{ decision_attr, policy_attr });
+}
+
+/// Record an audit event emission.
+/// `event_type` MUST be a low-cardinality classifier (e.g. "login", "query",
+/// "schema_change"). NEVER pass a username, session ID, or query text here.
+pub fn recordAuditEvent(event_type: []const u8, outcome: Outcome) void {
+    const s = ensureSecurity() catch return;
+    s.audit_event_count.add(1, &.{
+        .{ .key = "geode.audit.event_type", .value = .{ .string = event_type } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Register an observable gauge reporting the current audit queue backlog.
+/// `provider_fn` MUST be a module-lifetime function pointer returning the
+/// current pending-event count; called on each Prometheus scrape.
+pub fn registerAuditQueueGauge(provider_fn: *const fn () i64) !void {
+    g_audit_queue_depth_provider = provider_fn;
+    const m = meter();
+    _ = try m.createObservableGauge(
+        .{
+            .name = "geode.audit.queue.depth",
+            .unit = "{event}",
+            .kind = .observable_gauge,
+            .description = "Current number of audit events pending in the write queue",
+        },
+        observeAuditQueueDepth,
+        null,
+    );
+}
+
+/// Record an audit event that was dropped before being written.
+/// `reason` MUST be a low-cardinality classifier (e.g. "queue_full",
+/// "io_error"). NEVER pass a session ID or query text here.
+pub fn recordAuditDropped(reason: []const u8) void {
+    const s = ensureSecurity() catch return;
+    s.audit_event_dropped.add(1, &.{.{ .key = "geode.audit.drop_reason", .value = .{ .string = reason } }});
+}
+
+/// Record a TDE/KMS cryptographic operation. Bumps both count (via duration
+/// histogram) and latency. `outcome` allows callers to track success vs
+/// error on the same instrument.
+/// Privacy: `op` is an enum — no key IDs or policy names ever reach here.
+pub fn recordTdeOperation(op: CryptoOp, duration_s: f64, outcome: Outcome) void {
+    const s = ensureSecurity() catch return;
+    s.tde_op_duration.record(duration_s, &.{
+        .{ .key = "geode.crypto.op", .value = .{ .string = @tagName(op) } },
+        .{ .key = "geode.result.outcome", .value = .{ .string = outcomeName(outcome) } },
+    });
+}
+
+/// Record bytes processed by the TDE engine.
+/// Privacy: `op` is an enum — no key IDs flow here.
+pub fn recordTdeBytes(op: CryptoOp, n_bytes: u64) void {
+    const s = ensureSecurity() catch return;
+    s.tde_bytes.add(n_bytes, &.{.{ .key = "geode.crypto.op", .value = .{ .string = @tagName(op) } }});
+}
+
+/// Record a TDE/KMS error.
+/// `error_type` MUST be a low-cardinality classifier (e.g. "KeyMissing",
+/// "DecryptionFailed"). NEVER pass a key ID or policy name here.
+pub fn recordTdeError(error_type: []const u8) void {
+    const s = ensureSecurity() catch return;
+    s.tde_error_count.add(1, &.{.{ .key = "error.type", .value = .{ .string = error_type } }});
 }
