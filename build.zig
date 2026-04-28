@@ -3953,4 +3953,18 @@ pub fn build(b: *std.Build) void {
     const otel_resource_tests = b.addTest(.{ .root_module = otel_resource_test_mod });
     const run_otel_resource_tests = b.addRunArtifact(otel_resource_tests);
     test_step.dependOn(&run_otel_resource_tests.step);
+
+    // Task 4 (OTel instrumentation plan): otel_metrics facade unit tests.
+    const otel_metrics_mod = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod.addImport("otel", otel_mod);
+    // otel_metrics.zig uses path-relative @import("otel_resource.zig") which
+    // resolves within the same source tree, so no named import is needed for
+    // otel_resource. If that path-relative import ever breaks, add:
+    //   otel_metrics_mod.addImport("otel_resource", otel_resource_mod);
+    const otel_metrics_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_facade_smoke.zig"), .target = target, .optimize = optimize });
+    otel_metrics_test_mod.addImport("otel", otel_mod);
+    otel_metrics_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_metrics_tests = b.addTest(.{ .root_module = otel_metrics_test_mod });
+    const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
+    test_step.dependOn(&run_otel_metrics_tests.step);
 }
