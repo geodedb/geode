@@ -1,3 +1,13 @@
+// CANARY: REQ=REQ-OTEL-LEGACY-DEPRECATED-002; FEATURE="OTel Instrumentation"; ASPECT=Migration; STATUS=EXEMPT; TEST=tests/test_otel_prometheus_parity.zig; OWNER=monitoring; UPDATED=2026-04-28
+//
+// LEGACY FALLBACK — DEPRECATED. PrometheusExporter and MetricsCollector
+// are kept as a fallback path for the /metrics endpoint when the OTel
+// MeterProvider is not yet initialised (see src/monitoring/metrics_server.zig
+// serveMetrics for the routing logic added in Task 7). New instrumentation
+// MUST go through `src/monitoring/otel_metrics.zig`. Scheduled for deletion
+// after one full release cycle of OTel-only operation. See
+// docs/otel-updates.md §5 for the migration table.
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 

@@ -1,3 +1,14 @@
+// CANARY: REQ=REQ-OTEL-LEGACY-DEPRECATED-001; FEATURE="OTel Instrumentation"; ASPECT=Migration; STATUS=EXEMPT; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+//
+// LEGACY SHIM — DEPRECATED. The four metric fields previously exposed
+// by this file (query_latency_ms, active_transactions, pathcache_hits,
+// pathcache_misses) are now produced by `src/monitoring/otel_metrics.zig`
+// per the OTel instrumentation plan. The shim is kept compiling so any
+// stale callers don't break the build, but new code MUST import
+// otel_metrics directly. Scheduled for deletion after the OTel surface
+// is exercised in production. See docs/otel-updates.md §5 for the
+// migration table.
+
 const std = @import("std");
 pub const MetricKind = enum { counter, gauge, histogram };
 

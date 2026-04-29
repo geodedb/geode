@@ -1,6 +1,7 @@
 {
   "dashboard": {
     "title": "Geode Database Monitoring",
+    "_comment": "Panel exprs updated 2026-04-28 (Task 23) to OTel metric names per otel-updates.md §5. Old→new: geode_queries_total→geode_query_count_total; geode_connections_active→geode_transport_connection_count; geode_memory_used_bytes→process_memory_usage_bytes; geode_transactions_total→geode_transaction_count_total; geode_query_duration_seconds→geode_query_execution_duration_seconds.",
     "panels": [
       {
         "title": "Query Rate",
@@ -8,7 +9,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "rate(geode_queries_total[5m])",
+            "expr": "rate(geode_query_count_total[5m])",
             "legendFormat": "{{instance}}"
           }
         ]
@@ -19,7 +20,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "geode_connections_active",
+            "expr": "geode_transport_connection_count",
             "legendFormat": "{{instance}}"
           }
         ]
@@ -30,7 +31,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "geode_memory_used_bytes",
+            "expr": "process_memory_usage_bytes",
             "legendFormat": "{{instance}}"
           }
         ]
@@ -52,7 +53,7 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "rate(geode_transactions_total[5m])",
+            "expr": "rate(geode_transaction_count_total[5m])",
             "legendFormat": "{{instance}} - {{status}}"
           }
         ]
@@ -63,12 +64,12 @@
         "type": "graph",
         "targets": [
           {
-            "expr": "histogram_quantile(0.95, geode_query_duration_seconds)",
+            "expr": "histogram_quantile(0.95, rate(geode_query_execution_duration_seconds_bucket[5m]))",
             "legendFormat": "{{instance}}"
           }
         ]
       }
     ],
-    "version": 1
+    "version": 2
   }
 }
