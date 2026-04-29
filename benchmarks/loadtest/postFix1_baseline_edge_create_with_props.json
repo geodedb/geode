@@ -1,0 +1,74 @@
+{
+  "timestamp": "2026-04-29T20:41:38Z",
+  "dsn": "127.0.0.1:31430?insecure=true\u0026user=geode\u0026pass=***",
+  "scenario": "edge_create_with_props",
+  "query_type": "Concurrent MATCH+CREATE edges with msft-style props (link_id, snapshot_id, 3 strings)",
+  "data_size": {
+    "nodes": 500,
+    "edges": 0
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "total_queries": 883,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 176.6,
+      "latency_p50": "5.646175ms",
+      "latency_p95": "6.908765ms",
+      "latency_p99": "7.712988ms",
+      "latency_mean": "5.66833ms",
+      "latency_max": "33.51183ms"
+    },
+    {
+      "concurrency": 2,
+      "total_queries": 1642,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 328.4,
+      "latency_p50": "5.524413ms",
+      "latency_p95": "7.120348ms",
+      "latency_p99": "8.450456ms",
+      "latency_mean": "6.091565ms",
+      "latency_max": "643.648915ms"
+    },
+    {
+      "concurrency": 4,
+      "total_queries": 54,
+      "errors": 4,
+      "error_rate": 0.07407407407407407,
+      "duration": "5s",
+      "qps": 10,
+      "latency_p50": "4.969976ms",
+      "latency_p95": "75.5587ms",
+      "latency_p99": "3.400980564s",
+      "latency_mean": "78.166795ms",
+      "latency_max": "3.400980564s",
+      "error_samples": [
+        "context deadline exceeded",
+        "context deadline exceeded",
+        "context deadline exceeded",
+        "context deadline exceeded"
+      ]
+    },
+    {
+      "concurrency": 8,
+      "total_queries": 0,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "",
+      "qps": 0,
+      "latency_p50": "",
+      "latency_p95": "",
+      "latency_p99": "",
+      "latency_mean": "",
+      "latency_max": "",
+      "error_samples": [
+        "ping: geode: transport dial to 127.0.0.1:31430: timeout: no recent network activity"
+      ]
+    }
+  ],
+  "summary": "Peak QPS: 328.4 at c=2. Max tested: c=8 (0.0 QPS, 0.0% errors)"
+}

@@ -2232,6 +2232,12 @@ pub const StorageAdapter = struct {
             const _dur: f64 = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() -% _t0_12e)) / @as(f64, std.time.ns_per_s);
             _om12e.recordStorageOp(.write_edge, _dur, if (_ok_12e) .success else .error_, null);
         }
+        // NOTE (2026-04-29): see the matching note in
+        // `graph_store.zig:createEdgeWithGraphAndTenant`. A trace span at
+        // this layer was rolled back due to a BatchSpanProcessor race in
+        // the upstream OTel SDK that panics under concurrent shard-worker
+        // span emission. The `_om12e.recordEdgeMutation` counter below
+        // continues to publish `geode.graph_store.edge_mutations_total`.
         const mg = try self.getOrCreateGraph(graph_name);
         const rel_type = try mg.label_dict.getOrCreate(label);
 

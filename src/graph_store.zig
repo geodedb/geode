@@ -3040,6 +3040,23 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
+        // NOTE (2026-04-29 edge-merge-latency triage): a prior revision of
+        // this fix added a `geode.graph_store.create_edge` trace span here
+        // mirroring the `geode.graph_store.create_node` instrumentation at
+        // line 1197.  When combined with the bulk-fast-path promotion in
+        // `quic_connection_handler.zig` (so this function is now also
+        // entered concurrently from `group_commit.shardLoop` worker
+        // threads), the OTel SDK's BatchSpanProcessor drainer
+        // (`zig-pkg/otel-0.1.0/.../src/sdk/export.zig:330 drainLocked`)
+        // panics with `index 512, len 1` — a pre-existing thread-safety
+        // race in the BSP queue exposed only when the same span emission
+        // site is hit from many shard-worker threads in parallel.  The
+        // span is therefore intentionally omitted at this layer; the
+        // existing `_om.recordEdgeMutation(.create, …)` counter at
+        // `graph_storage_adapter.zig:2270` still publishes
+        // `geode.graph_store.edge_mutations_total` for monitoring.  Re-add
+        // the span only after the upstream BSP race is fixed (likely a
+        // `min(n, queue.items.len)` clamp inside `drainLocked`).
         // Bug fix 2026-04-27 (docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md):
         // The previous code used `catch break :blk null` on every step inside
         // this block, including on `vt.createEdgeFn`.  Under multi-threaded

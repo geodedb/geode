@@ -3347,6 +3347,35 @@ fn handleClientMessage(
                 }
             }
 
+            // Edge merge latency fix (2026-04-29): promote `match_create_edge`
+            // through the bulk fast path when no transaction is active even
+            // if `GEODE_BULK_INGEST=1` was not opt-in.  The regular dispatch
+            // below acquires the per-graph EXCLUSIVE write lock and holds it
+            // for the full MATCH-cartesian + CREATE + WAL-fsync window,
+            // which produced p99 ≥ 1.6 s on simple `MATCH (a:L {k:?}),
+            // (b:L {k:?}) CREATE (a)-[:R {props}]->(b)` even at
+            // concurrency=1 (see `benchmarks/loadtest/preFix_baseline_edge
+            // _create_with_props.json`).  `executeBulkMatchCreateEdge`
+            // resolves endpoints under the SHARED lock and only takes the
+            // EXCLUSIVE lock for the create + property apply (~tens of µs),
+            // routing through the group-commit coordinator when enabled so
+            // 8 concurrent workers no longer head-of-line behind one slow
+            // statement.  Gated on `!state.in_txn` so the undo log still
+            // captures inserts inside `BEGIN ... ROLLBACK` (the bulk path
+            // intentionally skips the undo log; the regression spec
+            // `2pc-rollback-edge-create-undone` covers this boundary).
+            if (is_mutation and !state.in_txn and !geode.bulk_ingest.isEnabled()) {
+                const bulk_shape = geode.bulk_ingest.matchSingleStatement(&parse_result.program);
+                if (bulk_shape == .match_create_edge) {
+                    if (geode.bulk_ingest.matchEdgeSpec(&parse_result.program)) |edge_spec| {
+                        try executeBulkMatchCreateEdge(gpa, stream, state, &parse_result.program, edge_spec, query_graph_name, exec_context);
+                        return;
+                    }
+                    // Spec/detector disagreement — fall through to the
+                    // general executor as the original block does.
+                }
+            }
+
             var graph_lock_handle: ?graph_store.GraphLockHandle = null;
             // GAP-0753: Read path takes the shared graph lock only long
             // enough to capture a QueryReadSession snapshot; downstream

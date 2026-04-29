@@ -591,7 +591,10 @@ bench:
 bench-timeseries: ## Run timeseries benchmarks
 	$(ZIG) build bench-timeseries $(ZIG_FLAGS)
 
-## Load test benchmarks
+## Load test benchmarks.  edge_create and edge_create_with_props are the
+## regression vehicles for the MATCH+CREATE write-lock contention path; keep
+## them in sync with loadtest/go/scenario.go and the harness's
+## loadtest-scenarios target.
 loadtest-compare: ## Compare load test results against baseline
 	python3 benchmarks/loadtest/compare.py \
 		--baseline benchmarks/loadtest/baseline.jsonl \
@@ -599,11 +602,13 @@ loadtest-compare: ## Compare load test results against baseline
 			$(wildcard ../geode-test-harness/reports/loadtest_point_read.json) \
 			$(wildcard ../geode-test-harness/reports/loadtest_one_hop.json) \
 			$(wildcard ../geode-test-harness/reports/loadtest_two_hop.json) \
-			$(wildcard ../geode-test-harness/reports/loadtest_fan_out.json)
+			$(wildcard ../geode-test-harness/reports/loadtest_fan_out.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_edge_create.json) \
+			$(wildcard ../geode-test-harness/reports/loadtest_edge_create_with_props.json)
 
 loadtest-save-baseline: ## Save current load test results as new baseline (all scenarios)
 	@rm -f benchmarks/loadtest/baseline.jsonl
-	@for scenario in ping point_read one_hop two_hop fan_out; do \
+	@for scenario in ping point_read one_hop two_hop fan_out edge_create edge_create_with_props; do \
 		if [ -f ../geode-test-harness/reports/loadtest_$${scenario}.json ]; then \
 			python3 benchmarks/loadtest/save_baseline.py \
 				--input ../geode-test-harness/reports/loadtest_$${scenario}.json \

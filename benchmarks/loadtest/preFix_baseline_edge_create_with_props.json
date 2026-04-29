@@ -1,0 +1,72 @@
+{
+  "timestamp": "2026-04-29T19:58:19Z",
+  "dsn": "127.0.0.1:31420?insecure=true\u0026user=geode\u0026pass=***",
+  "scenario": "edge_create_with_props",
+  "query_type": "Concurrent MATCH+CREATE edges with msft-style props (link_id, snapshot_id, 3 strings)",
+  "data_size": {
+    "nodes": 500,
+    "edges": 0
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "total_queries": 132,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 26.4,
+      "latency_p50": "4.627522ms",
+      "latency_p95": "5.326104ms",
+      "latency_p99": "2.164495012s",
+      "latency_mean": "38.998466ms",
+      "latency_max": "2.368918145s"
+    },
+    {
+      "concurrency": 2,
+      "total_queries": 345,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 69,
+      "latency_p50": "5.158426ms",
+      "latency_p95": "6.044669ms",
+      "latency_p99": "1.868338156s",
+      "latency_mean": "28.992732ms",
+      "latency_max": "2.183767156s"
+    },
+    {
+      "concurrency": 4,
+      "total_queries": 584,
+      "errors": 0,
+      "error_rate": 0,
+      "duration": "5s",
+      "qps": 116.8,
+      "latency_p50": "6.726724ms",
+      "latency_p95": "11.552716ms",
+      "latency_p99": "1.64437719s",
+      "latency_mean": "34.288134ms",
+      "latency_max": "2.804496084s"
+    },
+    {
+      "concurrency": 8,
+      "total_queries": 991,
+      "errors": 8,
+      "error_rate": 0.008072653884964682,
+      "duration": "5s",
+      "qps": 196.6,
+      "latency_p50": "15.363459ms",
+      "latency_p95": "24.001347ms",
+      "latency_p99": "164.997433ms",
+      "latency_mean": "30.682534ms",
+      "latency_max": "3.726742053s",
+      "error_samples": [
+        "context deadline exceeded",
+        "context deadline exceeded",
+        "context deadline exceeded",
+        "context deadline exceeded",
+        "context deadline exceeded"
+      ]
+    }
+  ],
+  "summary": "Peak QPS: 196.6 at c=8. Max tested: c=8 (196.6 QPS, 0.8% errors)"
+}

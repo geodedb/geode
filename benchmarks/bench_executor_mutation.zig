@@ -360,6 +360,99 @@ fn runCreateEdge(
     row_counts[iter] = r.rows.len;
 }
 
+// runCreateEdgeRandom — same shape as runCreateEdge but src/dst are
+// pseudo-random within the seeded 0..499 range. The deterministic LCG keeps
+// the benchmark reproducible while exercising arbitrary (a,b) pairs that
+// will land on different shards under the default 16-shard layout. Mirrors
+// the random-pair selection that the harness loadtest "edge_create"
+// scenario uses, providing a per-statement executor-only baseline (no QUIC,
+// no write-lock contention) against which post-fix executor regressions
+// would surface.
+fn runCreateEdgeRandom(
+    allocator: std.mem.Allocator,
+    ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
+    iter: usize,
+    parse_samples: []u64,
+    exec_samples: []u64,
+    row_counts: []u64,
+) anyerror!void {
+    // Numerical-Recipes LCG (a=1664525, c=1013904223), reduced mod 500 to
+    // stay inside the seeded pool. Picking r0/r1 from (iter, iter+1) gives
+    // pseudo-random pairs that aren't adjacent in IDs.
+    const r0: u64 = (@as(u64, iter) * 1664525 + 1013904223) % 500;
+    const r1: u64 = ((@as(u64, iter) +% 1) * 1664525 + 1013904223) % 500;
+    const src = r0;
+    const dst = if (r1 == r0) (r1 + 1) % 500 else r1;
+    const q = try std.fmt.allocPrint(
+        allocator,
+        "MATCH (a:LT_Person {{lt_id: {d}}}), (b:LT_Person {{lt_id: {d}}}) CREATE (a)-[:LT_KNOWS]->(b)",
+        .{ src, dst },
+    );
+    defer allocator.free(q);
+
+    const parse_start = nowNs();
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
+    const parse_end = nowNs();
+    defer handle.release();
+
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
+    const exec_end = nowNs();
+    defer r.deinit(allocator);
+
+    parse_samples[iter] = parse_end - parse_start;
+    exec_samples[iter] = exec_end - parse_end;
+    row_counts[iter] = r.rows.len;
+}
+
+// runCreateEdgeWithProps — mirrors the exact statement shape the msft seed
+// pipeline emits: endpoint MATCH by node_id plus a CREATE that sets a
+// per-edge link_id, snapshot_id, and three string properties on the edge.
+// Captures the property-write cost that the leaner runCreateEdge skips and
+// pairs with the harness loadtest "edge_create_with_props" scenario for
+// system-level coverage.
+fn runCreateEdgeWithProps(
+    allocator: std.mem.Allocator,
+    ctx: geode.execution.ExecutionContext,
+    ast_cache: *geode.SharedAstCache,
+    iter: usize,
+    parse_samples: []u64,
+    exec_samples: []u64,
+    row_counts: []u64,
+) anyerror!void {
+    const src = iter % 500;
+    const dst = (iter + 1) % 500;
+    const q = try std.fmt.allocPrint(
+        allocator,
+        "MATCH (a:LT_Person {{lt_id: {d}}}), (b:LT_Person {{lt_id: {d}}}) " ++
+            "CREATE (a)-[:LT_KNOWS {{link_id: \"lk-{d}-{d}\", snapshot_id: \"snap-bench\", " ++
+            "prop_role: \"reader\", prop_status: \"active\", prop_kind: \"bench\"}}]->(b)",
+        .{ src, dst, src, dst },
+    );
+    defer allocator.free(q);
+
+    const parse_start = nowNs();
+    const outcome = try geode.parseGqlCached(ast_cache, q, .{});
+    var handle = switch (outcome) {
+        .Ok => |h| h,
+        .Err => return error.ParseFailed,
+    };
+    const parse_end = nowNs();
+    defer handle.release();
+
+    var r = try geode.execution.executeProgramWithContext(allocator, &handle.parse_result.program, ctx);
+    const exec_end = nowNs();
+    defer r.deinit(allocator);
+
+    parse_samples[iter] = parse_end - parse_start;
+    exec_samples[iter] = exec_end - parse_end;
+    row_counts[iter] = r.rows.len;
+}
+
 // --------------------------------------------------------------------------
 // Scenario table
 // --------------------------------------------------------------------------
@@ -391,6 +484,12 @@ const MUTATION_SCENARIOS = [_]MutationScenario{
     .{ .name = "delete_single", .iterations = 300, .warmup = 20, .setupFn = seedLargePersons, .runFn = runDeleteSingle },
     .{ .name = "merge_single", .iterations = 300, .warmup = 20, .setupFn = noopSetup, .runFn = runMergeSingle },
     .{ .name = "create_edge", .iterations = 300, .warmup = 20, .setupFn = seed500Persons, .runFn = runCreateEdge },
+    // Edge MATCH+CREATE coverage for the msft seed shape.  Pairs with the
+    // harness loadtest scenarios "edge_create" and "edge_create_with_props"
+    // (geode-test-harness/loadtest/go/scenario.go) for a full executor +
+    // QUIC-path picture of this query shape.
+    .{ .name = "create_edge_random", .iterations = 300, .warmup = 20, .setupFn = seed500Persons, .runFn = runCreateEdgeRandom },
+    .{ .name = "create_edge_with_props", .iterations = 300, .warmup = 20, .setupFn = seed500Persons, .runFn = runCreateEdgeWithProps },
     // Task 11: bulk-ingest fast path — direct adapter call, no parser / executor.
     .{ .name = "bulk_create_single", .iterations = 300, .warmup = 20, .setupFn = noopSetup, .runFn = runBulkCreateSingle },
 };
