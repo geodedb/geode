@@ -48,6 +48,7 @@ const value_utilities = @import("../execution/value_utilities.zig");
 const query_runner = @import("../client/query_runner.zig");
 const result_utils = @import("result_utils.zig");
 const parallel_wrapper = @import("parallel/thread_pool_parallel");
+const otel_metrics = @import("otel_metrics");
 
 const logging = @import("logging");
 const log = logging.scoped("query_transport");
@@ -115,6 +116,7 @@ pub const QueryTransport = struct {
     }
 
     /// Execute query on remote node
+    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=DbClientMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     pub fn executeRemoteQuery(
         self: *QueryTransport,
         node_id: u32,
@@ -126,9 +128,25 @@ pub const QueryTransport = struct {
         var connection = try self.connection_pool.getConnection(node_id);
         defer self.connection_pool.releaseConnection(connection);
 
+        // Build a low-cardinality server_addr for db.client.* OTel attributes.
+        // Derived from the connection's node registry entry (or the fallback
+        // default) — always a static cluster peer address, never user data.
+        var addr_buf: [64]u8 = undefined;
+        const addr_info = connection.getNodeAddress();
+        const server_addr: []const u8 = std.fmt.bufPrint(&addr_buf, "{s}:{d}", .{ addr_info.host, addr_info.port }) catch "unknown";
+
+        otel_metrics.incDbClientConnection(server_addr, .used);
+        defer otel_metrics.decDbClientConnection(server_addr, .used);
+
         try connection.ensureSession(self.timeout_ms);
-        var result = try connection.executeQuery(self.allocator, query, self.timeout_ms, self.page_size);
+        var result = connection.executeQuery(self.allocator, query, self.timeout_ms, self.page_size) catch |err| {
+            const elapsed_s: f64 = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time)) / 1000.0;
+            otel_metrics.recordDbClientOperation("REMOTE", server_addr, elapsed_s, .error_, @errorName(err));
+            return err;
+        };
         result.execution_time_ms = @as(u64, @intCast(compat_milliTimestamp() - start_time));
+        const elapsed_s: f64 = @as(f64, @floatFromInt(result.execution_time_ms)) / 1000.0;
+        otel_metrics.recordDbClientOperation("REMOTE", server_addr, elapsed_s, .success, null);
         return result;
     }
 

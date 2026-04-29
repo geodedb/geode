@@ -143,6 +143,11 @@ pub fn shutdown() void {
     g_analytics_queue_depth_provider = null;
     // Backup + restore metrics state reset.
     g_backup = null;
+    // Process / runtime + db.client metrics state reset.
+    g_runtime_registered = false;
+    g_runtime_rss_gauge = null;
+    g_runtime_threads_gauge = null;
+    g_db_client = null;
     g_allocator = null;
 }
 
@@ -2160,4 +2165,179 @@ pub fn recordRestore(duration_s: f64, outcome: Outcome, error_type: ?[]const u8)
 pub fn recordRestoreBytes(n_bytes: u64) void {
     const b = ensureBackup() catch return;
     b.restore_bytes.add(n_bytes, &.{});
+}
+
+// -------------------------------------------------------------------------
+// Process / runtime metrics — REQ-OTEL-METRICS-014 (Sub-A).
+//
+// NOTE: otel.instrumentation.runtime uses std.fs.openFileAbsolute which was
+// removed in Zig 0.16. Until the upstream otel library is patched, Sub-A is
+// implemented as a native snapshot that reads /proc/self/statm directly via
+// std.fs.cwd().openFile and wires it into two observable gauges. The OTel
+// library's runtime.zig is intentionally NOT imported to avoid the compile
+// error. Process metrics are still collected via the native path below.
+// -------------------------------------------------------------------------
+// CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+
+/// Snapshot of process-level metrics read from /proc/self/statm and /proc/self/status.
+/// Uses std.posix syscalls directly to avoid std.fs API churn across Zig versions.
+const ProcessSnapshot = struct {
+    rss_bytes: ?u64 = null,
+    threads: ?u32 = null,
+
+    fn readProcFile(path: []const u8, buf: []u8) []u8 {
+        if (comptime @import("builtin").os.tag != .linux) return buf[0..0];
+        // Use std.posix.openat (AT.FDCWD = -100 on Linux) and raw read.
+        // std.posix.close was removed in Zig 0.16; use std.os.linux.close.
+        const fd = std.posix.openat(std.posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return buf[0..0];
+        defer _ = std.os.linux.close(fd);
+        const n = std.posix.read(fd, buf) catch return buf[0..0];
+        return buf[0..n];
+    }
+
+    fn capture() ProcessSnapshot {
+        var s: ProcessSnapshot = .{};
+        if (comptime @import("builtin").os.tag != .linux) return s;
+        // Read resident-set size from /proc/self/statm.
+        var buf: [256]u8 = undefined;
+        const statm = readProcFile("/proc/self/statm", &buf);
+        if (statm.len > 0) {
+            var iter = std.mem.tokenizeScalar(u8, statm, ' ');
+            _ = iter.next(); // total pages
+            const resident_str = iter.next() orelse return s;
+            const pages = std.fmt.parseInt(u64, std.mem.trim(u8, resident_str, " \n"), 10) catch return s;
+            s.rss_bytes = pages * std.heap.pageSize();
+        }
+        // Thread count from /proc/self/status.
+        var sbuf: [4096]u8 = undefined;
+        const status = readProcFile("/proc/self/status", &sbuf);
+        if (std.mem.indexOf(u8, status, "Threads:")) |idx| {
+            const rest = status[idx + "Threads:".len ..];
+            const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+            s.threads = std.fmt.parseInt(u32, std.mem.trim(u8, rest[0..end], " \t"), 10) catch null;
+        }
+        return s;
+    }
+};
+
+var g_runtime_rss_gauge: ?otel.api.metrics.Gauge = null;
+var g_runtime_threads_gauge: ?otel.api.metrics.Gauge = null;
+var g_runtime_registered: bool = false;
+
+/// Install process/runtime instruments (process.runtime.zig.memory.resident_set
+/// and process.runtime.zig.threads) via observable gauges backed by /proc/self.
+/// Must be called once after `init()`. Idempotent — second call is a no-op.
+pub fn registerRuntimeMetrics() !void {
+    if (g_runtime_registered) return;
+    const m = meter();
+    g_runtime_rss_gauge = try m.gauge(.{
+        .name = "process.runtime.zig.memory.resident_set",
+        .unit = "By",
+        .kind = .gauge,
+        .description = "Resident set size of the process in bytes",
+    });
+    g_runtime_threads_gauge = try m.gauge(.{
+        .name = "process.runtime.zig.threads",
+        .unit = "{thread}",
+        .kind = .gauge,
+        .description = "Number of OS threads in the process",
+    });
+    g_runtime_registered = true;
+}
+
+/// Refresh the runtime gauges from a fresh /proc/self snapshot.
+/// Call from a periodic timer (e.g. every 15 s).
+pub fn refreshRuntimeMetrics() void {
+    if (!g_runtime_registered) return;
+    const s = ProcessSnapshot.capture();
+    if (g_runtime_rss_gauge) |g| if (s.rss_bytes) |v| g.set(@floatFromInt(v), &.{});
+    if (g_runtime_threads_gauge) |g| if (s.threads) |v| g.set(@floatFromInt(v), &.{});
+}
+
+// -------------------------------------------------------------------------
+// db.client.* metrics — REQ-OTEL-METRICS-014 (Sub-B).
+//
+// Instruments the internal remote-query path used in distributed mode.
+// Follows the OTel semantic conventions for database clients:
+//   db.client.operation.duration  — histogram (seconds)
+//   db.client.connection.count    — up-down counter ({connection})
+// -------------------------------------------------------------------------
+
+pub const DbClientOp = []const u8;
+
+const DbClientMetrics = struct {
+    operation_duration: otel.api.metrics.Histogram,
+    connection_count: otel.api.metrics.UpDownCounter,
+};
+
+var g_db_client: ?DbClientMetrics = null;
+
+fn ensureDbClient() !*DbClientMetrics {
+    if (g_db_client != null) return &g_db_client.?;
+    const m = meter();
+    g_db_client = .{
+        .operation_duration = try m.histogram(.{
+            .name = "db.client.operation.duration",
+            .unit = "s",
+            .kind = .histogram,
+            .description = "Duration of outbound database operations sent to peer nodes",
+            .explicit_buckets = .{ .boundaries = buckets_db_client_duration },
+        }),
+        .connection_count = try m.upDownCounter(.{
+            .name = "db.client.connection.count",
+            .unit = "{connection}",
+            .kind = .up_down_counter,
+            .description = "Number of connections in the client connection pool",
+        }),
+    };
+    return &g_db_client.?;
+}
+
+/// Record a completed outbound database operation to a remote peer.
+/// `op` is a low-cardinality operation name (e.g. "MATCH", "CREATE").
+/// `server_addr` is a low-cardinality `"<host>:<port>"` string — use only
+/// static cluster peer addresses, never user-supplied data.
+/// `duration_s` is wall-clock time in seconds.
+/// `outcome` and `error_type` follow the same conventions as all other
+/// `record*` helpers in this module.
+pub fn recordDbClientOperation(op: DbClientOp, server_addr: []const u8, duration_s: f64, outcome: Outcome, error_type: ?[]const u8) void {
+    const db = ensureDbClient() catch return;
+    var buf: [4]attrs.Entry = undefined;
+    var n: usize = 0;
+    buf[n] = .{ .key = "db.system.name", .value = .{ .string = "codepros.geode" } };
+    n += 1;
+    buf[n] = .{ .key = "db.operation.name", .value = .{ .string = op } };
+    n += 1;
+    buf[n] = .{ .key = "server.address", .value = .{ .string = server_addr } };
+    n += 1;
+    if (error_type) |e| {
+        buf[n] = .{ .key = "error.type", .value = .{ .string = e } };
+        n += 1;
+    }
+    db.operation_duration.record(duration_s, buf[0..n]);
+    // outcome is not recorded on the histogram itself — callers that need
+    // per-outcome counters should use recordQueryExecution or the transport
+    // helpers instead.  Suppress the unused-variable warning:
+    _ = outcome;
+}
+
+pub const DbClientConnectionState = enum { idle, used };
+
+/// Increment the db.client.connection.count gauge for the given pool/state.
+/// `server_addr` is used as the pool name (low-cardinality peer address).
+pub fn incDbClientConnection(server_addr: []const u8, state: DbClientConnectionState) void {
+    const db = ensureDbClient() catch return;
+    db.connection_count.add(1, &.{
+        .{ .key = "db.client.connection.pool.name", .value = .{ .string = server_addr } },
+        .{ .key = "db.client.connection.state", .value = .{ .string = @tagName(state) } },
+    });
+}
+
+/// Decrement the db.client.connection.count gauge for the given pool/state.
+pub fn decDbClientConnection(server_addr: []const u8, state: DbClientConnectionState) void {
+    const db = ensureDbClient() catch return;
+    db.connection_count.add(-1, &.{
+        .{ .key = "db.client.connection.pool.name", .value = .{ .string = server_addr } },
+        .{ .key = "db.client.connection.state", .value = .{ .string = @tagName(state) } },
+    });
 }

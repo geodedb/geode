@@ -632,6 +632,12 @@ pub fn main() !void {
             Attr.string("error", @errorName(err)),
         });
     };
+    // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+    otel_metrics_facade.registerRuntimeMetrics() catch |err| {
+        log.warn("Failed to register runtime process metrics", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
     otel_metrics_facade.recordServerHealth("server", true);
 
     // CANARY: REQ=REQ-PROMETHEUS-WIRE-004; FEATURE="Prometheus Metrics Endpoint"; ASPECT=ServerInit; STATUS=TESTED; TEST=geodetestlab/specs/gap_0166_prometheus_metrics.yml; OWNER=monitoring; UPDATED=2026-01-14
