@@ -131,8 +131,8 @@
             // triggered by newer quic/grpc_zig/mcp/etc. that pull a different
             // thread_pool version transitively; those deps remain pinned. If
             // bumping those deps in future, verify no overlapping module paths.
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#1674ebbeb0eed7107e6e488cc9fd7b97a8036966",
-            .hash = "thread_pool-0.2.1-11B1BqycdgAPt02YXm95pvBtazxHeJlzMBIUHZ0yTzSa",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#a554a76499fcaa7bfde35907f79c2a4a586fea4d",
+            .hash = "thread_pool-0.2.1-11B1BtChdgA9Y33CKQAssNN0It53bpRXpmWNmvDqHQXB",
         },
 
         // =======================================================================
@@ -147,8 +147,8 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#5656e4f34703b009c8ed49499d0b735401db11ab",
-            .hash = "protobuf-3.0.0-0e82atYsKgBQldkFsZufSSw3ZuSSO_mwkJLAtrNLMtYT",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#66a69ea98bb98c1e007cea4dfb174e24db1deee5",
+            .hash = "protobuf-3.0.0-0e82aqUuKgBe6-52SFElKRLkwWp0MzKm5Gs1c0AVBz1g",
         },
 
         // gRPC for Zig

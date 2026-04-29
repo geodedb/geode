@@ -327,13 +327,13 @@ pub fn build(b: *std.Build) void {
     mcp_mod.addImport("json", json_mod);
 
     // Protobuf (Google Protocol Buffers)
-    // NOTE: with_otel=true is intentionally OFF for protobuf because its
-    // build.zig wires THREE addOptions blocks (lib_options + two bench
-    // exes), and the bench blocks build a `build_options` module that
-    // omits `with_otel`. Cached options.zig at hash 4c9d7c26 then satisfies
-    // protobuf's observability.zig import in some paths but lacks the
-    // `with_otel` field, breaking the build. Re-enable once protobuf's
-    // bench addOptions blocks are unified with the lib options block.
+    // NOTE: with_otel=true intentionally OFF. After unifying protobuf's
+    // bench addOptions with the lib block (commit 66a69ea), the resolved
+    // protobuf module's `build_options` STILL ends up bound to a 7-field
+    // options.zig (cache hash 4c9d7c26) when called from inside geode —
+    // the source of the 7-field block has not been identified, but it
+    // makes observability.zig's `build_options.with_otel` lookup fail.
+    // Tracked for future investigation.
     const protobuf_dep = b.dependency("protobuf", .{
         .target = target,
         .optimize = optimize,
@@ -352,6 +352,11 @@ pub fn build(b: *std.Build) void {
     const thread_pool_dep = b.dependency("thread_pool", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
