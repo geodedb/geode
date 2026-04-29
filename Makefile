@@ -267,6 +267,128 @@ install: release install-tuning
 	@echo "Logs:      sudo journalctl -u geode -f"
 	@echo "Admin pw:  sudo journalctl -u geode | grep 'Generated admin password'"
 
+# Install geode + OTel tracing/metrics push to the GitLab Observability
+# endpoint used by the upstream otel package's `otlp-integration-live` CI
+# job (otel/.gitlab-ci.yml:265-279). Build flags wire DevNW tls into the
+# OTLP/HTTP transport so HTTPS reaches the collector at
+# https://5333796.otel.gitlab-o11y.com:14318.
+#
+# Required env var (passed to make on the command line, NOT exported in
+# shell history):
+#   GEODE_OTEL_BEARER_TOKEN=<gitlab-observability-token>
+#       — bearer token issued under
+#         GitLab Observability → Settings → Tokens (scope:
+#         traces:write, metrics:write).
+#
+# Optional overrides:
+#   GEODE_OTEL_ENDPOINT=...              endpoint URL (defaults to GitLab)
+#   GEODE_OTEL_SAMPLER_ARG=1.0           sampling rate (default 1.0)
+#   GEODE_OTEL_RESOURCE_ATTRIBUTES=...   extra resource attrs
+#
+# Usage:
+#   make install-otel GEODE_OTEL_BEARER_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+#
+GEODE_OTEL_ENDPOINT ?= https://5333796.otel.gitlab-o11y.com:14318
+GEODE_OTEL_SAMPLER_ARG ?= 1.0
+GEODE_OTEL_RESOURCE_ATTRIBUTES ?= deployment.environment.name=production
+
+install-otel: install-tuning
+	@echo "=== Installing geode with OTel HTTPS push enabled ==="
+	@if [ -z "$(GEODE_OTEL_BEARER_TOKEN)" ]; then \
+		echo "Error: GEODE_OTEL_BEARER_TOKEN is required."; \
+		echo "Issue one in GitLab Observability → Settings → Tokens (scope: traces:write,metrics:write)."; \
+		echo "Then re-run: make install-otel GEODE_OTEL_BEARER_TOKEN=<token>"; \
+		exit 2; \
+	fi
+	@# Build with otel HTTPS support enabled. Skipping the regular
+	@# `release` target lets us pass -Dotel_use_devnw_tls=true into
+	@# the same artifact that lands in /usr/bin/geode.
+	@echo "Building geode (release, -Dotel_use_devnw_tls=true)..."
+	zig build -Doptimize=ReleaseSafe -Dotel_use_devnw_tls=true
+	@# Reuse the regular install plumbing (user/group/dirs/cert/svc)
+	@# but DON'T rebuild — we already produced the otel-tls binary.
+	@$(MAKE) --no-print-directory _install_no_build
+	@# Lay down the OTel runtime env file. Render the bearer token from
+	@# $$GEODE_OTEL_BEARER_TOKEN; everything else from the example.
+	@echo "Writing /etc/geode/otel.env (root:geode 0640)..."
+	@sudo install -m 0640 -o root -g geode \
+		deployment/systemd/otel.env.example /etc/geode/otel.env
+	@sudo sed -i \
+		-e 's|__REPLACE_WITH_TOKEN__|$(GEODE_OTEL_BEARER_TOKEN)|' \
+		-e 's|^OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=$(GEODE_OTEL_ENDPOINT)|' \
+		-e 's|^OTEL_TRACES_SAMPLER_ARG=.*|OTEL_TRACES_SAMPLER_ARG=$(GEODE_OTEL_SAMPLER_ARG)|' \
+		-e 's|^OTEL_RESOURCE_ATTRIBUTES=.*|OTEL_RESOURCE_ATTRIBUTES=$(GEODE_OTEL_RESOURCE_ATTRIBUTES)|' \
+		/etc/geode/otel.env
+	@sudo chmod 0640 /etc/geode/otel.env
+	@# Restart the service so EnvironmentFile= is reloaded.
+	@sudo systemctl daemon-reload
+	@sudo systemctl restart geode.service
+	@echo "✓ geode installed with OTel push to $(GEODE_OTEL_ENDPOINT)"
+	@echo ""
+	@echo "Verify push:    make test-otel-tracing"
+	@echo "Inspect cfg:    sudo cat /etc/geode/otel.env"
+	@echo "Live logs:      sudo journalctl -u geode -f"
+
+# Internal helper used by both `install` and `install-otel`. Performs
+# every install step EXCEPT the binary rebuild. Caller is responsible
+# for `zig build` / `zig build release` first.
+_install_no_build:
+	@if ! getent group geode >/dev/null 2>&1; then sudo groupadd --system geode; fi
+	@if ! getent passwd geode >/dev/null 2>&1; then \
+		sudo useradd --system --gid geode --no-create-home \
+			--home-dir /var/lib/geode --shell /usr/sbin/nologin \
+			--comment "Geode Graph Database" geode; \
+	fi
+	@sudo mkdir -p /var/lib/geode /var/log/geode /etc/geode/certs
+	@sudo chown -R geode:geode /var/lib/geode /var/log/geode /etc/geode
+	@sudo chmod 750 /var/lib/geode /var/log/geode
+	@sudo chmod 755 /etc/geode/certs
+	@if systemctl is-active --quiet geode.service 2>/dev/null; then \
+		sudo systemctl stop geode.service; sleep 2; \
+	fi
+	sudo install -m 0755 zig-out/bin/geode /usr/bin/geode
+	@if [ ! -f /lib/systemd/system/geode.service ] || \
+		! sudo cmp -s deployment/systemd/geode.service /lib/systemd/system/geode.service; then \
+		sudo install -m 0644 deployment/systemd/geode.service /lib/systemd/system/geode.service; \
+		sudo systemctl daemon-reload; \
+	fi
+	@if [ ! -f /etc/geode/certs/server.crt ] || [ ! -f /etc/geode/certs/server.key ]; then \
+		if command -v openssl >/dev/null 2>&1; then \
+			sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+				-keyout /etc/geode/certs/server.key -out /etc/geode/certs/server.crt \
+				-days 365 -subj "/CN=localhost" \
+				-addext "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:::1" 2>/dev/null; \
+			sudo chown geode:geode /etc/geode/certs/server.crt /etc/geode/certs/server.key; \
+			sudo chmod 644 /etc/geode/certs/server.crt; \
+			sudo chmod 600 /etc/geode/certs/server.key; \
+		fi; \
+	fi
+	@sudo systemctl enable geode.service >/dev/null 2>&1 || true
+
+# Smoke-test that an installed geode is actually pushing OTLP traces +
+# metrics to the configured endpoint. Two modes:
+#
+#   make test-otel-tracing                  — local docker collector
+#                                              (no auth, no internet)
+#   make test-otel-tracing-live             — live GitLab Observability
+#                                              (uses the installed
+#                                              /etc/geode/otel.env)
+#
+# Local mode: spins up an otel/opentelemetry-collector-contrib docker
+# container on :4318 with the debug exporter enabled, runs a query
+# workload against geode for ~30s, then asserts the collector log
+# contains span + metric records tagged service.name=geode.
+#
+# Live mode: emits a synthetic workload and tails the journal for the
+# OTel exporter's "successfully exported N records" log line. (We can't
+# read back from GitLab Observability without the project API token,
+# so this only verifies the geode→collector handshake.)
+test-otel-tracing:
+	@bash scripts/test-otel-tracing.sh local
+
+test-otel-tracing-live:
+	@bash scripts/test-otel-tracing.sh live
+
 # Apply the canonical zig-quic sysctl tuning. Unconditional on developer hosts;
 # idempotent and "only raise, never lower" at runtime. Drop-in at
 # /etc/sysctl.d/99-geode-quic.conf persists across reboots.

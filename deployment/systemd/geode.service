@@ -39,6 +39,12 @@ Environment="GEODE_DATA_DIR=/var/lib/geode"
 Environment="GEODE_LOG_DIR=/var/log/geode"
 Environment="GEODE_CERT_DIR=/etc/geode/certs"
 
+# Optional OpenTelemetry runtime configuration. The leading `-` makes
+# the file optional, so installs without OTel push (the default) are
+# unaffected. `make install-otel` populates this file from
+# deployment/systemd/otel.env.example.
+EnvironmentFile=-/etc/geode/otel.env
+
 # QUIC / UDP tuning is applied at install time via deployment/scripts/tune-system.sh
 # and persisted to /etc/sysctl.d/99-geode-quic.conf. See devnw/zig/quic
 # docs/SYSTEM_TUNING.md for per-knob rationale and rollback.

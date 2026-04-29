@@ -193,12 +193,47 @@ pub fn build(b: *std.Build) void {
     const slog_mod = slog_dep.module("slogz");
     slog_mod.addImport("json", json_mod);
 
-    // OpenTelemetry — metrics + tracing facade. Default-off transitive
-    // flags keep grpc_zig/protobuf/thread_pool pin conflicts out of the
-    // module graph; OTLP/HTTP works on stdlib std.http.Client alone.
+    // OpenTelemetry — metrics + tracing facade.
+    //
+    // Project-level options propagate into the upstream otel package's
+    // own build flags. Defaults match the conservative set documented in
+    // build.zig.zon (the .otel comment block): grpc_zig / protobuf /
+    // thread_pool transitive-dep flags stay OFF because turning them on
+    // pulls in otel-pinned versions that collide with geode's own pins
+    // (Zig 0.16 forbids overlapping module paths from two versions of
+    // the same dep).
+    //
+    //   -Dotel_disabled=true            comptime-collapse every otel
+    //                                   API call to a no-op (zero-overhead
+    //                                   disabled mode).
+    //   -Dotel_profiles=true            enable experimental OTLP profiles
+    //                                   export (the upstream proto is
+    //                                   /v1development/ and may break;
+    //                                   default off).
+    //   -Dotel_use_devnw_tls=true       wire DevNW tls into the otel
+    //                                   OTLP/HTTP transport so HTTPS
+    //                                   endpoints (incl. GitLab
+    //                                   observability) become reachable.
+    //                                   Required for `make install-otel`
+    //                                   when GEODE_OTEL_ENDPOINT is
+    //                                   `https://...`. Pulls in the otel
+    //                                   tls13_full module.
+    //   -Dotel_use_devnw_grpc=true      OTLP/gRPC. Currently INCOMPATIBLE
+    //                                   with geode (grpc_zig pin
+    //                                   conflict); the otel devnw_grpc
+    //                                   path remains experimental
+    //                                   upstream too. Stay false.
+    const otel_disabled = b.option(bool, "otel_disabled", "Compile every otel API call site to a comptime-known no-op (zero-overhead disabled mode)") orelse false;
+    const otel_profiles = b.option(bool, "otel_profiles", "Enable experimental OTLP profiles export (upstream proto unstable)") orelse false;
+    const otel_use_devnw_tls = b.option(bool, "otel_use_devnw_tls", "Use DevNW tls for HTTPS in OTLP/HTTP transport (required for HTTPS OTLP endpoints, e.g. GitLab observability)") orelse false;
+    const otel_use_devnw_grpc = b.option(bool, "otel_use_devnw_grpc", "Use DevNW grpc-zig for OTLP/gRPC transport (CURRENTLY UNSUPPORTED; pin-conflict with geode's grpc_zig)") orelse false;
     const otel_dep = b.dependency("otel", .{
         .target = target,
         .optimize = optimize,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const otel_mod = otel_dep.module("otel");
 
