@@ -71,6 +71,16 @@ var g_otlp_exporter: ?exporter_factory.OwnedMetricExporter = null;
 var g_tracer_provider: ?*TracerProvider = null;
 var g_tracer_owned_exporter: ?exporter_factory.OwnedSpanExporter = null;
 
+// Library binding handles. Each call to `bindLibraryGlobals` allocates a
+// stable Tracer / Meter handle on the heap (the lib's `global.tracer`
+// pointer needs a value that outlives the binding call). `shutdown()`
+// frees them. We over-allocate by tracking pairs to keep cleanup simple.
+const LibHandle = struct {
+    tracer: ?*Tracer = null,
+    meter: ?*Meter = null,
+};
+var g_lib_handles: std.ArrayListUnmanaged(LibHandle) = .empty;
+
 fn initIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -156,6 +166,19 @@ pub fn shutdown() void {
         e.deinit();
         g_otlp_exporter = null;
     }
+
+    // Free library binding handles BEFORE the providers below — the
+    // libs' `global.tracer/meter` pointers become dangling once these
+    // structs are freed, but the libs are racing nothing at this point
+    // (the process is shutting down).
+    if (g_allocator) |a| {
+        for (g_lib_handles.items) |h| {
+            if (h.tracer) |t| a.destroy(t);
+            if (h.meter) |m| a.destroy(m);
+        }
+        g_lib_handles.deinit(a);
+    }
+    g_lib_handles = .empty;
 
     // Tear down the tracer pipeline before the resource is freed below.
     // TracerProvider.deinit shuts down processors, which flushes the
@@ -488,6 +511,70 @@ pub fn tracer() Tracer {
 /// Safe to call when no tracer provider is active — returns immediately.
 pub fn forceFlushTraces(timeout_ms: u64) !void {
     if (g_tracer_provider) |p| try p.forceFlush(timeout_ms);
+}
+
+/// Bind a dependent library's `observability` seam to geode's
+/// TracerProvider + MeterProvider so spans/metrics emitted by that
+/// library land in geode's OTLP/HTTP pipeline.
+///
+/// `LibObservability` MUST be the named module re-exported by a CodePros
+/// DevNW library that follows the canonical observability seam (the lib
+/// exposes `pub const enabled: bool` and `pub const global = struct {
+/// pub var tracer: ?*Tracer; pub var meter: ?*Meter; }`). At time of
+/// writing this matches: wal, gql, repl, dns, slog, vulkan, protobuf,
+/// thread_pool — see `docs/otel-updates.md` for the full list.
+///
+/// The lib MUST be built with `-Dwith_otel=true` for the seam to actually
+/// emit spans; when built with the default `-Dwith_otel=false`, the
+/// `global` struct collapses to `struct {}` and this function compiles
+/// to a comptime no-op (zero binary impact).
+///
+/// Each successful call allocates one `Tracer` + one `Meter` on the
+/// global allocator. Both are freed by `shutdown()`. Calls are
+/// idempotent only across distinct `(LibObservability, scope_name)`
+/// pairs — calling twice with the same library leaks the previous
+/// handles without unbinding them.
+pub fn bindLibraryGlobals(
+    comptime LibObservability: type,
+    comptime scope_name: []const u8,
+) !void {
+    if (comptime !@hasDecl(LibObservability, "enabled") or !LibObservability.enabled) {
+        return;
+    }
+
+    g_init_mu.lockUncancelable(initIo());
+    defer g_init_mu.unlock(initIo());
+
+    const allocator = g_allocator orelse return error.OtelNotInitialised;
+    var handle: LibHandle = .{};
+
+    if (g_tracer_provider) |tp| {
+        const t = try allocator.create(Tracer);
+        errdefer allocator.destroy(t);
+        t.* = tp.tracer(.{
+            .name = scope_name,
+            .version = otel.version,
+            .schema_url = SCHEMA_URL,
+        });
+        LibObservability.global.tracer = t;
+        handle.tracer = t;
+    }
+
+    if (g_provider) |mp| {
+        const m = try allocator.create(Meter);
+        errdefer allocator.destroy(m);
+        m.* = mp.meter(.{
+            .name = scope_name,
+            .version = otel.version,
+            .schema_url = SCHEMA_URL,
+        });
+        LibObservability.global.meter = m;
+        handle.meter = m;
+    }
+
+    if (handle.tracer != null or handle.meter != null) {
+        try g_lib_handles.append(allocator, handle);
+    }
 }
 
 /// Return a `Meter` scoped to Geode's instrumentation library.
