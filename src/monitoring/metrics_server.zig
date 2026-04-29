@@ -189,14 +189,16 @@ pub const MetricsServer = struct {
     /// Serve `GET /metrics` — Prometheus text exposition format 0.0.4.
     ///
     /// When the OTel MeterProvider is initialised, renders via the OTel
-    /// Prometheus exporter. Falls back to the legacy MetricsCollector on
-    /// error or when the provider is not yet initialised (e.g. during
-    /// early startup or in tests that only exercise the legacy path).
+    /// Prometheus exporter AND appends the legacy MetricsCollector output so
+    /// that pre-OTel metric names (geode_queries_total, geode_connections_active,
+    /// etc.) remain visible for backward-compatible scrapers and test specs.
+    /// Falls back to the legacy collector only when OTel rendering fails or
+    /// the provider is not yet initialised.
     fn serveMetrics(self: *MetricsServer, stream: std.Io.net.Stream) !void {
         const io = self.threaded.?.io();
         const otel_resp = @import("otel_prometheus_responder");
 
-        var body: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 2048);
+        var body: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 4096);
         defer body.deinit();
 
         if (otel_resp.isAvailable()) {
@@ -210,6 +212,12 @@ pub const MetricsServer = struct {
                 body = try .initCapacity(self.allocator, 2048);
                 try self.collector.exportMetrics(&body.writer);
             };
+            // Append legacy metrics after OTel output for backward compatibility.
+            // This ensures pre-OTel metric names (geode_queries_total,
+            // geode_connections_active) are always present for scrapers and
+            // test specs that pre-date the OTel migration. Prometheus scrapers
+            // tolerate multiple metric families with distinct names in one payload.
+            try self.collector.exportMetrics(&body.writer);
         } else {
             try self.collector.exportMetrics(&body.writer);
         }

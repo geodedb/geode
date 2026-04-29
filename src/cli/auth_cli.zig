@@ -54,6 +54,24 @@ fn extractDataDir(argv: [][:0]u8) ?[]const u8 {
 /// Policy management command handler
 /// Handles: policy create, policy list, policy show, policy delete
 pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Help / missing-subcommand checks BEFORE opening the auth store —
+    // these paths must not require disk I/O.
+    const subcmd_idx = start_idx + 1;
+    if (subcmd_idx >= argv.len) {
+        std.debug.print("Error: missing policy subcommand\n", .{});
+        printPolicyUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    const subcmd = argv[subcmd_idx];
+    if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
+        printPolicyUsage();
+        return;
+    }
+    if (hasHelpFlag(argv, subcmd_idx + 1)) {
+        printPolicyUsage();
+        return;
+    }
+
     // Open graph store for offline auth operations
     const data_dir = extractDataDir(argv);
     var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
@@ -61,21 +79,6 @@ pub fn cmdPolicy(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize)
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
-    const subcmd_idx = start_idx + 1;
-
-    if (subcmd_idx >= argv.len) {
-        std.debug.print("Error: missing policy subcommand\n", .{});
-        printPolicyUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const subcmd = argv[subcmd_idx];
-
-    if (std.mem.eql(u8, subcmd, "--help") or std.mem.eql(u8, subcmd, "-h")) {
-        printPolicyUsage();
-        return;
-    }
 
     if (std.mem.eql(u8, subcmd, "create")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {

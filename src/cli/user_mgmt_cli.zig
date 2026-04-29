@@ -78,7 +78,7 @@ fn printUserUsage() void {
     printOut("Commands:\n", .{});
     printOut("  create <username> <email> --password <password> [--role <role>]\n", .{});
     printOut("  create <username> <email> --generate-password [--role <role>]\n", .{});
-    printOut("  list\n", .{});
+    printOut("  list                              List all users\n", .{});
     printOut("  show|info <username>\n", .{});
     printOut("  delete <username> [--yes]\n", .{});
     printOut("  update <username> [--email <email>] [--password <password>] [--role <role>]\n", .{});
@@ -98,7 +98,7 @@ fn printRoleUsage() void {
     printOut("Usage: geode role <command> [options]\n", .{});
     printOut("Commands:\n", .{});
     printOut("  create <rolename> [description] [--permissions <perm1,perm2>]\n", .{});
-    printOut("  list\n", .{});
+    printOut("  list                              List all roles\n", .{});
     printOut("  delete <rolename>\n", .{});
     printOut("  show <rolename>\n", .{});
 }
@@ -165,6 +165,13 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     const subcommand = argv[subcmd_idx];
 
     if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
+        printUserUsage();
+        return;
+    }
+
+    // Help check ALSO covers `user <subcommand> --help` (e.g. `user create --help`)
+    // — we must NOT open the auth store just to print help.
+    if (hasHelpFlag(argv, subcmd_idx + 1)) {
         printUserUsage();
         return;
     }
@@ -879,6 +886,25 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 /// Role management command handler
 /// Handles: role create, role list, role delete, role show
 pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
+    // Help / missing-subcommand checks BEFORE opening the auth store —
+    // these paths must not require any disk I/O (graph_storage_adapter
+    // would otherwise attempt to open /var/lib/geode and fail noisily
+    // for any user without that path's permissions).
+    if (start_idx + 1 >= argv.len) {
+        std.debug.print("Error: missing role subcommand\n", .{});
+        printRoleUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+    const subcommand = argv[start_idx + 1];
+    if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
+        printRoleUsage();
+        return;
+    }
+    if (hasHelpFlag(argv, start_idx + 2)) {
+        printRoleUsage();
+        return;
+    }
+
     // Open graph store for offline auth operations
     const data_dir = extractDataDir(argv);
     var mgr = cli_auth.initCliAuthManager(allocator, data_dir) catch |err| {
@@ -886,20 +912,6 @@ pub fn cmdRole(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
     defer cli_auth.deinitAndSaveCliAuth(allocator, &mgr);
-
-    if (start_idx + 1 >= argv.len) {
-        std.debug.print("Error: missing role subcommand\n", .{});
-        printRoleUsage();
-        std.process.exit(@intFromEnum(ExitCode.usage_error));
-    }
-
-    const subcommand = argv[start_idx + 1];
-
-    // Handle --help and -h flags
-    if (std.mem.eql(u8, subcommand, "--help") or std.mem.eql(u8, subcommand, "-h")) {
-        printRoleUsage();
-        return;
-    }
 
     if (std.mem.eql(u8, subcommand, "create")) {
         if (hasHelpFlag(argv, start_idx + 2)) {
