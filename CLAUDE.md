@@ -186,6 +186,68 @@ GEODE_BINARY=/path/to/geode make test
 make test-spec SPEC=geodetestlab-cli/specs/my_spec.yml
 ```
 
+### OTel Monitoring During Tests / Benchmarks (debugging)
+
+When a bug report involves "hung for N minutes", "connection died", "chunk failed",
+slow queries, or any cross-layer behavior, **run the suite with OTel monitoring
+enabled** to capture every span and metric geode emits during the run. This is
+how you triage cascading failures across QUIC ↔ executor ↔ WAL ↔ storage without
+having to instrument by hand.
+
+The harness ships a docker `otel/opentelemetry-collector-contrib` lifecycle and
+a one-shot Make target:
+
+```bash
+cd ../geode-test-harness
+# One-shot: start collector → run full suite → verify spans landed → stop collector
+make test-everything-otel GEODE_BINARY=/path/to/geode
+
+# Manual control (debugging a specific spec or load profile)
+make otel-start                      # docker collector on :44318 / :44317
+make otel-tail                       # docker logs -f (live span/metric stream)
+GEODE_OTEL=1 make test-spec SPEC=specs/foo.yml
+make otel-verify                     # assert spans with service.name=geode arrived
+make otel-stop                       # tear down
+```
+
+**Generated artefacts** (all under `../geode-test-harness/reports/`, gitignored):
+
+- `reports/spans.jsonl` — every span/metric in OTLP/JSON, one record per line.
+  Filter with `jq '.resourceSpans[].scopeSpans[] | select(.scope.name=="wal")'`.
+- `reports/otel-collector.log` — drained collector stdout.
+- `reports/.otel-env` — exact `OTEL_*` env vars sourced into the test run.
+
+**InstrumentationScopes that fire** (after merge commit `5609bc79`):
+
+| Scope | Useful for |
+|---|---|
+| `com.geodedb.geode` | `geode.transport.request`, `geode.query.execute`, `geode.graph_store.{create_node,get_nodes_by_label}`, `gql.execute.PARSE`, `wal.{create,update,delete}_*` |
+| `wal` | `wal.{replay,append,append_batch,commit,checkpoint,truncate}` |
+| `gql` | `gql.execute.query` (parser entry inside the lib) |
+| `dns` | DNS lookups (`client.zig`, `recursive.zig`, `stub.zig`) |
+| `vulkan` | GPU compute ops (when present in the workload) |
+| `thread_pool` | task lifecycle |
+| `repl` | REPL command execution |
+| `protobuf` / `slog` | bound for forward-compat; no internal spans today |
+
+**Common debugging recipes**:
+
+- *"chunk failed: driver: bad connection"* — look for `geode.transport.request`
+  spans whose status is error and check `quic_active_connections` over the
+  surrounding window. If `quic_min_smoothed_rtt_ns=12297829382473034410`
+  (`0xAAAA…`) shows up, that's an uninit-stat sentinel — focus on whether
+  the connection ever completed handshake.
+- *Slow query investigation* — diff `gql.execute.PARSE` and
+  `geode.query.execute` durations to see whether time is in parse, plan, or
+  execute.
+- *Pipeline cascade* — the `wal.*` span that errors first names the
+  operation type (e.g. `wal.create_edge`); pair with `geode.graph_store.*`
+  to localize.
+
+The harness `CLAUDE.md` (`../geode-test-harness/CLAUDE.md`) has the deep dive
+on collector defaults, port overrides, and `scripts/otel-collector.sh`
+internals.
+
 ### Recent Test Improvements (October 2025)
 
 - **stdin handling** in test runner fixed (critical issue)
