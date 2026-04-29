@@ -93,6 +93,35 @@ fn printUserUsage() void {
     printOut("\nNote: --password is required in production builds. Use --generate-password for random passwords.\n", .{});
 }
 
+fn printMfaSetupHelp() void {
+    printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
+    printOut("Generate MFA secret and recovery codes for a user.\n", .{});
+    printOut("\nOptions:\n", .{});
+    printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
+    printOut("  --show-recovery   Show recovery codes\n", .{});
+    printOut("  --regenerate      Regenerate new secret and recovery codes\n", .{});
+    printOut("  --help, -h        Show this help\n", .{});
+}
+
+fn printMfaVerifyHelp() void {
+    printOut("Usage: geode user mfa-verify <username> --token <code>\n", .{});
+    printOut("Verify a TOTP code for a user.\n", .{});
+    printOut("\nOptions:\n", .{});
+    printOut("  --token <code>    The 6-digit TOTP code to verify\n", .{});
+    printOut("  --help, -h        Show this help\n", .{});
+}
+
+fn printMfaToggleHelp() void {
+    printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
+    printOut("Enable or disable MFA for a user.\n", .{});
+    printOut("\nOptions:\n", .{});
+    printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
+    printOut("  --help, -h        Show this help\n", .{});
+    printOut("\nExamples:\n", .{});
+    printOut("  geode user mfa enable alice --code 123456\n", .{});
+    printOut("  geode user mfa disable alice\n", .{});
+}
+
 fn printRoleUsage() void {
     printOut("geode role - Role management commands\n", .{});
     printOut("Usage: geode role <command> [options]\n", .{});
@@ -172,7 +201,15 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     // Help check ALSO covers `user <subcommand> --help` (e.g. `user create --help`)
     // — we must NOT open the auth store just to print help.
     if (hasHelpFlag(argv, subcmd_idx + 1)) {
-        printUserUsage();
+        if (std.mem.eql(u8, subcommand, "mfa-setup")) {
+            printMfaSetupHelp();
+        } else if (std.mem.eql(u8, subcommand, "mfa-verify")) {
+            printMfaVerifyHelp();
+        } else if (std.mem.eql(u8, subcommand, "mfa")) {
+            printMfaToggleHelp();
+        } else {
+            printUserUsage();
+        }
         return;
     }
 
@@ -498,13 +535,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     if (std.mem.eql(u8, subcommand, "mfa-setup")) {
         // Handle --help flag
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode user mfa-setup <username> [options]\n", .{});
-            printOut("Generate MFA secret and recovery codes for a user.\n", .{});
-            printOut("\nOptions:\n", .{});
-            printOut("  --show-uri        Show provisioning URI for authenticator apps\n", .{});
-            printOut("  --show-recovery   Show recovery codes\n", .{});
-            printOut("  --regenerate      Regenerate new secret and recovery codes\n", .{});
-            printOut("  --help, -h        Show this help\n", .{});
+            printMfaSetupHelp();
             return;
         }
         if (subcmd_idx + 1 >= argv.len) {
@@ -575,11 +606,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
 
     if (std.mem.eql(u8, subcommand, "mfa-verify")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode user mfa-verify <username> --token <code>\n", .{});
-            printOut("Verify a TOTP code for a user.\n", .{});
-            printOut("\nOptions:\n", .{});
-            printOut("  --token <code>    The 6-digit TOTP code to verify\n", .{});
-            printOut("  --help, -h        Show this help\n", .{});
+            printMfaVerifyHelp();
             return;
         }
         if (subcmd_idx + 1 >= argv.len) {
@@ -648,14 +675,7 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
     if (std.mem.eql(u8, subcommand, "mfa")) {
         // Handle --help flag
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
-            printOut("Usage: geode user mfa <enable|disable> <username> [options]\n", .{});
-            printOut("Enable or disable MFA for a user.\n", .{});
-            printOut("\nOptions:\n", .{});
-            printOut("  --code <code>     TOTP code for verification (enable only)\n", .{});
-            printOut("  --help, -h        Show this help\n", .{});
-            printOut("\nExamples:\n", .{});
-            printOut("  geode user mfa enable alice --code 123456\n", .{});
-            printOut("  geode user mfa disable alice\n", .{});
+            printMfaToggleHelp();
             return;
         }
         // Support: geode user mfa enable <username>
