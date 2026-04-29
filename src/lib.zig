@@ -85,9 +85,16 @@ pub const ParseOptions = struct {
 pub fn parse(allocator: std.mem.Allocator, source: []const u8, options: ParseOptions) !ParseResult {
     _ = options;
     const om = @import("otel_metrics");
+    const gql_obs = @import("gql_lib").observability;
     const t0 = @import("otel").internal.clock.unixNanoNow();
     var arena = std.heap.ArenaAllocator.init(allocator);
     errdefer arena.deinit();
+
+    // GQL parser span — emits when gql lib is built with -Dwith_otel=true
+    // and otel_metrics.bindLibraryGlobals has wired the seam at server
+    // startup. Both gates collapse to comptime no-ops otherwise.
+    const _parse_span = gql_obs.startQueryExecutionSpan("PARSE", null);
+    defer gql_obs.endQueryExecutionSpan(_parse_span, true, 0);
 
     var lexer = Lexer{ .src = source };
     var parser = Parser{ .lx = &lexer, .arena = &arena, .cur = lexer.next() };
