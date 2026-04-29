@@ -1755,21 +1755,37 @@ fn runStreamQueryLoop(
             // OTel transport request instrumentation. op_name is "QUERY" for
             // all requests at this layer; Task 10 will refine per parsed type.
             const om = @import("otel_metrics");
+            const otel_lib = @import("otel");
             const op_name: []const u8 = "QUERY";
             om.incTransportInflight(op_name);
             defer om.decTransportInflight(op_name); // ALWAYS runs, including the catch-return path
-            const t0_ns = @import("otel").internal.clock.unixNanoNow();
+            const t0_ns = otel_lib.internal.clock.unixNanoNow();
+
+            // Trace span per inbound QUIC request. Becomes the parent for any
+            // executeStatementWithContext span that fires while handling this
+            // message. Span is a noop when no TracerProvider is wired.
+            var transport_span = om.tracer().startSpan(
+                otel_lib.api.context.Context.empty(),
+                "geode.transport.request",
+                .{ .kind = .server },
+            ) catch otel_lib.api.trace.Span{ .state = null, .sc = .{} };
+            transport_span.setStringAttribute("server.transport", "quic") catch {};
+            transport_span.setStringAttribute("network.peer.address", peer_ip) catch {};
+            defer transport_span.end(null);
+
             handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
-                const elapsed_ns = @import("otel").internal.clock.unixNanoNow() - t0_ns;
+                const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
                 const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
                 om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
+                transport_span.setStatus(.@"error", @errorName(err));
                 log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
                 sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
                 continue;
             };
-            const elapsed_ns = @import("otel").internal.clock.unixNanoNow() - t0_ns;
+            const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
             const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
             om.recordTransportRequest(op_name, dur_s, .success, null);
+            transport_span.setStatus(.ok, "");
         }
 
         if (conn_state) |shared| {
