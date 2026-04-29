@@ -319,6 +319,15 @@ fn tryWireOtlpReader(allocator: std.mem.Allocator, provider: *MeterProvider) !vo
     )) orelse return;
     errdefer owned.deinit();
 
+    // Plumb a `std.Io` into the underlying OtlpHttpExporter so its HTTPS
+    // path actually fires `std.http.Client.fetch`. Without this, the
+    // exporter's `io` field stays null, `httpTransportImpl` returns
+    // `error.UnsupportedTransport`, and every export silently drops.
+    if (owned.state) |state| {
+        const exp_ptr: *otel.exporters.otlp_http.OtlpHttpExporter = @ptrCast(@alignCast(state));
+        exp_ptr.io = initIo();
+    }
+
     // Allocate the reader on the heap so its address stays stable once we
     // hand `*provider` into it.
     const reader = try allocator.create(PeriodicMetricReader);
@@ -394,6 +403,15 @@ fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
         otlp_cfg,
     )) orelse return;
     errdefer owned.deinit();
+
+    // Plumb a `std.Io` into the underlying OtlpHttpExporter — see the
+    // matching block in tryWireOtlpReader for rationale. Without this,
+    // every BatchSpanProcessor flush returns UnsupportedTransport and
+    // spans never reach the collector.
+    if (owned.state) |state| {
+        const exp_ptr: *otel.exporters.otlp_http.OtlpHttpExporter = @ptrCast(@alignCast(state));
+        exp_ptr.io = initIo();
+    }
 
     const provider = try allocator.create(TracerProvider);
     errdefer allocator.destroy(provider);
