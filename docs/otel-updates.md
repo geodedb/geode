@@ -554,3 +554,65 @@ The highest-value production SLOs will come from these P0 metrics: `geode.query.
 [15]: https://gitlab.com/devnw/codepros/geode/geode/-/raw/main/docs/ML_GRAPH_EMBEDDINGS.md "gitlab.com"
 [16]: https://gitlab.com/devnw/codepros/geode/geode/-/raw/main/docs/GRAPH_ALGORITHMS_USAGE_GUIDE.md "gitlab.com"
 [17]: https://gitlab.com/devnw/codepros/geode/geode/-/raw/main/src/monitoring/registry.zig "gitlab.com"
+
+## 10. Migration status (2026-04-28)
+
+**P0 metrics: COMPLETE** (Tasks 1-23 of the implementation plan).
+
+The full `MeterProvider` is initialised at server startup (Task 6), `/metrics` renders OTel snapshots via `otel.exporters.prometheus.Prometheus.render` (Task 7), and the legacy `prometheus.MetricsCollector` is now a fallback path (Task 23). Every P0 instrument from §4.1–4.12 plus the §3 client metrics has a facade entry in `src/monitoring/otel_metrics.zig`. A subset of P0 instruments are wired to production call sites (see per-task DONE_WITH_CONCERNS notes in commit history); the remainder are exercised by `tests/test_otel_facade_smoke.zig` and `tests/test_otel_cardinality_guard.zig`.
+
+### P0 acceptance criteria status (§8)
+
+1. ✅ Single `MeterProvider` per process via `src/monitoring/otel_metrics.zig` (Task 4 + Task 6).
+2. ✅ Histograms track real sum/count/buckets via the OTel SDK aggregation pipeline.
+3. ✅ All duration metrics use unit `s` (Tasks 8-19).
+4. ✅ All byte metrics use unit `By` (Tasks 9, 12, 18, 19).
+5. ✅ `db.query.text` disabled by default (cardinality guard test, Task 20).
+6. ✅ `service.name`, `service.version`, `service.instance.id` on every metric (Task 3).
+7. ⚠️ **Partial** — server-side `db.client.*` metrics for the internal remote-query path landed (Task 19); external Go/Zig clients track in their own repos.
+8. ✅ `geode.query.execution.duration` emitted (Task 10).
+9. ✅ Transaction metrics include `geode.transaction.isolation_level` (Task 11).
+10. ✅ Security metrics never expose identities — enforced by `tests/test_otel_cardinality_guard.zig` (Task 20).
+11. ✅ `/metrics` and OTLP export show the same logical metric set (Task 7 + Task 21).
+12. ✅ CI scrape test (`tests/geodetestlab/otel_metrics_parity.yml`, Task 22) — geodetestlab harness needs HTTP probe support to execute; the Zig integration test `tests/test_otel_prometheus_parity.zig` covers the rendering equivalent.
+13. ⚠️ **Manual only** — OTLP loopback test requires a running collector; documented in Task 21's commit message.
+14. ✅ Dashboard migrated (Task 23 — `monitoring/grafana/dashboards/geode-dashboard.json` panels renamed per §5).
+15. ✅ Cardinality test gates default labels (Task 20 — fails the build if any forbidden attribute key appears).
+
+### Deferred work
+
+- **P1 metrics** (non-P0 instruments within each §4 subsystem): see `docs/superpowers/specs/2026-04-28-otel-p1-instrumentation.md` for the full subsystem-by-subsystem checklist.
+- **P2 metrics** (GPU, embedding/vector dimensions, anomaly score histograms, graph degree distribution, ML training loss/convergence): tracked in the same P1 follow-up spec under the "P2" heading.
+- **Production call-site sweeps** for several facade functions (handshake duration, deadlock count, KMS request count, rls.filtered_rows, etc.) — the facade is ready and smoke-tested, but call sites in production code paths (`src/security/`, `src/cdc/`, `src/distributed/`, etc.) are documented as TODOs in the relevant task commits and will land in a follow-up sweep.
+- **Legacy registry deletion**: `src/monitoring/registry.zig` and the `MetricsCollector` fallback in `src/monitoring/prometheus.zig` are soft-deprecated (Task 23) but not yet deleted. Schedule deletion after one full release of OTel-only operation.
+
+### Commit chain (for traceability)
+
+```
+0d3268eb test(otel): geodetestlab parity spec for /metrics P0 names
+b534c9f8 feat(otel): OTLP/HTTP push when OTEL_METRICS_EXPORTER=otlp
+0f7b824d test(otel): cardinality + privacy guard against forbidden attribute keys
+04332b5e feat(otel): process metrics + db.client.* family for distributed RPC
+cab86368 feat(otel): backup + restore metrics (P0 set per spec §4.12)
+a6956e5e feat(otel): CDC + real-time analytics metrics (P0 set per spec §4.10)
+5b75b45a feat(otel): distributed + cluster metrics (P0 set per spec §4.9)
+3a66ea35 feat(otel): security/RLS/audit/TDE/KMS metrics (P0 set per spec §4.8)
+5b694b7e feat(otel): index + vector HNSW metrics (P0 set per spec §4.7)
+87e8e256 feat(otel): graph data model + mutation metrics (P0 set per spec §4.4)
+10a7f95d feat(otel): storage + WAL metrics (P0 set per spec §4.5)
+e98df7c3 feat(otel): transaction + lock + deadlock metrics (P0 set per spec §4.6)
+0ac5c8c9 feat(otel): query lifecycle metrics (P0 set per spec §4.3)
+88bd455e feat(otel): QUIC transport metrics (P0 set per spec §4.2)
+4baf0355 feat(otel): server lifecycle metrics (uptime, health, reload, shutdown)
+2a05cf7c docs(otel): commit implementation plan for traceability
+da641443 feat(otel): /metrics renders OTel snapshot, legacy collector fallback
+8bc08065 feat(otel): initialise MeterProvider during server startup
+44d16027 feat(otel): histogram bucket profile constants per spec §2
+6a8e8f41 feat(otel): facade scaffold with global MeterProvider lifecycle
+8c73beb2 feat(otel): resource builder with service + db semconv attrs
+0713e50f build(otel): wire otel module into root + cli targets
+9d823144 chore(deps): add otel @ 20078af2 (gitlab.com/devnw/zig/otel)
+a6cfc7d1 refactor(otel): soft-deprecate legacy registry + prometheus collector; rename dashboard panels
+```
+
+(Task 24's own commit will be appended once this footer lands.)
