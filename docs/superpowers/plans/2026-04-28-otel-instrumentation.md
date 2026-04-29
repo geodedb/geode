@@ -387,7 +387,7 @@ const std = @import("std");
 const otel = @import("otel");
 const otel_resource = @import("otel_resource.zig");
 
-const SCOPE_NAME = "com.codepros.geode";
+const SCOPE_NAME = "com.geodedb.geode";
 const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
 
 var g_provider: ?*otel.sdk.metrics.MeterProvider = null;

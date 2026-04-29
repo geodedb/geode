@@ -50,7 +50,7 @@ const TracerProvider = otel.sdk.trace.TracerProvider;
 const Tracer = otel.api.trace.Tracer;
 const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 
-pub const SCOPE_NAME = "com.codepros.geode";
+pub const SCOPE_NAME = "com.geodedb.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
 
 // --- Module-level globals (one per process) ---
