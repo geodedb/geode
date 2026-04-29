@@ -74,8 +74,8 @@
         // Initial+Handshake into a 1200-byte datagram, exact varint Length
         // projection for coalesced datagram pad, TLS bumped to 7d9efd3.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#4b246b2743212f3c007abb3b4541a2534f17e628",
-            .hash = "quic-0.1.14-gBIqUeC4OACPS7NwD4FKRCTnMZ6GHSEE6fF2L0NxxCMP",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#c42657d97aee213f530e26cc68c553db3bfdbe46",
+            .hash = "quic-0.1.14-gBIqUQ3AOACbHux60u1GqaCDu7H1ky556uc6wNLGVUPr",
         },
 
         // =======================================================================
@@ -159,8 +159,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpPSQBAA4Zy82lVlAlkoeUV2QnorS8S2SnikRq2Ci",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#0ecf87c19fa1c8def213df8c3d37020786cd14b4",
-            .hash = "geode_client_zig-0.2.1-8ysbV7QQCQAX2OUPbSMuk6stfPHoJ3_FwIKYn6bExEis",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#a06d520a745cde5c393286fbf5099ea9c63a605f",
+            .hash = "geode_client_zig-0.2.1-8ysbV7QQCQDhVKyMC7gPITMWRFjtN5C1kCXIQBXfsOt-",
         },
 
         // =======================================================================

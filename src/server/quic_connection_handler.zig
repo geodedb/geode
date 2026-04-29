@@ -1361,22 +1361,83 @@ const StreamHandlerContext = struct {
     conn_state: *SharedConnState,
 };
 
-const StreamAcceptorContext = struct {
+/// Context shared between `handleQuicConnection` (the owner) and the
+/// dedicated stream-acceptor worker thread.  Exposed so the regression
+/// tests in `tests/test_acceptor_lifetime.zig` can pin the heap +
+/// refcount lifetime contract via the public API.
+///
+/// Lifetime model (2026-04-28 rewrite):
+/// The struct is HEAP-allocated and refcounted with two starting refs:
+/// one for the owner and one for the acceptor. Each side calls
+/// `release()` exactly once when it's done with the struct; the last
+/// caller frees it. Atomics live INSIDE the struct (not as pointers
+/// to stack vars), so even if the owner's frame would unwind early
+/// the acceptor's `shutdown.load()` reads valid heap memory.
+///
+/// Why not stack-allocate (the previous design, pre-2026-04-28)?
+/// The owner used to wait on a stack `acceptor_done` flag with a 5 s
+/// deadline-bail. Under heavy stream-pool contention the wait sometimes
+/// timed out before the acceptor's idle loop saw `shutdown=true`,
+/// the owner's frame popped, and the acceptor's next `@atomicLoad`
+/// segfaulted on freed stack memory (address 0x6, see
+/// `tests/test_acceptor_lifetime.zig`).  Heap allocation + refcount
+/// removes that failure mode entirely: the owner can wait as long as
+/// it likes (or even give up — though we still wait forever today, just
+/// with periodic warnings), without any UAF risk.
+///
+/// Conn lifetime: `transport.destroyConnection(conn)` is still in the
+/// owner's defer (line ~1728), and runs LAST (LIFO).  The owner's
+/// shutdown-wait defer (registered after) runs first; it returns only
+/// when `done=true`, i.e., the acceptor's loop has exited and is no
+/// longer touching `conn`.  So conn destruction always happens after
+/// the acceptor stops dereferencing it.
+pub const StreamAcceptorContext = struct {
     allocator: std.mem.Allocator,
     transport: *quic_transport.QuicTransport,
     conn: *quic_transport.QuicConnection,
     conn_state: *SharedConnState,
-    shutdown: *std.atomic.Value(bool),
-    /// Set by the acceptor immediately before its loop returns.  The owning
-    /// `handleQuicConnection` frame busy-waits on this in its shutdown
-    /// defer so its stack-allocated `acceptor_shutdown` / `acceptor_ctx`
-    /// stay live until the worker thread has actually finished reading
-    /// them.  Without this the worker can `@atomicLoad` from a popped
-    /// stack frame and segfault — repro: a wrong-password query that
-    /// drops the connection while the acceptor loop is mid-tick (regress
-    /// `distributed_auth_enforcement.yml::dist-auth-nonexistent-user-rejected`).
-    done: *std.atomic.Value(bool),
     stream_pool: *pooled.ThreadPool,
+    /// Set true by the owner when it wants the acceptor to exit.  The
+    /// acceptor checks this at the top of every loop iteration.
+    shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Set true by the acceptor's defer immediately before it returns.
+    /// The owner waits on this before letting its stack frame unwind so
+    /// `conn` stays alive while the acceptor is still dereferencing it.
+    done: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    /// Outstanding refs.  Initialized to 2 (owner + acceptor); each
+    /// caller invokes `release()` exactly once when finished.  The
+    /// last release frees the heap struct.
+    refcount: std.atomic.Value(u32) = std.atomic.Value(u32).init(2),
+
+    /// Heap-allocate and initialize a new context.  Caller owns one
+    /// reference; the acceptor will own the other once its task starts.
+    pub fn create(
+        gpa: std.mem.Allocator,
+        transport: *quic_transport.QuicTransport,
+        conn: *quic_transport.QuicConnection,
+        conn_state: *SharedConnState,
+        stream_pool: *pooled.ThreadPool,
+    ) !*StreamAcceptorContext {
+        const self = try gpa.create(StreamAcceptorContext);
+        self.* = .{
+            .allocator = gpa,
+            .transport = transport,
+            .conn = conn,
+            .conn_state = conn_state,
+            .stream_pool = stream_pool,
+        };
+        return self;
+    }
+
+    /// Decrement the refcount; free the struct on the last release.
+    /// Safe to call from either the owner thread or the acceptor thread.
+    pub fn release(self: *StreamAcceptorContext) void {
+        const prev = self.refcount.fetchSub(1, .acq_rel);
+        std.debug.assert(prev > 0);
+        if (prev == 1) {
+            self.allocator.destroy(self);
+        }
+    }
 };
 
 const SessionAuthStatus = enum {
@@ -1513,17 +1574,18 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
     const transport = ctx.transport;
     const conn = ctx.conn;
     const conn_state = ctx.conn_state;
-    const shutdown = ctx.shutdown;
-    const done = ctx.done;
     const stream_pool = ctx.stream_pool;
-    // Note: ctx is allocated on the owning `handleQuicConnection` stack
-    // frame.  The owning frame's defer waits on `done` before unwinding,
-    // so it is safe to keep dereferencing `ctx` until the moment we
-    // store true into `done`.  After that point we MUST NOT touch
-    // `ctx` again — the stack may pop in between this store and the
-    // function return.
-    defer done.store(true, .release);
-    while (!shutdown.load(.acquire)) {
+    // 2026-04-28 lifetime model: `ctx` is heap-allocated and refcounted.
+    // We hold one ref for the duration of this function; on exit we
+    // store `done=true` (the owner's wait condition) and release our
+    // ref.  Even if the owner gives up waiting and unwinds early, the
+    // refcount keeps `ctx` alive until we exit, and accessing `ctx`
+    // fields (including `shutdown` / `done`) is always safe.
+    defer {
+        ctx.done.store(true, .release);
+        ctx.release();
+    }
+    while (!ctx.shutdown.load(.acquire)) {
         // Check if connection is still alive
         if (conn.isDrained()) break;
 
@@ -1614,13 +1676,26 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
                 continue;
             }
         } else {
-            // No stream pending — poll and back off
-            transport.poll(0) catch {};
-            {
-                const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
-                var rem: std.os.linux.timespec = undefined;
-                _ = std.os.linux.nanosleep(&req, &rem);
-            }
+            // No stream pending — sleep and re-check shutdown.
+            //
+            // 2026-04-28: removed `transport.poll(0)` from this branch.
+            // The dedicated server poll thread (`runPollLoopTask` in
+            // main.zig) is the single owner of packet delivery; calling
+            // poll(0) here just contends with the poll thread and with
+            // every other connection's acceptor on `ep.mu`.  Under heavy
+            // close-churn (e.g. 16 client connections all closing at
+            // once when an msft-graph file boundary tears them down),
+            // that contention blocked individual acceptors inside
+            // poll(0) for >5 seconds — long enough to miss the
+            // `acceptor_shutdown` signal and trip the
+            // "acceptor thread did not exit within deadline; bailing
+            // despite UAF risk" guard in handleQuicConnection's defer,
+            // and ultimately crash the server.  Just sleeping here is
+            // both correct (the poll thread keeps running) and lets the
+            // loop re-check `shutdown` every ~1 ms.
+            const req = std.os.linux.timespec{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
         }
     }
 }
@@ -1726,8 +1801,14 @@ pub fn handleQuicConnection(
 ) !void {
     _ = _force_serialization_failure_unused;
     // CANARY: REQ=REQ-QUIC-CONN-CLEANUP-003; FEATURE="ConnectionMemoryManagement"; ASPECT=ProperCleanup; STATUS=EXEMPT; OWNER=server; UPDATED=2025-12-27
-    // Use destroyConnection to properly remove from transport list, close, and free resources
-    defer transport.destroyConnection(conn);
+    // 2026-04-28: conn destruction is gated on `destroy_conn`.  The acceptor
+    // wait defer (later in this function) clears it if the acceptor doesn't
+    // exit within the bounded deadline — leaving the conn alive (a leak)
+    // is preferable to freeing it under a still-running acceptor whose
+    // next `tryAcceptStream` would UAF.  The QUIC library will eventually
+    // idle-timeout the leaked conn at the protocol layer.
+    var destroy_conn: bool = true;
+    defer if (destroy_conn) transport.destroyConnection(conn);
     log.debug("Entering handleQuicConnection", &.{});
 
     // Wait for incoming STREAM frames with handler-driven polling.
@@ -2038,56 +2119,115 @@ pub fn handleQuicConnection(
     // closes × 5 = ~1800 zombie threads, starving the QUIC packet pump).
     // See docs/performance/2026-04-25-enterprise-rwlock-fairness/stacks-analysis.md.
 
-    var acceptor_shutdown = std.atomic.Value(bool).init(false);
-    var acceptor_done = std.atomic.Value(bool).init(false);
-
-    var acceptor_ctx = StreamAcceptorContext{
-        .allocator = gpa,
-        .transport = transport,
-        .conn = conn,
-        .conn_state = &conn_state,
-        .shutdown = &acceptor_shutdown,
-        .done = &acceptor_done,
-        .stream_pool = stream_pool,
-    };
-    acceptor_pool.submitBlocking(.{
-        .context = @ptrCast(&acceptor_ctx),
-        .callback = runStreamAcceptorLoop,
-    }) catch |err| {
-        log.warn("Failed to start stream acceptor, single-stream mode", &.{
+    // 2026-04-28 lifetime rewrite: the acceptor context is HEAP-allocated
+    // and refcounted (owner=1, acceptor=1).  This eliminates the previous
+    // UAF crash where a popped-stack `acceptor_ctx` was dereferenced by
+    // a still-running acceptor (segfault at address 0x6 in
+    // `streamAcceptorLoop`'s first `shutdown.load(.acquire)`).  See the
+    // `StreamAcceptorContext` doc-comment for the full rationale.
+    const acceptor_ctx = StreamAcceptorContext.create(
+        gpa,
+        transport,
+        conn,
+        &conn_state,
+        stream_pool,
+    ) catch |err| {
+        log.warn("Failed to allocate acceptor context, single-stream mode", &.{
             Attr.string("error", @errorName(err)),
         });
         runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
         return;
     };
+    var acceptor_submitted = false;
     defer {
-        // 2026-04-27 UAF fix: signal shutdown, then wait for the worker
-        // to actually exit before unwinding this frame.  `acceptor_ctx`
-        // and `acceptor_shutdown` live on this stack frame; if we
-        // returned while the loop was still running, its next
-        // `@atomicLoad(&acceptor_shutdown)` would touch popped-stack
-        // memory and segfault.  Repro:
-        //   distributed_auth_enforcement.yml::dist-auth-nonexistent-user-rejected
-        // (a failing-auth query that races connection teardown).
-        // The worker checks `shutdown` every ~1 ms (its idle nanosleep),
-        // so the wait normally completes in ≤ 2 ms.  The bounded ceiling
-        // is here as a safety valve only — log if we hit it.
-        acceptor_shutdown.store(true, .release);
-        const wait_deadline_ns: u64 = 5 * std.time.ns_per_s;
-        const wait_start = compat_milliTimestamp();
-        while (!acceptor_done.load(.acquire)) {
-            const req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_us };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-            const elapsed_ms: u64 = @intCast(@max(0, compat_milliTimestamp() - wait_start));
-            if (elapsed_ms * std.time.ns_per_ms > wait_deadline_ns) {
-                log.err("acceptor thread did not exit within deadline; bailing despite UAF risk", &.{
-                    Attr.int("waited_ms", @intCast(elapsed_ms)),
-                });
-                break;
+        // Owner side of the lifetime contract:
+        //   1. Signal `shutdown=true` so the acceptor exits its loop.
+        //   2. Wait up to `wait_deadline_ms` for `done=true` so we know
+        //      the acceptor is no longer dereferencing `conn` (which the
+        //      destroy_conn-gated defer would otherwise free).
+        //   3. If the acceptor exited cleanly within the deadline:
+        //      release our refcount; conn destruction proceeds normally.
+        //   4. If the deadline expires (the acceptor is genuinely
+        //      stuck): clear `destroy_conn` so conn is LEAKED instead
+        //      of freed under the still-running acceptor.  Release our
+        //      refcount.  The acceptor will eventually exit on its own
+        //      (it sees `shutdown=true` once unblocked) and drop the
+        //      last ref, freeing the heap struct.  The conn struct
+        //      leaks but the QUIC protocol-level idle timeout (300 s
+        //      default) reaps the underlying connection eventually.
+        //
+        // Why not wait forever?  The pre-deadline version (b6ec55c3)
+        // hung connection-handler threads indefinitely under heavy
+        // ep.mu contention — visible in production as
+        //     WARN acceptor still running after shutdown signal elapsed_ms=300000+
+        // bursts on PID 2625755 with quic_active_connections=8.  See
+        // tests/test_acceptor_owner_bail.zig for the contract this fix
+        // pins.
+        //
+        // Why not free conn anyway?  The acceptor's tryAcceptStream
+        // dereferences `conn`; if conn were freed, the next iteration
+        // segfaults at conn.quic_connection access (the same UAF that
+        // motivated the heap-allocated ctx in the first place).
+        if (acceptor_submitted) {
+            acceptor_ctx.shutdown.store(true, .release);
+            const wait_warn_ms: i64 = 5_000;
+            const wait_deadline_ms: i64 = 30_000;
+            const wait_start = compat_milliTimestamp();
+            var last_warn_ms: i64 = wait_start;
+            while (!acceptor_ctx.done.load(.acquire)) {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 200 * std.time.ns_per_us };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                const now = compat_milliTimestamp();
+                const elapsed = now - wait_start;
+                if (elapsed > wait_deadline_ms) {
+                    log.err("acceptor wait deadline exceeded; leaking conn to avoid UAF", &.{
+                        Attr.int("elapsed_ms", @intCast(elapsed)),
+                    });
+                    destroy_conn = false;
+                    break;
+                }
+                if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {
+                    log.warn("acceptor still running after shutdown signal", &.{
+                        Attr.int("elapsed_ms", @intCast(elapsed)),
+                    });
+                    last_warn_ms = now;
+                }
             }
         }
+        acceptor_ctx.release();
     }
+    // 2026-04-28 ROOT-CAUSE FIX: use submit() (default lane, ~63 workers)
+    // not submitBlocking() (blocking lane, ONLY 1 WORKER).  submitBlocking's
+    // name describes the backpressure policy (block if queue full), not the
+    // lane — but its implementation routes to `.lane = .blocking` which has
+    // a single dedicated worker.  With 8 active conns the previous code
+    // serialized all acceptors through that one worker; the first acceptor
+    // (whose conn was still actively reading its first stream) never exited,
+    // and the other 7 acceptor tasks sat in the blocking-lane queue forever
+    // — owners spinning on `done.load()=false` because their acceptor's
+    // `done.store(true)` was waiting in the queue.  Symptom in production:
+    //
+    //   WARN acceptor still running after shutdown signal elapsed_ms=300000+
+    //
+    // The default lane has ~63 workers (acceptor_pool num_threads=64 minus
+    // 1 reserved for the blocking lane) and a 256-task queue.  With ≤ 16
+    // production conns we never come close to saturating it.  If submit()
+    // does return false on queue-full we fall back to single-stream mode
+    // like the previous error path.
+    if (!acceptor_pool.submit(.{
+        .context = @ptrCast(acceptor_ctx),
+        .callback = runStreamAcceptorLoop,
+    })) {
+        log.warn("Failed to start stream acceptor (queue full), single-stream mode", &.{});
+        // The acceptor's ref will never be released because its task
+        // never starts.  Drop it here so the deferred owner release
+        // brings the refcount to zero and frees the heap struct.
+        acceptor_ctx.release();
+        runStreamQueryLoop(gpa, transport, stream, &state, &conn_state, disable_estimates, compact_profile, memcurve_profile, peer_ip);
+        return;
+    }
+    acceptor_submitted = true;
 
     // ── Phase 3: First stream query loop (inline) ────────────────────────
     // The first stream's remaining messages are processed on this thread.
@@ -4391,4 +4531,233 @@ test "global stream throttle acquire and release are symmetric" {
     g_stream_throttle.release();
     g_stream_throttle.release();
     try std.testing.expectEqual(@as(u32, 0), getGlobalStreamThreadCount());
+}
+
+// =============================================================================
+// StreamAcceptorContext lifetime tests (2026-04-28)
+//
+// Pin the heap+refcount lifetime model that replaced the previous
+// stack-allocated context.  The original bug: a busy acceptor that hadn't
+// observed `shutdown=true` within the owner's 5-second wait deadline got
+// its stack-allocated `acceptor_ctx` ripped out from under it, segfaulting
+// on the next `shutdown.load(.acquire)` (address 0x6 because the popped
+// stack memory had been reused with small-int garbage at the offset where
+// the `shutdown` pointer field used to live).
+//
+// The new model:
+//   * struct is heap-allocated via `StreamAcceptorContext.create`,
+//   * starts with refcount=2 (owner + acceptor),
+//   * `release()` decrements; the last caller frees,
+//   * atomics live INSIDE the struct (not as pointers to stack vars), so
+//     the acceptor's loop body can dereference them safely even if the
+//     owner has already given up waiting.
+// =============================================================================
+
+test "StreamAcceptorContext: create allocates heap struct with refcount=2" {
+    const allocator = std.testing.allocator;
+    // The struct holds pointers to externally-owned objects.  For this
+    // unit test we only exercise the heap allocation + refcount semantics
+    // — the pointed-to fields never get dereferenced — so undefined dummy
+    // pointers are fine and won't escape the test scope.
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    try std.testing.expectEqual(@as(u32, 2), ctx.refcount.load(.acquire));
+    try std.testing.expectEqual(false, ctx.shutdown.load(.acquire));
+    try std.testing.expectEqual(false, ctx.done.load(.acquire));
+    try std.testing.expectEqual(allocator.vtable, ctx.allocator.vtable);
+    try std.testing.expect(ctx.transport == dummy_transport);
+    try std.testing.expect(ctx.conn == dummy_conn);
+    try std.testing.expect(ctx.conn_state == &dummy_conn_state);
+    try std.testing.expect(ctx.stream_pool == dummy_pool);
+
+    // Two releases — owner + (would-be) acceptor — bring refcount to zero
+    // and free the struct.  Testing-allocator leak detection will fail
+    // the test if the second release didn't actually free.
+    ctx.release();
+    ctx.release();
+}
+
+test "StreamAcceptorContext: single release does not free (refcount stays >0)" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    ctx.release();
+    // Refcount must be exactly 1; struct must NOT be freed (we'd UAF on
+    // the load if it were).  This pins the "owner gave up first, acceptor
+    // is still running" scenario that the heap model is designed to
+    // tolerate.
+    try std.testing.expectEqual(@as(u32, 1), ctx.refcount.load(.acquire));
+
+    // Final release frees.  Without this, the testing allocator's leak
+    // detector will fail the test.
+    ctx.release();
+}
+
+test "StreamAcceptorContext: shutdown/done atomics survive owner release" {
+    // Pins the core invariant of the heap-based lifetime: the acceptor
+    // can read `ctx.shutdown` and write `ctx.done` AFTER the owner has
+    // already called release().  Pre-fix, this was the segfault site
+    // (stack-allocated atomics, popped frame, address 0x6 garbage).
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    // Owner side: signal shutdown, then release.  The struct must stay
+    // alive because the acceptor (refcount holder #2) hasn't released
+    // yet.
+    ctx.shutdown.store(true, .release);
+    ctx.release();
+
+    // Acceptor side: read shutdown (should be true), write done.  These
+    // accesses MUST NOT crash — the heap struct is still alive.
+    try std.testing.expectEqual(true, ctx.shutdown.load(.acquire));
+    ctx.done.store(true, .release);
+    try std.testing.expectEqual(true, ctx.done.load(.acquire));
+
+    // Acceptor's release brings refcount to 0 and frees.
+    ctx.release();
+}
+
+test "StreamAcceptorContext: concurrent release from two threads is safe" {
+    // Stress-tests the refcount atomics under racy release.  Spawns two
+    // threads that each call `release()` once.  Exactly one of them must
+    // observe the "last release" path (refcount transitions 1 -> 0) and
+    // free the struct.  No double-free, no use-after-free, no leak.
+    //
+    // Repeated 256 times to amplify the probability of catching a race.
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_BEEF_0001);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_BEEF_0002);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_BEEF_0004);
+
+    const Worker = struct {
+        fn run(c: *StreamAcceptorContext) void {
+            c.release();
+        }
+    };
+
+    var trial: usize = 0;
+    while (trial < 256) : (trial += 1) {
+        const ctx = try StreamAcceptorContext.create(
+            allocator,
+            dummy_transport,
+            dummy_conn,
+            &dummy_conn_state,
+            dummy_pool,
+        );
+        const t1 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+        const t2 = try std.Thread.spawn(.{}, Worker.run, .{ctx});
+        t1.join();
+        t2.join();
+        // Both threads have released; refcount should have hit zero and
+        // freed.  The testing allocator catches any leak / double-free.
+    }
+}
+
+// 2026-04-28 — owner-bails-before-acceptor regression.
+//
+// Pre-fix (b6ec55c3): the owner's wait-for-done loop had no deadline, so a
+// stuck acceptor wedged the connection-handler thread forever.  Live repro
+// on PID 2625755: 8 active conns, owner threads spinning at line 2150 with
+// `elapsed_ms` climbing past 300 s, the main accept loop starved on
+// ep.mu.  Post-fix: the owner waits up to 30 s, then bails and releases
+// its ref.  The struct stays alive (refcount still 1 from the acceptor's
+// ref) and is freed when the acceptor eventually exits.
+//
+// This test simulates the bail by having the OWNER release its ref WITHOUT
+// waiting for done, then the acceptor continues using `ctx.shutdown` and
+// `ctx.done` safely from a separate thread, eventually releases its own
+// ref, and the heap struct is freed cleanly.  The testing allocator's
+// leak detector catches any UAF or leak.
+test "StreamAcceptorContext: owner-bails-then-acceptor-finishes does not UAF or leak" {
+    const allocator = std.testing.allocator;
+    const dummy_transport: *quic_transport.QuicTransport = @ptrFromInt(0xDEAD_0000_1000);
+    const dummy_conn: *quic_transport.QuicConnection = @ptrFromInt(0xDEAD_0000_2000);
+    var dummy_conn_state: SharedConnState = .{ .allocator = allocator };
+    defer dummy_conn_state.deinit();
+    const dummy_pool: *pooled.ThreadPool = @ptrFromInt(0xDEAD_0000_3000);
+
+    const Acceptor = struct {
+        fn run(c: *StreamAcceptorContext) void {
+            // Spin-loop emulating the real acceptor: read shutdown each
+            // iteration, sleep briefly, exit when shutdown=true.  This
+            // path runs AFTER the owner has released its ref (refcount=1),
+            // so any access to a freed struct would crash here.
+            var spins: usize = 0;
+            while (!c.shutdown.load(.acquire)) {
+                const req = std.os.linux.timespec{ .sec = 0, .nsec = 100 * std.time.ns_per_us };
+                var rem: std.os.linux.timespec = undefined;
+                _ = std.os.linux.nanosleep(&req, &rem);
+                spins += 1;
+                if (spins > 10_000) {
+                    // Safety: bail if shutdown never arrives (test bug).
+                    break;
+                }
+            }
+            // Mirror the real defer order: store done=true, then release.
+            c.done.store(true, .release);
+            c.release();
+        }
+    };
+
+    const ctx = try StreamAcceptorContext.create(
+        allocator,
+        dummy_transport,
+        dummy_conn,
+        &dummy_conn_state,
+        dummy_pool,
+    );
+
+    // Spawn the acceptor with refcount=2 (owner+acceptor).
+    const accept_thread = try std.Thread.spawn(.{}, Acceptor.run, .{ctx});
+
+    // Owner side: simulate the bail path.  Signal shutdown, then release
+    // WITHOUT waiting for done.  The acceptor continues to read `shutdown`
+    // and write `done`/`refcount` after this point.
+    ctx.shutdown.store(true, .release);
+    ctx.release();
+
+    // Refcount is now 1 (acceptor still holds its ref).  The acceptor
+    // will see shutdown=true on its next iteration and exit cleanly.
+    accept_thread.join();
+    // After join, the acceptor has fully exited (its release() ran and
+    // freed the struct because refcount went 1 -> 0).  Any leak or
+    // double-free here would surface via the testing allocator.
 }
