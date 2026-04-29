@@ -1,0 +1,110 @@
+version: '1.0'
+name: OTel /metrics parity
+description: |
+  Verifies the Prometheus /metrics endpoint exposes the P0 OTel metric set
+  defined in docs/otel-updates.md after a fresh server boot. The OTel
+  facade renders snapshots via otel.exporters.prometheus.Prometheus.render
+  (see Task 7 of docs/superpowers/plans/2026-04-28-otel-instrumentation.md).
+
+  Note: this spec documents the intended black-box check. The geodetestlab
+  CLI runner does not currently support HTTP scrape assertions; the
+  functional equivalent is covered by tests/test_otel_prometheus_parity.zig
+  (Zig integration test that pushes a counter through the OTel meter and
+  asserts the rendered body contains geode_parity_test 7 plus the standard
+  # HELP / # TYPE lines), and the cardinality contract is covered by
+  tests/test_otel_cardinality_guard.zig.
+
+  When the geodetestlab runner gains HTTP probe support, the steps below
+  become executable; until then they serve as the canonical test plan.
+
+cli:
+  binary: geode
+  working_dir:
+  env:
+    GEODE_LOG_LEVEL: info
+    GEODE_METRICS_PORT: '9090'
+  server:
+    enabled: true
+    port: 3141
+    data_dir:
+    startup_timeout_ms: 10000
+    cleanup: true
+    args: [serve, --listen, 127.0.0.1:3141]
+    env: {}
+  client:
+    server_address: 127.0.0.1:3141
+    timeout_ms: 10000
+    tls_verify: false
+    format: json
+
+secrets: {}
+
+invariants: []
+
+fuzz:
+  enabled: false
+  provider: mock
+  max_cases: 0
+  seed: 42
+  geode_specific: false
+
+tests:
+- name: scrape_metrics_p0_names
+  description: |
+    HTTP GET /metrics returns 200 OK with Content-Type text/plain;
+    version=0.0.4. Body contains the P0 metric type lines.
+  http:
+    method: GET
+    url: http://127.0.0.1:9090/metrics
+  expect:
+    exit_code: 0
+    status: 200
+    body_contains:
+    - '# TYPE geode_query_execution_duration histogram'
+    - '# TYPE geode_query_count counter'
+    - '# TYPE geode_transport_connection_count gauge'
+    - '# TYPE geode_transaction_count counter'
+    - '# TYPE geode_transaction_deadlock_count counter'
+    - '# TYPE geode_wal_fsync_duration histogram'
+    - '# TYPE geode_storage_operation_duration histogram'
+    - '# TYPE geode_security_authorization_check_duration histogram'
+    - '# TYPE geode_audit_event_dropped counter'
+    - '# TYPE geode_server_uptime gauge'
+  tags: [otel, metrics, parity]
+
+- name: scrape_metrics_after_query
+  description: |
+    Run a trivial RETURN query, then re-scrape /metrics and confirm
+    geode_query_count incremented with geode_result_outcome=success.
+  steps:
+  - type: gql
+    query: RETURN 1 AS x
+  - type: http
+    method: GET
+    url: http://127.0.0.1:9090/metrics
+  expect:
+    exit_code: 0
+    body_regex:
+    - geode_query_count\{[^}]*geode_result_outcome="success"[^}]*\} [1-9]
+  tags: [otel, metrics, parity]
+
+- name: cardinality_no_forbidden_keys
+  description: |
+    /metrics body contains no forbidden attribute keys (user_id,
+    username, session_id, request_id, tenant_id, key_id, db_query_text).
+    This is the privacy contract from docs/otel-updates.md §7.
+  http:
+    method: GET
+    url: http://127.0.0.1:9090/metrics
+  expect:
+    exit_code: 0
+    status: 200
+    body_does_not_contain:
+    - user_id="
+    - username="
+    - session_id="
+    - request_id="
+    - tenant_id="
+    - key_id="
+    - db_query_text="
+  tags: [otel, security, cardinality]
