@@ -867,7 +867,22 @@ fn processInput(state: *ReplState) !void {
                     if (input[0] != ' ' and state.history.enabled) {
                         state.history.append(input) catch {};
                     }
-                    try repl_dispatch.handleMetaCommand(state, input);
+                    // Catch errors so a failed meta-command (e.g. `/use
+                    // <missing>`) prints the message and stays in the REPL
+                    // instead of unwinding out of `ReplLoop.run` and
+                    // tripping cli/main.zig's std.process.exit on the
+                    // returned error. Mirrors the catch pattern at the
+                    // earlier dispatch site (~line 299) and the GQL exec
+                    // catch (~line 912). Suppress WouldBlock the same way
+                    // the GQL path does (issue #388).
+                    repl_dispatch.handleMetaCommand(state, input) catch |err| {
+                        if (err != error.WouldBlock) {
+                            const stderr = platform.getStderrHandle();
+                            stderr.writeStreamingAll(replIo(), "REPL error: ") catch {};
+                            stderr.writeStreamingAll(replIo(), @errorName(err)) catch {};
+                            stderr.writeStreamingAll(replIo(), "\r\n") catch {};
+                        }
+                    };
                     state.buffer.clearRetainingCapacity();
                     state.cursor = 0;
                     state.is_continuation = false;
