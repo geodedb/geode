@@ -273,20 +273,21 @@ install: release install-tuning
 # OTLP/HTTP transport so HTTPS reaches the collector at
 # https://5333796.otel.gitlab-o11y.com:14318.
 #
-# Required env var (passed to make on the command line, NOT exported in
-# shell history):
-#   GEODE_OTEL_BEARER_TOKEN=<gitlab-observability-token>
-#       — bearer token issued under
-#         GitLab Observability → Settings → Tokens (scope:
-#         traces:write, metrics:write).
-#
-# Optional overrides:
+# Optional env vars (all have defaults):
+#   GEODE_OTEL_BEARER_TOKEN=<token>      bearer token to send as
+#                                        Authorization=Bearer <token>.
+#                                        OPTIONAL — GitLab Observability
+#                                        collectors can be configured to
+#                                        accept unauthenticated ingest;
+#                                        when this var is unset the auth
+#                                        header is omitted entirely.
 #   GEODE_OTEL_ENDPOINT=...              endpoint URL (defaults to GitLab)
 #   GEODE_OTEL_SAMPLER_ARG=1.0           sampling rate (default 1.0)
 #   GEODE_OTEL_RESOURCE_ATTRIBUTES=...   extra resource attrs
 #
 # Usage:
-#   make install-otel GEODE_OTEL_BEARER_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+#   make install-otel                                       # no auth
+#   make install-otel GEODE_OTEL_BEARER_TOKEN=glpat-...     # with auth
 #
 GEODE_OTEL_ENDPOINT ?= https://5333796.otel.gitlab-o11y.com:14318
 GEODE_OTEL_SAMPLER_ARG ?= 1.0
@@ -294,12 +295,6 @@ GEODE_OTEL_RESOURCE_ATTRIBUTES ?= deployment.environment.name=production
 
 install-otel: install-tuning
 	@echo "=== Installing geode with OTel HTTPS push enabled ==="
-	@if [ -z "$(GEODE_OTEL_BEARER_TOKEN)" ]; then \
-		echo "Error: GEODE_OTEL_BEARER_TOKEN is required."; \
-		echo "Issue one in GitLab Observability → Settings → Tokens (scope: traces:write,metrics:write)."; \
-		echo "Then re-run: make install-otel GEODE_OTEL_BEARER_TOKEN=<token>"; \
-		exit 2; \
-	fi
 	@# Build with otel HTTPS support enabled. Skipping the regular
 	@# `release` target lets us pass -Dotel_use_devnw_tls=true into
 	@# the same artifact that lands in /usr/bin/geode.
@@ -308,13 +303,25 @@ install-otel: install-tuning
 	@# Reuse the regular install plumbing (user/group/dirs/cert/svc)
 	@# but DON'T rebuild — we already produced the otel-tls binary.
 	@$(MAKE) --no-print-directory _install_no_build
-	@# Lay down the OTel runtime env file. Render the bearer token from
-	@# $$GEODE_OTEL_BEARER_TOKEN; everything else from the example.
+	@# Lay down the OTel runtime env file. The bearer token is OPTIONAL —
+	@# GitLab Observability collectors can be configured to accept
+	@# unauthenticated ingest from the project network. When absent, we
+	@# strip the OTEL_EXPORTER_OTLP_HEADERS line entirely so the SDK
+	@# sends no Authorization header.
 	@echo "Writing /etc/geode/otel.env (root:geode 0640)..."
 	@sudo install -m 0640 -o root -g geode \
 		deployment/systemd/otel.env.example /etc/geode/otel.env
+	@if [ -n "$(GEODE_OTEL_BEARER_TOKEN)" ]; then \
+		echo "  → bearer token configured (Authorization=Bearer ****)"; \
+		sudo sed -i \
+			-e 's|__REPLACE_WITH_TOKEN__|$(GEODE_OTEL_BEARER_TOKEN)|' \
+			/etc/geode/otel.env; \
+	else \
+		echo "  → no GEODE_OTEL_BEARER_TOKEN provided; pushing without auth header"; \
+		echo "    (set GEODE_OTEL_BEARER_TOKEN=<token> if your collector requires it)"; \
+		sudo sed -i -e '/^OTEL_EXPORTER_OTLP_HEADERS=/d' /etc/geode/otel.env; \
+	fi
 	@sudo sed -i \
-		-e 's|__REPLACE_WITH_TOKEN__|$(GEODE_OTEL_BEARER_TOKEN)|' \
 		-e 's|^OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=$(GEODE_OTEL_ENDPOINT)|' \
 		-e 's|^OTEL_TRACES_SAMPLER_ARG=.*|OTEL_TRACES_SAMPLER_ARG=$(GEODE_OTEL_SAMPLER_ARG)|' \
 		-e 's|^OTEL_RESOURCE_ATTRIBUTES=.*|OTEL_RESOURCE_ATTRIBUTES=$(GEODE_OTEL_RESOURCE_ATTRIBUTES)|' \
