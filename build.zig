@@ -4035,6 +4035,7 @@ pub fn build(b: *std.Build) void {
     otel_metrics_test_mod.addImport("otel", otel_mod);
     otel_metrics_test_mod.addImport("otel_metrics", otel_metrics_mod);
     const otel_metrics_tests = b.addTest(.{ .root_module = otel_metrics_test_mod });
+    otel_metrics_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     test_step.dependOn(&run_otel_metrics_tests.step);
 
@@ -4045,6 +4046,7 @@ pub fn build(b: *std.Build) void {
     otel_cardinality_test_mod.addImport("otel", otel_mod);
     otel_cardinality_test_mod.addImport("otel_metrics", otel_metrics_mod);
     const otel_cardinality_tests = b.addTest(.{ .root_module = otel_cardinality_test_mod });
+    otel_cardinality_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_cardinality_tests = b.addRunArtifact(otel_cardinality_tests);
     test_step.dependOn(&run_otel_cardinality_tests.step);
 
@@ -4061,6 +4063,7 @@ pub fn build(b: *std.Build) void {
     otel_prom_parity_test_mod.addImport("otel_metrics", otel_metrics_mod);
     otel_prom_parity_test_mod.addImport("otel_prometheus_responder", otel_prometheus_responder_mod);
     const otel_prom_parity_tests = b.addTest(.{ .root_module = otel_prom_parity_test_mod });
+    otel_prom_parity_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
     test_step.dependOn(&run_otel_prom_parity_tests.step);
 }

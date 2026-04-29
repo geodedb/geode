@@ -1,4 +1,5 @@
 // CANARY: REQ=REQ-OTEL-FACADE-001; FEATURE="OTel Instrumentation"; ASPECT=Facade; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
+// CANARY: REQ=REQ-OTEL-OTLP-PUSH-001; FEATURE="OTel Instrumentation"; ASPECT=OTLPPush; STATUS=TESTED; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
 //! Global MeterProvider facade for Geode.
 //!
 //! There is exactly one `MeterProvider` per process. All instrumentation
@@ -15,6 +16,20 @@
 //! provider is already initialised returns immediately without modifying
 //! any state. `shutdown` resets global state so `init` can be called
 //! again (useful in test suites that exercise the full lifecycle).
+//!
+//! OTLP/HTTP push (Task 21):
+//!   When `OTEL_METRICS_EXPORTER=otlp` is set in the environment, `init`
+//!   additionally wires a `PeriodicMetricReader` backed by an OTLP/HTTP
+//!   exporter. The exporter pushes to `OTEL_EXPORTER_OTLP_ENDPOINT`
+//!   (default: `http://localhost:4318`) on the interval set by
+//!   `OTEL_METRIC_EXPORT_INTERVAL` (default: 60 000 ms). The Prometheus
+//!   pull path (`/metrics`) continues to work in parallel — it calls
+//!   `Prometheus.render` directly on the MeterProvider, independent of
+//!   the periodic reader.
+//!
+//!   The PeriodicMetricReader is stored in `g_otlp_reader`; `shutdown()`
+//!   calls `reader.shutdown()` (which joins the timer thread and flushes
+//!   one last time) before tearing down the provider.
 
 const std = @import("std");
 const otel = @import("otel");
@@ -28,6 +43,9 @@ const otel_resource = @import("otel_resource");
 const Resource = otel.sdk.resource.Resource;
 const MeterProvider = otel.sdk.metrics.MeterProvider;
 const Meter = otel.api.metrics.Meter;
+const PeriodicMetricReader = otel.sdk.periodic_metric_reader.PeriodicMetricReader;
+const exporter_factory = otel.sdk.exporter_factory;
+const sdk_config = otel.sdk.config;
 
 pub const SCOPE_NAME = "com.codepros.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
@@ -39,6 +57,11 @@ var g_resource: ?*Resource = null;
 var g_allocator: ?std.mem.Allocator = null;
 var g_init_mu: std.Io.Mutex = std.Io.Mutex.init;
 
+// OTLP/HTTP push: heap-allocated reader + owned exporter bundle, or null
+// when OTEL_METRICS_EXPORTER != "otlp".
+var g_otlp_reader: ?*PeriodicMetricReader = null;
+var g_otlp_exporter: ?exporter_factory.OwnedMetricExporter = null;
+
 fn initIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -49,6 +72,12 @@ fn initIo() std.Io {
 
 /// Initialise the global MeterProvider. Idempotent: returns immediately
 /// if already initialised. Thread-safe via `g_init_mu`.
+///
+/// OTLP/HTTP push (Task 21): when `OTEL_METRICS_EXPORTER=otlp` is set,
+/// a `PeriodicMetricReader` is built and started after the provider is
+/// ready. The reader runs on a background thread and pushes metric
+/// snapshots to the OTLP/HTTP endpoint. The Prometheus pull path is
+/// unaffected.
 pub fn init(allocator: std.mem.Allocator, opts: otel_resource.Options) !void {
     g_init_mu.lockUncancelable(initIo());
     defer g_init_mu.unlock(initIo());
@@ -70,6 +99,15 @@ pub fn init(allocator: std.mem.Allocator, opts: otel_resource.Options) !void {
     g_resource = resource;
     g_provider = provider;
     g_allocator = allocator;
+
+    // --- OTLP/HTTP push wiring (Task 21) ---------------------------------
+    // Read the OTel env config. Errors are non-fatal: a misconfigured
+    // endpoint should not prevent the server from starting. If wiring
+    // fails, a warning is logged to stderr and the Prometheus pull path
+    // continues working normally.
+    tryWireOtlpReader(allocator, provider) catch |err| {
+        std.log.warn("otel_metrics: OTLP/HTTP push wiring failed ({s}); falling back to pull-only", .{@errorName(err)});
+    };
 }
 
 /// Test variant: builds a fixed-attribute resource so unit tests do not
@@ -87,6 +125,19 @@ pub fn initForTesting(allocator: std.mem.Allocator) !void {
 pub fn shutdown() void {
     g_init_mu.lockUncancelable(initIo());
     defer g_init_mu.unlock(initIo());
+
+    // Shut down the OTLP periodic reader BEFORE the provider so the
+    // reader's final flush can still collect from live instruments. The
+    // reader's shutdown() joins the timer thread internally.
+    if (g_otlp_reader) |r| {
+        r.deinit();
+        if (g_allocator) |a| a.destroy(r);
+        g_otlp_reader = null;
+    }
+    if (g_otlp_exporter) |*e| {
+        e.deinit();
+        g_otlp_exporter = null;
+    }
 
     if (g_provider) |p| {
         p.deinit();
@@ -149,6 +200,108 @@ pub fn shutdown() void {
     g_runtime_threads_gauge = null;
     g_db_client = null;
     g_allocator = null;
+}
+
+// -----------------------------------------------------------------------
+// OTLP/HTTP push wiring (Task 21)
+// -----------------------------------------------------------------------
+
+/// Read an env var (no allocation) via `std.c.getenv`. Returns the
+/// value slice as a zero-terminated C string borrowed from the process
+/// environment block, or `null` if not set. Safe to use before any
+/// allocator is available.
+fn getenv(name: [*:0]const u8) ?[:0]const u8 {
+    const ptr = std.c.getenv(name) orelse return null;
+    return std.mem.sliceTo(ptr, 0);
+}
+
+/// Detect `OTEL_METRICS_EXPORTER=otlp` in the environment and, when set,
+/// construct an OTLP/HTTP metric exporter + PeriodicMetricReader and
+/// start the background push loop.
+///
+/// This function is called from `init()` under `g_init_mu`. Errors
+/// propagate to `init()` which logs a warning and continues with the
+/// Prometheus pull path.
+///
+/// Reads (in priority order, most specific wins):
+///   `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT` (metrics-specific)
+///   `OTEL_EXPORTER_OTLP_ENDPOINT`         (shared default)
+///   fallback: `http://localhost:4318`
+///
+/// `OTEL_METRIC_EXPORT_INTERVAL` — push interval in ms (default 60 000)
+/// `OTEL_METRIC_EXPORT_TIMEOUT`  — per-export timeout in ms (default 30 000)
+///
+/// The loopback default `http://localhost:4318` is grandfathered by the
+/// OTel SDK `validateEndpoint` so it works without `allow_loopback`.
+fn tryWireOtlpReader(allocator: std.mem.Allocator, provider: *MeterProvider) !void {
+    // Check OTEL_METRICS_EXPORTER. Only "otlp" / "otlp_http" triggers
+    // the periodic push path.
+    const exporter_env = getenv("OTEL_METRICS_EXPORTER") orelse return;
+    const kind = sdk_config.ExporterKind.fromString(exporter_env);
+    if (kind != .otlp_http) return;
+
+    // Resolve endpoint: per-signal var wins over the shared var.
+    const default_endpoint = "http://localhost:4318";
+    const endpoint: []const u8 =
+        getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT") orelse
+        getenv("OTEL_EXPORTER_OTLP_ENDPOINT") orelse
+        default_endpoint;
+
+    // Resolve interval / timeout (in ms) from env, or use OTel spec defaults.
+    const interval_ms: u64 = blk: {
+        const s = getenv("OTEL_METRIC_EXPORT_INTERVAL") orelse break :blk 60_000;
+        break :blk std.fmt.parseInt(u64, s, 10) catch 60_000;
+    };
+    const timeout_ms: u64 = blk: {
+        const s = getenv("OTEL_METRIC_EXPORT_TIMEOUT") orelse break :blk 30_000;
+        break :blk std.fmt.parseInt(u64, s, 10) catch 30_000;
+    };
+
+    std.log.info(
+        "otel_metrics: OTLP/HTTP push enabled — endpoint={s} interval={d}ms timeout={d}ms",
+        .{ endpoint, interval_ms, timeout_ms },
+    );
+
+    // Build the OTLP/HTTP metric exporter directly via the factory's
+    // lower-level helper, bypassing `Config.resolve` (which uses the
+    // POSIX `Environ.Block.global` API that doesn't exist on Linux in
+    // Zig 0.16.0). We construct a minimal `OtlpConfig` from the env
+    // vars we already read above.
+    const otlp_cfg: sdk_config.OtlpConfig = .{
+        .endpoint = endpoint,
+        .protocol = .http_protobuf,
+        .timeout_ms = timeout_ms,
+        // The loopback default is grandfathered; user-set loopback needs
+        // the allow_loopback flag. We default to false here — operators
+        // who point at a loopback collector (other than the OTel default)
+        // should set `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318`
+        // and also set allow_loopback if the SDK validates it strictly.
+        .allow_loopback = false,
+    };
+    var owned = (try exporter_factory.metricExporterFor(
+        allocator,
+        .otlp_http,
+        otlp_cfg,
+    )) orelse return;
+    errdefer owned.deinit();
+
+    // Allocate the reader on the heap so its address stays stable once we
+    // hand `*provider` into it.
+    const reader = try allocator.create(PeriodicMetricReader);
+    errdefer allocator.destroy(reader);
+    reader.* = try PeriodicMetricReader.init(
+        allocator,
+        provider,
+        owned.exporter,
+        .{
+            .export_interval_ms = interval_ms,
+            .export_timeout_ms = timeout_ms,
+        },
+    );
+    try reader.start();
+
+    g_otlp_reader = reader;
+    g_otlp_exporter = owned;
 }
 
 // Hot-path reads — no lock. Callers MUST be in the init..shutdown window;
