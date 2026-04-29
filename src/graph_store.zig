@@ -1189,6 +1189,20 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
+        // Storage trace span — emits when geode's TracerProvider is wired
+        // (OTEL_TRACES_EXPORTER=otlp); graph_storage lib has no
+        // observability seam, so we use geode's own tracer directly.
+        const _gs_om = @import("otel_metrics");
+        const _gs_otel = @import("otel");
+        var _gs_span = _gs_om.tracer().startSpan(
+            _gs_otel.api.context.Context.empty(),
+            "geode.graph_store.create_node",
+            .{ .kind = .internal },
+        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
+        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
+        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
+        defer _gs_span.end(null);
+
         const adapter_node: ?struct {
             vt: AdapterVTable,
             slot_id: u64,
@@ -1773,6 +1787,21 @@ pub const GraphStore = struct {
     // needs to iterate without holding the rwlock, add a `getNodesByLabelSnapshot`
     // helper that clones under `LabelPosting.mutex` rather than aliasing.
     pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
+        // Read-path trace span — peer of the create_node span. Emits when
+        // geode's TracerProvider is wired (OTEL_TRACES_EXPORTER=otlp); no-op
+        // when unwired.
+        const _gs_om = @import("otel_metrics");
+        const _gs_otel = @import("otel");
+        var _gs_span = _gs_om.tracer().startSpan(
+            _gs_otel.api.context.Context.empty(),
+            "geode.graph_store.get_nodes_by_label",
+            .{ .kind = .internal },
+        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
+        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
+        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
+        _gs_span.setStringAttribute("geode.label", label) catch {};
+        defer _gs_span.end(null);
+
         // Create composite key "graph_name:label"
         var key_buf: [512]u8 = undefined;
         const key = std.fmt.bufPrint(&key_buf, "{s}:{s}", .{ graph_name, label }) catch return null;

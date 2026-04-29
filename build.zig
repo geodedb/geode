@@ -104,6 +104,17 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // OTel package options. Declared early so dependent libraries that
+    // forward these options into their own `b.lazyDependency("otel", ...)`
+    // calls see the same values geode passes to its direct otel dep —
+    // identical options ⇒ deduplicated otel module across the build graph
+    // (without this, zig errors with "file exists in modules 'otel' and
+    // 'otel0'" at any source file reachable through both module trees).
+    const otel_disabled = b.option(bool, "otel_disabled", "Compile every otel API call site to a comptime-known no-op (zero-overhead disabled mode)") orelse false;
+    const otel_profiles = b.option(bool, "otel_profiles", "Enable experimental OTLP profiles export (upstream proto unstable)") orelse false;
+    const otel_use_devnw_tls = b.option(bool, "otel_use_devnw_tls", "Use DevNW tls for HTTPS in OTLP/HTTP transport (required for HTTPS OTLP endpoints, e.g. GitLab observability)") orelse false;
+    const otel_use_devnw_grpc = b.option(bool, "otel_use_devnw_grpc", "Use DevNW grpc-zig for OTLP/gRPC transport (CURRENTLY UNSUPPORTED; pin-conflict with geode's grpc_zig)") orelse false;
+
     // Get version from git tags
     const version = getGitVersion(b);
 
@@ -143,6 +154,14 @@ pub fn build(b: *std.Build) void {
     const repl_dep = b.dependency("repl", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        // Forward otel package options so the lib's lazyDependency builds
+        // the SAME otel module instance as geode's. See build(otel)
+        // forward-options commits in each lib for rationale.
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const repl_mod = repl_dep.module("repl");
 
@@ -150,6 +169,14 @@ pub fn build(b: *std.Build) void {
     const vulkan_dep = b.dependency("vulkan", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        // Forward otel package options so the lib's lazyDependency builds
+        // the SAME otel module instance as geode's. See build(otel)
+        // forward-options commits in each lib for rationale.
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const vulkan_mod = vulkan_dep.module("vulkan");
 
@@ -189,6 +216,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .json = false,
+        .with_otel = true,
+        // Forward otel package options so the lib's lazyDependency builds
+        // the SAME otel module instance as geode's. See build(otel)
+        // forward-options commits in each lib for rationale.
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const slog_mod = slog_dep.module("slogz");
     slog_mod.addImport("json", json_mod);
@@ -223,10 +258,8 @@ pub fn build(b: *std.Build) void {
     //                                   conflict); the otel devnw_grpc
     //                                   path remains experimental
     //                                   upstream too. Stay false.
-    const otel_disabled = b.option(bool, "otel_disabled", "Compile every otel API call site to a comptime-known no-op (zero-overhead disabled mode)") orelse false;
-    const otel_profiles = b.option(bool, "otel_profiles", "Enable experimental OTLP profiles export (upstream proto unstable)") orelse false;
-    const otel_use_devnw_tls = b.option(bool, "otel_use_devnw_tls", "Use DevNW tls for HTTPS in OTLP/HTTP transport (required for HTTPS OTLP endpoints, e.g. GitLab observability)") orelse false;
-    const otel_use_devnw_grpc = b.option(bool, "otel_use_devnw_grpc", "Use DevNW grpc-zig for OTLP/gRPC transport (CURRENTLY UNSUPPORTED; pin-conflict with geode's grpc_zig)") orelse false;
+    // (otel_disabled / otel_profiles / otel_use_devnw_tls / otel_use_devnw_grpc
+    // are declared at the top of `build` so dependent libs can forward them.)
     const otel_dep = b.dependency("otel", .{
         .target = target,
         .optimize = optimize,
@@ -269,6 +302,14 @@ pub fn build(b: *std.Build) void {
     const dns_dep = b.dependency("dns", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        // Forward otel package options so the lib's lazyDependency builds
+        // the SAME otel module instance as geode's. See build(otel)
+        // forward-options commits in each lib for rationale.
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const dns_mod = dns_dep.module("dns");
 
@@ -289,6 +330,11 @@ pub fn build(b: *std.Build) void {
     const protobuf_dep = b.dependency("protobuf", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const protobuf_mod = protobuf_dep.module("protobuf");
 
@@ -304,6 +350,11 @@ pub fn build(b: *std.Build) void {
     const thread_pool_dep = b.dependency("thread_pool", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
@@ -322,6 +373,14 @@ pub fn build(b: *std.Build) void {
     const wal_dep = b.dependency("wal", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        // Forward otel package options so the lib's lazyDependency builds
+        // the SAME otel module instance as geode's. See build(otel)
+        // forward-options commits in each lib for rationale.
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const wal_ext_mod = wal_dep.module("wal");
 
@@ -355,7 +414,19 @@ pub fn build(b: *std.Build) void {
     const fle_dep = b.dependency("fle", .{ .target = target, .optimize = optimize });
     const fle_ext_mod = fle_dep.module("fle");
 
-    const gql_dep = b.dependency("gql", .{ .target = target, .optimize = optimize });
+    const gql_dep = b.dependency("gql", .{
+        .target = target,
+        .optimize = optimize,
+        .with_otel = true,
+        // Forward otel package options so gql's lazyDependency("otel", ...)
+        // builds the SAME module instance as geode's. Without identical
+        // options, zig materialises distinct module objects and errors
+        // with "file exists in modules 'otel' and 'otel0'".
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
+    });
     const gql_ext_mod = gql_dep.module("gql");
 
     const timeseries_dep = b.dependency("timeseries", .{ .target = target, .optimize = optimize });
@@ -4073,6 +4144,17 @@ pub fn build(b: *std.Build) void {
     otel_metrics_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     test_step.dependOn(&run_otel_metrics_tests.step);
+
+    // Tracer-pipeline regression test: facade tracer() emits spans through
+    // a wired TracerProvider into an in-memory recorder. Reproduces and
+    // gates the install-otel-no-traces gap.
+    const otel_tracer_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_tracer_smoke.zig"), .target = target, .optimize = optimize });
+    otel_tracer_test_mod.addImport("otel", otel_mod);
+    otel_tracer_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_tracer_tests = b.addTest(.{ .root_module = otel_tracer_test_mod });
+    otel_tracer_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_otel_tracer_tests = b.addRunArtifact(otel_tracer_tests);
+    test_step.dependOn(&run_otel_tracer_tests.step);
 
     // Task 20: cardinality + privacy guard — asserts no forbidden high-cardinality
     // attribute key (user.id, username, session.id, …) leaks into the Prometheus

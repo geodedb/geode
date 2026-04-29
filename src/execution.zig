@@ -939,15 +939,52 @@ fn executeStatement(allocator: std.mem.Allocator, stmt: ast.Statement) !Executio
 
 pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.Statement, context: ExecutionContext) !ExecutionResult {
     const om = @import("otel_metrics");
+    const otel_lib = @import("otel");
     const qt: om.QueryType = .read; // simplified — Task 10 follow-up: classify from stmt
     om.incQueryActive(qt);
     defer om.decQueryActive(qt);
-    const t0_exec = @import("otel").internal.clock.unixNanoNow();
+    const t0_exec = otel_lib.internal.clock.unixNanoNow();
     var exec_outcome: om.Outcome = .success;
     errdefer exec_outcome = .error_;
+
+    // Tracing: open one span per executed statement so the OTLP exporter
+    // (when wired via OTEL_TRACES_EXPORTER=otlp) sees real query traffic.
+    // The span is a noop when no TracerProvider is wired.
+    const op_name: []const u8 = switch (stmt) {
+        .Query => "QUERY",
+        .Union => "UNION",
+        .Intersect => "INTERSECT",
+        .Except => "EXCEPT",
+        .Create => "CREATE",
+        .Insert, .InsertValue => "INSERT",
+        .Delete => "DELETE",
+        .Merge => "MERGE",
+        .Call => "CALL",
+        .CreateIndex => "CREATE_INDEX",
+        .DropIndex => "DROP_INDEX",
+        .CreateConstraint => "CREATE_CONSTRAINT",
+        .DropConstraint => "DROP_CONSTRAINT",
+        .Show => "SHOW",
+        .StartTransaction => "BEGIN",
+        .Commit => "COMMIT",
+        .Rollback => "ROLLBACK",
+        .Backup => "BACKUP",
+        .Restore => "RESTORE",
+        else => "STATEMENT",
+    };
+    var span = om.tracer().startSpan(
+        otel_lib.api.context.Context.empty(),
+        "geode.query.execute",
+        .{ .kind = .internal },
+    ) catch otel_lib.api.trace.Span{ .state = null, .sc = .{} };
+    span.setStringAttribute("db.system.name", "geode") catch {};
+    span.setStringAttribute("db.operation.name", op_name) catch {};
+    defer span.end(null);
+
     defer {
-        const dur_s = @as(f64, @floatFromInt(@import("otel").internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
+        const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
         om.recordQueryExecution("STATEMENT", "STATEMENT", qt, dur_s, exec_outcome, null);
+        span.setStatus(if (exec_outcome == .success) .ok else .@"error", "");
     }
     switch (stmt) {
         .Query => |q| {

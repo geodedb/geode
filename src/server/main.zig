@@ -394,6 +394,21 @@ const TrackingAllocator = @import("tracking_alloc").TrackingAllocator;
 // Removed: processMessage() function (~422 lines) now in quic_connection_handler module (M3.3 Phase 3 QUIC handlers extraction)
 // Total extracted: ~588 lines to quic_connection_handler.zig module
 
+/// Bind a dependent library's observability seam to geode's
+/// TracerProvider/MeterProvider. Comptime no-op when the lib was built
+/// with `-Dwith_otel=false`. Wraps `otel_metrics.bindLibraryGlobals` and
+/// downgrades errors to a warning since OTel wiring failures must never
+/// block server startup.
+fn bindLib(comptime LibObservability: type, comptime scope_name: []const u8) void {
+    const otel_metrics_facade = @import("otel_metrics");
+    otel_metrics_facade.bindLibraryGlobals(LibObservability, scope_name) catch |err| {
+        log.warn("Failed to bind library otel observability", &.{
+            Attr.string("scope", scope_name),
+            Attr.string("error", @errorName(err)),
+        });
+    };
+}
+
 pub fn main() !void {
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
     var gpa_instance = std.heap.DebugAllocator(.{}){};
@@ -632,6 +647,25 @@ pub fn main() !void {
             Attr.string("error", @errorName(err)),
         });
     };
+
+    // Bind dependent libraries' observability seams to geode's
+    // TracerProvider/MeterProvider so spans they emit land in the same
+    // OTLP/HTTP pipeline as geode's own spans (bottom-up traces).
+    //
+    // Each call is a comptime no-op when the lib was built with
+    // `-Dwith_otel=false`. The libs whose otel pin and build options
+    // align with geode's are bound here; thread_pool is intentionally
+    // omitted because its pin is held back to avoid a "file exists in
+    // modules" conflict with quic/grpc_zig's transitive thread_pool
+    // resolution (see build.zig.zon comment on .thread_pool).
+    bindLib(@import("wal").observability, "wal");
+    bindLib(@import("gql_lib").observability, "gql");
+    bindLib(@import("repl").observability, "repl");
+    bindLib(@import("dns").observability, "dns");
+    bindLib(@import("slog").observability, "slog");
+    bindLib(@import("vulkan").observability, "vulkan");
+    bindLib(@import("thread_pool").observability, "thread_pool");
+    bindLib(@import("protobuf").observability, "protobuf");
     // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     otel_metrics_facade.registerRuntimeMetrics() catch |err| {
         log.warn("Failed to register runtime process metrics", &.{

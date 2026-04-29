@@ -38,7 +38,7 @@ Bad:  geode.query.duration.seconds
 ### Instrumentation scope
 
 ```text
-meter.name     = "com.codepros.geode"
+meter.name     = "com.geodedb.geode"
 meter.version  = <Geode version>
 schema_url     = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0"
 ```

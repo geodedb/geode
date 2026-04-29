@@ -225,6 +225,22 @@ pub const WriteAheadLog = struct {
         };
         _om12w.recordWalRecord(_rec_type);
 
+        // WAL trace span — emits when wal lib is built with -Dwith_otel=true
+        // and otel_metrics.bindLibraryGlobals has wired the seam at server
+        // startup. Both gates collapse to comptime no-ops otherwise.
+        const _wal_op: []const u8 = switch (record) {
+            .CreateNode => "create_node",
+            .CreateEdge => "create_edge",
+            .SetNodeProperty, .AddNodeLabel => "update_node",
+            .RemoveNodeProperty, .RemoveNodeLabel => "update_node",
+            .SetEdgeProperty => "update_edge",
+            .RemoveEdgeProperty => "update_edge",
+            .DeleteNode => "delete_node",
+            .DeleteEdge => "delete_edge",
+        };
+        const _wal_span = wal_lib.observability.startWalSpan(_wal_op);
+        defer wal_lib.observability.endWalSpan(_wal_span, true, 0);
+
         // #692: Use a stack buffer for small records (majority of mutations
         // are under 256 bytes) to avoid a heap allocation per WAL append.
         // The FixedBufferAllocator serves from the stack; if the record

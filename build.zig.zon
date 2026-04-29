@@ -41,14 +41,14 @@
 
         // REPL library with Emacs/Vi keybindings
         .repl = .{
-            .url = "git+https://gitlab.com/devnw/zig/repl.git#3e04c2604edd551852a339359679f57a9ba2b75d",
-            .hash = "repl-0.1.0-gwF1T5P0BQC0Wa03SuIVPmYeVDP3JNuOqF3hy2mtln0Y",
+            .url = "git+https://gitlab.com/devnw/zig/repl.git#0458a77a19c559836bdc574a4915142b22ce0d3c",
+            .hash = "repl-0.1.0-gwF1T7D5BQDSXu2jpLMu5aEFMk0Ff2Por983ma_lkjDU",
         },
 
         // Vulkan compute library
         .vulkan = .{
-            .url = "git+https://gitlab.com/devnw/zig/vulkan.git#ba4eef9843dba8a4269736d58ea46a522acaefaf",
-            .hash = "vulkan-0.1.0-zh1htbcDEgAMh8npElUuOVC6bv_SWEz-45Nz79Cw2yyj",
+            .url = "git+https://gitlab.com/devnw/zig/vulkan.git#91ffaf3af9436b1d5ae58ac30b56bcead84ddee6",
+            .hash = "vulkan-0.1.0-zh1htdYIEgCdVh0TRJ58gu2qD3HaOCz6pIIVKYWmWDJU",
         },
 
         // =======================================================================
@@ -84,8 +84,8 @@
 
         // Structured logging - slog-style logging with multiple handlers
         .slog = .{
-            .url = "git+https://gitlab.com/devnw/zig/slog.git#97593b9f4e48322eb45b1899afaa63f9bf369bc0",
-            .hash = "slog-0.1.0-SamEDz-uBgB_90dznNlaUGl6bd7dd8W7S4jH-mXI07Af",
+            .url = "git+https://gitlab.com/devnw/zig/slog.git#eaaf81955cfb20fb3d199bb93b35dcd48fbdf75b",
+            .hash = "slog-0.1.0-SamED3S2BgC5ODNd1eXxzd0C4u0ZSXPXvsqDbXK-wWTr",
         },
 
         // OpenTelemetry client library — metrics, tracing, logs surface.
@@ -120,8 +120,8 @@
 
         // DNS resolution - RFC 1035 compliant with caching and DoT/DoH/DoQ support
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#d21a9bf850f494f97721a8385124ec0d37dd302f",
-            .hash = "dns-0.1.0-x4U-zQE4EQDjcYemckjTGpYoH9ZsoSnJSzU9IJXj084B",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#7cfbee6dff66a80fd97b8fdab8421913fd716029",
+            .hash = "dns-0.1.0-x4U-zR09EQA8Lj6HwwM3ItO0hwTfTEWuso11ilIR9DEF",
         },
 
         // Thread Pool - Bounded, lock-free thread pool with work-stealing
@@ -131,8 +131,8 @@
             // triggered by newer quic/grpc_zig/mcp/etc. that pull a different
             // thread_pool version transitively; those deps remain pinned. If
             // bumping those deps in future, verify no overlapping module paths.
-            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#1674ebbeb0eed7107e6e488cc9fd7b97a8036966",
-            .hash = "thread_pool-0.2.1-11B1BqycdgAPt02YXm95pvBtazxHeJlzMBIUHZ0yTzSa",
+            .url = "git+https://gitlab.com/devnw/zig/thread-pool.git#a554a76499fcaa7bfde35907f79c2a4a586fea4d",
+            .hash = "thread_pool-0.2.1-11B1BtChdgA9Y33CKQAssNN0It53bpRXpmWNmvDqHQXB",
         },
 
         // =======================================================================
@@ -147,8 +147,8 @@
 
         // Protocol Buffers - Zig 0.15.2 compatible
         .protobuf = .{
-            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#925d0896b49b26c141727baddfb862d8f88866f4",
-            .hash = "protobuf-3.0.0-0e82atImKgC12aCCoaGNPjzHK71iseW701-R1PDlskhe",
+            .url = "git+https://gitlab.com/devnw/zig/protobuf.git#3518081cfe756d176a03ee5e2b1ec813741b403a",
+            .hash = "protobuf-3.0.0-0e82agMxKgDoOSzBZvsFjhUYYfDzxc3ZaWwtIFcDdi3z",
         },
 
         // gRPC for Zig
@@ -175,8 +175,8 @@
 
         // WAL - Generic, payload-agnostic Write-Ahead Log with AES-256-GCM encryption
         .wal = .{
-            .url = "git+https://gitlab.com/devnw/zig/wal.git#09cd440d11e0739ab7e3998fa609833a40df9b47",
-            .hash = "wal-0.1.0-EqPqpjs7BAB-dsQiJttXHtTuWcMaR8qSsUXfsoSKqCWu",
+            .url = "git+https://gitlab.com/devnw/zig/wal.git#5b5630c54822f8d0902b17280a6d78c4390e3811",
+            .hash = "wal-0.1.0-EqPqps1ABABeSKzCaAr9E_NeJb3trwEnAL69dtL_uJp4",
         },
 
         // Page-based graph storage engine
@@ -232,8 +232,8 @@
 
         // GQL - ISO/IEC 39075:2024 Graph Query Language front-end (lexer, parser, AST)
         .gql = .{
-            .url = "git+https://gitlab.com/devnw/zig/gql.git#19f900656a549326e114da54f1ad7c8020f334b1",
-            .hash = "gql-0.1.0-T1ANDSbyCAC9sJjmrQT1_juauzN83QIhkjJ8-SkFgV1O",
+            .url = "git+https://gitlab.com/devnw/zig/gql.git#08f8f807ec25ad36f8d7a5331c232c7a75bf9d55",
+            .hash = "gql-0.1.0-T1ANDbz3CABct0rU_qNlcXp-PJMGJnMqBseUGV-VRlwA",
         },
 
         // Timeseries - Pattern matching, DTW, matrix profile, PELT change-point detection
