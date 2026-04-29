@@ -4038,6 +4038,16 @@ pub fn build(b: *std.Build) void {
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     test_step.dependOn(&run_otel_metrics_tests.step);
 
+    // Task 20: cardinality + privacy guard — asserts no forbidden high-cardinality
+    // attribute key (user.id, username, session.id, …) leaks into the Prometheus
+    // metric stream from any public recordX facade call.
+    const otel_cardinality_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_cardinality_guard.zig"), .target = target, .optimize = optimize });
+    otel_cardinality_test_mod.addImport("otel", otel_mod);
+    otel_cardinality_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_cardinality_tests = b.addTest(.{ .root_module = otel_cardinality_test_mod });
+    const run_otel_cardinality_tests = b.addRunArtifact(otel_cardinality_tests);
+    test_step.dependOn(&run_otel_cardinality_tests.step);
+
     // Task 7 (OTel instrumentation plan): /metrics OTel-exporter parity test.
     // All three monitoring modules use named imports and are wired as separate
     // named module instances so parity test + metrics_server test can share
