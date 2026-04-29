@@ -46,6 +46,9 @@ const Meter = otel.api.metrics.Meter;
 const PeriodicMetricReader = otel.sdk.periodic_metric_reader.PeriodicMetricReader;
 const exporter_factory = otel.sdk.exporter_factory;
 const sdk_config = otel.sdk.config;
+const TracerProvider = otel.sdk.trace.TracerProvider;
+const Tracer = otel.api.trace.Tracer;
+const InMemoryRecorder = otel.exporters.in_memory.Recorder;
 
 pub const SCOPE_NAME = "com.codepros.geode";
 pub const SCHEMA_URL = "https://schemas.geodedb.com/otel/geode/metrics/1.0.0";
@@ -61,6 +64,12 @@ var g_init_mu: std.Io.Mutex = std.Io.Mutex.init;
 // when OTEL_METRICS_EXPORTER != "otlp".
 var g_otlp_reader: ?*PeriodicMetricReader = null;
 var g_otlp_exporter: ?exporter_factory.OwnedMetricExporter = null;
+
+// Tracing pipeline: heap-allocated TracerProvider + owned span exporter.
+// Wired when OTEL_TRACES_EXPORTER=otlp, or by initForTracingTest when
+// running unit tests against an in-memory recorder.
+var g_tracer_provider: ?*TracerProvider = null;
+var g_tracer_owned_exporter: ?exporter_factory.OwnedSpanExporter = null;
 
 fn initIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
@@ -108,6 +117,15 @@ pub fn init(allocator: std.mem.Allocator, opts: otel_resource.Options) !void {
     tryWireOtlpReader(allocator, provider) catch |err| {
         std.log.warn("otel_metrics: OTLP/HTTP push wiring failed ({s}); falling back to pull-only", .{@errorName(err)});
     };
+
+    // --- Tracing pipeline wiring -----------------------------------------
+    // When OTEL_TRACES_EXPORTER=otlp is set, build a TracerProvider that
+    // pushes spans to the OTLP/HTTP endpoint. Errors are non-fatal: tracing
+    // is opt-in and a misconfigured collector should not prevent geode
+    // from starting. The metrics pipeline is independent.
+    tryWireOtlpTracer(allocator, resource) catch |err| {
+        std.log.warn("otel_metrics: OTLP/HTTP tracer wiring failed ({s}); spans will not be exported", .{@errorName(err)});
+    };
 }
 
 /// Test variant: builds a fixed-attribute resource so unit tests do not
@@ -137,6 +155,22 @@ pub fn shutdown() void {
     if (g_otlp_exporter) |*e| {
         e.deinit();
         g_otlp_exporter = null;
+    }
+
+    // Tear down the tracer pipeline before the resource is freed below.
+    // TracerProvider.deinit shuts down processors, which flushes the
+    // OTLP/HTTP exporter; the owned exporter is freed afterwards. The
+    // resource pointer is shared with g_resource and will be freed once,
+    // below — TracerProvider was constructed with `owns_resource = false`
+    // because we passed a non-null `resource` field.
+    if (g_tracer_provider) |p| {
+        p.deinit();
+        if (g_allocator) |a| a.destroy(p);
+        g_tracer_provider = null;
+    }
+    if (g_tracer_owned_exporter) |*e| {
+        e.deinit();
+        g_tracer_owned_exporter = null;
     }
 
     if (g_provider) |p| {
@@ -304,6 +338,107 @@ fn tryWireOtlpReader(allocator: std.mem.Allocator, provider: *MeterProvider) !vo
     g_otlp_exporter = owned;
 }
 
+// -----------------------------------------------------------------------
+// OTLP/HTTP tracer wiring
+// -----------------------------------------------------------------------
+
+/// Detect `OTEL_TRACES_EXPORTER=otlp` in the environment and, when set,
+/// construct an OTLP/HTTP span exporter and a `TracerProvider` backed by
+/// the SDK's default BatchSpanProcessor. The provider takes ownership of
+/// the resource pointer (it is shared with the MeterProvider — the resource
+/// lifetime is tied to `g_resource`, not to the provider).
+///
+/// Reads (in priority order, most specific wins):
+///   `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` (traces-specific)
+///   `OTEL_EXPORTER_OTLP_ENDPOINT`        (shared default)
+///   fallback: `http://localhost:4318`
+///
+/// `OTEL_BSP_SCHEDULE_DELAY` — batch flush interval in ms (default 5_000)
+/// `OTEL_BSP_EXPORT_TIMEOUT` — per-export timeout in ms (default 30_000)
+///
+/// Errors propagate to `init()` which logs a warning and continues.
+fn tryWireOtlpTracer(allocator: std.mem.Allocator, resource: *Resource) !void {
+    const exporter_env = getenv("OTEL_TRACES_EXPORTER") orelse return;
+    const kind = sdk_config.ExporterKind.fromString(exporter_env);
+    if (kind != .otlp_http) return;
+
+    const default_endpoint = "http://localhost:4318";
+    const endpoint: []const u8 =
+        getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT") orelse
+        getenv("OTEL_EXPORTER_OTLP_ENDPOINT") orelse
+        default_endpoint;
+
+    const timeout_ms: u64 = blk: {
+        const s = getenv("OTEL_BSP_EXPORT_TIMEOUT") orelse break :blk 30_000;
+        break :blk std.fmt.parseInt(u64, s, 10) catch 30_000;
+    };
+    const schedule_delay_ms: u64 = blk: {
+        const s = getenv("OTEL_BSP_SCHEDULE_DELAY") orelse break :blk 5_000;
+        break :blk std.fmt.parseInt(u64, s, 10) catch 5_000;
+    };
+
+    std.log.info(
+        "otel_metrics: OTLP/HTTP tracer enabled — endpoint={s} schedule_delay={d}ms timeout={d}ms",
+        .{ endpoint, schedule_delay_ms, timeout_ms },
+    );
+
+    const otlp_cfg: sdk_config.OtlpConfig = .{
+        .endpoint = endpoint,
+        .protocol = .http_protobuf,
+        .timeout_ms = timeout_ms,
+        .allow_loopback = false,
+    };
+    var owned = (try exporter_factory.spanExporterFor(
+        allocator,
+        .otlp_http,
+        otlp_cfg,
+    )) orelse return;
+    errdefer owned.deinit();
+
+    const provider = try allocator.create(TracerProvider);
+    errdefer allocator.destroy(provider);
+    provider.* = try TracerProvider.init(allocator, .{
+        .resource = resource,
+        .default_exporter = owned.exporter,
+        .bsp_options = .{
+            .schedule_delay_ms = schedule_delay_ms,
+            .export_timeout_ms = timeout_ms,
+        },
+        .disabled = false,
+    });
+
+    g_tracer_provider = provider;
+    g_tracer_owned_exporter = owned;
+}
+
+/// Test-only: wire a `TracerProvider` against a caller-supplied in-memory
+/// recorder so unit tests can assert on emitted spans without spinning up
+/// an OTLP collector. Uses `SimpleSpanProcessor` for synchronous export so
+/// `forceFlushTraces` is unnecessary, but the public flush API is still
+/// honoured for symmetry with production.
+///
+/// Caller owns `recorder` and must keep it alive across `shutdown()`.
+pub fn initForTracingTest(allocator: std.mem.Allocator, recorder: *InMemoryRecorder) !void {
+    // Bootstrap the MeterProvider first (its own init takes the lock).
+    if (g_provider == null) try initForTesting(allocator);
+
+    g_init_mu.lockUncancelable(initIo());
+    defer g_init_mu.unlock(initIo());
+    if (g_tracer_provider != null) return;
+
+    const resource = g_resource orelse return error.MeterProviderNotInitialised;
+
+    const provider = try allocator.create(TracerProvider);
+    errdefer allocator.destroy(provider);
+    provider.* = try TracerProvider.init(allocator, .{
+        .resource = resource,
+        .default_exporter = recorder.spanExporter(),
+        .disabled = false,
+    });
+    g_tracer_provider = provider;
+    g_tracer_owned_exporter = null;
+}
+
 // Hot-path reads — no lock. Callers MUST be in the init..shutdown window;
 // concurrent access with shutdown() is undefined behaviour. In production
 // this is enforced by the lifecycle: init() runs at server startup before
@@ -313,6 +448,28 @@ fn tryWireOtlpReader(allocator: std.mem.Allocator, provider: *MeterProvider) !vo
 /// Return the global MeterProvider, or `null` if not yet initialised.
 pub fn getProvider() ?*MeterProvider {
     return g_provider;
+}
+
+/// Return a `Tracer` scoped to Geode's instrumentation library.
+/// If called before `init` or after `shutdown` (or when no
+/// `TracerProvider` was wired because `OTEL_TRACES_EXPORTER` was unset),
+/// returns an inert noop `Tracer` whose `startSpan` calls collapse to
+/// `Span.noop` without touching the SDK pipeline.
+pub fn tracer() Tracer {
+    if (g_tracer_provider) |p| {
+        return p.tracer(.{
+            .name = SCOPE_NAME,
+            .version = otel.version,
+            .schema_url = SCHEMA_URL,
+        });
+    }
+    return .{ .scope = .{ .name = SCOPE_NAME } };
+}
+
+/// Force a flush of all pending spans through the wired processors.
+/// Safe to call when no tracer provider is active — returns immediately.
+pub fn forceFlushTraces(timeout_ms: u64) !void {
+    if (g_tracer_provider) |p| try p.forceFlush(timeout_ms);
 }
 
 /// Return a `Meter` scoped to Geode's instrumentation library.

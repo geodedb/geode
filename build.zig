@@ -4074,6 +4074,17 @@ pub fn build(b: *std.Build) void {
     const run_otel_metrics_tests = b.addRunArtifact(otel_metrics_tests);
     test_step.dependOn(&run_otel_metrics_tests.step);
 
+    // Tracer-pipeline regression test: facade tracer() emits spans through
+    // a wired TracerProvider into an in-memory recorder. Reproduces and
+    // gates the install-otel-no-traces gap.
+    const otel_tracer_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_otel_tracer_smoke.zig"), .target = target, .optimize = optimize });
+    otel_tracer_test_mod.addImport("otel", otel_mod);
+    otel_tracer_test_mod.addImport("otel_metrics", otel_metrics_mod);
+    const otel_tracer_tests = b.addTest(.{ .root_module = otel_tracer_test_mod });
+    otel_tracer_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
+    const run_otel_tracer_tests = b.addRunArtifact(otel_tracer_tests);
+    test_step.dependOn(&run_otel_tracer_tests.step);
+
     // Task 20: cardinality + privacy guard — asserts no forbidden high-cardinality
     // attribute key (user.id, username, session.id, …) leaks into the Prometheus
     // metric stream from any public recordX facade call.
