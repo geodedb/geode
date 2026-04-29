@@ -355,6 +355,11 @@ pub fn build(b: *std.Build) void {
     const fle_dep = b.dependency("fle", .{ .target = target, .optimize = optimize });
     const fle_ext_mod = fle_dep.module("fle");
 
+    // NOTE: `-Dwith_otel=true` here would compile in gql's observability
+    // seam, but until gql's otel pin (20078af2 as of 2026-04-29) is
+    // bumped to match geode's pin (ee492166), the resulting Tracer/Meter
+    // types are distinct module instances and cannot be unified via
+    // `otel_metrics.bindLibraryGlobals`. Re-enable once the pins align.
     const gql_dep = b.dependency("gql", .{ .target = target, .optimize = optimize });
     const gql_ext_mod = gql_dep.module("gql");
 

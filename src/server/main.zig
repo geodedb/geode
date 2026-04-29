@@ -632,6 +632,16 @@ pub fn main() !void {
             Attr.string("error", @errorName(err)),
         });
     };
+
+    // NOTE: bindLibraryGlobals call sites live here once the lib's otel
+    // pin matches geode's otel pin. As of 2026-04-29 the dependent libs
+    // (gql, wal, repl, …) pin otel at 20078af2 while geode pins
+    // ee492166dfefc7914229979c933411e6da9e504e (the Zig-0.16 prometheus.zig
+    // fix). The Tracer/Meter types from those distinct module instances
+    // are NOT type-compatible, so passing geode's Tracer to a lib's
+    // global.tracer fails to compile. Bump each lib's otel pin to
+    // ee492166 (or later) before enabling its `-Dwith_otel=true` flag and
+    // wiring `bindLibraryGlobals` here.
     // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     otel_metrics_facade.registerRuntimeMetrics() catch |err| {
         log.warn("Failed to register runtime process metrics", &.{
