@@ -327,16 +327,14 @@ pub fn build(b: *std.Build) void {
     mcp_mod.addImport("json", json_mod);
 
     // Protobuf (Google Protocol Buffers)
-    // NOTE: with_otel=true intentionally OFF. After unifying protobuf's
-    // bench addOptions with the lib block (commit 66a69ea), the resolved
-    // protobuf module's `build_options` STILL ends up bound to a 7-field
-    // options.zig (cache hash 4c9d7c26) when called from inside geode —
-    // the source of the 7-field block has not been identified, but it
-    // makes observability.zig's `build_options.with_otel` lookup fail.
-    // Tracked for future investigation.
     const protobuf_dep = b.dependency("protobuf", .{
         .target = target,
         .optimize = optimize,
+        .with_otel = true,
+        .otel_use_devnw_tls = otel_use_devnw_tls,
+        .otel_disabled = otel_disabled,
+        .otel_profiles = otel_profiles,
+        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const protobuf_mod = protobuf_dep.module("protobuf");
 

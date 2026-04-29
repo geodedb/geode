@@ -665,7 +665,7 @@ pub fn main() !void {
     bindLib(@import("slog").observability, "slog");
     bindLib(@import("vulkan").observability, "vulkan");
     bindLib(@import("thread_pool").observability, "thread_pool");
-    // protobuf intentionally omitted — see build.zig comment (4c9d7c26).
+    bindLib(@import("protobuf").observability, "protobuf");
     // CANARY: REQ=REQ-OTEL-METRICS-014; FEATURE="OTel Instrumentation"; ASPECT=ProcessMetrics; STATUS=IMPL; TEST=tests/test_otel_facade_smoke.zig; OWNER=monitoring; UPDATED=2026-04-28
     otel_metrics_facade.registerRuntimeMetrics() catch |err| {
         log.warn("Failed to register runtime process metrics", &.{
