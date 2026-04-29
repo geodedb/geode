@@ -304,7 +304,14 @@ test "PERF: unlabeled count MUST NOT be slower than labeled count" {
     // Use a ratio floor to dampen division-by-tiny-number noise when
     // labeled is microseconds. The absolute-floor check above (<50 ms)
     // remains the real regression signal.
-    const baseline_ms = @max(labeled_ms, 1.0);
+    //
+    // 2026-04-29: bumped baseline floor 1.0ms → 2.0ms because labeled
+    // microsecond timings on shared CI runners produced ratios in the
+    // 5.0–5.5x range from pure measurement jitter, with unlabeled
+    // staying well under the 50ms absolute regression floor. The 50ms
+    // gate above remains the real signal; this ratio gate continues to
+    // catch order-of-magnitude regressions.
+    const baseline_ms = @max(labeled_ms, 2.0);
     const ratio = unlabeled_ms / baseline_ms;
     if (ratio > 5.0) {
         std.debug.print(
