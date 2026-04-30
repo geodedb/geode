@@ -140,6 +140,31 @@ repos:
     files: \.goreleaser\.ya?ml$
     pass_filenames: false
 
+      # Diamond-dep detector — fail loud when build.zig.zon transitively
+      # pins the same package name to two different content hashes.
+      # Soft-fails (exit 2) if the zig package cache hasn't been
+      # populated yet, so a fresh checkout doesn't block commits before
+      # the developer has run `zig build --fetch` once.  Hard-fails
+      # (exit 1) on actual diamonds (e.g. thread_pool-0.2.0 + 0.2.1
+      # both linked into one binary) — those should be resolved by
+      # bumping every transitive importer to the same hash.
+  - id: detect-diamond-deps
+    name: detect diamond deps in build.zig.zon
+    entry: bash
+    args:
+    - -c
+    - |
+      python3 scripts/detect_diamond_deps.py
+      rc=$?
+      if [ $rc -eq 2 ]; then
+        echo "detect-diamond-deps: cache not populated; skipping (run 'zig build --fetch')"
+        exit 0
+      fi
+      exit $rc
+    language: system
+    files: ^build\.zig\.zon$
+    pass_filenames: false
+
       # Zig formatting check — runs at BOTH pre-commit and pre-push so a
       # --no-verify on commit is still caught on push (issue #724).
       # Scope covers every Zig source tree in the repo; narrow src/+build.zig

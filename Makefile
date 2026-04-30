@@ -36,7 +36,7 @@ endif
 .PHONY: loadtest-compare loadtest-save-baseline loadtest-save-all-baselines bench-timeseries
 # Note: geodetestlab and client-test-harness moved to separate repository (geode-test-harness)
 .PHONY: deps deps-check
-.PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all setup-dev lint lint-bootstrap
+.PHONY: pre-commit pre-commit-install pre-commit-update pre-commit-all detect-diamond-deps setup-dev lint lint-bootstrap
 
 # Default target - build everything including cross-compilation checks (non-blocking)
 # Note: Integration tests (geodetestlab) moved to ../geode-test-harness
@@ -836,6 +836,15 @@ pre-commit-all:
 		echo "pre-commit not installed. Run 'make pre-commit-install' first."; \
 		exit 1; \
 	fi
+
+# Diamond-dep detector — fail loud when build.zig.zon transitively
+# pins the same package name to two different content hashes (e.g.
+# thread_pool-0.2.0 + thread_pool-0.2.1 both linked into one binary,
+# which is what produced the OTel BSP UAF on 2026-04-30).  Run
+# manually with `make detect-diamond-deps`; pre-commit hook also
+# invokes it on every change to build.zig.zon.
+detect-diamond-deps:
+	@python3 scripts/detect_diamond_deps.py
 
 # Full development setup
 setup-dev:
