@@ -150,6 +150,7 @@ pub const CreateBatchResult = crud_operations.CreateBatchResult;
 pub const executeCreateQuery = crud_operations.executeCreateQuery;
 pub const executeReturnClauseWithNodes = crud_operations.executeReturnClauseWithNodes;
 pub const executeCreate = crud_operations.executeCreate;
+pub const ensureAutoIndexes = crud_operations.ensureAutoIndexes;
 pub const executeInsert = crud_operations.executeInsert;
 pub const executeMerge = crud_operations.executeMerge;
 pub const executeDelete = crud_operations.executeDelete;

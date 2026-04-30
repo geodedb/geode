@@ -349,10 +349,15 @@ fn collectMatchingEdgeIds(
     return try matches.toOwnedSlice(allocator);
 }
 
-// CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-02-07
+// CANARY: REQ=REQ-AUTO-INDEX-003; FEATURE="AutoIdIndex"; ASPECT=CrudAutoIndex; STATUS=TESTED; OWNER=crud_operations; UPDATED=2026-04-30
 /// Ensure auto-indexes exist for the given labels.
 /// Called after node/edge creation to auto-create btree indexes on the `id` property.
-fn ensureAutoIndexes(allocator: std.mem.Allocator, labels: []const []const u8) void {
+/// Made `pub` so the bulk fast paths in `src/server/quic_connection_handler.zig`
+/// (which bypass `executeProgramWithContext` and therefore skip the regular-
+/// path auto-index hook at the CREATE site) can call it directly after a
+/// successful bulk insert.  Mirrors the regular pattern already used at
+/// line 690 of this file.
+pub fn ensureAutoIndexes(allocator: std.mem.Allocator, labels: []const []const u8) void {
     const cat = execution.ensureCatalogInstance(allocator) catch return;
     for (labels) |label| {
         cat.ensureAutoIdIndex(label) catch |err| {

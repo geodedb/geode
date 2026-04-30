@@ -570,6 +570,12 @@ fn executeBulkMatchCreateEdge(
         } else {
             mut_sample.record("bulk_match_create_edge");
             auditQueryExecution(state, "bulk_match_create_edge", true);
+            // Auto-index the edge type — mirrors the regular-executor
+            // hook at `src/execution/crud_operations.zig:690`.  The bulk
+            // fast path bypasses `executeProgramWithContext`, so without
+            // this call the spec `auto_index_id.yml::auto-idx-edge-visible`
+            // fails: `SHOW INDEXES` doesn't list `auto_idx_<edge_type>_id`.
+            execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
         }
         syncGraphFromSession(state);
         updateTxnStateFromProgram(state, program);
@@ -676,6 +682,9 @@ fn executeBulkMatchCreateEdge(
     mut_sample.record("bulk_match_create_edge");
 
     auditQueryExecution(state, "bulk_match_create_edge", true);
+    // Auto-index the edge type — non-coordinator path counterpart of the
+    // call above.  See note in coordinator-path branch.
+    execution.ensureAutoIndexes(gpa, &.{spec.rel_type});
     syncGraphFromSession(state);
     updateTxnStateFromProgram(state, program);
 }
