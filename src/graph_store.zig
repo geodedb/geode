@@ -3040,23 +3040,30 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        // NOTE (2026-04-29 edge-merge-latency triage): a prior revision of
-        // this fix added a `geode.graph_store.create_edge` trace span here
-        // mirroring the `geode.graph_store.create_node` instrumentation at
-        // line 1197.  When combined with the bulk-fast-path promotion in
-        // `quic_connection_handler.zig` (so this function is now also
-        // entered concurrently from `group_commit.shardLoop` worker
-        // threads), the OTel SDK's BatchSpanProcessor drainer
-        // (`zig-pkg/otel-0.1.0/.../src/sdk/export.zig:330 drainLocked`)
-        // panics with `index 512, len 1` — a pre-existing thread-safety
-        // race in the BSP queue exposed only when the same span emission
-        // site is hit from many shard-worker threads in parallel.  The
-        // span is therefore intentionally omitted at this layer; the
-        // existing `_om.recordEdgeMutation(.create, …)` counter at
-        // `graph_storage_adapter.zig:2270` still publishes
-        // `geode.graph_store.edge_mutations_total` for monitoring.  Re-add
-        // the span only after the upstream BSP race is fixed (likely a
-        // `min(n, queue.items.len)` clamp inside `drainLocked`).
+        // Storage trace span — mirrors `geode.graph_store.create_node` at
+        // line 1197.  Re-added 2026-04-30 after upstream OTel BSP fix
+        // `0c34ce9 fix(bsp): close concurrent-producer race in
+        // synchronous-drain build` landed on gitlab.com/devnw/zig/otel.
+        // The drainer race in `src/sdk/export.zig:330` (panic
+        // `index 512, len 1` when shard-worker threads hit this site
+        // concurrently) is now closed by a real `std.Io.Mutex` around
+        // `queue.append` and `drainLocked` on the no-pool path.  Geode's
+        // pin in `build.zig.zon` was bumped to that commit alongside this
+        // re-add.  The existing
+        // `_om.recordEdgeMutation(.create, …)` counter at
+        // `graph_storage_adapter.zig:2270` continues to publish
+        // `geode.graph_store.edge_mutations_total` for non-trace monitoring.
+        const _gs_om = @import("otel_metrics");
+        const _gs_otel = @import("otel");
+        var _gs_span = _gs_om.tracer().startSpan(
+            _gs_otel.api.context.Context.empty(),
+            "geode.graph_store.create_edge",
+            .{ .kind = .internal },
+        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
+        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
+        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
+        defer _gs_span.end(null);
+
         // Bug fix 2026-04-27 (docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md):
         // The previous code used `catch break :blk null` on every step inside
         // this block, including on `vt.createEdgeFn`.  Under multi-threaded

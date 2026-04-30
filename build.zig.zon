@@ -62,7 +62,18 @@
         },
 
         // QUIC v1/v2 protocol implementation
-        // Updated 2026-04-28 (later): bump to 4b246b2 — sendHandshakePackets
+        // Updated 2026-04-30: bump to 1226ece — fix(quic): use full peer SCID
+        // for standalone ECN-ACK packet routing.  Closes the long-response
+        // stream stall (BUG_LONG_RESPONSE_STREAM_STALL.md): once the receiver's
+        // ECN flag fired, every standalone ACK packet was emitted with a
+        // 4-byte DCID that did not match the peer's full 8-byte our_scid, so
+        // localDcidMatchLen rejected the packet and the sender's recovery
+        // layer never advanced largest_acked.  cwnd stayed pinned at the
+        // initial 10×MDS value and bytes_in_flight >= cwnd blocked every
+        // subsequent writeStream.  The Geode integration repro was MATCH+
+        // RETURN over >550 multi-column rows; setup batches in
+        // gap_0257 went from timing-out at 30 s to all green after this bump.
+        // Earlier 2026-04-28 (later): bump to 4b246b2 — sendHandshakePackets
         // now drives the TLS state machine via pollCrypto BEFORE checking
         // hs_tx_keys.  Fixes a benign race that capped concurrent client
         // fan-out at c=4: under msft-graph --workers 16, the keys check
@@ -74,8 +85,8 @@
         // Initial+Handshake into a 1200-byte datagram, exact varint Length
         // projection for coalesced datagram pad, TLS bumped to 7d9efd3.
         .quic = .{
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#d6b60890e7440fd14ac6a1d03484ad9bcb1e6f0a",
-            .hash = "quic-0.1.14-gBIqURJ6OQBAfCjY1BtmcVOeQXnWoUd6PkE51-hBUqii",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#1226eceb34d2b86e7712f9dd0d8b896680a77b47",
+            .hash = "quic-0.1.14-gBIqUb-_OQCCZ05iB4qtKYSl_k09mPyfDlddhqKMXobt",
         },
 
         // =======================================================================
@@ -89,8 +100,12 @@
         },
 
         // OpenTelemetry client library — metrics, tracing, logs surface.
-        // Pinned commit 20078af2 (2026-04-28). Intended for production use:
-        // /metrics (rendered via otel.exporters.prometheus) and OTLP/HTTP push.
+        // Pinned commit 0c34ce9 (2026-04-30) — includes BSP concurrent-producer
+        // race fix (synchronous-drain build now wraps queue.append + drainLocked
+        // with a real std.Io.Mutex; previously a no-op stub when
+        // -Dotel_use_devnw_pool was off). This unblocks re-adding the
+        // `geode.graph_store.create_edge` span at graph_store.zig:3042 that
+        // was rolled back in 89afe963.
         // Build flags `use_devnw_grpc`, `use_devnw_protobuf`, `use_devnw_pool`
         // are LEFT DEFAULT-OFF — turning them on pulls otel's pinned versions
         // of grpc_zig / protobuf / thread_pool into the module graph and
@@ -98,7 +113,7 @@
         // module paths). OTLP/HTTP transport works on stdlib std.http.Client
         // alone; gRPC OTLP is gated on resolving the pin conflict.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git#ee492166dfefc7914229979c933411e6da9e504e",
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#0c34ce9bcd8a7a8fb59257344344d053519565cd",
             .hash = "otel-0.1.0-B0v3lr2UMwA5qFJCa20OT-1huDPLm1sTIFD22PQBADDD",
         },
 
@@ -159,8 +174,8 @@
             .hash = "grpc_zig-0.1.0-7FnvpPSQBAA4Zy82lVlAlkoeUV2QnorS8S2SnikRq2Ci",
         },
         .geode_client_zig = .{
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#5479daa4e41a7b16d7de02cb0471d1726dfc8cca",
-            .hash = "geode_client_zig-0.2.1-8ysbV7RbCQD91JPe_FEEHQidRujW6ApXsmHy6cMzoNgj",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#e7873079d2af4f2dbe6257c724507c16168590c2",
+            .hash = "geode_client_zig-0.2.1-8ysbV7RbCQB1Llr5wLaIW94cI0QgEbMzWp6YdXkHU2zQ",
         },
 
         // =======================================================================
