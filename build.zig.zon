@@ -85,13 +85,19 @@
         // Initial+Handshake into a 1200-byte datagram, exact varint Length
         // projection for coalesced datagram pad, TLS bumped to 7d9efd3.
         .quic = .{
-            // Bumped 2026-05-01 to e33e7bf — fix(udp_transport): switch
-            // initPosix and the macOS deinit paths from removed
-            // std.posix.{socket,close,bind,getsockname,fcntl} to
-            // std.c.* (libc passthrough). Surfaced by pipeline #1011
-            // cross-compiling to x86_64-macos.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#e33e7bf2f9e1522e1d44e6f14525cb2d966c77d4",
-            .hash = "quic-0.1.14-gBIqUXfFOQDcp_5fl9IPTjOcom48JB5ATHdCYfmUGT-e",
+            // Bumped 2026-04-30 to 49f59f7 — fix(handshake): defer + retry
+            // sendHandshakePackets on NoHandshakeKeys. Server-side fix
+            // for the host-haleth bug-triager finding
+            //   ERROR: processInitial: sendHandshakePackets failed: NoHandshakeKeys
+            // Pre-fix processInitial logged-and-dropped on a single
+            // first-tick race; under msft-graph --workers 16 fan-in 12
+            // of 16 connections never reached the accept queue and
+            // stalled past the QUIC idle timeout. Post-fix processInitial
+            // sets conn.pending_hs_send and the endpoint poll loop's
+            // Phase 4.5 drain retries the flush every tick until the
+            // TLS engine derives hs_tx_keys.
+            .url = "git+https://gitlab.com/devnw/zig/quic.git#49f59f7ac432d71842baf1263abe39988b9603c3",
+            .hash = "quic-0.1.14-gBIqUS4jOgBqM61tIiulYgHrmm9DemZXX2DtMnV8XcJj",
         },
 
         // =======================================================================
@@ -195,8 +201,12 @@
             // geode and geode-client-zig quic pins must agree to keep
             // a single quic module instance in geode's build graph
             // (else "file exists in modules 'quic' and 'quic0'").
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#aa5502d28e81c402bc90abf49c9525f492d0e911",
-            .hash = "geode_client_zig-0.2.1-8ysbV69bCQD7jn8tdtUlZTA5HOXZ9kUGPKqXxTOub3Ri",
+            // 2026-05-01: bumped to 36ae5bb — matches geode's quic
+            // pin at 49f59f7 (NoHandshakeKeys retry fix). Without
+            // this both quic versions appear in the build graph and
+            // the Phase 4.5 drain wouldn't engage on client paths.
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#36ae5bbff3bf71009965dc97f13f301f18001b51",
+            .hash = "geode_client_zig-0.2.1-8ysbV5ZcCQBn-CZWU-Jzkur4YmdwKpFF8pVzkdou6K4f",
         },
 
         // =======================================================================
