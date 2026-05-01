@@ -906,6 +906,24 @@ pub fn build(b: *std.Build) void {
     // group_commit.zig uses @import("shard_worker_tls") — must be registered
     // on every module that transitively includes group_commit.zig.
     graph_store_mod.addImport("shard_worker_tls", shard_worker_tls_mod);
+
+    // 2026-05-01: graph_store.zig:1195 added `@import("otel_metrics")` for
+    // the create_node span (`createNodeWithGraphAndTenant`). Wire the
+    // imports on `graph_store_mod` itself so every downstream consumer
+    // that imports graph_store (graph_algo_tests,
+    // point_read_view_zero_copy_tests, point_read_view_mutation_tests)
+    // gets them via the named-module's own dep list. The larger
+    // `graph_store_unit_tests` block below is rooted directly at
+    // `src/graph_store.zig` so it adds the same imports on its OWN
+    // root module — see line ~1117.
+    const otel_resource_mod_for_graph_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = optimize });
+    otel_resource_mod_for_graph_tests.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_graph_tests = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = optimize });
+    otel_metrics_mod_for_graph_tests.addImport("otel", otel_mod);
+    otel_metrics_mod_for_graph_tests.addImport("otel_resource", otel_resource_mod_for_graph_tests);
+    graph_store_mod.addImport("otel", otel_mod);
+    graph_store_mod.addImport("otel_metrics", otel_metrics_mod_for_graph_tests);
+
     const graph_algo_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_graph_algorithms.zig"), .target = target, .optimize = optimize }) });
     graph_algo_tests.root_module.addImport("graph_store", graph_store_mod);
     graph_algo_tests.root_module.link_libc = true;
