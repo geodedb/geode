@@ -197,6 +197,52 @@ repos:
     files: build\.zig\.zon$
     pass_filenames: false
 
+      # Verify every recorded build.zig.zon hash matches what `zig fetch`
+      # produces from the same SHA. Caused pipeline #1004
+      # (bench-timeseries / bench-query-path / test-gql-compliance):
+      # geode pinned otel@0c34ce9b but the recorded hash was for the
+      # parent commit ee492166, so CI's fresh `zig fetch` produced a
+      # different hash and aborted with `hash mismatch: manifest declares
+      # ... but the fetched package has ...`.
+      #
+      # Soft-skips (exit 2 from the script) if `zig fetch` itself fails
+      # (network down, gitlab unreachable) so offline commits aren't
+      # blocked by infrastructure flake. Only an actual hash MISMATCH
+      # fails (exit 1).
+  - id: zon-hash-verify
+    name: build.zig.zon hash freshness
+    entry: bash
+    args:
+    - -c
+    - |
+      python3 scripts/verify_zon_hashes.py
+      rc=$?
+      if [ "$rc" = "2" ]; then
+        echo "zon-hash-verify: network/cache unavailable, skipping (CI will enforce)"
+        exit 0
+      fi
+      exit $rc
+    language: system
+    files: build\.zig\.zon$
+    pass_filenames: false
+
+      # GitLab CI YAML lint — enforce that any job using `image: docker:`
+      # or `services: docker:dind` also tags `linux` (or inherits a
+      # default that does). Caused pipeline #1009 (v0.5.2 tag):
+      # build-release was assigned to a Windows PowerShell runner that
+      # also matched `company,dedicated` tags; PowerShell choked on the
+      # bash script with `Missing '(' after 'if' in if statement`. The
+      # fix was to add `linux` to the tags list. Same trap exists for
+      # the `snapshot` job and would re-occur for any new docker job
+      # the team adds without thinking about runner OS.
+  - id: ci-yaml-docker-linux-tag
+    name: .gitlab-ci.yml docker jobs require linux tag
+    entry: python3
+    args: [scripts/lint_ci_yaml_runner_tags.py]
+    language: system
+    files: ^\.gitlab-ci\.ya?ml$
+    pass_filenames: false
+
       # Zig build check (compilation) - moved to pre-push per #471 to reduce commit friction
   - id: zig-build
     name: zig build (compilation check)
