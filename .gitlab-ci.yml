@@ -969,6 +969,15 @@ test-harness-integration:
     - |
       echo "=== Cloning geode-test-harness (latest main) ==="
       HARNESS_URL="https://gitlab-ci-token:${CI_JOB_TOKEN}@gitlab.com/devnw/codepros/geode/geode-test-harness.git"
+      # Defensive cleanup: GitLab SaaS reused-runner state can leave a
+      # previous job's `../geode-test-harness/` checkout in place,
+      # which makes `git clone` fail with `destination path already
+      # exists and is not an empty directory`. Pipelines #1004 and
+      # #1006 both tripped on this. Removing the stale dir BEFORE
+      # cloning is idempotent and safe — the harness lives OUTSIDE
+      # the geode project working tree at `..`, so this can never
+      # touch geode source files (CI working dir is the geode repo).
+      rm -rf ../geode-test-harness
       git clone --depth 1 --branch main "$HARNESS_URL" ../geode-test-harness
       echo "geode-test-harness ref: $(git -C ../geode-test-harness rev-parse HEAD)"
     - |
