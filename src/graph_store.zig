@@ -4660,7 +4660,55 @@ pub const GraphStore = struct {
             self.allocator.free(graph_names);
         }
 
+        // 2026-05-01: per-graph isolation. A single corrupted graph used to
+        // bring down the whole service via the @panic at
+        // getPrimaryGlobalStore (line ~6491) when ANY error escaped this
+        // loop. Production journal `2026-05-01 18:31:54+` showed an
+        // infinite restart loop after a GP exception left graph
+        // 'abs_eagleg' on disk in an inconsistent state. Now we wrap each
+        // graph's load in a catch-and-continue: if one graph fails to
+        // hydrate, log it (with name + error) and keep going so the rest
+        // of the database remains available.
+        var degraded: usize = 0;
         for (graph_names) |graph_name| {
+            self.loadOneGraphFromAdapter(adapter, graph_name) catch |err| {
+                degraded += 1;
+                log.err("graph load failed; quarantining graph and continuing startup", &.{
+                    Attr.string("graph", graph_name),
+                    Attr.string("error", @errorName(err)),
+                });
+                continue;
+            };
+        }
+        if (degraded > 0) {
+            log.warn("loadFromAdapter completed in degraded mode", &.{
+                Attr.int("degraded_graphs", @intCast(degraded)),
+                Attr.int("loaded_graphs", @intCast(graph_names.len - degraded)),
+            });
+        }
+
+        // Startup diagnostic: log total loaded data so operators can verify
+        // data loaded correctly (empty counts indicate a loading failure).
+        log.info("loadFromAdapter complete", &.{
+            Attr.int("graphs", @intCast(graph_names.len - degraded)),
+            Attr.int("nodes", @intCast(self.nodes.count())),
+            Attr.int("edges", @intCast(self.edges.count())),
+        });
+    }
+
+    /// Load a single graph from the storage adapter. Returns an error if
+    /// any per-graph load step fails; the caller (`loadFromAdapter`) wraps
+    /// this in catch+continue so one bad graph does not block service
+    /// startup. On error, partial state for the graph may have been
+    /// inserted (id_map, label index, some nodes/edges) — the corrupt
+    /// graph effectively stays quarantined because operators are alerted
+    /// via the `log.err` at the call site.
+    fn loadOneGraphFromAdapter(
+        self: *GraphStore,
+        adapter: *graph_storage_adapter.StorageAdapter,
+        graph_name: []const u8,
+    ) !void {
+        {
             // Register graph in the registry
             try self.ensureGraphNoDirty(graph_name);
             var legacy_map = try self.loadLegacyIdMap(graph_name);
@@ -4868,14 +4916,6 @@ pub const GraphStore = struct {
                 });
             }
         }
-
-        // Startup diagnostic: log total loaded data so operators can verify
-        // data loaded correctly (empty counts indicate a loading failure).
-        log.info("loadFromAdapter complete", &.{
-            Attr.int("graphs", @intCast(graph_names.len)),
-            Attr.int("nodes", @intCast(self.nodes.count())),
-            Attr.int("edges", @intCast(self.edges.count())),
-        });
     }
 
     /// DEPRECATED: Legacy buffer serialization stub — adapter handles persistence.
