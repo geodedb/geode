@@ -113,7 +113,18 @@
         // module paths). OTLP/HTTP transport works on stdlib std.http.Client
         // alone; gRPC OTLP is gated on resolving the pin conflict.
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git#0c34ce9bcd8a7a8fb59257344344d053519565cd",
+            // Aligned 2026-05-01 to ee492166 — the parent of 0c34ce9b.
+            // All transitive devnw consumers (gql, dns, repl, vulkan,
+            // thread_pool, protobuf, slog, wal) pin otel@ee492166 in
+            // their own manifests, so geode must use the same SHA to
+            // avoid a build-graph diamond ("file exists in modules
+            // 'otel' and 'otel0'"). otel@0c34ce9b's only addition over
+            // ee49216 is the BSP concurrent-producer race fix; that
+            // change is captured in the locally-generated otel-bump
+            // workflow but NOT yet propagated to all sibling pins.
+            // Reverting to ee492166 keeps the dep graph consistent
+            // until the next coordinated bump can fan it out.
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#ee492166dfefc7914229979c933411e6da9e504e",
             .hash = "otel-0.1.0-B0v3lr2UMwA5qFJCa20OT-1huDPLm1sTIFD22PQBADDD",
         },
 
