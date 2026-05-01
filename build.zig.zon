@@ -195,8 +195,8 @@
             // geode and geode-client-zig quic pins must agree to keep
             // a single quic module instance in geode's build graph
             // (else "file exists in modules 'quic' and 'quic0'").
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#d1af7925ffdc64f663783e03f0dbf07322386c5d",
-            .hash = "geode_client_zig-0.2.1-8ysbV-dZCQCIUnsFyojS6aAkSS_h3VuqXEXPxeOr_jWA",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#aa5502d28e81c402bc90abf49c9525f492d0e911",
+            .hash = "geode_client_zig-0.2.1-8ysbV69bCQD7jn8tdtUlZTA5HOXZ9kUGPKqXxTOub3Ri",
         },
 
         // =======================================================================

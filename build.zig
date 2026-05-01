@@ -1292,9 +1292,14 @@ pub fn build(b: *std.Build) void {
     // Note: transport/quic comes through the geode module (root_mod) which already has it
     // No separate transport/quic import needed here to avoid duplicate module conflicts
 
-    // Link with OpenSSL (skip on Windows where it's not available in CI)
+    // Link with OpenSSL — gated on enable_openssl (same flag as
+    // geode_exe above) so cross-compile to targets without libssl-dev
+    // (e.g. CI test-cross-build for x86_64-linux-gnu from a musl/Alpine
+    // host) doesn't fail with "unable to find dynamic system library
+    // 'ssl'". Pipeline #1013/#1014 surfaced this when the quic dep
+    // bump invalidated the test-cross-build cache.
     custom_tests.root_module.link_libc = true;
-    if (target.result.os.tag != .windows) {
+    if (enable_openssl) {
         custom_tests.root_module.linkSystemLibrary("ssl", .{});
         custom_tests.root_module.linkSystemLibrary("crypto", .{});
     }
@@ -4021,7 +4026,9 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
     });
     zig_client_lib.root_module.link_libc = true;
-    if (target.result.os.tag != .windows) {
+    // 2026-05-01: gated on enable_openssl so cross-compile to targets
+    // without libssl-dev doesn't fail in CI test-cross-build.
+    if (enable_openssl) {
         zig_client_lib.root_module.linkSystemLibrary("ssl", .{});
         zig_client_lib.root_module.linkSystemLibrary("crypto", .{});
     }
@@ -4048,7 +4055,9 @@ pub fn build(b: *std.Build) void {
     });
     zig_client_example.root_module.addImport("geode-client", zig_client_lib.root_module);
     zig_client_example.root_module.link_libc = true;
-    if (target.result.os.tag != .windows) {
+    // 2026-05-01: gated on enable_openssl so cross-compile to targets
+    // without libssl-dev doesn't fail in CI test-cross-build.
+    if (enable_openssl) {
         zig_client_example.root_module.linkSystemLibrary("ssl", .{});
         zig_client_example.root_module.linkSystemLibrary("crypto", .{});
     }
