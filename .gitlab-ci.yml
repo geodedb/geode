@@ -945,7 +945,13 @@ test-gql-compliance:
 test-harness-integration:
   stage: test
   image: $ZIG_IMAGE
-  timeout: 2h
+  # Bumped from 2h on 2026-05-01 — pipeline #1005 hit the cap around
+  # spec #107 of 213 (~quic_mutations_january_2026.yml). Local
+  # `make test-everything-otel` against the same HEAD takes ~1h45m
+  # for the integration suite (4151/4151 PASS); CI's GitLab-SaaS
+  # hardware is slower, so 3h leaves margin for transient slowdowns
+  # + the harness's serial-retry pass for any initial failure.
+  timeout: 3h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   retry:
