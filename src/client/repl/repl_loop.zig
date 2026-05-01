@@ -83,7 +83,15 @@ pub const ReplLoop = struct {
         // Use dependency injection for transport - will be provided by CLI layer
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
-        session.graph = opts.graph;
+        // Dup `opts.graph` so `session.graph` is always allocator-owned —
+        // matches the contract enforced by ClientSession.deinit and the
+        // `:use` rebind path at repl_dispatch.zig:2360 (which frees the
+        // previous value before assigning a new dup). Borrowing here would
+        // cause an invalid free if the user ran `:use <other>` after
+        // starting with `-g`.
+        if (opts.graph) |g| {
+            session.graph = try opts.allocator.dupe(u8, g);
+        }
         try session.connect();
 
         // Print connected message after successful connection (we're in raw mode so use stderr writeAll)
@@ -173,7 +181,12 @@ pub const ReplLoop = struct {
         // Initialize session
         var session = try repl_dispatch.ClientSession.init(opts.allocator, opts.server, opts.transport);
         defer session.deinit();
-        session.graph = opts.graph;
+        // See parallel comment in `ReplLoop.run` above — `session.graph`
+        // must be allocator-owned to satisfy ClientSession.deinit and the
+        // `:use` rebind path.
+        if (opts.graph) |g| {
+            session.graph = try opts.allocator.dupe(u8, g);
+        }
         try session.connect();
         try stdout_file.writeStreamingAll(replIo(), "Connected!\n");
 
