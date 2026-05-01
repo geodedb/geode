@@ -1770,23 +1770,23 @@ fn runStreamQueryLoop(
             defer om.decTransportInflight(op_name); // ALWAYS runs, including the catch-return path
             const t0_ns = otel_lib.internal.clock.unixNanoNow();
 
-            // Trace span per inbound QUIC request. Becomes the parent for any
-            // executeStatementWithContext span that fires while handling this
-            // message. Span is a noop when no TracerProvider is wired.
-            var transport_span = om.tracer().startSpan(
-                otel_lib.api.context.Context.empty(),
-                "geode.transport.request",
-                .{ .kind = .server },
-            ) catch otel_lib.api.trace.Span{ .state = null, .sc = .{} };
-            transport_span.setStringAttribute("server.transport", "quic") catch {};
-            transport_span.setStringAttribute("network.peer.address", peer_ip) catch {};
-            defer transport_span.end(null);
+            // The `geode.transport.request` parent trace span was rolled
+            // back here pending a coordinated otel pin bump to 0c34ce9b+.
+            // It fired on every inbound QUIC client message, making this
+            // the hottest of the rolled-back sites — every concurrent
+            // connection ended one of these spans simultaneously, which
+            // is exactly the BatchSpanProcessor concurrent-producer race
+            // (panic at otel/src/sdk/export.zig:330 — see the May 01
+            // 2026 production crash log). The recordTransportRequest
+            // counter + latency histogram below continues to publish
+            // non-trace monitoring data. See
+            // src/storage/graph_storage_adapter.zig:2237 and
+            // tests/test_bsp_race_regression.zig.
 
             handleClientMessage(gpa, state, stream, msg, disable_estimates, compact_profile, memcurve_profile, peer_ip) catch |err| {
                 const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
                 const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
                 om.recordTransportRequest(op_name, dur_s, .error_, @errorName(err));
-                transport_span.setStatus(.@"error", @errorName(err));
                 log.err("Protobuf process error", &.{Attr.string("error", @errorName(err))});
                 sendExecuteError(gpa, stream, "58000", "Internal Server Error", &.{}, &.{}) catch {}; // best-effort; don't leak inflight, defer handles it
                 continue;
@@ -1794,7 +1794,6 @@ fn runStreamQueryLoop(
             const elapsed_ns = otel_lib.internal.clock.unixNanoNow() - t0_ns;
             const dur_s: f64 = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
             om.recordTransportRequest(op_name, dur_s, .success, null);
-            transport_span.setStatus(.ok, "");
         }
 
         if (conn_state) |shared| {

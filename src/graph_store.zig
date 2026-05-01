@@ -1189,19 +1189,13 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=NodeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create a node tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createNodeWithGraphAndTenant(self: *GraphStore, labels: []const []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        // Storage trace span — emits when geode's TracerProvider is wired
-        // (OTEL_TRACES_EXPORTER=otlp); graph_storage lib has no
-        // observability seam, so we use geode's own tracer directly.
-        const _gs_om = @import("otel_metrics");
-        const _gs_otel = @import("otel");
-        var _gs_span = _gs_om.tracer().startSpan(
-            _gs_otel.api.context.Context.empty(),
-            "geode.graph_store.create_node",
-            .{ .kind = .internal },
-        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
-        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
-        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
-        defer _gs_span.end(null);
+        // The `geode.graph_store.create_node` trace span was rolled back
+        // here pending a coordinated otel pin bump to 0c34ce9b+ — the
+        // upstream BatchSpanProcessor concurrent-producer race (panic at
+        // otel/src/sdk/export.zig:330) otherwise crashes drainLocked
+        // under load. See the note at
+        // src/storage/graph_storage_adapter.zig:2237 and the regression
+        // guard at tests/test_bsp_race_regression.zig.
 
         const adapter_node: ?struct {
             vt: AdapterVTable,
@@ -1787,20 +1781,14 @@ pub const GraphStore = struct {
     // needs to iterate without holding the rwlock, add a `getNodesByLabelSnapshot`
     // helper that clones under `LabelPosting.mutex` rather than aliasing.
     pub fn getNodesByLabel(self: *const GraphStore, graph_name: []const u8, label: []const u8) ?[]const u64 {
-        // Read-path trace span — peer of the create_node span. Emits when
-        // geode's TracerProvider is wired (OTEL_TRACES_EXPORTER=otlp); no-op
-        // when unwired.
-        const _gs_om = @import("otel_metrics");
-        const _gs_otel = @import("otel");
-        var _gs_span = _gs_om.tracer().startSpan(
-            _gs_otel.api.context.Context.empty(),
-            "geode.graph_store.get_nodes_by_label",
-            .{ .kind = .internal },
-        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
-        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
-        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
-        _gs_span.setStringAttribute("geode.label", label) catch {};
-        defer _gs_span.end(null);
+        // The `geode.graph_store.get_nodes_by_label` trace span was rolled
+        // back here pending a coordinated otel pin bump to 0c34ce9b+ — the
+        // upstream BatchSpanProcessor concurrent-producer race (panic at
+        // otel/src/sdk/export.zig:330) otherwise crashes drainLocked under
+        // load. The read-path is the hottest of the rolled-back sites, so
+        // the no-op-tracer call alone meaningfully feeds the BSP queue. See
+        // src/storage/graph_storage_adapter.zig:2237 and
+        // tests/test_bsp_race_regression.zig.
 
         // Create composite key "graph_name:label"
         var key_buf: [512]u8 = undefined;
@@ -3040,29 +3028,24 @@ pub const GraphStore = struct {
     // CANARY: REQ=REQ-MULTI-TENANT-003; FEATURE="PerTenantIsolation"; ASPECT=EdgeCreation; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=enterprise; UPDATED=2026-04-01
     // GAP-0279: Create an edge tagged with both graph_name and tenant_id for per-tenant isolation
     pub fn createEdgeWithGraphAndTenant(self: *GraphStore, from_id: u64, to_id: u64, edge_type: []const u8, graph_name: []const u8, tenant: []const u8) !u64 {
-        // Storage trace span — mirrors `geode.graph_store.create_node` at
-        // line 1197.  Re-added 2026-04-30 after upstream OTel BSP fix
-        // `0c34ce9 fix(bsp): close concurrent-producer race in
-        // synchronous-drain build` landed on gitlab.com/devnw/zig/otel.
-        // The drainer race in `src/sdk/export.zig:330` (panic
-        // `index 512, len 1` when shard-worker threads hit this site
-        // concurrently) is now closed by a real `std.Io.Mutex` around
-        // `queue.append` and `drainLocked` on the no-pool path.  Geode's
-        // pin in `build.zig.zon` was bumped to that commit alongside this
-        // re-add.  The existing
+        // The `geode.graph_store.create_edge` trace span was rolled back
+        // (again) here.  History:
+        //   * 2026-04-29: original rollback after the BSP concurrent-
+        //     producer race surfaced under msft-graph load (see the
+        //     matching note at src/storage/graph_storage_adapter.zig:2237).
+        //   * 2026-04-30 (commit 2a9ea3a6): re-added when the otel pin
+        //     was briefly bumped to 0c34ce9b (the BSP race fix).
+        //   * 2026-05-01 (commit d7ceaaea): otel pin reverted to ee492166
+        //     to fix a build-graph diamond — but the spans were left
+        //     in place, leaving production exposed to the same panic.
+        //   * 2026-05-01 (this rollback): re-removed in lockstep with
+        //     the regression guard at tests/test_bsp_race_regression.zig.
+        // Re-add only after a coordinated multi-repo bump to otel@0c34ce9b+
+        // across every sibling devnw consumer (gql, dns, repl, vulkan,
+        // thread_pool, protobuf, slog, wal). The
         // `_om.recordEdgeMutation(.create, …)` counter at
-        // `graph_storage_adapter.zig:2270` continues to publish
+        // graph_storage_adapter.zig:2270 continues to publish
         // `geode.graph_store.edge_mutations_total` for non-trace monitoring.
-        const _gs_om = @import("otel_metrics");
-        const _gs_otel = @import("otel");
-        var _gs_span = _gs_om.tracer().startSpan(
-            _gs_otel.api.context.Context.empty(),
-            "geode.graph_store.create_edge",
-            .{ .kind = .internal },
-        ) catch _gs_otel.api.trace.Span{ .state = null, .sc = .{} };
-        _gs_span.setStringAttribute("db.system.name", "geode") catch {};
-        _gs_span.setStringAttribute("geode.graph", graph_name) catch {};
-        defer _gs_span.end(null);
 
         // Bug fix 2026-04-27 (docs/bugs/2026-04-27-bulk-edge-id-map-silent-fallback.md):
         // The previous code used `catch break :blk null` on every step inside
