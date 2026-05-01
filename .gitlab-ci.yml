@@ -1093,10 +1093,16 @@ snapshot:
       artifacts: false
     - job: security-trivy
       artifacts: false
-  # Use GitLab hosted runners for Docker-in-Docker support
+  # Use GitLab hosted runners for Docker-in-Docker support.
+  # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
+  # this job assigned to a Windows PowerShell runner that also has
+  # `company,dedicated` tags, producing PowerShell parser errors
+  # against the bash script (`if [ -d ... ] && ...`). The
+  # docker:dind executor only works on Linux runners.
   tags:
     - company
     - dedicated
+    - linux
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
@@ -1234,10 +1240,16 @@ build-release:
       artifacts: false
     - job: security-trivy
       artifacts: false
-  # Use GitLab hosted runners for Docker-in-Docker support
+  # Use GitLab hosted runners for Docker-in-Docker support.
+  # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
+  # this job assigned to a Windows PowerShell runner that also has
+  # `company,dedicated` tags, producing PowerShell parser errors
+  # against the bash script (`if [ -d ... ] && ...`). The
+  # docker:dind executor only works on Linux runners.
   tags:
     - company
     - dedicated
+    - linux
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
   services:
