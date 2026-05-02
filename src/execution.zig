@@ -948,44 +948,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
     var exec_outcome: om.Outcome = .success;
     errdefer exec_outcome = .error_;
 
-    // Tracing: open one span per executed statement so the OTLP exporter
-    // (when wired via OTEL_TRACES_EXPORTER=otlp) sees real query traffic.
-    // The span is a noop when no TracerProvider is wired.
-    const op_name: []const u8 = switch (stmt) {
-        .Query => "QUERY",
-        .Union => "UNION",
-        .Intersect => "INTERSECT",
-        .Except => "EXCEPT",
-        .Create => "CREATE",
-        .Insert, .InsertValue => "INSERT",
-        .Delete => "DELETE",
-        .Merge => "MERGE",
-        .Call => "CALL",
-        .CreateIndex => "CREATE_INDEX",
-        .DropIndex => "DROP_INDEX",
-        .CreateConstraint => "CREATE_CONSTRAINT",
-        .DropConstraint => "DROP_CONSTRAINT",
-        .Show => "SHOW",
-        .StartTransaction => "BEGIN",
-        .Commit => "COMMIT",
-        .Rollback => "ROLLBACK",
-        .Backup => "BACKUP",
-        .Restore => "RESTORE",
-        else => "STATEMENT",
-    };
-    var span = om.tracer().startSpan(
-        otel_lib.api.context.Context.empty(),
-        "geode.query.execute",
-        .{ .kind = .internal },
-    ) catch otel_lib.api.trace.Span{ .state = null, .sc = .{} };
-    span.setStringAttribute("db.system.name", "geode") catch {};
-    span.setStringAttribute("db.operation.name", op_name) catch {};
-    defer span.end(null);
+    // The `geode.query.execute` trace span was rolled back here pending a
+    // coordinated otel pin bump to 0c34ce9b+ — the upstream
+    // BatchSpanProcessor concurrent-producer race (panic at
+    // otel/src/sdk/export.zig:330) otherwise crashes drainLocked under
+    // load. The op-name switch that fed the `db.operation.name` attribute
+    // went with it; recordQueryExecution still publishes the latency
+    // histogram + outcome counter for non-trace monitoring. See the note
+    // at src/storage/graph_storage_adapter.zig:2237 and the regression
+    // guard at tests/test_bsp_race_regression.zig.
 
     defer {
         const dur_s = @as(f64, @floatFromInt(otel_lib.internal.clock.unixNanoNow() - t0_exec)) / 1_000_000_000.0;
         om.recordQueryExecution("STATEMENT", "STATEMENT", qt, dur_s, exec_outcome, null);
-        span.setStatus(if (exec_outcome == .success) .ok else .@"error", "");
     }
     switch (stmt) {
         .Query => |q| {

@@ -4183,6 +4183,18 @@ pub fn build(b: *std.Build) void {
     const run_otel_tracer_tests = b.addRunArtifact(otel_tracer_tests);
     test_step.dependOn(&run_otel_tracer_tests.step);
 
+    // BSP race regression: assert that no concurrent-context tracer.startSpan
+    // calls live in geode hot paths until the otel pin advances past the
+    // BatchSpanProcessor concurrent-producer race fix (otel@0c34ce9b). The
+    // test @embedFile-s the three hot-path source files and substring-greps
+    // for banned span names; pure comptime + std.mem.indexOf, no runtime
+    // dependencies. See the file header for the production crash that
+    // motivated this guard.
+    const bsp_race_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_bsp_race_regression.zig"), .target = target, .optimize = optimize });
+    const bsp_race_tests = b.addTest(.{ .root_module = bsp_race_test_mod });
+    const run_bsp_race_tests = b.addRunArtifact(bsp_race_tests);
+    test_step.dependOn(&run_bsp_race_tests.step);
+
     // Task 20: cardinality + privacy guard — asserts no forbidden high-cardinality
     // attribute key (user.id, username, session.id, …) leaks into the Prometheus
     // metric stream from any public recordX facade call.
