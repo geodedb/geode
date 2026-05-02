@@ -9,6 +9,13 @@ before:
   hooks:
     # Ensure clean state
   - rm -rf dist/
+    # Overlay vendored patches onto fetched zig-pkg deps. Currently fixes
+    # the quic@49f59f7 macOS cross-compile error (`std.c.F` shape +
+    # dropped `std.posix.{sendto,recvfrom}`). The upstream fix at
+    # quic@b73a804 cannot be pinned directly because Zig 0.16 module
+    # dedup trips a build-graph diamond at the new hash. See
+    # scripts/apply-vendored-patches.sh for the sunset path.
+  - bash scripts/apply-vendored-patches.sh
 
 # =============================================================================
 # Zig Cross-Compilation Builds

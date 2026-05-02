@@ -96,6 +96,21 @@
             // sets conn.pending_hs_send and the endpoint poll loop's
             // Phase 4.5 drain retries the flush every tick until the
             // TLS engine derives hs_tx_keys.
+            //
+            // 2026-05-02 — macOS cross-compile fix vendored as a patch.
+            // Upstream `b73a804` adds `fcntlCmd(comptime tag)` to handle
+            // the per-OS `std.c.F` shape divergence and rewrites
+            // posixSendTo/posixRecvFrom against `std.c.{sendto,recvfrom}`
+            // (Zig 0.16 dropped `std.posix.{sendto,recvfrom}`). Bumping
+            // the pin to b73a804 directly trips a Zig 0.16 module-dedup
+            // diamond ("file exists in modules 'build_options13' and
+            // 'build_options0'") even though the upstream content-tree is
+            // otherwise identical to 49f59f7. The fix is therefore
+            // overlaid via `scripts/apply-vendored-patches.sh` (wired
+            // into `.goreleaser.yaml` `before:hooks` and the Makefile
+            // `cross-macos-{x86_64,arm64}` targets). Sunset the patch
+            // and bump to b73a804+ once the sibling-pin convergence
+            // resolves the diamond.
             .url = "git+https://gitlab.com/devnw/zig/quic.git#49f59f7ac432d71842baf1263abe39988b9603c3",
             .hash = "quic-0.1.14-gBIqUS4jOgBqM61tIiulYgHrmm9DemZXX2DtMnV8XcJj",
         },
