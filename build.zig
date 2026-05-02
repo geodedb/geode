@@ -4195,6 +4195,16 @@ pub fn build(b: *std.Build) void {
     const run_bsp_race_tests = b.addRunArtifact(bsp_race_tests);
     test_step.dependOn(&run_bsp_race_tests.step);
 
+    // REPL session leak regression: ClientSession.deinit must free the
+    // `graph` field allocated by `:use <graph>`. Reproduces the May 01
+    // 2026 DebugAllocator leak at REPL exit. Uses testing.allocator
+    // (DebugAllocator) which fails the test on any unreleased allocation.
+    const session_leak_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_repl_session_leak_regression.zig"), .target = target, .optimize = optimize });
+    session_leak_test_mod.addImport("geode", root_mod);
+    const session_leak_tests = b.addTest(.{ .root_module = session_leak_test_mod });
+    const run_session_leak_tests = b.addRunArtifact(session_leak_tests);
+    test_step.dependOn(&run_session_leak_tests.step);
+
     // Task 20: cardinality + privacy guard — asserts no forbidden high-cardinality
     // attribute key (user.id, username, session.id, …) leaks into the Prometheus
     // metric stream from any public recordX facade call.

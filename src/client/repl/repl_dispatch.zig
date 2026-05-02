@@ -813,6 +813,15 @@ pub const ClientSession = struct {
             self.allocator.free(e);
             self.last_txn_error = null;
         }
+        // The `graph` field is owned by the session: every assignment site
+        // (`repl_loop.zig` at init, `repl_dispatch.zig` `:use` at line ~2361)
+        // dup's the source string. Without this free, every `:use <graph>`
+        // leaked the final value at REPL exit (DebugAllocator panic on
+        // shutdown — see tests/test_repl_session_leak_regression.zig).
+        if (self.graph) |g| {
+            self.allocator.free(g);
+            self.graph = null;
+        }
         // CANARY: REQ=REQ-SOURCE-PERF-003; FEATURE="SourceFilePerformance"; ASPECT=CacheCleanupOnExit; STATUS=IMPL; OWNER=cli; UPDATED=2026-01-30
         // Issue #413: Clean up global file hash cache to prevent memory leaks on exit
         deinitSourcedFileCache();
