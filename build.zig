@@ -110,10 +110,15 @@ pub fn build(b: *std.Build) void {
     // identical options ⇒ deduplicated otel module across the build graph
     // (without this, zig errors with "file exists in modules 'otel' and
     // 'otel0'" at any source file reachable through both module trees).
-    const otel_disabled = b.option(bool, "otel_disabled", "Compile every otel API call site to a comptime-known no-op (zero-overhead disabled mode)") orelse false;
-    const otel_profiles = b.option(bool, "otel_profiles", "Enable experimental OTLP profiles export (upstream proto unstable)") orelse false;
-    const otel_use_devnw_tls = b.option(bool, "otel_use_devnw_tls", "Use DevNW tls for HTTPS in OTLP/HTTP transport (required for HTTPS OTLP endpoints, e.g. GitLab observability)") orelse false;
-    const otel_use_devnw_grpc = b.option(bool, "otel_use_devnw_grpc", "Use DevNW grpc-zig for OTLP/gRPC transport (CURRENTLY UNSUPPORTED; pin-conflict with geode's grpc_zig)") orelse false;
+    // 2026-05-02: otel_disabled / otel_profiles / otel_use_devnw_tls /
+    // otel_use_devnw_grpc were forwarded to every dep call so the
+    // resulting otel module instances were constructed identically. After
+    // tagged-version convergence those forwards were stripped to align
+    // dep options with transitive consumers' minimal calls (different
+    // option sets = distinct Zig 0.16 module instances even at identical
+    // package hashes). The local consts are removed since nothing
+    // references them; pass `-Dotel_use_devnw_tls=true` to upstream otel
+    // directly through the build.zig.zon `otel` dep when needed.
 
     // Get version from git tags
     const version = getGitVersion(b);
@@ -154,14 +159,6 @@ pub fn build(b: *std.Build) void {
     const repl_dep = b.dependency("repl", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        // Forward otel package options so the lib's lazyDependency builds
-        // the SAME otel module instance as geode's. See build(otel)
-        // forward-options commits in each lib for rationale.
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const repl_mod = repl_dep.module("repl");
 
@@ -169,14 +166,6 @@ pub fn build(b: *std.Build) void {
     const vulkan_dep = b.dependency("vulkan", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        // Forward otel package options so the lib's lazyDependency builds
-        // the SAME otel module instance as geode's. See build(otel)
-        // forward-options commits in each lib for rationale.
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const vulkan_mod = vulkan_dep.module("vulkan");
 
@@ -258,10 +247,6 @@ pub fn build(b: *std.Build) void {
     const otel_dep = b.dependency("otel", .{
         .target = target,
         .optimize = optimize,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const otel_mod = otel_dep.module("otel");
 
@@ -297,14 +282,6 @@ pub fn build(b: *std.Build) void {
     const dns_dep = b.dependency("dns", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        // Forward otel package options so the lib's lazyDependency builds
-        // the SAME otel module instance as geode's. See build(otel)
-        // forward-options commits in each lib for rationale.
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const dns_mod = dns_dep.module("dns");
 
@@ -339,14 +316,17 @@ pub fn build(b: *std.Build) void {
     const grpc_client_mod = grpc_dep.module("grpc-client");
 
     // Thread Pool - Bounded, lock-free thread pool with work-stealing
+    // 2026-05-02: with_otel + otel_use_devnw_* removed so geode and
+    // geode-client-zig construct the SAME thread_pool module instance
+    // (different b.option args = distinct Zig 0.16 modules even when
+    // the package hash is identical, which surfaces as a
+    // 'thread_pool' vs 'thread_pool0' diamond at the consumer's
+    // import site). thread-pool@v0.2.4's with_otel option is
+    // deprecated-and-ignored upstream, so dropping it here is a no-op
+    // for runtime behaviour.
     const thread_pool_dep = b.dependency("thread_pool", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const thread_pool_ext_mod = thread_pool_dep.module("thread_pool");
 
@@ -365,14 +345,6 @@ pub fn build(b: *std.Build) void {
     const wal_dep = b.dependency("wal", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        // Forward otel package options so the lib's lazyDependency builds
-        // the SAME otel module instance as geode's. See build(otel)
-        // forward-options commits in each lib for rationale.
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const wal_ext_mod = wal_dep.module("wal");
 
@@ -409,15 +381,10 @@ pub fn build(b: *std.Build) void {
     const gql_dep = b.dependency("gql", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
         // Forward otel package options so gql's lazyDependency("otel", ...)
         // builds the SAME module instance as geode's. Without identical
         // options, zig materialises distinct module objects and errors
         // with "file exists in modules 'otel' and 'otel0'".
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const gql_ext_mod = gql_dep.module("gql");
 
