@@ -967,16 +967,8 @@ cross-linux-riscv64:
 	$(ZIG) build -Dtarget=riscv64-linux-gnu -p zig-out/linux-riscv64 $(ZIG_FLAGS)
 	@echo "✓ Linux RISC-V 64-bit build successful"
 
-# Apply vendored patches to fetched zig-pkg deps (currently fixes the
-# quic@49f59f7 macOS cross-compile error). See
-# scripts/apply-vendored-patches.sh for the full rationale and sunset
-# path. Idempotent — second invocation is a no-op.
-.PHONY: apply-vendored-patches
-apply-vendored-patches:
-	@bash scripts/apply-vendored-patches.sh
-
 # Cross-compile for macOS x86_64
-cross-macos-x86_64: apply-vendored-patches
+cross-macos-x86_64:
 	@echo "Cross-compiling for macOS x86_64..."
 	@# Only run on non-macOS systems or when on ARM macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "arm64" ]; then \
@@ -987,7 +979,7 @@ cross-macos-x86_64: apply-vendored-patches
 	fi
 
 # Cross-compile for macOS ARM64 (Apple Silicon)
-cross-macos-arm64: apply-vendored-patches
+cross-macos-arm64:
 	@echo "Cross-compiling for macOS ARM64..."
 	@# Only run on non-macOS systems or when on Intel macOS
 	@if [ "$$(uname)" != "Darwin" ] || [ "$$(uname -m)" = "x86_64" ]; then \

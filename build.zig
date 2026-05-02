@@ -212,18 +212,13 @@ pub fn build(b: *std.Build) void {
     // ==========================================================================
 
     // Structured logging - slog-style logging with multiple handlers
+    // 2026-05-02: with_otel + otel_use_devnw_* removed because slog
+    // dropped its lazy otel dep (broke the slog<->otel cycle); slog
+    // now hardcodes with_otel=false in its build.zig.
     const slog_dep = b.dependency("slog", .{
         .target = target,
         .optimize = optimize,
         .json = false,
-        .with_otel = true,
-        // Forward otel package options so the lib's lazyDependency builds
-        // the SAME otel module instance as geode's. See build(otel)
-        // forward-options commits in each lib for rationale.
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const slog_mod = slog_dep.module("slogz");
     slog_mod.addImport("json", json_mod);
@@ -327,14 +322,11 @@ pub fn build(b: *std.Build) void {
     mcp_mod.addImport("json", json_mod);
 
     // Protobuf (Google Protocol Buffers)
+    // 2026-05-02: with_otel + otel_use_devnw_* removed because protobuf
+    // dropped its lazy otel dep (broke the protobuf<->otel cycle).
     const protobuf_dep = b.dependency("protobuf", .{
         .target = target,
         .optimize = optimize,
-        .with_otel = true,
-        .otel_use_devnw_tls = otel_use_devnw_tls,
-        .otel_disabled = otel_disabled,
-        .otel_profiles = otel_profiles,
-        .otel_use_devnw_grpc = otel_use_devnw_grpc,
     });
     const protobuf_mod = protobuf_dep.module("protobuf");
 
