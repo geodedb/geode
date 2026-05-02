@@ -119,6 +119,19 @@ pub fn build(b: *std.Build) void {
     // package hashes). The local consts are removed since nothing
     // references them; pass `-Dotel_use_devnw_tls=true` to upstream otel
     // directly through the build.zig.zon `otel` dep when needed.
+    //
+    // Declared here as ACCEPTED-BUT-IGNORED options so the Makefile's
+    // `make install-otel` target (which passes `-Dotel_use_devnw_tls=true`)
+    // doesn't fail with `error: invalid option`. The seam is currently
+    // hardcoded to `enabled = false` in every devnw/zig observability.zig
+    // (BYOM-elimination, see the lib-side commits), so these flags have
+    // no runtime effect today; restore wiring once Zig 0.16's module-dedup
+    // quirk is fixed upstream and the conditional `@import("build_options")`
+    // pattern can be reinstated in the seam.
+    _ = b.option(bool, "otel_use_devnw_tls", "(no-op while OTel seam is hardcoded off) Use devnw/zig/tls for OTLP/HTTPS") orelse false;
+    _ = b.option(bool, "otel_use_devnw_grpc", "(no-op while OTel seam is hardcoded off) Use devnw/zig/grpc-zig for OTLP/gRPC") orelse false;
+    _ = b.option(bool, "otel_disabled", "(no-op while OTel seam is hardcoded off) Disable OTel emission") orelse false;
+    _ = b.option(bool, "otel_profiles", "(no-op while OTel seam is hardcoded off) Enable profile signal") orelse false;
 
     // Get version from git tags
     const version = getGitVersion(b);
