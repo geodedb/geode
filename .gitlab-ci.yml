@@ -17,14 +17,12 @@ include:
       allow_failure: false
 
   # APT repository publishing (apt.geodedb.com)
-  # 2026-05-03: allow_failure flipped to true. The component's upload step
-  # uses `amazon/aws-cli:latest` which regressed on the `sh` command
-  # (aws CLI now rejects 'sh' as a subcommand: "Found invalid choice 'sh'"),
-  # making apt-publish-* jobs fail deterministically. Deploy gate
-  # (build-release + publish-release + GitLab Package Registry) is unaffected.
-  # Revert once gitlab.com/devnw/ci-catalog/apt-publish ships a fix
-  # (e.g. pin aws-cli image or add `--entrypoint=""`).
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.14.0
+  # 2026-05-03: bumped to v1.24.2, which carries upstream fix d393c881
+  # (clears amazon/aws-cli's ENTRYPOINT=["aws"] so GitLab's default
+  # `sh -c "..."` script wrapper works — fixes the v1.14.0 deterministic
+  # failure "argument command: Found invalid choice 'sh'"). allow_failure
+  # restored to false so the deploy gate now blocks on apt publishing.
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.24.2
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
@@ -34,7 +32,7 @@ include:
       package_path: dist/*.deb
       gpg_key_name: geode.gpg
       sign_needs: build-release
-      allow_failure: true
+      allow_failure: false
 
 # Auto-cancel redundant pipelines on push (non-tag builds only).
 # Tagged release pipelines are never cancelled — they must run to completion.
