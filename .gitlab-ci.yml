@@ -9,7 +9,11 @@ include:
   # which caused Exec-format-error on ARM64 runners because that version
   # wasn't available for the catalog component's download script. All
   # other CI jobs already use ZIG_VERSION=0.16.0 from the global vars.
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
+  # 2026-05-03: bumped from v1.2.1 to v1.24.2 (catalog mono-version) to
+  # align with apt-publish@v1.24.2 and pick up upstream changes since
+  # v1.2.1 (Go 1.26 images, ansible-playbook fixes, runner updates).
+  # Spec is unchanged — same inputs accepted.
+  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.24.2
     inputs:
       zig_version: "0.16.0"
       paths: "src/"
