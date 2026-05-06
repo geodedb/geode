@@ -19,6 +19,26 @@ pub const TransportError = error{
     StdioUnavailable,
 };
 
+// CANARY: REQ=REQ-LSP-SEC-001; FEATURE="ContentLengthCap"; ASPECT=DoSGuard; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
+// LSP-SEC-001: Maximum LSP message size. The JSON-RPC framing layer rejects
+// any Content-Length header above this value before allocating the body
+// buffer. This bounds the worst-case memory request from a malicious or
+// misbehaving client to 16 MiB (well above any realistic LSP payload).
+pub const MAX_LSP_MESSAGE: usize = 16 * 1024 * 1024;
+
+/// Parse a Content-Length header value, applying the LSP-SEC-001 cap.
+/// Returns `TransportError.InvalidContentLength` for non-numeric input or
+/// values strictly greater than `MAX_LSP_MESSAGE`.
+pub fn parseContentLength(value: []const u8) TransportError!usize {
+    const parsed = std.fmt.parseInt(usize, value, 10) catch {
+        return TransportError.InvalidContentLength;
+    };
+    if (parsed > MAX_LSP_MESSAGE) {
+        return TransportError.InvalidContentLength;
+    }
+    return parsed;
+}
+
 // CANARY: REQ=REQ-QUALITY-GAP-406-003; FEATURE="SafeStdioHandles"; ASPECT=ErrorHandling; STATUS=TESTED; OWNER=quality; UPDATED=2026-01-30
 // Cross-platform file handle helpers with proper error handling
 fn getStdinHandle() TransportError!std.Io.File.Handle {
@@ -88,9 +108,7 @@ pub const Transport = struct {
 
             if (std.mem.startsWith(u8, line, "Content-Length: ")) {
                 const length_str = line["Content-Length: ".len..];
-                content_length = std.fmt.parseInt(usize, length_str, 10) catch {
-                    return TransportError.InvalidContentLength;
-                };
+                content_length = try parseContentLength(length_str);
             }
             // Ignore Content-Type and other headers
         }

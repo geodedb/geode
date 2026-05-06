@@ -10,4 +10,5 @@ test {
     _ = @import("features_test.zig");
     _ = @import("server_test.zig");
     _ = @import("e2e_test.zig");
+    _ = @import("transport_test.zig");
 }
