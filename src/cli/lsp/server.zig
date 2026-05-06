@@ -457,10 +457,56 @@ pub const Server = struct {
         try self.sendJsonValue(.{ .object = response });
     }
 
+    /// GAP-0056: pure helper — extracted for unit testability.
+    /// Returns the goto-definition Location for `(uri, line, character)`,
+    /// or null if not found / unknown / keyword.
+    /// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinitionWired"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
+    pub fn computeDefinition(self: *Server, uri: []const u8, line: u32, character: u32) !?protocol.Location {
+        const doc = self.documents.get(uri) orelse return null;
+        return try features.provideDefinition(self.allocator, doc, line, character);
+    }
+
     fn handleDefinition(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        _ = params;
-        // Not implemented yet
-        try self.sendResult(id, .null);
+        // GAP-0056: wire textDocument/definition through to features.provideDefinition.
+        const p = params orelse {
+            try self.sendResult(id, .null);
+            return;
+        };
+        const pos = self.extractTextDocumentPosition(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
+
+        const location = self.computeDefinition(pos.uri, pos.line, pos.character) catch {
+            try self.sendResult(id, .null);
+            return;
+        };
+
+        if (location) |loc| {
+            // Build JSON-RPC response with the Location object.
+            var response = std.json.ObjectMap{};
+            try response.put(self.allocator, "jsonrpc", .{ .string = "2.0" });
+            try response.put(self.allocator, "id", id);
+
+            var result = std.json.ObjectMap{};
+            try result.put(self.allocator, "uri", .{ .string = loc.uri });
+
+            var range = std.json.ObjectMap{};
+            var start_pos = std.json.ObjectMap{};
+            try start_pos.put(self.allocator, "line", .{ .integer = loc.range.start.line });
+            try start_pos.put(self.allocator, "character", .{ .integer = loc.range.start.character });
+            var end_pos = std.json.ObjectMap{};
+            try end_pos.put(self.allocator, "line", .{ .integer = loc.range.end.line });
+            try end_pos.put(self.allocator, "character", .{ .integer = loc.range.end.character });
+            try range.put(self.allocator, "start", .{ .object = start_pos });
+            try range.put(self.allocator, "end", .{ .object = end_pos });
+            try result.put(self.allocator, "range", .{ .object = range });
+
+            try response.put(self.allocator, "result", .{ .object = result });
+            try self.sendJsonValue(.{ .object = response });
+        } else {
+            try self.sendResult(id, .null);
+        }
     }
 
     fn handleFormatting(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {

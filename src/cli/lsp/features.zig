@@ -447,7 +447,7 @@ pub fn provideCompletion(allocator: Allocator, doc: *const Document, line: u32, 
 }
 
 // GAP-0056: LSP Go-To-Definition Implementation
-// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinition"; ASPECT=VariableLookup; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-10
+// CANARY: REQ=REQ-LSP-GOTODEF-001; FEATURE="GoToDefinition"; ASPECT=VariableLookup; STATUS=TESTED; OWNER=lsp; UPDATED=2026-05-06
 pub fn provideDefinition(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Location {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
