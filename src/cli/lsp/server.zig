@@ -29,6 +29,29 @@ pub const ServerCapabilities = struct {
     semanticTokensProvider: bool = true,
 };
 
+/// F-01: per-document debounce state for didChange diagnostics.
+const DebounceState = struct {
+    last_change_at_ns: i128,
+    pending: bool,
+};
+
+/// F-01: portable monotonic-ish nanos (Zig 0.16 removed
+/// `std.time.nanoTimestamp`). Returns ns since some unspecified
+/// reference; only deltas are meaningful.
+fn lspMonoNanos() i128 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else if (comptime @import("builtin").os.tag == .windows) {
+        // Coarse fallback for Windows hosts running tests; production
+        // builds on Windows already use a different code path.
+        return @as(i128, @intCast(@as(u64, @intCast(@max(ts.sec, 0))))) * std.time.ns_per_s;
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
+    return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+}
+
 pub const Server = struct {
     allocator: Allocator,
     transport: Transport,
@@ -36,17 +59,77 @@ pub const Server = struct {
     initialized: bool = false,
     shutdown_requested: bool = false,
     formatting_options: features.FormattingOptions = .{},
+    /// F-01: per-document debounce state. Keyed by URI; values track
+    /// the timestamp of the last didChange and whether a diagnostic
+    /// flush is still pending.
+    debounce_state: std.StringHashMap(DebounceState) = undefined,
+    debounce_state_initialized: bool = false,
+    /// F-01: incremented every time sendDiagnostics actually transmits
+    /// (or would transmit) a diagnostic frame. Test-only field; does
+    /// not affect production behavior.
+    diagnostics_send_count_for_test: usize = 0,
+
+    /// F-01: minimum interval between successive diagnostic flushes
+    /// for the same document. Real LSP clients debounce around
+    /// 100 ms; 80 ms gives plenty of headroom.
+    pub const DEBOUNCE_NS: i128 = 80 * std.time.ns_per_ms;
 
     pub fn init(allocator: Allocator) !Server {
         return .{
             .allocator = allocator,
             .transport = try Transport.init(allocator),
             .documents = DocumentStore.init(allocator),
+            .debounce_state = std.StringHashMap(DebounceState).init(allocator),
+            .debounce_state_initialized = true,
         };
     }
 
     pub fn deinit(self: *Server) void {
+        if (self.debounce_state_initialized) {
+            self.debounce_state.deinit();
+        }
         self.documents.deinit();
+    }
+
+    /// F-01: record a didChange event for `uri`. Sets the pending flag
+    /// and updates the last-change timestamp. Does NOT eagerly fire
+    /// diagnostics — the run loop's flushPendingDiagnostics() decides
+    /// when to actually send.
+    pub fn markDocumentDirty(self: *Server, uri: []const u8) void {
+        const now = lspMonoNanos();
+        // Use the document's own URI slice as the key — it's stable
+        // for the document's lifetime.
+        const key = if (self.documents.get(uri)) |doc| doc.uri else uri;
+        self.debounce_state.put(key, .{ .last_change_at_ns = now, .pending = true }) catch {};
+    }
+
+    /// F-01: returns true if `uri` has unflushed diagnostics pending.
+    pub fn isDirty(self: *Server, uri: []const u8) bool {
+        const st = self.debounce_state.get(uri) orelse return false;
+        return st.pending;
+    }
+
+    /// F-01: timestamp (ns since epoch, monotonic-ish) of the last
+    /// didChange for `uri`, or null if no change has been recorded.
+    pub fn lastChangeNanos(self: *Server, uri: []const u8) ?i128 {
+        const st = self.debounce_state.get(uri) orelse return null;
+        return st.last_change_at_ns;
+    }
+
+    /// F-01: walk every dirty document and emit diagnostics for those
+    /// whose debounce window (DEBOUNCE_NS) has elapsed since the last
+    /// didChange. `now_ns` is supplied by callers (tests, run-loop) to
+    /// keep the function deterministic.
+    pub fn flushPendingDiagnostics(self: *Server, now_ns: i128) !void {
+        var it = self.debounce_state.iterator();
+        while (it.next()) |entry| {
+            const st = entry.value_ptr.*;
+            if (!st.pending) continue;
+            if (now_ns - st.last_change_at_ns < DEBOUNCE_NS) continue;
+            // Window elapsed — flush.
+            self.sendDiagnostics(entry.key_ptr.*) catch {};
+            entry.value_ptr.pending = false;
+        }
     }
 
     pub fn run(self: *Server) !void {
@@ -81,6 +164,11 @@ pub const Server = struct {
                 defer self.allocator.free(error_msg);
                 self.transport.logMessage("ERROR", error_msg);
             };
+
+            // F-01: after handling each message, flush any pending
+            // diagnostics whose debounce window has elapsed. Naturally
+            // coalesces bursts of didChange into one diagnostic frame.
+            self.flushPendingDiagnostics(lspMonoNanos()) catch {};
         }
 
         self.transport.logMessage("INFO", "Geode LSP server shutting down");
@@ -343,8 +431,9 @@ pub const Server = struct {
             const text = try json_helpers.getString(first.object, "text");
             try self.documents.update(uri, text, version);
 
-            // Send diagnostics
-            try self.sendDiagnostics(uri);
+            // F-01: defer diagnostic emission to the run-loop debounce
+            // flush instead of firing eagerly on every keystroke.
+            self.markDocumentDirty(uri);
         }
     }
 
@@ -871,6 +960,8 @@ pub const Server = struct {
     }
 
     fn sendDiagnostics(self: *Server, uri: []const u8) !void {
+        // F-01: count every send for test introspection.
+        self.diagnostics_send_count_for_test += 1;
         const doc = self.documents.get(uri) orelse return;
 
         const diagnostics = try features.provideDiagnostics(self.allocator, doc);
