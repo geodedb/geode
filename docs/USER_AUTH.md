@@ -475,3 +475,69 @@ geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.
 | **OAuth2/OIDC** | 🔜 Planned | Q3 2026 | SSO, cloud-native deployments |
 
 **Note**: LDAP/AD and OAuth2/OIDC are on the roadmap for future releases. For enterprise SSO requirements before these are available, consider using mTLS certificate-based authentication with your PKI infrastructure.
+
+---
+
+## MCP LSP Bridge — RLS Pre-Condition (GAP-0818)
+
+The Geode MCP server exposes four LSP-bridge tools — `validate`,
+`complete`, `hover`, `diagnostics` — under `src/mcp/tools.zig` /
+`src/mcp/lsp.zig`. As of 2026-05-06, these tools accept a single
+process-wide bearer token (or `auth_mode=.none`) and **do not thread
+the calling principal into the GQL query path**. This section
+documents the three pre-conditions that must be in place before
+Row-Level Security (RLS) policies can be safely enforced on
+MCP-bridged completions and validations. See `docs/MCP_LSP_BRIDGE.md`
+for the full design.
+
+### 1. Per-caller principal threading (BLOCKING for RLS-on-MCP)
+
+**Today**: every MCP request runs as the bearer-token holder. There
+is no `(authenticated_user, session_id)` plumbed through to
+`validateQuery` / `getCompletions` / `getHover` / `getDiagnostics`.
+
+**Required**: extend the call signatures in `src/mcp/lsp.zig` so each
+takes a `principal: Principal` (a typed struct carrying user_id +
+session_id + tenant_id), and have `src/mcp/server.zig` derive the
+principal from the validated bearer token (or mTLS cert subject) at
+request entry.
+
+**Why blocking**: without a principal, the existing RLS expression
+engine (`src/security/rls_expr_engine.zig`, see Known Limitations
+notes for GAP-0510) has nothing to evaluate `current_user()` or
+`current_tenant()` against. Wiring RLS on MCP today would silently
+return rows the caller is not entitled to read.
+
+### 2. Token → user mapping
+
+**Today**: `auth_mode = .bearer` validates a single token against a
+process-wide secret (or none). There is no per-token user
+attribution — the token is the credential, not the identity.
+
+**Required**: the MCP server's auth layer must (a) accept either
+issued-by-Geode tokens (signed JWTs carrying `sub` claims) or service
+tokens with a configured (token → user) mapping, and (b) return the
+resolved `Principal` to the dispatcher at request entry.
+
+### 3. Audit identity
+
+**Today**: tool invocations are logged to OTel spans without
+identity. A future RLS-on-MCP rollout MUST carry the resolved user
+id into every audit span and into the GQL execution context's
+`audit_identity` field, so reads and writes through the bridge are
+attributable to a named user.
+
+### Tracking
+
+- GAP-0818 (latent — no exploit today) — closed by documentation,
+  not code, on 2026-05-06.
+- GAP-0510 (RLS expression engine wiring) — closed 2026-04-11; see
+  Known Limitations in `CLAUDE.md`.
+- GAP-0819 (MCP GQL input chokepoint) — closed 2026-05-06 with the
+  `validateAndSanitizeGqlInput` helper.
+
+**Operator action**: until pre-conditions 1-3 are in place, do not
+configure tenant-aware RLS policies that depend on `current_user()`
+for any database that is reachable through the MCP server.
+
+CANARY: REQ=REQ-DOC-MCP-LSP-BRIDGE; FEATURE="MCPLSPBridgeDoc"; ASPECT=Documentation; STATUS=EXEMPT; OWNER=mcp; UPDATED=2026-05-06
