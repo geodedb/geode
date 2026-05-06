@@ -12,4 +12,5 @@ test {
     _ = @import("e2e_test.zig");
     _ = @import("transport_test.zig");
     _ = @import("json_helpers_test.zig");
+    _ = @import("server_invalid_params_test.zig");
 }

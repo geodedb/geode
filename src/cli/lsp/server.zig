@@ -86,7 +86,38 @@ pub const Server = struct {
         self.transport.logMessage("INFO", "Geode LSP server shutting down");
     }
 
-    fn handleMessage(self: *Server, message_text: []const u8) !void {
+    /// LSP-SEC-004: extracted shape for textDocument-position requests.
+    pub const TextDocumentPosition = struct {
+        uri: []const u8,
+        line: u32,
+        character: u32,
+    };
+
+    /// LSP-SEC-004: shared safe extractor for the common
+    /// `{textDocument: {uri}, position: {line, character}}` request shape
+    /// used by hover/completion/definition/references/signatureHelp.
+    fn extractTextDocumentPosition(self: *Server, params_value: std.json.Value) json_helpers.JsonError!TextDocumentPosition {
+        _ = self;
+        const text_document = try json_helpers.getObject(params_value, "textDocument");
+        const uri = try json_helpers.getString(text_document, "uri");
+        const position = try json_helpers.getObject(params_value, "position");
+        const line_i64 = try json_helpers.getInteger(position, "line");
+        const char_i64 = try json_helpers.getInteger(position, "character");
+        return TextDocumentPosition{
+            .uri = uri,
+            .line = try json_helpers.castU32(line_i64),
+            .character = try json_helpers.castU32(char_i64),
+        };
+    }
+
+    /// LSP-SEC-004: shared safe extractor for textDocument-only requests.
+    fn extractTextDocumentUri(self: *Server, params_value: std.json.Value) json_helpers.JsonError![]const u8 {
+        _ = self;
+        const text_document = try json_helpers.getObject(params_value, "textDocument");
+        return try json_helpers.getString(text_document, "uri");
+    }
+
+    pub fn handleMessage(self: *Server, message_text: []const u8) !void {
         // LSP-SEC-003: reject deeply nested or oversized payloads BEFORE
         // entering the recursive parser. checkJsonDepth is O(n), allocation-free,
         // and aware of in-string brace characters.
@@ -155,25 +186,40 @@ pub const Server = struct {
     }
 
     fn handleInitialize(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        // Parse initialization options for formatting settings
-        if (params) |p| {
-            if (p.object.get("initializationOptions")) |init_opts| {
-                if (init_opts.object.get("format")) |format_opts| {
+        // Parse initialization options for formatting settings.
+        // LSP-SEC-004: silently ignore malformed entries rather than
+        // panicking. The init handshake must succeed for the client to
+        // recover; logged-and-defaulted is the right policy here.
+        if (params) |p| if (p == .object) {
+            if (p.object.get("initializationOptions")) |init_opts| if (init_opts == .object) {
+                if (init_opts.object.get("format")) |format_opts| if (format_opts == .object) {
                     if (format_opts.object.get("foldPropertyMaps")) |fold| {
-                        self.formatting_options.fold_property_maps = fold.bool;
+                        if (fold == .bool) self.formatting_options.fold_property_maps = fold.bool;
                     }
                     if (format_opts.object.get("indentSize")) |indent| {
-                        self.formatting_options.indent_size = @intCast(indent.integer);
+                        if (indent == .integer) {
+                            if (json_helpers.castU32(indent.integer)) |v| {
+                                self.formatting_options.indent_size = v;
+                            } else |_| {}
+                        }
                     }
                     if (format_opts.object.get("maxLineLength")) |max_len| {
-                        self.formatting_options.max_line_length = @intCast(max_len.integer);
+                        if (max_len == .integer) {
+                            if (json_helpers.castU32(max_len.integer)) |v| {
+                                self.formatting_options.max_line_length = v;
+                            } else |_| {}
+                        }
                     }
                     if (format_opts.object.get("minPropertiesToFold")) |min_props| {
-                        self.formatting_options.min_properties_to_fold = @intCast(min_props.integer);
+                        if (min_props == .integer) {
+                            if (json_helpers.castU32(min_props.integer)) |v| {
+                                self.formatting_options.min_properties_to_fold = v;
+                            } else |_| {}
+                        }
                     }
-                }
-            }
-        }
+                };
+            };
+        };
 
         const capabilities = ServerCapabilities{};
 
@@ -266,12 +312,12 @@ pub const Server = struct {
     }
 
     fn handleDidOpen(self: *Server, params: ?std.json.Value) !void {
-        if (params == null) return;
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const text = text_document.get("text").?.string;
-        const version = @as(i32, @intCast(text_document.get("version").?.integer));
+        const p = params orelse return;
+        // LSP-SEC-004: structured access, returns InvalidParams on bad shape.
+        const text_document = try json_helpers.getObject(p, "textDocument");
+        const uri = try json_helpers.getString(text_document, "uri");
+        const text = try json_helpers.getString(text_document, "text");
+        const version = try json_helpers.castI32(try json_helpers.getInteger(text_document, "version"));
 
         try self.documents.open(uri, text, version);
 
@@ -280,16 +326,21 @@ pub const Server = struct {
     }
 
     fn handleDidChange(self: *Server, params: ?std.json.Value) !void {
-        if (params == null) return;
+        const p = params orelse return;
+        // LSP-SEC-004: structured access, returns InvalidParams on bad shape.
+        const text_document = try json_helpers.getObject(p, "textDocument");
+        const uri = try json_helpers.getString(text_document, "uri");
+        const version = try json_helpers.castI32(try json_helpers.getInteger(text_document, "version"));
 
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const version = @as(i32, @intCast(text_document.get("version").?.integer));
-        const changes = params.?.object.get("contentChanges").?.array;
+        if (p != .object) return json_helpers.JsonError.InvalidParams;
+        const changes_v = p.object.get("contentChanges") orelse return json_helpers.JsonError.InvalidParams;
+        if (changes_v != .array) return json_helpers.JsonError.InvalidParams;
+        const changes = changes_v.array;
 
         if (changes.items.len > 0) {
-            const change = changes.items[0].object;
-            const text = change.get("text").?.string;
+            const first = changes.items[0];
+            if (first != .object) return json_helpers.JsonError.InvalidParams;
+            const text = try json_helpers.getString(first.object, "text");
             try self.documents.update(uri, text, version);
 
             // Send diagnostics
@@ -298,25 +349,26 @@ pub const Server = struct {
     }
 
     fn handleDidClose(self: *Server, params: ?std.json.Value) !void {
-        if (params == null) return;
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
+        const p = params orelse return;
+        // LSP-SEC-004: structured access, returns InvalidParams on bad shape.
+        const text_document = try json_helpers.getObject(p, "textDocument");
+        const uri = try json_helpers.getString(text_document, "uri");
 
         self.documents.close(uri);
     }
 
     fn handleHover(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const p = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const position = params.?.object.get("position").?.object;
-        const line = @as(u32, @intCast(position.get("line").?.integer));
-        const character = @as(u32, @intCast(position.get("character").?.integer));
+        };
+        const pos = self.extractTextDocumentPosition(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
+        const uri = pos.uri;
+        const line = pos.line;
+        const character = pos.character;
 
         const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .null);
@@ -347,16 +399,17 @@ pub const Server = struct {
     }
 
     fn handleCompletion(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const p = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const position = params.?.object.get("position").?.object;
-        const line = @as(u32, @intCast(position.get("line").?.integer));
-        const character = @as(u32, @intCast(position.get("character").?.integer));
+        };
+        const pos = self.extractTextDocumentPosition(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
+        const uri = pos.uri;
+        const line = pos.line;
+        const character = pos.character;
 
         const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
@@ -510,13 +563,14 @@ pub const Server = struct {
     }
 
     fn handleDocumentSymbol(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const p = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
+        };
+        const uri = self.extractTextDocumentUri(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
 
         const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
@@ -578,16 +632,17 @@ pub const Server = struct {
     }
 
     fn handleSignatureHelp(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const params_v = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const position = params.?.object.get("position").?.object;
-        const line = @as(u32, @intCast(position.get("line").?.integer));
-        const character = @as(u32, @intCast(position.get("character").?.integer));
+        };
+        const pos = self.extractTextDocumentPosition(params_v) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
+        const uri = pos.uri;
+        const line = pos.line;
+        const character = pos.character;
 
         const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .null);
@@ -666,22 +721,27 @@ pub const Server = struct {
     }
 
     fn handleReferences(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const p = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
+        };
+        const pos = self.extractTextDocumentPosition(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
+        const uri = pos.uri;
+        const line = pos.line;
+        const character = pos.character;
 
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
-        const position = params.?.object.get("position").?.object;
-        const line = @as(u32, @intCast(position.get("line").?.integer));
-        const character = @as(u32, @intCast(position.get("character").?.integer));
-
-        // Check for includeDeclaration in context
+        // Check for includeDeclaration in context (optional, defaults to true)
         var include_decl = true;
-        if (params.?.object.get("context")) |ctx| {
-            if (ctx.object.get("includeDeclaration")) |inc| {
-                include_decl = inc.bool;
+        if (p == .object) {
+            if (p.object.get("context")) |ctx| {
+                if (ctx == .object) {
+                    if (ctx.object.get("includeDeclaration")) |inc| {
+                        if (inc == .bool) include_decl = inc.bool;
+                    }
+                }
             }
         }
 
@@ -727,13 +787,14 @@ pub const Server = struct {
     }
 
     fn handleSemanticTokensFull(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        if (params == null) {
+        const p = params orelse {
             try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing params");
             return;
-        }
-
-        const text_document = params.?.object.get("textDocument").?.object;
-        const uri = text_document.get("uri").?.string;
+        };
+        const uri = self.extractTextDocumentUri(p) catch {
+            try self.sendError(id, @intFromEnum(protocol.ErrorCode.InvalidParams), "Missing or malformed params");
+            return;
+        };
 
         const doc = self.documents.get(uri) orelse {
             try self.sendResult(id, .null);
