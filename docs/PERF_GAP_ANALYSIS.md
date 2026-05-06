@@ -318,3 +318,116 @@ make loadtest-compare  # must not regress any benchmark
 - No duplicates: #560 (per-row env alloc, closed) is distinct from #715 (RLS row); #540 (idle CPU broad bug) overlaps with #718 but has different scope (handshake spin vs. wake storm)
 - Phase 3 review: `docs/audit/perf-phase3-review.md`
 - Baseline regression cited: ping_c4 727 → 646 qps + 4 errors
+
+## LSP — 2026-05-06 Audit (Phase 4)
+
+**Source:** `/tmp/lsp-audit-phase3/perf-reviewer.md` (24 findings) → 15 GitLab issues
+**Scope:** `src/cli/lsp/*.zig` (~8,480 LOC) + `src/mcp/lsp.zig` (715 LOC)
+**Method:** PerfScore = Impact × Likelihood × 4 (codepros perf-scoring framework)
+
+### Summary
+
+- P0 (PerfScore 100): 5 findings → 3 umbrella/keystone issues
+- P1 (PerfScore 48-64): 10 findings → 5 issues + 5 sub-tasks under #770 keystone
+- P2 (PerfScore 32-36): 4 findings → 4 issues
+- P3 (PerfScore 24): 5 findings → 4 issues + 1 fold
+
+**Top-5 risks (by p95 delta on hot path):**
+
+1. **#770 Per-doc AST cache** (PerfScore 100) — 3× re-parse per save → 1×; gates 5 sub-tasks. Modal-request p95 collapses for documentSymbol/definition/references/semanticTokens.
+2. **#766 Tier-A free-money batch** (PerfScore 100) — debounce + buffered transport + completion cap + static JSON + Content-Length stack-buf. Cuts keystroke storm from 5 invocations/sec to ~1/pause.
+3. **#772 JSON serialization rewrite** (PerfScore 100) — completion serialize ~300μs → ~50μs via `std.json.WriteStream` direct emission.
+4. **#776 OTel instrumentation** (PerfScore 48) — gates measurement of every other fix; cardinality-safe (no URI tagging).
+5. **#777 Line offset table** (PerfScore 64) — hover p95 ~300μs → ~10μs on 1000-line docs.
+
+### Stack-Ranked LSP Findings
+
+| Rank | Sev | Score | Finding | File:Line | GitLab | Fix Summary | Status |
+|---:|-----|------:|---------|-----------|--------|-------------|--------|
+| 1 | P0 | 100 | F-01 didChange debounce | `src/cli/lsp/server.zig:273-289` | [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) | 80-150ms debounce + per-doc gen counter | **Closed 2026-05-06** (`1603d9a1`) |
+| 2 | P0 | 100 | F-02 AST cache (KEYSTONE) | `src/cli/lsp/features.zig:40,461,845` | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) | `Document.getOrParse` keyed on `doc.version` + sub-tasks | Deferred to follow-up (gates F-05/06/12/15/16) |
+| 3 | P0 | 100 | F-04 Buffered stdin reader | `src/cli/lsp/transport.zig:138-154` | [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) | 4KB BufferedReader; 1 syscall/msg | **Closed 2026-05-06** (`a0d52c9e`) |
+| 4 | P0 | 100 | F-09 Static completion JSON | `src/cli/lsp/server.zig:171-243,373-394,746-754` | [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766), [#772](https://gitlab.com/devnw/codepros/geode/geode/-/issues/772) | Comptime envelope + WriteStream direct emit | Triage |
+| 5 | P0 | 100 | F-14 Completion prefix-cap | `src/cli/lsp/features.zig:385-446` | [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) | Cap 50 items; `isIncomplete=true` | Triage |
+| 6 | P1 | 64 | F-05 Identifier-position index | `src/cli/lsp/document.zig:114-227` | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) (sub-task) | Built once during cached parse | Triage |
+| 7 | P1 | 64 | F-06 semanticTokens lex reuse | `src/cli/lsp/features.zig:1543-1745` | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) (sub-task) | Use cached lex stream | Triage |
+| 8 | P1 | 64 | F-08 Levenshtein typo memoize | `src/cli/lsp/semantic.zig:261-301,116-160` | [#779](https://gitlab.com/devnw/codepros/geode/geode/-/issues/779) | Cache by `hash(label-set)` | Triage |
+| 9 | P1 | 64 | F-12 MCP bridge AST reuse | `src/mcp/lsp.zig:107-188` | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) (sub-task) | Share AST cache across LSP+MCP | Triage |
+| 10 | P1 | 64 | F-18 Line-start offset table | `src/cli/lsp/document.zig:36-84` | [#777](https://gitlab.com/devnw/codepros/geode/geode/-/issues/777) | O(1) `getOffset`/`getLineContent` | Triage |
+| 11 | P1 | 64 | F-22 WriteStream direct emit | indirect→F-09 | [#772](https://gitlab.com/devnw/codepros/geode/geode/-/issues/772) | (folded into JSON rewrite) | Triage |
+| 12 | P1 | 48 | F-03 Incremental sync (rope) | `src/cli/lsp/document.zig:30-34` | [#786](https://gitlab.com/devnw/codepros/geode/geode/-/issues/786) | `textDocumentSync.change=2` + piece-table | Triage |
+| 13 | P1 | 48 | F-10 Typed JSON-RPC peel | `src/cli/lsp/server.zig:89` | [#787](https://gitlab.com/devnw/codepros/geode/geode/-/issues/787) | MessageHeader + per-method structs | Triage |
+| 14 | P1 | 48 | F-11 OTel LSP+MCP | LSP+MCP whole tree | [#776](https://gitlab.com/devnw/codepros/geode/geode/-/issues/776) | 7 spans + 7 metrics, cardinality guards | Triage |
+| 15 | P1 | 48 | F-20 Non-blocking dispatcher | `src/cli/lsp/server.zig:51-86` | [#790](https://gitlab.com/devnw/codepros/geode/geode/-/issues/790) | Worker pool + per-request arenas | Triage |
+| 16 | P2 | 36 | F-07 Scope.canonicalize arena | `src/cli/lsp/semantic.zig:64-71` | [#780](https://gitlab.com/devnw/codepros/geode/geode/-/issues/780) | Arena-owned uppercase | Triage |
+| 17 | P2 | 36 | F-15 References AST cross-check | `src/cli/lsp/features.zig:1416-1513` | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) (sub-task) | AST + ident-index | Triage |
+| 18 | P2 | 32 | F-19 $/cancelRequest | `src/cli/lsp/server.zig:107-131` | [#789](https://gitlab.com/devnw/codepros/geode/geode/-/issues/789) | Per-id task table + cooperative cancel | Triage |
+| 19 | P2 | 32 | F-21 Async didOpen diagnostics | `src/cli/lsp/server.zig:259-271` | [#792](https://gitlab.com/devnw/codepros/geode/geode/-/issues/792) | Deferred publish post-ack | Triage |
+| 20 | P3 | 24 | F-13 MCP comptime strings | `src/mcp/lsp.zig:417-473` | [#784](https://gitlab.com/devnw/codepros/geode/geode/-/issues/784) | Drop `allocator.dupe` | Triage |
+| 21 | P3 | 24 | F-16 Unify byte-scanners | 4× sites | [#770](https://gitlab.com/devnw/codepros/geode/geode/-/issues/770) (sub-task) | Single canonical scanner | Triage |
+| 22 | P3 | 24 | F-17 Stack Content-Length buf | `src/cli/lsp/transport.zig:121-126` | [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) | `bufPrint` to stack | Triage |
+| 23 | P3 | 24 | F-23 DocumentStore LRU | `src/cli/lsp/document.zig:230-247` | [#781](https://gitlab.com/devnw/codepros/geode/geode/-/issues/781) | Bounded LRU cap=64 | Triage |
+| 24 | P3 | 24 | F-24 Identifier case-fold | `src/cli/lsp/document.zig:114-227` | [#782](https://gitlab.com/devnw/codepros/geode/geode/-/issues/782) | Pre-normalized lowercase in index | Triage |
+
+### Findings by Area
+
+- **app::lsp:** 23 findings across #766, #770, #772, #776, #777, #779, #780, #781, #782, #786, #787, #789, #790, #792
+- **app::mcp::lsp-bridge:** 2 findings folded into AST cache + comptime strings (#770, #784)
+
+### Roadmap
+
+**Quick Wins (< 1 day each, batched in #766)**
+
+- F-01 debounce
+- F-04 buffered transport
+- F-09 static completion JSON (composes w/ #772)
+- F-14 completion prefix-cap
+- F-17 stack Content-Length buffer
+
+**Medium (1-5 days)**
+
+- #770 AST cache keystone (3-5d incl. sub-tasks F-05/06/12/15/16)
+- #772 JSON WriteStream rewrite
+- #777 Line offset table
+- #779 Typo memoization
+- #780 Scope.canonicalize arena
+
+**Strategic (> 5 days, Tier-C)**
+
+- #786 Incremental sync (rope) — 1-2 weeks
+- #787 Typed JSON-RPC peel
+- #789 cancelRequest preemption (also closes GAP-0816 functional)
+- #790 Non-blocking dispatcher with worker pool
+- #792 Async didOpen diagnostics
+- #776 OTel — across all of the above
+
+### OTel Plan Committed
+
+`#776` carries the full OTel plan: 7 spans (`lsp.request`, `lsp.parse`, `lsp.diagnostics`, `lsp.semantic_tokens`, `lsp.completion`, `lsp.transport.read`, `mcp.lsp.tool_call`) + 7 metrics (`geode_lsp_request_duration_seconds`, `geode_lsp_parse_duration_seconds`, `geode_lsp_diagnostics_count`, `geode_lsp_completion_items_returned`, `geode_lsp_transport_read_syscalls_total`, `geode_lsp_doc_size_bytes`, `geode_lsp_open_documents`) with cardinality guards (no `uri` tagging; BLAKE2b-128 hash for span attrs; method allowlist; tail-sampling).
+
+### Validation Plan (Phase 5)
+
+Bench harness sketch (proposed in `#776`+follow-up):
+
+- `benchmarks/lsp/bench_lsp_stdio.py` driving `./zig-out/bin/geode lsp` over stdio
+- Fixtures `benchmarks/lsp/fixtures/*.gql` sized {1KB, 10KB, 50KB, 100KB}
+- Workloads W1 (cold open), W2 (typing burst), W3 (modal), W4 (semanticTokens)
+- A/B mode: alternating-rounds baseline vs. patched binary; emit JSON per workload with p50/p95/p99 + syscall counts
+- SLOs: completion p95 <100ms (target 30ms); diagnostics-on-save p95 <500ms (target 50ms); semanticTokens p95 <200ms (target 30ms); hover p95 <50ms (target 5ms)
+
+### 2026-05-06 LSP Tracking
+
+- Created 15 GitLab issues: #766, #770, #772, #776, #777, #779, #780, #781, #782, #784, #786, #787, #789, #790, #792
+- Cross-references: F-22↔quality-reviewer #2 (semanticTokens lexer dup); F-12↔GAP-0830 (MCP bridge contract); F-19/F-20↔GAP-0816 ($/cancelRequest); F-04/F-17↔GAP-0825 (transport conformance); F-11↔GAP-0826 (perf/stress baseline)
+- Phase 3 perf review: `/tmp/lsp-audit-phase3/perf-reviewer.md`
+- Phase 4 tracker: `/tmp/lsp-audit-phase4/perf-issue-tracker.md`
+
+### 2026-05-06 closure pass — summary
+
+| ID | Title | Commit | Status |
+|---|---|---|---|
+| F-01 | Debounce `didChange` diagnostics | `1603d9a1` | Closed |
+| F-04 | Buffered stdin reader for LSP transport | `a0d52c9e` | Closed |
+| F-02 | AST cache keystone (KEYSTONE) | n/a | Deferred to follow-up; #770 remains open with all sub-tasks (F-05/06/12/15/16) gated on this |
+
+**Tier-A umbrella #766:** Partial closure — F-01 and F-04 closed; F-09 (static completion JSON), F-14 (completion prefix-cap), F-17 (stack Content-Length buffer) remain open as untouched sub-tasks. Issue stays open with checked sub-task list.

@@ -462,3 +462,73 @@ No findings require immediate rotation or emergency remediation. All new finding
 9. ~~**SEC-MIG-09** (LOW/4) -- Version counter overflow~~ -- **Closed (2026-04-05)**
 10. ~~**SEC-MIG-03** (MEDIUM/36) -- CLI auth for status/create~~ -- **Closed (2026-04-10)**
 11. ~~**SEC-MIG-05** (MEDIUM/24) -- SHA-256 hash upgrade~~ -- **Closed (2026-04-10)**
+
+---
+
+## LSP — 2026-05-06 audit
+
+Last updated: 2026-05-06
+Scope: `src/cli/lsp/` (~8,480 LOC) + `src/mcp/lsp.zig` (715 LOC) + `src/mcp/tools.zig` + `src/mcp/server.zig` + vendored `zig-pkg/mcp-0.1.5-…/src/mcp.zig`
+Audited by: `/codepros:audit` Phase 1-4 (security-scanner -> security-reviewer -> gap-detector -> gap-sync + security-issue-tracker)
+
+### Summary
+
+- **Total findings:** 6 (5 confidential, 1 public) + 1 public forward-looking design-gate issue
+- **High (Risk 60-80):** 4 -- LSP-SEC-001 (80), LSP-SEC-007 (64), LSP-SEC-003 (64), LSP-SEC-004 (60)
+- **Medium (Risk 32):** 1 -- LSP-SEC-002 (32)
+- **Low (Risk 8):** 1 -- LSP-SEC-005 (8)
+- **Forward-looking / Critical-latent:** 1 -- GAP-0818 (PASS today; pre-condition gate filed publicly as #795)
+- **Confidential:** 5 (5 created, 0 closed)
+- **Public:** 1 finding + 1 pre-condition
+
+### Top risks (LSP)
+
+| Rank | Risk | ID | Finding (placeholder titles only -- see issue for details) | Issue | Conf? | Status |
+|------|------|-----|-----|-------|------|---|
+| 1 | 80 | LSP-SEC-001 | Unbounded transport-layer allocation primitive | [#783](https://gitlab.com/devnw/codepros/geode/geode/-/issues/783) | YES | **Closed 2026-05-06** (`022bfb38`, CWE-770) |
+| 2 | 64 | LSP-SEC-007 | MCP-bridge GQL forwarding length cap | [#793](https://gitlab.com/devnw/codepros/geode/geode/-/issues/793) | YES | **Closed 2026-05-06** (`c090763b`, CWE-20/CWE-770) |
+| 3 | 64 | LSP-SEC-003 | JSON parser depth bounding | [#788](https://gitlab.com/devnw/codepros/geode/geode/-/issues/788) | YES | **Closed 2026-05-06** (`1cce1e57`, CWE-674) |
+| 4 | 60 | LSP-SEC-004 | JSON-RPC handler input validation hardening | [#791](https://gitlab.com/devnw/codepros/geode/geode/-/issues/791) | YES | **Closed 2026-05-06** (`1cce1e57` + `6a36651b`, CWE-754) |
+| 5 | 32 | LSP-SEC-002 | Vendored package constant-time compare | [#785](https://gitlab.com/devnw/codepros/geode/geode/-/issues/785) | YES | Open (vendored-patch story pending) |
+| 6 | 8 | LSP-SEC-005 | publishDiagnostics URI escaping | [#794](https://gitlab.com/devnw/codepros/geode/geode/-/issues/794) | NO | Open |
+
+### Cross-cutting / overlap
+
+- **GAP-0819 (#668):** broader chokepoint that subsumes LSP-SEC-007. **Closed 2026-05-06** via commit `c090763b` -- both #668 and #793 closed together. Test cover: `tests/mcp_input_guards_test.zig`.
+- **GAP-0818 (#754):** re-classified Critical-latent / forward-looking. Documentation pre-condition landed in `docs/MCP_LSP_BRIDGE.md` (commit `01ca2480`). Enforcement of the pre-condition remains tracked under #795 -- documentation closes the latent design ambiguity but the enforcement is a forward-looking gate.
+- **Quality-reviewer Sev1 JsonHelpers recommendation:** overlaps LSP-SEC-004 (#791). Both closed together via `1cce1e57` + `6a36651b`. New helper module: `src/cli/lsp/json_helpers.zig`.
+- **Phase 2 (LSP-SEC-008):** MCP `--no-auth` is debug-only and `http_bind` is hard-coded loopback. PASS-with-warning -- future `--bind` flag must re-assert loopback when `auth_mode==.none`. Captured as immediate action #7 in Phase 3 review (not yet a separate issue).
+
+### Immediate actions (post-2026-05-06 closure status)
+
+| # | Action | Status |
+|---|---|---|
+| 1 | Cap Content-Length at 16 MiB | **Closed 2026-05-06** -- commit `022bfb38`, confidential #783 |
+| 2 | Add JSON depth check + size cap | **Closed 2026-05-06** -- commit `1cce1e57`, confidential #788 |
+| 3 | JsonHelpers module to replace `.?` chains | **Closed 2026-05-06** -- commits `1cce1e57` + `6a36651b`, confidential #791 (+ quality Sev1 cross-link) |
+| 4 | Cap MCP-bridge `query.len` at 1 MiB | **Closed 2026-05-06** -- commit `c090763b`, confidential #793 + GAP-0819 #668 |
+| 5 | Constant-time bearer compare (vendored) | Open -- confidential #785 needs vendored-patch script decision |
+| 6 | JSON-escape URI in publishDiagnostics | Open -- public #794 |
+| 7 | Hard-assert loopback when auth_mode=.none | Open -- needs human triage (no issue yet) |
+| 8 | Document MCP-RLS pre-condition in `docs/MCP_LSP_BRIDGE.md` | **Documented 2026-05-06** -- commit `01ca2480`, public #795 (kept open as forward-looking enforcement gate) |
+
+### Residual
+
+- **GAP-0832 (NEW 2026-05-06):** Two unsafe direct field accesses remain at `src/cli/lsp/server.zig:220-221` (`parsed.value.object` / `m.string`) on the JSON-RPC root. Outside the original 10-site SEC-004 audit. Filed as a quality follow-up. Severity Low/P3, `Domain::lsp::lifecycle`.
+
+### Phase 5 follow-ups
+
+- Confirm vendored-patch story for LSP-SEC-002 (#785) -- create `scripts/apply-vendored-patches.sh` or pin to a fork.
+- File a separate hardening issue for immediate-action #7 (loopback assertion guard).
+- Track GAP-0832 (residual `server.zig:220-221`) as a quality cleanup PR.
+
+Confidential issues use placeholder titles in this public document. Full details (file:line, exploit narrative, patch sketch, Risk-Score breakdown) remain in the confidential issues only.
+
+### 2026-05-06 closure pass — summary
+
+| ID | Title | Commit | CWE | Test Evidence | Status |
+|---|---|---|---|---|---|
+| LSP-SEC-001 | Cap LSP `Content-Length` at 16 MiB | `022bfb38` | CWE-770 | transport tests | Closed |
+| LSP-SEC-003 | JSON depth guard + safe accessors foundation | `1cce1e57` | CWE-674 | json_helpers tests | Closed |
+| LSP-SEC-004 | Route 10 unsafe unwrap sites through `json_helpers` | `1cce1e57` + `6a36651b` | CWE-754 | json_helpers tests | Closed |
+| LSP-SEC-007 | MCP input chokepoint (1 MiB cap, UTF-8, nested comments) | `c090763b` | CWE-20/CWE-770 | `tests/mcp_input_guards_test.zig` | Closed |

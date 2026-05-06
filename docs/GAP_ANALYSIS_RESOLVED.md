@@ -2094,17 +2094,20 @@ All 5 gaps identified in Session 10 have been fully implemented with production 
 
 ---
 
-### GAP-0056: LSP Go-To-Definition (Resolved January 10, 2026)
+### GAP-0056: LSP Go-To-Definition (Resolved January 10, 2026) — **RETRACTED 2026-05-06**
+
+> **Retraction (2026-05-06, Phase-4 LSP audit):** This closure is **invalid**. While `provideDefinition` was indeed implemented in `src/cli/lsp/features.zig:451-507`, **the dispatcher was never wired**. The handler at `src/cli/lsp/server.zig:398-402` is the original stub from initial commit `dc6b6a81` (Oct 28 2025) and returns `null` for every `textDocument/definition` request. `git log -p --all -S 'handleDefinition' -- src/cli/lsp/server.zig` shows no commit ever changed the stub body. The advertised capability `definitionProvider: true` (`src/cli/lsp/server.zig:21,185`) misleads clients into believing the feature works. **Issue [#138](https://gitlab.com/devnw/codepros/geode/geode/-/issues/138) has been re-opened.** Tracking: GAP-0056 (re-open) in `docs/GAP_ANALYSIS.md` — "LSP & MCP Bridge — 2026-05-06 audit" section. Related: GAP-0829 (doc-drift), GAP-0831 (capability-truthfulness guard). **Do not treat this entry as resolved until the dispatcher wire-up lands and a regression test exists.**
 
 - **Original Gap:** LSP go-to-definition returned null without implementation
-- **Original Severity:** Low (Feature)
-- **Resolution Evidence:**
+- **Original Severity:** Low (Feature) — re-classified to **High** on retraction (advertised-but-stub regression)
+- **Resolution Evidence (now invalid):**
   - src/cli/lsp/features.zig:386-778 — Complete go-to-definition implementation:
     - AST-based variable definition lookup via `findVariableDefinition()`
     - Pattern detection for nodes `(varname)`, relationships `[varname]`, WITH aliases, LET bindings
     - Text-based fallback search for incomplete parses
     - CANARY marker: REQ=REQ-LSP-GOTODEF-001, STATUS=IMPL, UPDATED=2026-01-10
-- **Verification:** Go-to-definition now navigates to variable definitions in GQL queries
+- **Verification (now invalid):** Go-to-definition now navigates to variable definitions in GQL queries
+- **Why the original verification missed this:** No end-to-end LSP dispatch test existed; the CANARY marker was attached to `provideDefinition` but no test drove the LSP `textDocument/definition` JSON-RPC code path through `handleDefinition`. GAP-0831 adds the structural fix.
 
 ---
 
@@ -4644,3 +4647,101 @@ Per `docs/audit/gap-close-plan.md` §Won't-Do — these six are explicitly not c
 - `zig fmt --check src/ build.zig`: 30 dirty → 0 dirty
 - CANARY status.csv: 4 COMPLETE + 16 blank-status schema violations → 0 / 0 (GAP-0539)
 - TESTED/IMPL/EXEMPT/BENCHED: 71.0/14.2/11.6/3.1 → 78.7/9.1/7.0/5.1 (Phase 4)
+
+---
+
+## LSP Audit Closure Pass — 2026-05-06
+
+Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp/lsp-gap-close/{plan.md,implementer-log.md,verifier-log.md}`. Verifier verdict: READY-TO-REPORT.
+
+### GAP-0056: LSP Go-To-Definition dispatcher wired (Resolved 2026-05-06)
+
+- **Original Gap:** Dispatcher stub at `src/cli/lsp/server.zig:398-402` was never wired to `provideDefinition` at `src/cli/lsp/features.zig:451-507`; `definitionProvider: true` was advertised falsely. (Re-opened from a 2026-01-10 false-positive closure that was retracted.)
+- **Severity:** High (advertised-but-stub regression)
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `46334814` — `fix: close GAP-0056 - wire handleDefinition to features.provideDefinition`.
+  - Test cover: `tests/server_definition_test.zig` drives the LSP `textDocument/definition` JSON-RPC code path through the dispatcher.
+  - GitLab issue [#138](https://gitlab.com/devnw/codepros/geode/geode/-/issues/138) closed with commit + test reference.
+- **Verification:** Go-to-definition now navigates via the dispatcher; capability-vs-handler test (GAP-0831) is a follow-up.
+
+### GAP-0819 / LSP-SEC-007: MCP input chokepoint (Resolved 2026-05-06)
+
+- **Original Gap:** MCP raw GQL forwarding had no allowlist, length cap, or comment strip; LSP-SEC-007 (Risk 64) — Critical injection / denial-of-service attack surface.
+- **Severity:** Critical (Risk 64)
+- **CWE:** CWE-20 (Improper Input Validation), CWE-770 (Allocation of Resources Without Limits)
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `c090763b` — `sec: close LSP-SEC-007 / GAP-0819 - MCP input chokepoint`.
+  - Implements: 1 MiB length cap, UTF-8 validation, nested-comment stripping in a single `validateAndSanitizeGqlInput` chokepoint routed by both `validateQuery` and `executeQuery`.
+  - Test cover: `tests/mcp_input_guards_test.zig`.
+  - GitLab issues [#793](https://gitlab.com/devnw/codepros/geode/geode/-/issues/793) (confidential) and [#668](https://gitlab.com/devnw/codepros/geode/geode/-/issues/668) (public) closed.
+- **Verification:** Adversarial inputs rejected at the MCP boundary; cap enforced; nested comments parsed correctly.
+
+### LSP-SEC-001: Cap LSP `Content-Length` at 16 MiB (Resolved 2026-05-06)
+
+- **Original Gap:** Unbounded transport-layer allocation primitive — LSP-SEC-001 (Risk 80, Critical-High).
+- **CWE:** CWE-770
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `022bfb38` — `sec: close LSP-SEC-001 - cap LSP Content-Length at 16 MiB`.
+  - GitLab issue [#783](https://gitlab.com/devnw/codepros/geode/geode/-/issues/783) (confidential) closed.
+
+### LSP-SEC-003: JSON depth guard + safe accessors foundation (Resolved 2026-05-06)
+
+- **Original Gap:** JSON parser depth bounding was absent — LSP-SEC-003 (Risk 64).
+- **CWE:** CWE-674 (Uncontrolled Recursion)
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `1cce1e57` — `sec: close LSP-SEC-003 / LSP-SEC-004 - JSON depth guard + safe accessors`.
+  - New module: `src/cli/lsp/json_helpers.zig`.
+  - GitLab issue [#788](https://gitlab.com/devnw/codepros/geode/geode/-/issues/788) (confidential) closed.
+
+### LSP-SEC-004 / Quality Sev1: JSON-RPC handler input validation hardening (Resolved 2026-05-06)
+
+- **Original Gap:** ~10 unsafe `.?` unwraps in JSON-RPC handlers — LSP-SEC-004 (Risk 60) and Quality-Sev1 (PriorityScore 100).
+- **CWE:** CWE-754 (Improper Check for Unusual or Exceptional Conditions)
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `1cce1e57` — JSON-helpers foundation.
+  - Commit `6a36651b` — Route 10 unsafe unwrap sites through `json_helpers`.
+  - GitLab issue [#791](https://gitlab.com/devnw/codepros/geode/geode/-/issues/791) (confidential) closed.
+  - Quality Sev1 cross-link in `docs/QUALITY_GAP_ANALYSIS.md` row 1 marked closed.
+- **Residual:** 2 sites at `src/cli/lsp/server.zig:220-221` outside the original audit scope — filed as new GAP-0832 (Low / P3 quality follow-up).
+
+### F-04: Buffered stdin reader for LSP transport (Resolved 2026-05-06)
+
+- **Original Gap:** LSP transport read loop made one syscall per byte; F-04 (PerfScore 100, P0).
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `a0d52c9e` — `perf: close F-04 - buffered stdin reader for LSP transport`.
+  - 4 KB BufferedReader; 1 syscall per message.
+  - GitLab issue [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) (Tier-A umbrella) updated with checked sub-task; remains open (other Tier-A sub-tasks pending).
+
+### F-01: Debounce `didChange` diagnostics (Resolved 2026-05-06)
+
+- **Original Gap:** Diagnostics re-fired on every keystroke; F-01 (PerfScore 100, P0).
+- **Resolved date:** 2026-05-06
+- **Resolution evidence:**
+  - Commit `1603d9a1` — `perf: close F-01 - debounce didChange diagnostics`.
+  - 80–150 ms debounce + per-doc generation counter; cuts keystroke storm from ~5/sec to ~1/pause.
+  - GitLab issue [#766](https://gitlab.com/devnw/codepros/geode/geode/-/issues/766) (Tier-A umbrella) updated with checked sub-task.
+
+### GAP-0818 (partial — documentation pre-condition): MCP-LSP bridge RLS pre-condition documented (Documented 2026-05-06)
+
+- **Status:** Partial — documentation landed; enforcement remains a forward-looking gate.
+- **Resolved date (docs):** 2026-05-06
+- **Resolution evidence:**
+  - Commit `01ca2480` — `docs: close GAP-0818 - document MCP LSP bridge RLS pre-condition`.
+  - New doc: `docs/MCP_LSP_BRIDGE.md`.
+  - GitLab issue [#754](https://gitlab.com/devnw/codepros/geode/geode/-/issues/754) — kept open (`Status::partial`); enforcement still required.
+  - GitLab issue [#795](https://gitlab.com/devnw/codepros/geode/geode/-/issues/795) — kept open as the forward-looking enforcement gate.
+- **Why not fully closed:** Documentation closes the latent design ambiguity but the actual pre-condition enforcement is the closing event, not the documentation. Tracked under #795.
+
+### Closure metrics (2026-05-06 LSP pass)
+
+- 8 commits since baseline (7 code + 1 docs).
+- 9 gaps closed; 1 partial (GAP-0818 docs); 1 deferred (F-02 AST cache keystone).
+- 1 new follow-up filed (GAP-0832 — residual `server.zig:220-221`).
+- Build / format / canary: PASS / PASS / PASS.
+- No regressions detected.

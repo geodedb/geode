@@ -1,6 +1,6 @@
 # Quality Gap Analysis
 
-Last updated: 2026-04-16 (Phase 4 closeout — 3 of 15 Phase 4 findings closed this pass: #710, #717, #724; 2 more follow-ups committed as sub-fixes for #716 / audit.jsonl; 10 remain open; prior: 2026-04-10 gap closure — all 8 remaining items closed; Q13, Q15, Q17, Q18 closed; migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
+Last updated: 2026-05-06 (LSP audit Phase 4 — 8 quality findings filed (#767, #768, #769, #771, #773, #774, #775, #778); 3 cross-linked to existing GAP-IDs; prior: 2026-04-16 Phase 4 closeout — 3 of 15 Phase 4 findings closed: #710, #717, #724; 2 more follow-ups committed as sub-fixes for #716 / audit.jsonl; 10 remain open; prior: 2026-04-10 gap closure — all 8 remaining items closed; Q13, Q15, Q17, Q18 closed; migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
 
 ## Summary
 
@@ -360,3 +360,56 @@ Existing items (2026-02-18 triage):
 - `python3 tools/release_target_manifest.py sync-goreleaser --manifest release/target_manifest.json --goreleaser .goreleaser.yaml --check`
 - `python3 tools/release_dockerfile_manifest.py check --manifest release/dockerfile_manifest.json --repo-root .`
 - `python3 tools/release_dockerfile_manifest.py signoff --manifest release/dockerfile_manifest.json --repo-root . --output /tmp/release-dockerfile-signoff.txt`
+
+---
+
+## LSP — 2026-05-06 audit
+
+Scope: `src/cli/lsp/` + `src/mcp/lsp.zig`. Source: `/tmp/lsp-audit-phase3/quality-reviewer.md` (Sev1×1, Sev2×6, Sev3×3, Sev4×1). Cross-cuts security (LSP-SEC-001..010) and gap-detector (GAP-0816..0831).
+
+### LSP audit summary
+
+- Total LSP quality findings: 11.
+- New issues filed: 8.
+- Cross-linked to existing GAP-IDs: 3 (Q1 → LSP-SEC-004 / GAP-0816-class; Q9 → GAP-0829; Q11 → GAP-0814 hygiene umbrella).
+- Top risk: Q1 — `src/cli/lsp/server.zig` JSON-RPC unwrap panics across ~10 handler call sites (PriorityScore 100). Owned by security/reliability sweep, not by quality.
+
+### LSP findings (stack-ranked, PriorityScore desc)
+
+| Rank | Severity | PriorityScore | Category | Finding | Component | Evidence | Issue URL | Fix Summary | Owner | Status |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | Sev1 | 100 | maintainability + reliability | JSON-RPC unwrap panics at ~10 call sites | `src/cli/lsp/server.zig` | server.zig:262, 265, 308, 346, 509, 577, 665, 727, 276, 294 | LINK: LSP-SEC-004 / GAP-0816-class | `JsonHelpers` module + handler swap | claude | **Closed 2026-05-06** (`1cce1e57` + `6a36651b`; cross-link to LSP-SEC-004 #791) |
+| 2 | Sev2 | 64 | maintainability | `formatBasic` 541-line monolith | `src/cli/lsp/features.zig:2193-2734` | features.zig:2193-2734 | [#767](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/767) | Extract per-clause printers into `src/cli/lsp/formatter.zig` | tbd | Triage |
+| 3 | Sev2 | 64 | maintainability + perf | `provideSemanticTokensFull` duplicates GQL lexer (202 lines) | `src/cli/lsp/features.zig:1543-1745` | features.zig:1543-1745; `src/gql/lexer.zig` | [#768](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/768) | Reuse `gql_lexer.Lexer` via thin adapter | tbd | Triage |
+| 4 | Sev2 | 48 | maintainability | `analyzeExpr` 247-line switch | `src/cli/lsp/semantic.zig:803-1050` | semantic.zig:803-1050 | [#769](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/769) | Dispatch table per AST variant | tbd | Triage |
+| 5 | Sev2 | 48 | cleanup | 4 duplicate `findX*ForSymbol` pairs | `src/cli/lsp/features.zig` | features.zig:683/1114, 710/1127, 734/1155, 759/1168 | [#771](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/771) | Collapse to one fn + `kind: PatternKind` enum | tbd | Triage |
+| 6 | Sev2 | 48 | readability | 4 server.zig handlers exceed 80 lines | `src/cli/lsp/server.zig` | server.zig:148, 404, 757, 571 | [#773](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/773) | Extract JSON-blob helpers; comptime-friendly capability table | tbd | Triage |
+| 7 | Sev2 | 48 | api-contract + architecture | MCP bridge naming/contract drift vs `features.zig` | `src/mcp/lsp.zig` | mcp/lsp.zig:225, 100-188 vs features.zig:208 | [#774](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/774) | Delegate to `features.provideX` via in-memory `Document` | tbd | Triage |
+| 8 | Sev3 | 36 | tests + ci-cd | No `test-lsp` build/Make target | `build.zig`, `Makefile`, `.gitlab-ci.yml` | none of the three define `test-lsp` | [#778](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/778) | Add step + Make target + CI job | tbd | Triage |
+| 9 | Sev3 | 32 | docs | Doc drift: shipped features under "Future" | `docs/LSP_IMPLEMENTATION.md:255-264`; `docs/LSP_TEST_SUITE.md:3` | docs only | LINK: GAP-0829 | Move 4 items to "Implemented"; update test count "79"→"169" | tbd | Cross-linked |
+| 10 | Sev3 | 24 | cleanup | 13 `std.debug.print` sites (test-only) | `src/cli/lsp/semantic.zig` | semantic.zig:1378, 1441, 1446, 1505, 1510, 1543, 1548, 1580, 1585, 1644, 1649, 1710, 1715 | [#775](https://gitlab.com/devnw/codepros/geode/geode/-/work_items/775) | Migrate to `std.log.scoped(.lsp_semantic).debug` | tbd | Triage |
+| 11 | Sev3 | 24 | cleanup | 4 CANARY IMPL-not-TESTED markers | `src/cli/lsp/features.zig` | features.zig:836, 1280, 1412, 1517 | LINK: GAP-0814 hygiene umbrella | Flip to TESTED with cited test name | tbd | Cross-linked |
+
+### LSP roadmap
+
+**Quick wins (< 1 day)**: #771 (collapse dup `findX`), #773 (long handlers), #775 (debug.print), #778 (test-lsp target). Combine #771 + #773 + #775 + #778 + the 2 LINK-only items (Q9 doc fix + Q11 CANARY flips) into a single "LSP hygiene combo" PR (Phase 3 quality-reviewer §9).
+
+**Medium (1-5 days)**: #767 (formatBasic), #768 (semantic-tokens lexer reuse — closes Quality-Sev2 + Perf-P1 #5 + Phase-2 dup-scanner #15 in one diff), #769 (analyzeExpr dispatch table), #774 (MCP bridge delegation — closes Quality-Sev2 + Perf-P1 #11 + LSP-SEC-007 cap).
+
+**Strategic (> 5 days)**: `RequestContext` normalization across all 10 `provideX` signatures (carries cancellation + OTel — depends on GAP-0816 landing first).
+
+### LSP cross-cutting de-duplication notes
+
+- **Q1 (JSON unwrap, ×10 sites)**: NOT a new quality issue. Single root cause already tracked under security GAP-0816-class / LSP-SEC-004. **Closed 2026-05-06** via commits `1cce1e57` (json_helpers foundation) and `6a36651b` (10-site rewire). New module `src/cli/lsp/json_helpers.zig` provides safe accessors.
+- **Q9 (doc drift)**: NOT a new quality issue. Already canonical as GAP-0829 (gap-detector §2).
+- **Q11 (CANARY IMPL flips)**: NOT a new quality issue. Project-wide CANARY hygiene tracked under GAP-0814; flips will land in that sprint.
+
+### LSP residual follow-up (2026-05-06)
+
+- **GAP-0832 (NEW)** — Residual unsafe field access at `src/cli/lsp/server.zig:220-221` after SEC-004 closure. Two `parsed.value.object` / `m.string` direct-access sites on the JSON-RPC root were outside the original 10-site SEC-004 audit scope and remain. Filed as quality follow-up. Severity Low / PriorityScore P3, `Domain::lsp::lifecycle`. Fix summary: route through `json_helpers.expectObjectField` and `json_helpers.expectString`.
+
+### 2026-05-06 closure pass — summary
+
+| Rank | ID | Title | Commit | Status |
+|---|---|---|---|---|
+| 1 | Q1 (LSP-SEC-004 cross-link) | JSON-RPC unwrap panics at ~10 call sites | `1cce1e57` + `6a36651b` | Closed |

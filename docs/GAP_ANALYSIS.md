@@ -2335,3 +2335,58 @@ Each open phase should get its own plan document under `docs/superpowers/plans/`
 - **Follow-up:** Wave-5 item #35 — extract `NodeRegistry` to `src/distributed/node_registry.zig`; both prod and test import it. Tracked in `docs/audit/gap-close-plan.md`.
 - **Current state (unchanged):** `src/distributed/test_query_transport_node_registry.zig:53-112` remains an inline clone of `src/distributed/query_transport.zig:607-664`.
 - **Moved to:** [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md) (Won't-Do section)
+
+## LSP & MCP Bridge — 2026-05-06 audit
+
+Phase-4 sync of the `/codepros:audit` LSP pipeline. Inputs: `/tmp/lsp-audit-phase{1,2,3}/`. Auditor: Claude Opus 4.7 (1M).
+
+- **New gaps opened:** 14 (GAP-0816..GAP-0828, GAP-0831). GAP-0819 tracked under existing #668. GAP-0830 doc-only follow-up under existing #547.
+- **Reopened:** GAP-0056 (#138) — false closure detected; dispatcher stub at `src/cli/lsp/server.zig:398-402` was never wired to `provideDefinition` at `src/cli/lsp/features.zig:451-507`.
+- **Carried (intentional EXEMPT):** GAP-0254 (#547), GAP-0516 (#668 — re-scoped to GAP-0819).
+- **2026-05-06 closure pass:** GAP-0056, GAP-0819 closed (commits `46334814`, `c090763b`); GAP-0818 partial — documentation pre-condition landed (commit `01ca2480`); enforcement remains tracked under #795.
+
+### Open gaps
+
+| Gap-ID | Issue | Severity | Domain sublabel | Title | Status |
+|---|---|---|---|---|---|
+| GAP-0056 | [#138](https://gitlab.com/devnw/codepros/geode/geode/-/issues/138) | High | `Domain::lsp::definition` | LSP Go-to-Definition stub silently returns null despite advertised capability | **Closed 2026-05-06** (`46334814`, `tests/server_definition_test.zig`) — moved to GAP_ANALYSIS_RESOLVED.md |
+| GAP-0816 | [#752](https://gitlab.com/devnw/codepros/geode/geode/-/issues/752) | High | `Domain::lsp::lifecycle` | LSP `$/cancelRequest` not handled — long completions cannot be cancelled | Open |
+| GAP-0817 | [#753](https://gitlab.com/devnw/codepros/geode/geode/-/issues/753) | High | `Domain::lsp::lifecycle` | No `positionEncoding` negotiation — UTF-8 clients silently desync on multi-byte content | Open |
+| GAP-0818 | [#754](https://gitlab.com/devnw/codepros/geode/geode/-/issues/754) | Critical | `Domain::lsp::completion` (+`hover`,`definition`) | LSP feature providers carry no caller identity — multi-tenant schema leak | **Partial 2026-05-06** (docs/MCP_LSP_BRIDGE.md pre-condition landed `01ca2480`); enforcement → #795 |
+| GAP-0819 | [#668](https://gitlab.com/devnw/codepros/geode/geode/-/issues/668) | Critical | `Domain::mcp::lsp-bridge` | MCP raw GQL forwarding — no allowlist, length cap, comment strip | **Closed 2026-05-06** (`c090763b`, `tests/mcp_input_guards_test.zig`) — moved to GAP_ANALYSIS_RESOLVED.md |
+| GAP-0820 | [#755](https://gitlab.com/devnw/codepros/geode/geode/-/issues/755) | Medium | `Domain::lsp::workspace` | LSP `workspace/*` family entirely absent (folders, symbol, configuration, applyEdit) | Open |
+| GAP-0821 | [#756](https://gitlab.com/devnw/codepros/geode/geode/-/issues/756) | Medium | `Domain::lsp::workspace` | `textDocument/rename` + `prepareRename` not implemented | Open |
+| GAP-0822 | [#757](https://gitlab.com/devnw/codepros/geode/geode/-/issues/757) | Medium | `Domain::lsp::diagnostics` | `textDocument/codeAction` (quick fixes) not implemented | Open |
+| GAP-0823 | [#758](https://gitlab.com/devnw/codepros/geode/geode/-/issues/758) | Low | `Domain::lsp::semantic-tokens` | `textDocument/inlayHint` for inferred types not implemented | Open |
+| GAP-0824 | [#759](https://gitlab.com/devnw/codepros/geode/geode/-/issues/759) | Low | `Domain::lsp::lifecycle` | `willSave`, `willSaveWaitUntil`, `didSave` absent — formatters cannot run on save | Open |
+| GAP-0825 | [#760](https://gitlab.com/devnw/codepros/geode/geode/-/issues/760) | Low | `Domain::lsp::lifecycle` | LSP transport layer has no Content-Length / JSON conformance test | Open |
+| GAP-0826 | [#761](https://gitlab.com/devnw/codepros/geode/geode/-/issues/761) | Low | `Domain::lsp::lifecycle` | LSP performance / stress test pack missing | Open |
+| GAP-0827 | [#762](https://gitlab.com/devnw/codepros/geode/geode/-/issues/762) | Low | `Domain::lsp::lifecycle` | LSP 3.17 protocol-conformance test pack missing | Open |
+| GAP-0828 | [#763](https://gitlab.com/devnw/codepros/geode/geode/-/issues/763) | Low | `Domain::lsp::lifecycle` | DocumentStore reopen leak acknowledged but untracked | Open |
+| GAP-0829 | [#764](https://gitlab.com/devnw/codepros/geode/geode/-/issues/764) | Medium | `Domain::lsp::doc-drift` | `LSP_IMPLEMENTATION.md` lists shipped features under "Future" + `GAP_ANALYSIS_RESOLVED.md` falsely closes GAP-0056 | Open |
+| GAP-0830 | [#547](https://gitlab.com/devnw/codepros/geode/geode/-/issues/547) | Low | `Domain::mcp::lsp-bridge` | `src/mcp/lsp.zig` MCP↔LSP bridge has no design doc, no REQ-DOC issue, no CANARY for the bridge contract | Open |
+| GAP-0831 | [#765](https://gitlab.com/devnw/codepros/geode/geode/-/issues/765) | Medium | `Domain::lsp::canary-hygiene` | LSP capability-vs-handler "advertise truthfulness" guard missing | Open |
+| GAP-0832 (NEW) | tbd | Low | `Domain::lsp::lifecycle` | Residual unsafe field access at `src/cli/lsp/server.zig:220-221` after SEC-004 — file follow-up quality issue | Open |
+
+### Top-5 must-close (per Phase-3 ranking)
+
+1. ~~GAP-0056~~ **Closed 2026-05-06** (`46334814`).
+2. ~~GAP-0819~~ **Closed 2026-05-06** (`c090763b`).
+3. GAP-0818 — `LspContext { tenant_id, user_id, session_id }` parameter plumbed through `provideHover`/`provideCompletion`/`provideDefinition`. **Partial:** docs landed `01ca2480`; enforcement #795 still open.
+4. GAP-0816 — `$/cancelRequest` per-request task table; cancelled handler returns -32800.
+5. GAP-0831 — capability-vs-handler truthfulness test (structural fix that prevents another GAP-0056 regression).
+
+### Cross-cutting references for sibling Phase-4 trackers
+
+- Quality tracker: GAP-0829 (doc-drift), GAP-0831 (canary-hygiene), GAP-0832 (residual unsafe field access)
+- Perf tracker: GAP-0826 (LSP perf/stress pack)
+- Security tracker: GAP-0818 (Critical — multi-tenant LSP), GAP-0819 (Critical — MCP injection — **Closed 2026-05-06**)
+
+### 2026-05-06 closure pass — summary
+
+| Gap-ID | Title | Commit | Status |
+|---|---|---|---|
+| GAP-0056 | LSP Go-to-Definition wired to dispatcher | `46334814` | Closed |
+| GAP-0818 | MCP-LSP bridge RLS pre-condition documented | `01ca2480` | Partial (enforcement → #795) |
+| GAP-0819 | MCP input chokepoint (1 MiB cap, UTF-8, nested comments) | `c090763b` | Closed |
+| GAP-0832 | Residual unsafe field access at `server.zig:220-221` (SEC-004 follow-up) | n/a | Open (filed as quality follow-up) |
