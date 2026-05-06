@@ -5,6 +5,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+const framer_mod = @import("framer.zig");
 
 // Import Windows-specific types when needed
 const windows = if (builtin.os.tag == .windows) std.os.windows else struct {};
@@ -88,50 +89,32 @@ pub const Transport = struct {
         };
     }
 
+    /// F-04: ReadFn adapter — bridges the framer's single-buffer
+    /// callback signature to std.Io.File.readStreaming's multi-buffer
+    /// signature. The framer hands us a destination slice; we forward
+    /// it as a single-element [][]u8 vector.
+    fn readStreamingAdapter(ctx: *anyopaque, dest: []u8) framer_mod.FramerError!usize {
+        const self: *Transport = @ptrCast(@alignCast(ctx));
+        const n = self.stdin.readStreaming(self.io, &.{dest}) catch {
+            return framer_mod.FramerError.ReadFailed;
+        };
+        return n;
+    }
+
     pub fn readMessage(self: *Transport) ![]const u8 {
-        var content_length: ?usize = null;
-        var buf: [1024]u8 = undefined;
-        var first_read = true;
-
-        // Read headers
-        while (true) {
-            const maybe_line = try self.readLine(&buf);
-            if (maybe_line == null) {
-                // EOF on first read means client disconnected
-                if (first_read) return TransportError.EndOfStream;
-                break;
-            }
-            first_read = false;
-
-            const line = maybe_line.?;
-            if (line.len == 0) break; // Empty line separates headers from content
-
-            if (std.mem.startsWith(u8, line, "Content-Length: ")) {
-                const length_str = line["Content-Length: ".len..];
-                content_length = try parseContentLength(length_str);
-            }
-            // Ignore Content-Type and other headers
-        }
-
-        if (content_length == null) {
-            return TransportError.MissingContentLength;
-        }
-
-        // Read content
-        const content = try self.allocator.alloc(u8, content_length.?);
-        errdefer self.allocator.free(content);
-
-        var total_read: usize = 0;
-        while (total_read < content_length.?) {
-            const n = try self.stdin.readStreaming(self.io, &.{content[total_read..]});
-            if (n == 0) {
-                self.allocator.free(content);
-                return TransportError.EndOfStream;
-            }
-            total_read += n;
-        }
-
-        return content;
+        // F-04: delegate to the buffered framer. The framer owns a 4 KiB
+        // read-ahead buffer and uses parseContentLength's cap (16 MiB)
+        // implicitly via MAX_LSP_MESSAGE.
+        var f = framer_mod.Framer.init(readStreamingAdapter, self);
+        const body = f.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |err| switch (err) {
+            framer_mod.FramerError.EndOfStream => return TransportError.EndOfStream,
+            framer_mod.FramerError.MissingContentLength => return TransportError.MissingContentLength,
+            framer_mod.FramerError.InvalidContentLength => return TransportError.InvalidContentLength,
+            framer_mod.FramerError.InvalidHeader => return TransportError.InvalidHeader,
+            framer_mod.FramerError.ReadFailed => return TransportError.ReadFailed,
+            framer_mod.FramerError.OutOfMemory => return error.OutOfMemory,
+        };
+        return body;
     }
 
     pub fn writeMessage(self: *Transport, message: []const u8) !void {
@@ -151,23 +134,5 @@ pub const Transport = struct {
         const msg = std.fmt.allocPrint(self.allocator, "[{s}] {s}\n", .{ level, message }) catch return;
         defer self.allocator.free(msg);
         self.stderr.writeStreamingAll(self.io, msg) catch {};
-    }
-
-    fn readLine(self: *Transport, buf: []u8) !?[]const u8 {
-        var i: usize = 0;
-        while (i < buf.len) : (i += 1) {
-            const n = try self.stdin.readStreaming(self.io, &.{buf[i .. i + 1]});
-            if (n == 0) {
-                // EOF - return null if no data read, otherwise return what we have
-                if (i == 0) return null;
-                return buf[0..i];
-            }
-            if (buf[i] == '\n') {
-                // Remove \r\n or \n
-                const end = if (i > 0 and buf[i - 1] == '\r') i - 1 else i;
-                return buf[0..end];
-            }
-        }
-        return buf[0..i];
     }
 };
