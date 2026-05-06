@@ -11,4 +11,5 @@ test {
     _ = @import("server_test.zig");
     _ = @import("e2e_test.zig");
     _ = @import("transport_test.zig");
+    _ = @import("json_helpers_test.zig");
 }

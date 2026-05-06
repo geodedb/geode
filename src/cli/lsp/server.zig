@@ -8,6 +8,7 @@ const protocol = @import("protocol.zig");
 const transport = @import("transport.zig");
 const document = @import("document.zig");
 const features = @import("features.zig");
+const json_helpers = @import("json_helpers.zig");
 
 const Transport = transport.Transport;
 const DocumentStore = document.DocumentStore;
@@ -86,6 +87,14 @@ pub const Server = struct {
     }
 
     fn handleMessage(self: *Server, message_text: []const u8) !void {
+        // LSP-SEC-003: reject deeply nested or oversized payloads BEFORE
+        // entering the recursive parser. checkJsonDepth is O(n), allocation-free,
+        // and aware of in-string brace characters.
+        json_helpers.checkJsonDepth(message_text) catch |err| {
+            self.transport.logMessage("WARN", "Rejected JSON payload (depth/size cap)");
+            return err;
+        };
+
         var parsed = try std.json.parseFromSlice(std.json.Value, self.allocator, message_text, .{});
         defer parsed.deinit();
 
