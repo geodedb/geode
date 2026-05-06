@@ -14,4 +14,5 @@ test {
     _ = @import("json_helpers_test.zig");
     _ = @import("server_invalid_params_test.zig");
     _ = @import("server_definition_test.zig");
+    _ = @import("mcp_input_guards_test.zig");
 }

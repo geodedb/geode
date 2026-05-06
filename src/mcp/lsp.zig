@@ -7,6 +7,15 @@ const std = @import("std");
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-048; FEATURE="JSON Library Migration"; ASPECT=MCPLSP; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const json_lib = @import("json");
 
+// LSP-SEC-007 / GAP-0819: MCP input chokepoint — length cap, UTF-8
+// validation, embedded-NUL screen, nested-comment depth check.
+// CANARY: REQ=REQ-MCP-SEC-007; FEATURE="QueryLengthCap"; ASPECT=DoSGuard; STATUS=TESTED; OWNER=mcp; UPDATED=2026-05-06
+// CANARY: REQ=REQ-MCP-GAP-0819; FEATURE="GqlInputChokepoint"; ASPECT=Sanitization; STATUS=TESTED; OWNER=mcp; UPDATED=2026-05-06
+const input_guards = @import("input_guards.zig");
+pub const InputError = input_guards.InputError;
+pub const MAX_GQL_TEXT = input_guards.MAX_GQL_TEXT;
+pub const validateAndSanitizeGqlInput = input_guards.validateAndSanitizeGqlInput;
+
 const mod = @import("mod.zig");
 const gql_parser = mod.gql_parser;
 const gql_lexer = mod.gql_lexer;
@@ -98,6 +107,11 @@ pub const HoverInfo = struct {
 
 /// Validate a GQL query and return diagnostics
 pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u8 {
+    // LSP-SEC-007 / GAP-0819: chokepoint check before any parser work.
+    _ = validateAndSanitizeGqlInput(query) catch |err| {
+        return formatRejectionResponse(allocator, err);
+    };
+
     var diagnostics = try std.ArrayList(Diagnostic).initCapacity(allocator, 4);
     defer diagnostics.deinit(allocator);
 
@@ -189,6 +203,11 @@ pub fn validateQuery(allocator: std.mem.Allocator, query: []const u8) ![]const u
 
 /// Get completions at a cursor position
 pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
+    // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
+    _ = validateAndSanitizeGqlInput(query) catch |err| {
+        return formatRejectionResponse(allocator, err);
+    };
+
     var completions = try std.ArrayList(CompletionItem).initCapacity(allocator, 32);
     defer completions.deinit(allocator);
 
@@ -223,6 +242,11 @@ pub fn getCompletions(allocator: std.mem.Allocator, query: []const u8, line: u32
 
 /// Get hover information for a position
 pub fn getHover(allocator: std.mem.Allocator, query: []const u8, line: u32, column: u32) ![]const u8 {
+    // LSP-SEC-007 / GAP-0819: chokepoint check before any lexer work.
+    _ = validateAndSanitizeGqlInput(query) catch |err| {
+        return formatRejectionResponse(allocator, err);
+    };
+
     // Find the word at the cursor position
     const word = getWordAtPosition(query, line, column);
     if (word == null) {
@@ -475,6 +499,31 @@ fn addTypes(allocator: std.mem.Allocator, completions: *std.ArrayList(Completion
 // =============================================================================
 // JSON Formatting - Using JSON Library
 // =============================================================================
+
+/// LSP-SEC-007 / GAP-0819: format a rejection response when the input
+/// chokepoint validator (`validateAndSanitizeGqlInput`) refuses a
+/// payload. Returns a ValidationResponse-shaped JSON document with a
+/// single error-severity diagnostic naming the rejection reason.
+/// CANARY: REQ=REQ-MCP-GAP-0819; FEATURE="GqlInputChokepointResponse"; ASPECT=Sanitization; STATUS=TESTED; OWNER=mcp; UPDATED=2026-05-06
+fn formatRejectionResponse(allocator: std.mem.Allocator, err: InputError) ![]const u8 {
+    const reason: []const u8 = switch (err) {
+        InputError.QueryTooLarge => "Query exceeds 1 MiB limit",
+        InputError.QueryEmpty => "Query is empty",
+        InputError.InvalidUtf8 => "Query is not valid UTF-8",
+        InputError.EmbeddedNul => "Query contains an embedded NUL byte",
+        InputError.NestedCommentTooDeep => "Query has nested comments deeper than the supported limit",
+    };
+
+    const diags = [_]Diagnostic{.{
+        .line = 0,
+        .column = 0,
+        .end_line = 0,
+        .end_column = 0,
+        .severity = .@"error",
+        .message = reason,
+    }};
+    return formatValidationResponse(allocator, false, &diags);
+}
 
 /// CANARY: REQ=REQ-LIB-MIGRATION-JSON-049; FEATURE="JSON Library Migration"; ASPECT=LSPValidation; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 fn formatValidationResponse(allocator: std.mem.Allocator, is_valid: bool, diagnostics: []const Diagnostic) ![]const u8 {

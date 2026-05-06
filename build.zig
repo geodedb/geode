@@ -2146,6 +2146,12 @@ pub fn build(b: *std.Build) void {
     // LSP implementation tests
     const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/test_runner.zig"), .target = target, .optimize = optimize }) });
     lsp_tests.root_module.addImport("geode", root_mod);
+    // LSP-SEC-007 / GAP-0819: expose the MCP input_guards module so the
+    // LSP test runner can exercise the cap + chokepoint helpers without
+    // pulling in the rest of the MCP tree (which is intentionally not
+    // wired into `zig build test` — see comment near line 3931).
+    const mcp_input_guards_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/input_guards.zig"), .target = target, .optimize = optimize });
+    lsp_tests.root_module.addImport("mcp_input_guards", mcp_input_guards_mod);
     const run_lsp_tests = b.addRunArtifact(lsp_tests);
     test_step.dependOn(&run_lsp_tests.step);
 
