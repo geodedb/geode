@@ -12,7 +12,7 @@
   "plugins": [
     {
       "name": "geode",
-      "source": "./geode-claude-plugin",
+      "source": "../geode-claude-plugin",
       "description": "GQL Language Server, MCP tools, agents, and skills for Geode",
       "version": "2.1.0",
       "author": "Developer Network",
