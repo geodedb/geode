@@ -512,6 +512,17 @@ REQ-CLI-GRAPH-FLAG-003,GraphFlag,ExecuteWithGraph,IMPL,,,cli,2026-01-28,src/cli/
 REQ-CLI-GRAPH-FLAG-004,GraphFlag,ExecuteQuicQuery,IMPL,,,cli,2026-01-28,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-005,GraphFlag,ExecuteOnConnection,IMPL,,,cli,2026-02-02,src/cli/main.zig
 REQ-CLI-GRAPH-FLAG-006,GraphFlag,PrependUseGraph,IMPL,,,cli,2026-01-28,src/cli/main.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,AmpersandEscapePreservesBrTag,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,DuplicateNodeDedup,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EdgeLabelAngleBracketEscape,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EdgeStartNodeEndNodeAlternates,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EdgeWithLabel,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EdgeWithTypeField,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,EmptyRowsGolden,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,MultiLabelJoin,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,NodeFallbackToId,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,NodeWithLabelsAndName,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
+REQ-CLI-MERMAID-FORMAT-001,MermaidQueryFormat,QuoteEscape,TESTED,,,cli,2026-05-06,tests/test_query_result_mermaid.zig
 REQ-CLI-MIGRATE-CREATE-001,CLIMigrateCreate,FileCreation,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-RUN-001,CLIMigrateRun,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
 REQ-CLI-MIGRATE-STATUS-001,CLIMigrateStatus,MigrationModule,TESTED,,,cli,2026-01-11,src/cli/backup_cli.zig
@@ -724,6 +735,8 @@ REQ-DISTRIBUTED-QUERY-009,Distributed Transaction Coordination,TransactionCoordi
 REQ-DISTRIBUTED-QUERY-PLANNER-001,Distributed Query Planning,BasicPlanGeneration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
 REQ-DISTRIBUTED-QUERY-PLANNER-002,Distributed Query Planning,FederationIntegration,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
 REQ-DISTRIBUTED-QUERY-PLANNER-003,Distributed Query Planning,CostOptimization,TESTED,,,distributed,2026-04-05,tests/test_distributed_query_planner.zig
+REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/MCP_LSP_BRIDGE.md
+REQ-DOC-MCP-LSP-BRIDGE,MCPLSPBridgeDoc,Documentation,EXEMPT,,,mcp,2026-05-06,docs/USER_AUTH.md
 REQ-DOCS-001,Docs,Documentation,TESTED,,,docs,2026-01-15,tests/test_gap_0193_final_batch.zig
 REQ-DOCS-API-001,Docs,APIDocumentation,TESTED,,,docs,2026-01-16,tests/test_gap_0193_batch4_comprehensive.zig
 REQ-DOCUMENTATION-STRUCTURE-001,DocStructure,StructureTests,TESTED,,,claude,2026-01-16,tests/test_gap_0193_batch2_testing.zig
@@ -2634,12 +2647,21 @@ REQ-LOADTEST-TESTS-005,QuerySuiteTests,UnitTests,EXEMPT,,,loadtest,2026-01-03,lo
 REQ-LOADTEST-WORKLOADS-001,WorkloadPatterns,Definition,EXEMPT,,,loadtest,2026-01-03,loadtest/benchmarks/workloads.py
 REQ-LSP-001,Language Server Protocol,LSPServer,EXEMPT,,,cli,2025-10-28,src/cli/main.zig
 REQ-LSP-001,LanguageServerProtocol,LSPServer,TESTED,,,cli,2026-01-15,tests/test_gap_analysis_january_2026.zig
-REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,EXEMPT,,,lsp,2026-01-10,src/cli/lsp/features.zig
+REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig
+REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server.zig
+REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_definition_test.zig
 REQ-LSP-METADATA-001,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-002,MetadataIntegration,ComptimeLists,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-003,MetadataIntegration,Hover,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-004,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-REFS-001,References,FindAllRefs,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport.zig
+REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport_test.zig
+REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig
+REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers_test.zig
+REQ-LSP-SEC-004,JsonHelpers,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig
+REQ-LSP-SEC-004,JsonHelpers,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers_test.zig
+REQ-LSP-SEC-004,JsonHelpersWired,SafeUnwrap,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_invalid_params_test.zig
 REQ-LSP-SEMTOK-001,SemanticTokens,SyntaxHighlight,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-LSP-SIGHEP-001,SignatureHelp,FunctionParams,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
 REQ-LSP-SYMBOLS-001,DocumentSymbols,OutlineView,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
@@ -2831,8 +2853,15 @@ REQ-MATVIEW-SYSTEM-007,MaterializedViews,TestCoverage,TESTED,,,storage,2026-01-1
 REQ-MATVIEW-SYSTEM-008,MaterializedViews,Documentation,TESTED,,,storage,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-MATVIEW-TEST-001,Materialized View Tests,UnitTests,EXEMPT,,,query,2025-10-05,tests/test_materialized_views_enhanced.zig
 REQ-MCP-COMPLETE-001,MCPCompletion,EmptyProvider,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig
+REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig
+REQ-MCP-GAP-0819,GqlInputChokepoint,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
+REQ-MCP-GAP-0819,GqlInputChokepointResponse,Sanitization,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-001,MCPResourceSubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
 REQ-MCP-RESOURCE-SUBSCRIBE-002,MCPResourceUnsubscribe,UnsupportedSignal,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
+REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/cli/lsp/mcp_input_guards_test.zig
+REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/input_guards.zig
+REQ-MCP-SEC-007,QueryLengthCap,DoSGuard,TESTED,,,mcp,2026-05-06,src/mcp/lsp.zig
 REQ-MCP-SETLOGLEVEL-001,MCPSetLogLevel,SilentSuccess,EXEMPT,,,mcp,2026-04-11,src/mcp/server.zig
 REQ-MEM-001,MemorySafety,AllocatorUsage,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-MEM-002,MemorySafety,DeferCleanup,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
@@ -2851,6 +2880,11 @@ REQ-MEM-SAFETY-005,MemorySafety,ErrorHandling,TESTED,,,core,2026-01-15,tests/tes
 REQ-MEM-SAFETY-006,MemorySafety,SliceValidation,TESTED,,,core,2026-01-15,tests/test_gap_0193_impl_batch_promotion.zig
 REQ-MEM-SENTINEL-001,RealSentinelAllocator,MemorySafety,TESTED,,,memory,2026-01-16,src/sentinel.zig
 REQ-MEMORY-SAFETY-001,MemorySafetyDocumentation,Core,TESTED,,,core,2026-01-12,src/lib.zig
+REQ-MERGE-RELPROPS-001,MergeRelationship,BareSetOnRelationship,TESTED,,,execution,2026-05-06,tests/test_merge_relationship_bugs.zig
+REQ-MERGE-RELPROPS-001,MergeRelationship,InlineRelProps,TESTED,,,execution,2026-05-06,tests/test_merge_relationship_bugs.zig
+REQ-MERGE-RELPROPS-001,MergeRelationship,MatchBoundEndpoints,TESTED,,,execution,2026-05-06,tests/test_merge_relationship_bugs.zig
+REQ-MERGE-RELPROPS-001,MergeRelationship,MatchBoundEndpointsWithInlineRelProps,TESTED,,,execution,2026-05-06,tests/test_merge_relationship_bugs.zig
+REQ-MERGE-RELPROPS-001,MergeRelationship,OnCreateSetRelationship,TESTED,,,execution,2026-05-06,tests/test_merge_relationship_bugs.zig
 REQ-META-001,MetadataIntegration,DbLabels,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-META-002,MetadataIntegration,DbRelTypes,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
 REQ-META-003,MetadataIntegration,DbPropertyKeys,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
@@ -3178,6 +3212,9 @@ REQ-PERF-EDGE-TYPE-INDEX-001,EdgeTypeIndex,EdgeTypeLookup,TESTED,,,perf,2026-04-
 REQ-PERF-EDGE-TYPE-INDEX-002,EdgeTypeIndex,IndexMaintenance,TESTED,,,perf,2026-04-10,src/graph_store.zig
 REQ-PERF-EDGE-TYPE-INDEX-003,EdgeTypeIndex,EdgeTypeLookup,TESTED,,,perf,2026-04-10,src/graph_store.zig
 REQ-PERF-EDGE-TYPE-INDEX-004,EdgeTypeIndex,UnitTest,TESTED,,,perf,2026-04-10,src/graph_store.zig
+REQ-PERF-F-01,DidChangeDebounce,Throughput,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_debounce_test.zig
+REQ-PERF-F-04,BufferedTransport,Throughput,TESTED,,,lsp,2026-05-06,src/cli/lsp/framer.zig
+REQ-PERF-F-04,BufferedTransport,Throughput,TESTED,,,lsp,2026-05-06,src/cli/lsp/framer_test.zig
 REQ-PERF-FLE-SKIP-001,FLESkipOptimization,GlobalDisable,IMPL,,,perf,2026-01-27,src/fle_integration.zig
 REQ-PERF-FLE-SKIP-002,FLESkipOptimization,DecryptFastPath,IMPL,,,perf,2026-01-27,src/fle_integration.zig
 REQ-PERF-FLE-SKIP-003,FLESkipOptimization,NodePropertyWrite,IMPL,,,perf,2026-01-27,src/execution/value_utilities.zig
