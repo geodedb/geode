@@ -3490,6 +3490,36 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     test_step.dependOn(&run_gap0509_tests.step);
 
+    // Reproduction tests for v0.5.11 admin-bootstrap bugs:
+    //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
+    //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
+    //   2) Offline `geode user reset-password` does not reach the next `serve` reload.
+    // Tests must FAIL on HEAD; PASS once the env-var widening + storage-layout
+    // unification land. See tests/test_admin_bootstrap_env_and_reset.zig.
+    //
+    // cli_auth_helpers.zig is normally pulled in via a relative `@import`
+    // from sibling files in src/cli/.  To exercise it from a tests/ entry
+    // we wrap it as a named module with the same upstream module graph
+    // it expects (geode + auth_graph_manager).
+    const cli_auth_helpers_mod = b.createModule(.{ .root_source_file = b.path("src/cli/cli_auth_helpers.zig"), .target = target, .optimize = optimize });
+    cli_auth_helpers_mod.addImport("geode", root_mod);
+    cli_auth_helpers_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+
+    const admin_bootstrap_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_admin_bootstrap_env_and_reset.zig"), .target = target, .optimize = optimize });
+    admin_bootstrap_test_mod.addImport("geode", root_mod);
+    admin_bootstrap_test_mod.addImport("auth_lib", auth_ext_mod);
+    admin_bootstrap_test_mod.addImport("geode_auth", auth_mod);
+    admin_bootstrap_test_mod.addImport("user_storage", user_storage_mod);
+    admin_bootstrap_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    admin_bootstrap_test_mod.addImport("cli_auth_helpers", cli_auth_helpers_mod);
+    admin_bootstrap_test_mod.addImport("logging", logging_mod);
+    admin_bootstrap_test_mod.addImport("transport/thread_pool", thread_pool_mod);
+    const admin_bootstrap_tests = b.addTest(.{ .root_module = admin_bootstrap_test_mod });
+    const run_admin_bootstrap_tests = b.addRunArtifact(admin_bootstrap_tests);
+    test_step.dependOn(&run_admin_bootstrap_tests.step);
+    const admin_bootstrap_step = b.step("test-admin-bootstrap", "Reproduction tests for admin-bootstrap env-var + offline-reset bugs (must fail pre-fix)");
+    admin_bootstrap_step.dependOn(&run_admin_bootstrap_tests.step);
+
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
     // shutdown warning under a 16-worker Go-client ingest workload.
