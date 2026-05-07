@@ -12,6 +12,7 @@ fn renderMermaidToSlice(
     return try allocator.dupe(u8, writer.buffered());
 }
 
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=EmptyRowsGolden; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
 test "mermaid format: empty rows emit only flowchart header" {
     const allocator = std.testing.allocator;
 
