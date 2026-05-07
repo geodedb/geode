@@ -651,9 +651,110 @@ pub fn outputMermaidFormatFromRows(
     rows: []const std.ArrayList([]const u8),
     stdout: anytype,
 ) !void {
-    _ = allocator;
-    _ = rows;
     const io = std.Io.Threaded.global_single_threaded.io();
     var out = if (@TypeOf(stdout) == std.Io.File) transport_response.Stream.init(stdout, io) else stdout;
+
     try out.writeAll("flowchart LR\n");
+
+    var seen_nodes = std.StringHashMap(void).init(allocator);
+    defer {
+        var iter = seen_nodes.keyIterator();
+        while (iter.next()) |key| allocator.free(key.*);
+        seen_nodes.deinit();
+    }
+
+    for (rows) |row| {
+        for (row.items) |cell| {
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
+            defer parsed.deinit();
+
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+
+            if (obj.get("labels")) |labels_val| {
+                const node_id = getDotNodeId(allocator, obj) orelse continue;
+                defer allocator.free(node_id);
+
+                if (!seen_nodes.contains(node_id)) {
+                    try seen_nodes.put(try allocator.dupe(u8, node_id), {});
+
+                    const label = getMermaidNodeLabel(allocator, obj, labels_val) catch try allocator.dupe(u8, node_id);
+                    defer allocator.free(label);
+
+                    try out.writeAll("  n");
+                    try out.writeAll(node_id);
+                    try out.writeAll("[\"");
+                    try out.writeAll(label);
+                    try out.writeAll("\"]\n");
+                }
+            }
+        }
+    }
+}
+
+fn getMermaidNodeLabel(
+    allocator: std.mem.Allocator,
+    obj: std.json.ObjectMap,
+    labels_val: std.json.Value,
+) ![]const u8 {
+    var raw = try std.ArrayList(u8).initCapacity(allocator, 64);
+    defer raw.deinit(allocator);
+
+    if (labels_val == .array) {
+        for (labels_val.array.items, 0..) |label, idx| {
+            if (idx > 0) try raw.append(allocator, ':');
+            if (label == .string) try raw.appendSlice(allocator, label.string);
+        }
+    }
+
+    const display_props = [_][]const u8{ "name", "title", "label", "username", "email" };
+    if (obj.get("properties")) |props_val| {
+        if (props_val == .object) {
+            for (display_props) |prop| {
+                if (props_val.object.get(prop)) |val| {
+                    if (val == .string and val.string.len > 0) {
+                        try raw.appendSlice(allocator, "<br/>");
+                        try raw.appendSlice(allocator, val.string);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (raw.items.len == 0) {
+        if (getDotNodeId(allocator, obj)) |id| {
+            defer allocator.free(id);
+            return try escapeMermaidLabel(allocator, id);
+        }
+        return try allocator.dupe(u8, "node");
+    }
+
+    return try escapeMermaidLabel(allocator, raw.items);
+}
+
+fn escapeMermaidLabel(allocator: std.mem.Allocator, raw: []const u8) ![]const u8 {
+    var out = try std.ArrayList(u8).initCapacity(allocator, raw.len);
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < raw.len) : (i += 1) {
+        const c = raw[i];
+        switch (c) {
+            '<' => {
+                if (i + 4 < raw.len and std.mem.eql(u8, raw[i .. i + 5], "<br/>")) {
+                    try out.appendSlice(allocator, "<br/>");
+                    i += 4;
+                } else {
+                    try out.appendSlice(allocator, "&lt;");
+                }
+            },
+            '&' => try out.appendSlice(allocator, "&amp;"),
+            '>' => try out.appendSlice(allocator, "&gt;"),
+            '"' => try out.appendSlice(allocator, "&quot;"),
+            else => try out.append(allocator, c),
+        }
+    }
+
+    return try out.toOwnedSlice(allocator);
 }
