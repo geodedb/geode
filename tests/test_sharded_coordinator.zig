@@ -31,8 +31,15 @@ fn napNs(ns: u64) void {
 }
 
 fn monoNanosNow() u64 {
+    // Zig 0.16 cross-platform compat: std.posix.timespec maps to c.timespec on
+    // macOS which is a distinct type from os.linux.timespec expected by
+    // clock_gettime. Use comptime branch (mirrors test_thread_pool_lane_parallelism.zig).
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
-    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    } else {
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+    }
     return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
 }
 
