@@ -59,6 +59,71 @@ fn tenantFilterFromContext(context: ExecutionContext) ?[]const u8 {
         null;
 }
 
+/// REQ=REQ-MERGE-RELPROPS-001 ASPECT=MatchBoundEndpoints
+/// Look up a MATCH-bound variable name in `context.query_param_*` and return
+/// its node id when the parameter slot holds a `Value.Node`. Used by the
+/// MERGE edge branch to recover endpoints supplied by the upstream dispatcher
+/// (query_execution.zig) which threads MATCH bindings through `query_param_*`
+/// rather than `context.bindings`.
+fn lookupNodeIdInQueryParams(context: ExecutionContext, name: []const u8) ?u64 {
+    const names = context.query_param_names;
+    const values = context.query_param_values;
+    const n = @min(names.len, values.len);
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        if (std.mem.eql(u8, names[i], name)) {
+            switch (values[i]) {
+                .Node => |node_ptr| return node_ptr.id,
+                else => {},
+            }
+        }
+    }
+    return null;
+}
+
+/// REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
+/// Apply MERGE SET clauses (`m.on_create` for newly created edges or
+/// `m.on_match` for matched edges; bare-SET duplicates both lists by
+/// construction in the parser) whose target binding name matches the
+/// relationship variable on the freshly merged edge.
+///
+/// SET clauses targeting a node variable are intentionally ignored here
+/// (the node MERGE branch above handles those). Only items whose target
+/// equals `rel_var_name` reach the edge property writer.
+fn applySetClausesToEdge(
+    allocator: std.mem.Allocator,
+    store: *graph_store.GraphStore,
+    rel_var_name: ?[]const u8,
+    edge_type: []const u8,
+    edge_id: u64,
+    set_items: []ast.SetClause,
+    context: ExecutionContext,
+) !void {
+    const var_name = rel_var_name orelse return;
+    if (set_items.len == 0) return;
+
+    for (set_items) |set_clause| {
+        switch (set_clause) {
+            .Property => |prop| {
+                if (!std.mem.eql(u8, prop.target.object, var_name)) continue;
+                const value = try eval.evalExpr(allocator, prop.value, envFromContext(allocator, context));
+                try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.target.property, value);
+            },
+            .AllProperties => |all_props| {
+                if (!std.mem.eql(u8, all_props.node, var_name)) continue;
+                const props_value = try eval.evalExpr(allocator, all_props.properties, envFromContext(allocator, context));
+                if (store.edges.getPtr(edge_id)) |edge_ptr| {
+                    try property_mutation.replaceEdgeProperties(allocator, store, edge_ptr, props_value);
+                }
+            },
+            .Labels => {
+                // Edges do not carry labels in the same shape as nodes; this
+                // form is parsed against node variables. Nothing to do here.
+            },
+        }
+    }
+}
+
 fn evaluatePatternProps(allocator: std.mem.Allocator, props: ?[]ast.Property, context: ExecutionContext) !?[]EvaluatedPatternProp {
     const pattern_props = props orelse return null;
 
@@ -2332,6 +2397,9 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
     }
 
     // GAP #58: Handle edge MERGE patterns (e.g., MATCH (a), (b) MERGE (a)-[:REL]->(b))
+    // REQ=REQ-MERGE-RELPROPS-001 — endpoint resolution for MATCH-bound vars,
+    // and persistence of inline rel props / on_create / on_match / bare SET on
+    // the merged relationship variable.
     if (m.pattern.chains.len > 0 and m.pattern.chains[0].hops.len > 0) {
         const chain = m.pattern.chains[0];
         const hop = chain.hops[0];
@@ -2357,6 +2425,23 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
                         .edge_id => {},
                     }
                 }
+            }
+        }
+
+        // REQ=REQ-MERGE-RELPROPS-001 ASPECT=MatchBoundEndpoints (Bug A):
+        // When the dispatcher (query_execution.zig:1700-1703) executes
+        // `MATCH ... MERGE ...` it propagates the MATCH row into
+        // `query_param_names`/`query_param_values` rather than
+        // `context.bindings`. Consult those parallel arrays so bound
+        // endpoints from MATCH resolve correctly here.
+        if (source_id == null) {
+            if (hop.left.name) |name| {
+                source_id = lookupNodeIdInQueryParams(context, name);
+            }
+        }
+        if (target_id == null) {
+            if (hop.right.name) |name| {
+                target_id = lookupNodeIdInQueryParams(context, name);
             }
         }
 
@@ -2396,20 +2481,51 @@ pub fn executeMerge(allocator: std.mem.Allocator, m: ast.MergeStatement, current
         }
 
         if (source_id != null and target_id != null) {
-            const found_edge = findExistingEdgeId(
+            const edge_type = if (rel_types.len > 0) rel_types[0] else "";
+            const existing_edge = findExistingEdgeId(
                 read_store,
                 target_graph,
                 filter_tenant,
                 source_id.?,
                 target_id.?,
                 rel_types,
-            ) != null;
+            );
 
-            // If no matching edge found, create one
-            if (!found_edge) {
-                const edge_type = if (rel_types.len > 0) rel_types[0] else "";
-                _ = try store.createEdgeWithGraph(source_id.?, target_id.?, edge_type, target_graph);
+            // Pick the edge_id we will operate on: existing one (ON MATCH path)
+            // or a freshly created one (ON CREATE path). Either way we then
+            // apply inline rel props (create-only) plus the appropriate
+            // on_create/on_match SET clauses targeting the relationship
+            // variable.
+            const created_new = existing_edge == null;
+            const edge_id: u64 = if (existing_edge) |eid|
+                eid
+            else
+                try store.createEdgeWithGraph(source_id.?, target_id.?, edge_type, target_graph);
+
+            // REQ=REQ-MERGE-RELPROPS-001 ASPECT=InlineRelProps (Bug B1):
+            // Inline `[:REL {key: val}]` literals are applied only on the
+            // create path. This mirrors how the executeCreate / executeInsert
+            // paths set rel props after `createEdgeWithGraph` (lines 697-708,
+            // 861-873, 1249-1257, 1830-1838, 2058-2070).
+            if (created_new) {
+                if (hop.rel.props) |props| {
+                    const env = envFromContext(allocator, context);
+                    for (props) |prop| {
+                        const value = try eval.evalExpr(allocator, prop.value.*, env);
+                        try property_mutation.setEdgePropertyFromValue(allocator, store, edge_type, edge_id, prop.key, value);
+                    }
+                }
             }
+
+            // REQ=REQ-MERGE-RELPROPS-001 ASPECT=OnCreateSet/BareSetOnRelationship
+            // (Bugs B2, B3): apply SET items targeting the relationship
+            // variable. Bare SET (parser flag `set_is_bare`) duplicates the
+            // clauses into both on_create and on_match by construction
+            // (parser.zig:4575-4586), so picking the right list per branch
+            // and routing only items whose target binding name matches the
+            // rel variable name is correct for all three SET forms.
+            const rel_set_items: []ast.SetClause = if (created_new) m.on_create else m.on_match;
+            try applySetClausesToEdge(allocator, store, hop.rel.name, edge_type, edge_id, rel_set_items, context);
         }
     }
 
