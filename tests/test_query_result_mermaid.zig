@@ -154,3 +154,109 @@ test "mermaid format: multi-label node joins labels with colon" {
         rendered,
     );
 }
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=DuplicateNodeDedup; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: duplicate nodes across rows render once" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 2);
+    defer deinitRows(allocator, &rows);
+
+    const node_json =
+        \\{"id":7,"labels":["Person"],"properties":{"name":"Carol"}}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{node_json}));
+    try rows.append(allocator, try rowFromCells(allocator, &.{node_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n7[\"Person<br/>Carol\"]\n",
+        rendered,
+    );
+}
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=QuoteEscape; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: label with quotes is HTML-escaped" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const node_json =
+        \\{"id":11,"labels":["Person"],"properties":{"name":"He said \"hi\""}}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{node_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n11[\"Person<br/>He said &quot;hi&quot;\"]\n",
+        rendered,
+    );
+}
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=AmpersandEscapePreservesBrTag; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: label with ampersand is HTML-escaped without breaking br tags" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const node_json =
+        \\{"id":12,"labels":["Co"],"properties":{"name":"R&D"}}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{node_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n12[\"Co<br/>R&amp;D\"]\n",
+        rendered,
+    );
+}
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=EdgeLabelAngleBracketEscape; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: edge label with angle bracket is escaped" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const r_json =
+        \\{"id":50,"from":1,"to":2,"label":"A<B"}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{r_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n1 -->|\"A&lt;B\"| n2\n",
+        rendered,
+    );
+}
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=EdgeStartNodeEndNodeAlternates; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: edge with start_node and end_node alternate endpoint fields" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const r_json =
+        \\{"id":77,"start_node":10,"end_node":20,"type":"LIKES"}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{r_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n10 -->|\"LIKES\"| n20\n",
+        rendered,
+    );
+}
