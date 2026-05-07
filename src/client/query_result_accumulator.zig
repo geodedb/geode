@@ -8,7 +8,7 @@ pub const ColumnInfo = transport_response.ColumnInfo;
 pub const QueryResultKind = transport_response.QueryResultKind;
 pub const TransportResponseView = transport_response.TransportResponseView;
 
-const TextMode = enum { display, dot };
+const TextMode = enum { display, dot, mermaid };
 
 pub const CaptureSummary = struct {
     schema_received: bool = false,
@@ -21,6 +21,7 @@ pub const ResultAccumulator = struct {
     format: []const u8,
     wants_json: bool,
     wants_dot: bool,
+    wants_mermaid: bool,
     columns: std.ArrayList(ColumnInfo),
     result_kind: QueryResultKind = .rows,
     result_payload: ?[]u8 = null,
@@ -43,11 +44,13 @@ pub const ResultAccumulator = struct {
     pub fn init(allocator: std.mem.Allocator, format: []const u8) !ResultAccumulator {
         const wants_json = std.mem.eql(u8, format, "json");
         const wants_dot = std.mem.eql(u8, format, "dot");
+        const wants_mermaid = std.mem.eql(u8, format, "mermaid");
         var result = ResultAccumulator{
             .allocator = allocator,
             .format = try allocator.dupe(u8, format),
             .wants_json = wants_json,
             .wants_dot = wants_dot,
+            .wants_mermaid = wants_mermaid,
             .columns = try std.ArrayList(ColumnInfo).initCapacity(allocator, 16),
             .order_keys = std.ArrayList([]const u8).empty,
             .status_class = try allocator.dupe(u8, "00000"),
@@ -142,6 +145,13 @@ pub const ResultAccumulator = struct {
             return self.indicatesFailure();
         }
 
+        if (self.wants_mermaid) {
+            if (self.rows_text) |rows| {
+                try outputMermaidFormatFromRows(self.allocator, rows.items, stdout);
+            }
+            return self.indicatesFailure();
+        }
+
         return transport_response.renderTransportResponseWithStreams(
             self.allocator,
             stdout,
@@ -232,7 +242,13 @@ pub const ResultAccumulator = struct {
                 if (self.wants_json) {
                     if (self.rows_json) |*rows| try appendPageJson(self.allocator, page, rows);
                 } else if (self.rows_text) |*rows| {
-                    try appendPageText(self.allocator, page, rows, if (self.wants_dot) .dot else .display);
+                    const mode: TextMode = if (self.wants_dot)
+                        .dot
+                    else if (self.wants_mermaid)
+                        .mermaid
+                    else
+                        .display;
+                    try appendPageText(self.allocator, page, rows, mode);
                 }
                 break :blk .{ .saw_page = true, .page_final = page.final };
             },
@@ -333,7 +349,7 @@ fn valueToText(allocator: std.mem.Allocator, value: schema.Value, mode: TextMode
                 break :blk out;
             },
             else => blk: {
-                if (mode == .dot) {
+                if (mode == .dot or mode == .mermaid) {
                     break :blk try valueToJsonString(allocator, value);
                 }
                 const json_val = try protoValueToJson(allocator, value);
@@ -628,4 +644,16 @@ fn outputDotFormatFromRows(
     }
 
     try out.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), "}\n");
+}
+
+pub fn outputMermaidFormatFromRows(
+    allocator: std.mem.Allocator,
+    rows: []const std.ArrayList([]const u8),
+    stdout: anytype,
+) !void {
+    _ = allocator;
+    _ = rows;
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var out = if (@TypeOf(stdout) == std.Io.File) transport_response.Stream.init(stdout, io) else stdout;
+    try out.writeAll("flowchart LR\n");
 }

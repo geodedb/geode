@@ -1376,6 +1376,19 @@ pub fn build(b: *std.Build) void {
     const cli_transport_parity_step = b.step("test-cli-transport-parity", "Run CLI transport response parity goldens");
     cli_transport_parity_step.dependOn(&run_cli_transport_parity_tests.step);
 
+    // Mermaid query format unit tests (companion to dot format)
+    const mermaid_format_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_query_result_mermaid.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    mermaid_format_tests.root_module.addImport("geode", root_mod);
+    const run_mermaid_format_tests = b.addRunArtifact(mermaid_format_tests);
+    const mermaid_format_step = b.step("test-mermaid-format", "Run mermaid query format unit tests");
+    mermaid_format_step.dependOn(&run_mermaid_format_tests.step);
+
     // GAP-0481: Security audit — verify no password_hint in structured logger
     const auth_security_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1814,6 +1827,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_limitations_fixes_tests.step);
     test_step.dependOn(&run_advanced_property_ga_tests.step);
     test_step.dependOn(&run_cli_transport_parity_tests.step);
+    test_step.dependOn(&run_mermaid_format_tests.step);
     test_step.dependOn(&run_auth_security_tests.step);
     test_step.dependOn(&run_random_security_tests.step);
     test_step.dependOn(&run_secure_zero_tests.step);
