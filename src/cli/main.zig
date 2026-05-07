@@ -258,7 +258,7 @@ fn printQueryUsage() void {
         "  --ca-cert <path>       CA certificate path for server verification\n" ++
         "  --client-cert <path>   Client certificate path for mutual TLS\n" ++
         "  --client-key <path>    Client private key path for mutual TLS\n" ++
-        "  --format <fmt>         Output format: json|table|csv|dot (default: json)\n" ++
+        "  --format <fmt>         Output format: json|table|csv|dot|mermaid (default: json)\n" ++
         "  --param <name> <value>       Add query parameter (JSON literal)\n" ++
         "  --page-size <n>        Page size for results (default: 128)\n" ++
         "  --timeout <secs>       Connection timeout in seconds (default: 30)\n" ++
@@ -318,6 +318,7 @@ fn printQueryUsage() void {
         "  geode query --ca-cert /etc/ssl/ca.crt --client-cert /etc/ssl/client.crt --client-key /etc/ssl/client.key --server secure.example.com:3141 \"RETURN 1\"\n" ++
         "  geode query --format table \"MATCH (u:User) RETURN u.name, u.email\"\n" ++
         "  geode query --format dot \"MATCH (a)-[r]->(b) RETURN a, r, b\" | dot -Tpng -o graph.png\n" ++
+        "  geode query --format mermaid \"MATCH (a)-[r]->(b) RETURN a, r, b\" | npx -y -p @mermaid-js/mermaid-cli mmdc -i - -o graph.svg\n" ++
         "  geode query --param id 123 \"MATCH (n) WHERE id(n) = $id RETURN n\"\n" ++
         "  geode query --server remote:3141 --timeout 5 --retry 3 \"RETURN 1 AS x\"\n" ++
         "  echo \"RETURN 1 AS x\" | geode query -\n" ++
