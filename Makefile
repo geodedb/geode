@@ -27,7 +27,7 @@ endif
 #   - Python: geode-client-python
 #   - Rust: geode-client-rust
 
-.PHONY: all build release install install-tuning test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl
+.PHONY: all build release install install-tuning test integration-test regression-test property-ordering-test pagination-test aggregation-test graph-test db-test test-all-integration dataset-integration-test load-dataset fuzz bench tools doccheck clean cert-gen fmt ci help check-openssl test-mermaid-integration
 .PHONY: goreleaser goreleaser-test goreleaser-snapshot goreleaser-check
 .PHONY: cross-compile cross-windows cross-linux-x86_64 cross-linux-arm cross-linux-arm64 cross-linux-riscv64 cross-macos-x86_64 cross-macos-arm64 cross-windows-arm64 cross-test
 .PHONY: canary canary-verify governance-check update-status-hash governance-delta governance-dry-run governance-freshness-prewarn governance-aggregate match-ops-parity match-ops-bench cli-transport-parity stdio-abstraction-check release-target-manifest-check docker-release-sync docker-release-check docker-release-signoff
@@ -1491,3 +1491,14 @@ docker-integration-smoke: docker-integration-build
 		"/app/geode query --server geode-server:8443 --insecure 'RETURN 1 AS smoke_test'"
 	$(DOCKER_COMPOSE_INTEGRATION) down
 	@echo "==== Smoke test complete ===="
+
+# ====================================================================================
+# External Mermaid Integration Tests
+# ====================================================================================
+
+# External mermaid integration test (uses @mermaid-js/mermaid-cli to
+# verify --format mermaid output is real, parseable Mermaid).
+.PHONY: test-mermaid-integration
+test-mermaid-integration:
+	@echo "Running external mermaid integration tests..."
+	@./tests/integration/test_mermaid_external.sh
