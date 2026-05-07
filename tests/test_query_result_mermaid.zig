@@ -84,6 +84,56 @@ test "mermaid format: single node falls back to id when no labels match" {
     );
 }
 
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=EdgeWithLabel; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: edge between two nodes uses relationship label" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const a_json =
+        \\{"id":1,"labels":["Person"],"properties":{"name":"Alice"}}
+    ;
+    const r_json =
+        \\{"id":99,"from":1,"to":2,"label":"KNOWS","properties":{}}
+    ;
+    const b_json =
+        \\{"id":2,"labels":["Person"],"properties":{"name":"Bob"}}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{ a_json, r_json, b_json }));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    const expected =
+        "flowchart LR\n" ++
+        "  n1[\"Person<br/>Alice\"]\n" ++
+        "  n2[\"Person<br/>Bob\"]\n" ++
+        "  n1 -->|\"KNOWS\"| n2\n";
+    try std.testing.expectEqualStrings(expected, rendered);
+}
+
+// CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=EdgeWithTypeField; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
+test "mermaid format: edge accepts type field instead of label" {
+    const allocator = std.testing.allocator;
+
+    var rows = try std.ArrayList(std.ArrayList([]const u8)).initCapacity(allocator, 1);
+    defer deinitRows(allocator, &rows);
+
+    const r_json =
+        \\{"id":99,"from":3,"to":4,"type":"FRIENDS_WITH"}
+    ;
+    try rows.append(allocator, try rowFromCells(allocator, &.{r_json}));
+
+    const rendered = try renderMermaidToSlice(allocator, rows.items);
+    defer allocator.free(rendered);
+
+    try std.testing.expectEqualStrings(
+        "flowchart LR\n  n3 -->|\"FRIENDS_WITH\"| n4\n",
+        rendered,
+    );
+}
+
 // CANARY: REQ=REQ-CLI-MERMAID-FORMAT-001; FEATURE="MermaidQueryFormat"; ASPECT=MultiLabelJoin; STATUS=TESTED; TEST=tests/test_query_result_mermaid.zig; OWNER=cli; UPDATED=2026-05-06
 test "mermaid format: multi-label node joins labels with colon" {
     const allocator = std.testing.allocator;

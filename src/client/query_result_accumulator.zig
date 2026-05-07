@@ -663,6 +663,7 @@ pub fn outputMermaidFormatFromRows(
         seen_nodes.deinit();
     }
 
+    // Pass 1: emit nodes only, in encounter order.
     for (rows) |row| {
         for (row.items) |cell| {
             const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
@@ -687,6 +688,42 @@ pub fn outputMermaidFormatFromRows(
                     try out.writeAll(label);
                     try out.writeAll("\"]\n");
                 }
+            }
+        }
+    }
+
+    // Pass 2: emit edges only.
+    for (rows) |row| {
+        for (row.items) |cell| {
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, cell, .{}) catch continue;
+            defer parsed.deinit();
+
+            if (parsed.value != .object) continue;
+            const obj = parsed.value.object;
+
+            if (obj.get("labels") != null) continue;
+
+            if (obj.get("label") orelse obj.get("type")) |type_val| {
+                if (type_val != .string) continue;
+
+                const start_id = getDotIdString(allocator, obj.get("from")) orelse
+                    getDotIdString(allocator, obj.get("start_node")) orelse continue;
+                defer allocator.free(start_id);
+
+                const end_id = getDotIdString(allocator, obj.get("to")) orelse
+                    getDotIdString(allocator, obj.get("end_node")) orelse continue;
+                defer allocator.free(end_id);
+
+                const escaped_type = try escapeMermaidLabel(allocator, type_val.string);
+                defer allocator.free(escaped_type);
+
+                try out.writeAll("  n");
+                try out.writeAll(start_id);
+                try out.writeAll(" -->|\"");
+                try out.writeAll(escaped_type);
+                try out.writeAll("\"| n");
+                try out.writeAll(end_id);
+                try out.writeAll("\n");
             }
         }
     }
