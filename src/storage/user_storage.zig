@@ -275,6 +275,14 @@ pub const UserStorageBackend = struct {
         try self.loadRolesFromGraph();
         try self.loadPermissionsFromGraph();
         try self.loadPoliciesFromGraph();
+        // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
+        // a subsequent `persistChainRoot` call (e.g. during offline
+        // reset-password rewriting the seal) updates the existing node
+        // instead of creating a duplicate. Without this, repeated CLI
+        // invocations against the same data dir leave multiple
+        // AuthChainRoot nodes, and `verifyChain` on reload picks the
+        // stale one and reports `ChainHashMismatch`.
+        _ = self.loadChainRoot();
     }
 
     fn loadUsersFromGraph(self: *Self) !void {

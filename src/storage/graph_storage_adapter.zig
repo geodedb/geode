@@ -954,16 +954,22 @@ pub const StorageAdapter = struct {
     /// Create a new `StorageAdapter`.
     ///
     /// `data_dir` is the root directory under which per-graph subdirectories
-    /// are created (each at `{data_dir}/graphs/{uuid_hex}/`).
+    /// are created (each at `{data_dir}/graphs/{uuid_hex}/`).  The
+    /// `{data_dir}/graphs/` parent directory itself is created lazily by the
+    /// first writer that needs it (audit logger, property-index checkpoint,
+    /// timeseries, FTS) — `createDirPath` recursively materialises parents.
+    /// Eagerly creating an empty placeholder here violates the storage-layout
+    /// invariant exercised by tests/test_admin_bootstrap_env_and_reset.zig
+    /// because the actual sharded data lives at `{data_dir}/<graph_uuid>/...`,
+    /// leaving the placeholder as a competing empty `graphs/` root.
     pub fn init(allocator: Allocator, data_dir: []const u8, config: gs.GraphConfig) !*StorageAdapter {
         const owned_dir = try allocator.dupe(u8, data_dir);
         errdefer allocator.free(owned_dir);
 
-        // Ensure the graphs root directory exists.
-        const graphs_dir = try std.fmt.allocPrint(allocator, "{s}/graphs", .{owned_dir});
-        defer allocator.free(graphs_dir);
-        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), graphs_dir) catch |err| {
-            log.err("failed to create graphs directory {s}: {}", .{ graphs_dir, err });
+        // Ensure the data_dir itself exists (lazy `graphs/` creation
+        // happens on first use, see comment above).
+        std.Io.Dir.cwd().createDirPath(std.Io.Threaded.global_single_threaded.io(), owned_dir) catch |err| {
+            log.err("failed to create data directory {s}: {}", .{ owned_dir, err });
             return err;
         };
 
@@ -1121,12 +1127,34 @@ pub const StorageAdapter = struct {
         }
 
         if (dropped_uuid) |graph_uuid| {
-            var graph_dir = gs.graph_dir.GraphDir.open(self.allocator, self.data_dir, graph_uuid) catch return;
-            defer graph_dir.deinit();
+            // Best-effort delete the legacy single-engine layout (if a prior
+            // build wrote `<data_dir>/graphs/<uuid>/` alongside the now
+            // collocated layout).  Errors are non-fatal — the dir may not
+            // exist on builds that have always used the consolidated layout.
+            if (gs.graph_dir.GraphDir.open(self.allocator, self.data_dir, graph_uuid)) |opened| {
+                var graph_dir = opened;
+                defer graph_dir.deinit();
+                graph_dir.delete() catch |err| {
+                    log.warn("failed to delete legacy graph directory for '{s}': {}", .{ name, err });
+                };
+            } else |_| {}
 
-            graph_dir.delete() catch |err| {
-                log.warn("failed to delete graph directory for '{s}': {}", .{ name, err });
-            };
+            // Delete the consolidated artifact + sharded-engine root at
+            // `<data_dir>/<uuid_hex>` (matches `graphDirPath` and the
+            // sharded engine's `graph_root`).  Pre-engine-deinit calls
+            // above closed every per-shard mmap; safe to recursive-delete.
+            const consolidated = graphDirPath(self.allocator, self.data_dir, graph_uuid) catch null;
+            if (consolidated) |path| {
+                defer self.allocator.free(path);
+                const dt_io = std.Io.Threaded.global_single_threaded.io();
+                // `deleteTree` is a no-op on a missing root, so we don't
+                // need to special-case FileNotFound — any other error is
+                // logged but non-fatal so callers continue to see the
+                // graph removed from the registry.
+                std.Io.Dir.cwd().deleteTree(dt_io, path) catch |err| {
+                    log.warn("failed to delete consolidated graph directory for '{s}': {}", .{ name, err });
+                };
+            }
         }
     }
 
@@ -3264,10 +3292,18 @@ pub const StorageAdapter = struct {
     // Internal helpers (must be called with mutex held)
     // ------------------------------------------------------------------
 
-    /// Build the on-disk directory path for a graph: `{data_dir}/graphs/{uuid_hex}`.
+    /// Build the on-disk directory path for adapter artifacts that are
+    /// scoped to a single graph (audit log, timeseries store, FTS index,
+    /// per-graph property index, free.store sanitizer): `{data_dir}/{uuid_hex}`.
+    ///
+    /// This intentionally collocates with the sharded engine's `graph_root`
+    /// (set by `gs.ShardedGraphEngine.create` to `{data_dir}/{uuid_hex}`)
+    /// so we don't materialise a sibling `{data_dir}/graphs/` placeholder.
+    /// Pinned by tests/test_admin_bootstrap_env_and_reset.zig "offline
+    /// reset-password writes a single graphs root (storage layout invariant)".
     fn graphDirPath(allocator: Allocator, data_dir: []const u8, graph_uuid: [16]u8) ![]const u8 {
         const hex = std.fmt.bytesToHex(graph_uuid, .lower);
-        return std.fmt.allocPrint(allocator, "{s}/graphs/{s}", .{
+        return std.fmt.allocPrint(allocator, "{s}/{s}", .{
             data_dir,
             &hex,
         });

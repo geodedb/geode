@@ -613,12 +613,36 @@ pub const AuthGraphManager = struct {
         // 1. Resolve admin username
         const username = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_USERNAME")) |name| name else |_| try self.allocator.dupe(u8, "geode");
 
-        // 2. Use GEODE_ADMIN_PASSWORD from env if set, otherwise generate random 32-char hex password
+        // 2. Resolve seed password from env (widened to honour both the
+        //    historical `GEODE_ADMIN_PASSWORD` and the documented
+        //    `GEODE_DEFAULT_PASSWORD`).  Precedence: when both are set,
+        //    `GEODE_ADMIN_PASSWORD` wins for backward compatibility with
+        //    deployments already pinning that name; a deprecation warning is
+        //    emitted when both are set with different values so operators
+        //    notice the drift.  Falls back to a random 32-char hex password
+        //    when neither env var is present.
         var password_from_env = false;
-        const password = if (getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| pw_blk: {
-            password_from_env = true;
-            break :pw_blk env_pw;
-        } else |_| blk: {
+        const password = blk: {
+            const admin_env = getEnvVarOwned(self.allocator, "GEODE_ADMIN_PASSWORD") catch null;
+            const default_env = getEnvVarOwned(self.allocator, "GEODE_DEFAULT_PASSWORD") catch null;
+
+            if (admin_env != null and default_env != null) {
+                if (!std.mem.eql(u8, admin_env.?, default_env.?)) {
+                    log.warn("Both GEODE_ADMIN_PASSWORD and GEODE_DEFAULT_PASSWORD are set with different values; using GEODE_ADMIN_PASSWORD (precedence)", &.{});
+                }
+                self.allocator.free(default_env.?);
+                password_from_env = true;
+                break :blk admin_env.?;
+            }
+            if (admin_env) |env_pw| {
+                password_from_env = true;
+                break :blk env_pw;
+            }
+            if (default_env) |env_pw| {
+                password_from_env = true;
+                break :blk env_pw;
+            }
+
             var random_bytes: [16]u8 = undefined;
             compat_fillRandom(&random_bytes);
             const pw = try self.allocator.alloc(u8, 32);

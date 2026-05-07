@@ -305,9 +305,17 @@ pub fn initialize(
             };
 
             if (agm.hasAuthRecords()) {
+                // Honour both env-var spellings: `GEODE_ADMIN_PASSWORD`
+                // (legacy / backward compat) and `GEODE_DEFAULT_PASSWORD`
+                // (documented).  Either one being set when records already
+                // exist is logged as ignored.
                 if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
                     allocator.free(env_pw);
                     log.info("GEODE_ADMIN_PASSWORD ignored because auth records already exist", &.{});
+                } else |_| {}
+                if (getEnvVarOwned(allocator, "GEODE_DEFAULT_PASSWORD")) |env_pw| {
+                    allocator.free(env_pw);
+                    log.info("GEODE_DEFAULT_PASSWORD ignored because auth records already exist", &.{});
                 } else |_| {}
 
                 // Verify HMAC chain integrity
@@ -373,13 +381,50 @@ pub fn initialize(
                     agm.deinit();
                     break :agm_blk null;
                 };
-                // Print generated password to stderr only (never to structured log).
-                // Skip the message when the password came from GEODE_ADMIN_PASSWORD
-                // so test runners don't see a misleading "generated" label.
-                if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
-                    allocator.free(env_pw);
-                } else |_| {
-                    std.debug.print("\n*** Generated admin password: {s} ***\n", .{result.password});
+                // SEC: never print the generated admin password to stderr.
+                // When neither `GEODE_ADMIN_PASSWORD` nor the documented
+                // `GEODE_DEFAULT_PASSWORD` is set we still need to surface
+                // the auto-generated value to the operator on first boot;
+                // we mirror the legacy `geode_auth_lib` behaviour by
+                // writing it to `<data_dir>/.geode_admin_password` with
+                // mode 0600 and emitting only a structured-log pointer.
+                const admin_env_present = blk_env: {
+                    if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+                        allocator.free(env_pw);
+                        break :blk_env true;
+                    } else |_| {}
+                    if (getEnvVarOwned(allocator, "GEODE_DEFAULT_PASSWORD")) |env_pw| {
+                        allocator.free(env_pw);
+                        break :blk_env true;
+                    } else |_| {}
+                    break :blk_env false;
+                };
+                if (!admin_env_present) {
+                    const pw_dir: []const u8 = data_dir orelse ".";
+                    const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch null;
+                    if (pw_path) |path| {
+                        defer allocator.free(path);
+                        const io_pw = std.Io.Threaded.global_single_threaded.io();
+                        if (std.Io.Dir.cwd().createFile(io_pw, path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
+                            defer file.close(io_pw);
+                            file.writeStreamingAll(io_pw, result.password) catch |err| {
+                                log.warn("Failed to write generated admin password file", &.{
+                                    Attr.string("path", path),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                            };
+                            log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
+                                Attr.string("path", path),
+                            });
+                        } else |err| {
+                            log.err("Failed to create generated admin password file (operator must rotate via reset-password)", &.{
+                                Attr.string("path", path),
+                                Attr.string("error", @errorName(err)),
+                            });
+                        }
+                    } else {
+                        log.err("Failed to allocate path for generated admin password file (operator must rotate via reset-password)", &.{});
+                    }
                 }
                 log.info("Default admin user bootstrapped via auth graph", &.{
                     Attr.string("username", result.username),

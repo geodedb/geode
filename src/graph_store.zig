@@ -6915,7 +6915,13 @@ test "createNodeWithId and createEdgeWithId survive adapter-backed reload" {
     try testing.expectEqualStrings(encodePersistedPublicId(&edge_id_buf, 9001), persisted_edge_id.string);
 
     const graph_uuid = GraphStore.getGraphUuid("default") orelse return error.GraphUuidUnavailable;
-    const graph_dir_path = try std.fmt.allocPrint(testing.allocator, "{s}/graphs/{s}", .{ dir_path, std.fmt.bytesToHex(graph_uuid, .lower) });
+    // Per-graph artifact directory layout was consolidated to
+    // `<data_dir>/<uuid_hex>` so audit/timeseries/FTS/property-index live
+    // alongside the sharded engine's `graph_root`.  The historical layout
+    // `<data_dir>/graphs/<uuid_hex>` is retained only as a legacy fallback
+    // for older on-disk data; new writes do not materialise it.  See
+    // `StorageAdapter.graphDirPath`.
+    const graph_dir_path = try std.fmt.allocPrint(testing.allocator, "{s}/{s}", .{ dir_path, std.fmt.bytesToHex(graph_uuid, .lower) });
     defer testing.allocator.free(graph_dir_path);
 
     const io = std.Io.Threaded.global_single_threaded.io();

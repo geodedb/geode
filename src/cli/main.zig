@@ -288,7 +288,8 @@ fn printQueryUsage() void {
         "\n" ++
         "  Environment variables are NOT used for authentication.\n" ++
         "  The default admin username is 'geode' (not 'admin').\n" ++
-        "  Set GEODE_DEFAULT_PASSWORD on the server to bootstrap the admin account.\n" ++
+        "  Set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD on the server to bootstrap\n" ++
+        "  the admin account. When both are set, GEODE_ADMIN_PASSWORD takes precedence.\n" ++
         "\n" ++
         "Session Management:\n" ++
         "  By default, queries auto-load saved session from ~/.geode/credentials.json\n" ++
