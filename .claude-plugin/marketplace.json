@@ -1,0 +1,25 @@
+{
+  "name": "geode",
+  "owner": {
+    "name": "Developer Network",
+    "url": "https://gitlab.com/devnw/codepros/geode"
+  },
+  "description": "Geode graph database marketplace — Claude Code plugins for GQL development.",
+  "metadata": {
+    "version": "1.0.0",
+    "homepage": "https://geodedb.com"
+  },
+  "plugins": [
+    {
+      "name": "geode",
+      "source": "./geode-claude-plugin",
+      "description": "GQL Language Server, MCP tools, agents, and skills for Geode",
+      "version": "2.1.0",
+      "author": "Developer Network",
+      "homepage": "https://gitlab.com/devnw/codepros/geode/geode-claude-plugin",
+      "license": "Apache-2.0",
+      "category": "database",
+      "tags": ["gql", "graph", "iso-39075", "lsp", "mcp"]
+    }
+  ]
+}
