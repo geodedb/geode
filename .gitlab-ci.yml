@@ -398,7 +398,13 @@ test-zig-unit:
   # mid-suite under "Company Cluster Runner(s)" load. The Debug-mode test
   # suite has grown past 3h on slow runners; bump headroom to 4h so transient
   # runner slowness doesn't block releases.
-  timeout: 4h
+  #
+  # 2026-05-08: pipeline #2509486107 (commit 48a0899a) ALSO hit the 4h
+  # deadline at 14402s on "Lab Servers" — the suite is genuinely longer
+  # than 4h on slow runners. Bump again to 6h. If we hit 6h next, the
+  # right fix is sharded test execution (parallel: matrix), not more
+  # timeout.
+  timeout: 6h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   retry:
@@ -618,7 +624,12 @@ test-zig-release-safe:
   # load (7203s). Bump headroom to 4h to match test-zig-unit; the suite is
   # genuinely slower in ReleaseSafe than in Debug mode, and transient runner
   # slowness shouldn't block releases.
-  timeout: 4h
+  #
+  # 2026-05-08: pipeline #2509486107 (commit 48a0899a) ALSO hit the 4h
+  # deadline at 14402s on "Lab Servers". The Debug-mode counterpart hit
+  # the same 4h. Bump both to 6h. If we hit 6h next, the right fix is
+  # sharded test execution (parallel: matrix), not more timeout.
+  timeout: 6h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
