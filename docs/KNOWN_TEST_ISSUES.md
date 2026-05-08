@@ -13,6 +13,85 @@ This document tracks tests that are skipped in the geodetestlab test suite due t
 - **Pass Rate**: ~97% (varies by test run)
 - **Skipped**: ~120 tests (intentionally skipped due to known limitations documented below)
 
+## Test Suite Drift — Pre-existing, Tracked for Re-baseline
+
+The items below were observed during validation of unrelated MRs and have
+been confirmed to reproduce at the parent commit (no regression from the
+MR being validated). They are recorded here so future runs don't chase
+them as new failures; each block carries enough context to triage cheaply
+when the underlying issue is finally addressed.
+
+### `extended_test_runner.py` — ~200 failures including `gql_pattern_matching_comprehensive` 0/35 (2026-05-07)
+
+Running `python3 scripts/test/extended_test_runner.py` against the harness
+specs in `../geode-test-harness/geodetestlab-cli/specs/` produces ~200
+failures, dominated by a 0/35 wipeout in
+`gql_pattern_matching_comprehensive.yml`. Verified pre-existing by
+reverting all fix files for the active MR and re-running on the parent
+commit — same 0/35 reproduces.
+
+**Status:** Pre-existing environmental drift in the in-tree Python
+runner, not the harness's `geodetestlab` CLI. The harness CLI runner
+(invoked via `make test-everything-otel` / `make geodetestlab-comprehensive`)
+remains green for these specs.
+
+**Likely cause:** Setup / persistence / server-lifecycle handling has
+diverged between the two runners (`extended_test_runner.py` and
+`geodetestlab` CLI) since the harness was extracted to its own repo.
+`extended_test_runner.py` uses `test_runner_core.start_server` /
+`stop_server`; the geodetestlab CLI has its own server-manager path.
+
+**Re-baseline action (follow-up sprint):**
+
+1. Decide whether `extended_test_runner.py` is still authoritative or
+   should be deprecated in favour of the harness CLI for spec runs.
+2. If keeping it: re-baseline by aligning the runner's setup path with
+   the harness CLI (per-spec data dir, persistence reset between tests,
+   stdin handling — see `docs/TEST_RUNNER_FIXES_OCTOBER_2025.md` for the
+   parallel runner fix history).
+3. If deprecating: remove the runner and update CLAUDE.md /
+   `make`-target references that still point at it.
+
+### Load-induced 30 s timeouts in `make test-everything-otel` runs (2026-05-07)
+
+Several specs intermittently fail with `Test timed out after 30000ms`
+when the harness is run under heavy concurrent load (other CI work
+happening on the host, or the harness running with `PARALLEL_WORKERS=1`
+back-to-back with shell + load-test phases):
+
+- `gap_0193_priority_categories.yml :: metadata-relationship-types`
+  (`CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType LIMIT 10`)
+- `gap_153_154_password_security.yml :: gap-0154-user-create-with-explicit-password`
+  (`geode user create gap154test gap154@test.com --password SecurePass123!`)
+- `geode_migrations.yml :: check-index-usage` setup-0
+  (multi-statement `CREATE (:TestNode {id: 1}), ... ; CREATE INDEX IF NOT EXISTS ...`)
+
+**Status:** Confirmed flaky, not deterministic. Re-running each spec in
+isolation via `make test-spec SPEC=<file>.yml` produces 52/52, 19/19,
+and 30/30 PASS respectively. The `output` field of the failed test is empty, which
+is consistent with the geode subprocess still warming up (server
+startup, cache hydration, FLE bootstrap) when the per-test 30 s wall
+elapses.
+
+**Likely cause:** The harness's `client.timeout_ms: 30000` is the same
+as the geode `server.startup_timeout_ms: 30000` for `cli.server.enabled:
+true` specs. Under CPU pressure, the server startup path can consume
+most of that budget, leaving the first per-test invocation insufficient
+runway. The cause is environmental, not a regression in the MR being
+validated.
+
+**Re-baseline action (follow-up sprint):**
+
+1. Decouple per-test timeouts from the cli server startup timeout for
+   `cli.server.enabled: true` specs — the test-level wall should start
+   when the server reports ready, not when the harness records the
+   spec start.
+2. Optionally bump `client.timeout_ms` to 60 s for these two specs
+   while the underlying timeout decoupling lands; revert once the
+   harness layer fix is in.
+3. Audit any spec that hits the wall by >50% of the test's isolated
+   duration — it's the same pattern under load.
+
 ## Recently Fixed — Concurrency
 
 ### `test-two-phase-edge-lock` :: "two-phase lock: 16 threads beat single-thread by >= 4x" ✅ FIXED (2026-04-27)
@@ -150,4 +229,4 @@ When fixing a feature, update this document by:
 2. Running `make geodetestlab-comprehensive` to verify the fix
 3. Removing the entry from this document
 
-*Last Updated: January 9, 2026*
+*Last Updated: 2026-05-07*
