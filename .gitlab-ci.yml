@@ -394,7 +394,11 @@ governance-conformance-sync:
 test-zig-unit:
   stage: test
   image: $ZIG_IMAGE
-  timeout: 3h
+  # Pipeline #2509086665 (commit 7df369a0) hit the 3h deadline at 10802s
+  # mid-suite under "Company Cluster Runner(s)" load. The Debug-mode test
+  # suite has grown past 3h on slow runners; bump headroom to 4h so transient
+  # runner slowness doesn't block releases.
+  timeout: 4h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   retry:
@@ -609,10 +613,12 @@ test-zig-release-safe:
   image: $ZIG_IMAGE
   # ReleaseSafe build + full test suite straddles the project-default 1h budget
   # on the shared runner — pipelines #910, #911, #916 all hit the 1h deadline
-  # while #913, #914 (same code) finished in 55-58 min. Give it 2h headroom
-  # consistent with the other long-running test jobs (test-macos-unit, snapshot,
-  # build-release) so transient runner slowness doesn't block releases.
-  timeout: 2h
+  # while #913, #914 (same code) finished in 55-58 min. Pipeline #2509086665
+  # (commit 7df369a0) then hit the 2h deadline mid-suite under "Lab Servers"
+  # load (7203s). Bump headroom to 4h to match test-zig-unit; the suite is
+  # genuinely slower in ReleaseSafe than in Debug mode, and transient runner
+  # slowness shouldn't block releases.
+  timeout: 4h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
