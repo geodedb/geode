@@ -58,9 +58,19 @@ stages:
   - publish
 
 # Default configuration applied to all jobs
+# 2026-05-09: added `k8s` to force jobs onto "Company Cluster Runner(s)"
+# (kubernetes-executor, ~10-15s for governance jobs). Without `k8s` the
+# runner picker also matches "Lab Servers" (slow: 5+ min) and "OVH
+# Dedicated Runners" (currently BROKEN: every job hits 1h
+# server_timeout_running, see pipeline #2512528539). Pool tag map:
+#   - Company Cluster Runner(s) -> [company, k8s, linux, amd64, ubuntu, docker]
+#   - Lab Servers                -> [company, docker, lab, linux, amd64]
+#   - OVH Dedicated Runners      -> [company, dedicated, docker, linux, x86]
+# Jobs that need docker:dind override with `[company, lab, linux]`.
 default:
   tags:
     - company
+    - k8s
     - linux
   interruptible: true  # Allow auto-cancel of redundant pipelines on push
 
@@ -406,12 +416,15 @@ test-zig-unit:
   # timeout.
   #
   # 2026-05-09: pipeline #2510271779 hit 6h on "Lab Servers" while the
-  # same suite ran in 32-43min on the dedicated pool (#913, #914). Pin
-  # to `company,dedicated,linux` so the suite cannot land on the slow
-  # shared pool. Default tag set is `company,linux` (no `dedicated`).
+  # same suite ran in 32-43min on the Company Cluster Runner(s) pool.
+  # Pin to `company,k8s,linux` — `k8s` is exclusive to Company Cluster
+  # (kubernetes-executor) and excludes both "Lab Servers" (slow) and
+  # "OVH Dedicated Runners" (currently broken: every job hits 1h
+  # server_timeout_running, see pipeline #2512528539). Default tag set
+  # is `company,linux` which matches all three pools.
   tags:
     - company
-    - dedicated
+    - k8s
     - linux
   timeout: 6h
   variables:
@@ -639,13 +652,16 @@ test-zig-release-safe:
   # the same 4h. Bump both to 6h. If we hit 6h next, the right fix is
   # sharded test execution (parallel: matrix), not more timeout.
   #
-  # 2026-05-09: pipeline #2510271779 hit 6h on "Company Cluster Runner(s)"
-  # while #913, #914 (same suite) ran in 32-43min on the dedicated pool.
-  # Pin to `company,dedicated,linux` to avoid the slow shared pool.
-  # Default tag set is `company,linux` (no `dedicated`).
+  # 2026-05-09: pipeline #2510271779 hit 6h. Same suite ran in 32-43min
+  # on Company Cluster Runner(s). Pin to `company,k8s,linux` — `k8s`
+  # is exclusive to Company Cluster (kubernetes-executor) and excludes
+  # both "Lab Servers" (slow) and "OVH Dedicated Runners" (currently
+  # broken: every job hits 1h server_timeout_running, see pipeline
+  # #2512528539). Default tag set is `company,linux` which matches all
+  # three pools.
   tags:
     - company
-    - dedicated
+    - k8s
     - linux
   timeout: 6h
   variables:
@@ -1137,15 +1153,21 @@ snapshot:
       artifacts: false
     - job: security-trivy
       artifacts: false
-  # Use GitLab hosted runners for Docker-in-Docker support.
   # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
   # this job assigned to a Windows PowerShell runner that also has
   # `company,dedicated` tags, producing PowerShell parser errors
   # against the bash script (`if [ -d ... ] && ...`). The
   # docker:dind executor only works on Linux runners.
+  #
+  # 2026-05-09: switched `dedicated` -> `lab`. The `dedicated` tag
+  # belongs to "OVH Dedicated Runners" which is currently broken
+  # (every job hits 1h server_timeout_running, see pipeline
+  # #2512528539). "Lab Servers" (`lab` tag) is the proven
+  # docker-capable pool. The default tag set was also tightened to
+  # `[company, k8s, linux]` so no other job can land on OVH.
   tags:
     - company
-    - dedicated
+    - lab
     - linux
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
@@ -1284,15 +1306,21 @@ build-release:
       artifacts: false
     - job: security-trivy
       artifacts: false
-  # Use GitLab hosted runners for Docker-in-Docker support.
   # 2026-05-01: added `linux` tag — pipeline #1009 (v0.5.2 tag) got
   # this job assigned to a Windows PowerShell runner that also has
   # `company,dedicated` tags, producing PowerShell parser errors
   # against the bash script (`if [ -d ... ] && ...`). The
   # docker:dind executor only works on Linux runners.
+  #
+  # 2026-05-09: switched `dedicated` -> `lab`. The `dedicated` tag
+  # belongs to "OVH Dedicated Runners" which is currently broken
+  # (every job hits 1h server_timeout_running, see pipeline
+  # #2512528539). "Lab Servers" (`lab` tag) is the proven
+  # docker-capable pool. The default tag set was also tightened to
+  # `[company, k8s, linux]` so no other job can land on OVH.
   tags:
     - company
-    - dedicated
+    - lab
     - linux
   image: docker:latest
   timeout: 2h  # Cross-compilation of 8 targets + packaging takes >1h
@@ -1459,9 +1487,14 @@ build-release:
 publish-release:
   stage: release
   interruptible: false
-  # Use GitLab hosted runners
+  # 2026-05-09: tightened from `[company]` to `[company, k8s, linux]`.
+  # `[company]` alone matched "OVH Dedicated Runners" which is broken
+  # (1h server_timeout_running). The `k8s` tag pins to "Company
+  # Cluster Runner(s)" — release-cli has no docker:dind requirement.
   tags:
     - company
+    - k8s
+    - linux
   image: registry.gitlab.com/gitlab-org/release-cli:latest
   needs:
     - job: build-release
@@ -1565,8 +1598,14 @@ publish-release:
 publish-packages:
   stage: publish
   interruptible: false
+  # 2026-05-09: tightened from `[company]` to `[company, k8s, linux]`.
+  # `[company]` alone matched "OVH Dedicated Runners" which is broken
+  # (1h server_timeout_running). The `k8s` tag pins to "Company
+  # Cluster Runner(s)" — curl has no docker:dind requirement.
   tags:
     - company
+    - k8s
+    - linux
   image: curlimages/curl:latest
   needs:
     - build-release
