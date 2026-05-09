@@ -404,6 +404,15 @@ test-zig-unit:
   # than 4h on slow runners. Bump again to 6h. If we hit 6h next, the
   # right fix is sharded test execution (parallel: matrix), not more
   # timeout.
+  #
+  # 2026-05-09: pipeline #2510271779 hit 6h on "Lab Servers" while the
+  # same suite ran in 32-43min on the dedicated pool (#913, #914). Pin
+  # to `company,dedicated,linux` so the suite cannot land on the slow
+  # shared pool. Default tag set is `company,linux` (no `dedicated`).
+  tags:
+    - company
+    - dedicated
+    - linux
   timeout: 6h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
@@ -629,6 +638,15 @@ test-zig-release-safe:
   # deadline at 14402s on "Lab Servers". The Debug-mode counterpart hit
   # the same 4h. Bump both to 6h. If we hit 6h next, the right fix is
   # sharded test execution (parallel: matrix), not more timeout.
+  #
+  # 2026-05-09: pipeline #2510271779 hit 6h on "Company Cluster Runner(s)"
+  # while #913, #914 (same suite) ran in 32-43min on the dedicated pool.
+  # Pin to `company,dedicated,linux` to avoid the slow shared pool.
+  # Default tag set is `company,linux` (no `dedicated`).
+  tags:
+    - company
+    - dedicated
+    - linux
   timeout: 6h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
