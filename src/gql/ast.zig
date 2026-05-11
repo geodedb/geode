@@ -545,6 +545,8 @@ pub const DropConstraintStatement = struct {
 
 pub const ShowStatement = struct {
     show_type: ShowType,
+    /// Optional target for SHOW PERMISSIONS FOR <username>; null for all other SHOW forms.
+    target: ?[]const u8 = null,
 };
 
 pub const ShowType = enum {
@@ -556,6 +558,9 @@ pub const ShowType = enum {
     functions,
     users,
     roles,
+    permissions,
+    version,
+    capabilities,
 };
 
 pub const IndexType = enum {

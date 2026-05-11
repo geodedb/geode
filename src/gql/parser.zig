@@ -283,6 +283,29 @@ pub const Parser = struct {
     // We’ll thread a tiny error wrapper with a message alongside generic errors when needed.
     const ParserError = error{ UnexpectedToken, OutOfMemory, Overflow, InvalidCharacter, InvalidIndexType };
 
+    /// Read an object name: an identifier or a quoted identifier.
+    fn parseName(self: *Parser) ParserError![]const u8 {
+        if (self.cur.kind == .quoted_identifier or self.cur.kind == .identifier) {
+            const out = self.cur.lexeme;
+            self.advance();
+            return out;
+        }
+        return self.unexpected("expected a name (identifier)");
+    }
+
+    /// Read a quoted string literal (returns the lexeme per existing lexer behavior).
+    fn parseStringLit(self: *Parser) ParserError![]const u8 {
+        if (self.cur.kind != .string_lit) return self.unexpected("expected a quoted string literal");
+        const out = self.cur.lexeme;
+        self.advance();
+        return out;
+    }
+
+    /// True if the current token is an identifier whose text equals `kw` (case-insensitive).
+    fn softKw(self: *Parser, kw: []const u8) bool {
+        return self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, kw);
+    }
+
     fn unexpected(self: *Parser, what: []const u8) ParserError {
         // For now, we just return UnexpectedToken; callers like CLI can add context using 'what'.
         self.last_error = what;
@@ -622,6 +645,12 @@ pub const Parser = struct {
                     break :blk_ident self.parseBackupStatement();
                 } else if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "RESTORE")) {
                     break :blk_ident self.parseRestoreStatement();
+                } else if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "ALTER")) {
+                    break :blk_ident self.parseAlterStatement();
+                } else if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "GRANT")) {
+                    break :blk_ident self.parseGrantStatement();
+                } else if (std.ascii.eqlIgnoreCase(self.cur.lexeme, "REVOKE")) {
+                    break :blk_ident self.parseRevokeStatement();
                 }
                 return error.UnexpectedToken;
             },
@@ -4227,6 +4256,10 @@ pub const Parser = struct {
             }
         }
 
+        // Check if this is CREATE USER or CREATE ROLE (auth DDL soft keywords)
+        if (self.softKw("USER")) { self.advance(); return self.parseCreateUser(); }
+        if (self.softKw("ROLE")) { self.advance(); return self.parseCreateRole(); }
+
         // Check if this is CREATE INDEX
         if (self.cur.kind == .INDEX or
             (self.cur.kind == .identifier and std.ascii.eqlIgnoreCase(self.cur.lexeme, "INDEX")) or
@@ -5332,6 +5365,16 @@ pub const Parser = struct {
                 std.ascii.eqlIgnoreCase(type_str, "FUNCTION"))
             {
                 break :blk .functions;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "USERS") or std.ascii.eqlIgnoreCase(type_str, "USER")) {
+                break :blk .users;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "ROLES") or std.ascii.eqlIgnoreCase(type_str, "ROLE")) {
+                break :blk .roles;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "PERMISSIONS") or std.ascii.eqlIgnoreCase(type_str, "PERMISSION")) {
+                break :blk .permissions;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "VERSION")) {
+                break :blk .version;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "CAPABILITIES") or std.ascii.eqlIgnoreCase(type_str, "CAPABILITY")) {
+                break :blk .capabilities;
             } else {
                 return error.UnexpectedToken;
             }
@@ -5339,7 +5382,12 @@ pub const Parser = struct {
             return error.UnexpectedToken;
         };
 
-        return .{ .Show = .{ .show_type = show_type } };
+        var target: ?[]const u8 = null;
+        if (show_type == .permissions and self.cur.kind == .FOR) {
+            self.advance(); // FOR
+            target = try self.parseName();
+        }
+        return .{ .Show = .{ .show_type = show_type, .target = target } };
     }
 
     fn parseValuesStatement(self: *Parser) ParserError!ast.Statement {
@@ -5575,6 +5623,10 @@ pub const Parser = struct {
         if (self.cur.kind == .CONSTRAINT) {
             return self.parseDropConstraint();
         }
+
+        // Check if this is DROP USER or DROP ROLE (auth DDL soft keywords)
+        if (self.softKw("USER")) { self.advance(); return self.parseDropUserOrRole(true); }
+        if (self.softKw("ROLE")) { self.advance(); return self.parseDropUserOrRole(false); }
 
         // Future: handle DROP DATABASE, etc.
         return error.UnexpectedToken;
@@ -6253,6 +6305,127 @@ pub const Parser = struct {
             .timestamp = timestamp,
             .verify_only = verify_only,
         } };
+    }
+
+    // ---------------------------------------------------------------------------
+    // Auth DDL parse functions (Geode extension — soft-keyword based)
+    // ---------------------------------------------------------------------------
+
+    // Parse CREATE USER <name> SET PASSWORD '<pw>' [EMAIL '<email>'] [ROLE <role>]
+    fn parseCreateUser(self: *Parser) ParserError!ast.Statement {
+        const name = try self.parseName();
+        _ = try self.expect(.SET);
+        if (!self.softKw("PASSWORD")) return self.unexpected("expected PASSWORD after SET in CREATE USER");
+        self.advance(); // PASSWORD
+        const password = try self.parseStringLit();
+        var email: ?[]const u8 = null;
+        var role: ?[]const u8 = null;
+        while (self.softKw("EMAIL") or self.softKw("ROLE")) {
+            if (self.softKw("EMAIL")) {
+                self.advance();
+                email = try self.parseStringLit();
+            } else {
+                self.advance(); // ROLE
+                role = try self.parseName();
+            }
+        }
+        return .{ .CreateUser = .{ .name = name, .password = password, .email = email, .role = role } };
+    }
+
+    // Parse CREATE ROLE <name> [SET DESCRIPTION '<desc>']
+    fn parseCreateRole(self: *Parser) ParserError!ast.Statement {
+        const name = try self.parseName();
+        var description: ?[]const u8 = null;
+        if (self.cur.kind == .SET) {
+            self.advance();
+            if (!self.softKw("DESCRIPTION")) return self.unexpected("expected DESCRIPTION after SET in CREATE ROLE");
+            self.advance();
+            description = try self.parseStringLit();
+        }
+        return .{ .CreateRole = .{ .name = name, .description = description } };
+    }
+
+    // Parse DROP USER [IF EXISTS] <name>  or  DROP ROLE [IF EXISTS] <name>
+    fn parseDropUserOrRole(self: *Parser, is_user: bool) ParserError!ast.Statement {
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind != .EXISTS) return self.unexpected("expected EXISTS after IF");
+            self.advance();
+            if_exists = true;
+        }
+        const name = try self.parseName();
+        if (is_user) return .{ .DropUser = .{ .name = name, .if_exists = if_exists } };
+        return .{ .DropRole = .{ .name = name, .if_exists = if_exists } };
+    }
+
+    // Parse ALTER USER <name> ENABLE|DISABLE|SET PASSWORD '<pw>'|SET ROLE <role>
+    fn parseAlterStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.identifier); // ALTER
+        if (!self.softKw("USER")) return self.unexpected("only ALTER USER is supported");
+        self.advance(); // USER
+        const name = try self.parseName();
+        if (self.softKw("ENABLE")) { self.advance(); return .{ .AlterUser = .{ .name = name, .action = .enable } }; }
+        if (self.softKw("DISABLE")) { self.advance(); return .{ .AlterUser = .{ .name = name, .action = .disable } }; }
+        _ = try self.expect(.SET);
+        if (self.softKw("PASSWORD")) {
+            self.advance();
+            const pw = try self.parseStringLit();
+            return .{ .AlterUser = .{ .name = name, .action = .{ .set_password = pw } } };
+        }
+        if (self.softKw("ROLE")) {
+            self.advance();
+            const r = try self.parseName();
+            return .{ .AlterUser = .{ .name = name, .action = .{ .set_role = r } } };
+        }
+        return self.unexpected("expected PASSWORD or ROLE after ALTER USER ... SET");
+    }
+
+    // Parse READ | WRITE | SCHEMA | ALL into a GrantPrivilege
+    fn parseGrantPrivilege(self: *Parser) ParserError!ast.GrantPrivilege {
+        switch (self.cur.kind) {
+            .READ => { self.advance(); return .read; },
+            .WRITE => { self.advance(); return .write; },
+            .SCHEMA => { self.advance(); return .schema; },
+            .ALL => { self.advance(); return .all; },
+            else => return self.unexpected("expected one of READ, WRITE, SCHEMA, ALL"),
+        }
+    }
+
+    // Parse optional ON GRAPH <name> clause
+    fn parseOnGraphClause(self: *Parser) ParserError!?[]const u8 {
+        if (self.cur.kind != .ON) return null;
+        self.advance(); // ON
+        if (self.cur.kind != .GRAPH) return self.unexpected("expected GRAPH after ON");
+        self.advance(); // GRAPH
+        return try self.parseName();
+    }
+
+    // Parse GRANT ROLE <role> TO <user>  or  GRANT <priv> [ON GRAPH <g>] TO <user>
+    fn parseGrantStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.identifier); // GRANT
+        if (self.softKw("ROLE")) {
+            self.advance(); // ROLE
+            const role_name = try self.parseName();
+            _ = try self.expect(.TO);
+            const grantee = try self.parseName();
+            return .{ .Grant = .{ .subject = .{ .role = role_name }, .on_graph = null, .grantee = grantee } };
+        }
+        const priv = try self.parseGrantPrivilege();
+        const on_graph = try self.parseOnGraphClause();
+        _ = try self.expect(.TO);
+        const grantee = try self.parseName();
+        return .{ .Grant = .{ .subject = .{ .privilege = priv }, .on_graph = on_graph, .grantee = grantee } };
+    }
+
+    // Parse REVOKE <priv> [ON GRAPH <g>] FROM <user>
+    fn parseRevokeStatement(self: *Parser) ParserError!ast.Statement {
+        _ = try self.expect(.identifier); // REVOKE
+        const priv = try self.parseGrantPrivilege();
+        const on_graph = try self.parseOnGraphClause();
+        _ = try self.expect(.FROM);
+        const grantee = try self.parseName();
+        return .{ .Revoke = .{ .privilege = priv, .on_graph = on_graph, .grantee = grantee } };
     }
 
     // Parse SESSION SET statement with full ISO GQL syntax
