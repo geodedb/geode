@@ -4296,4 +4296,14 @@ pub fn build(b: *std.Build) void {
     otel_prom_parity_tests.root_module.link_libc = true; // std.c.getenv in tryWireOtlpReader
     const run_otel_prom_parity_tests = b.addRunArtifact(otel_prom_parity_tests);
     shardDep(test_step, &run_otel_prom_parity_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+
+    // Task 7 (GQL auth DDL): parser unit tests for CREATE/ALTER/DROP USER,
+    // CREATE/DROP ROLE, GRANT, REVOKE, SHOW auth variants.
+    const auth_ddl_parser_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_ddl_parser.zig"), .target = target, .optimize = optimize });
+    auth_ddl_parser_test_mod.addImport("geode", root_mod);
+    const auth_ddl_parser_tests = b.addTest(.{ .root_module = auth_ddl_parser_test_mod });
+    const run_auth_ddl_parser_tests = b.addRunArtifact(auth_ddl_parser_tests);
+    shardDep(test_step, &run_auth_ddl_parser_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const auth_ddl_parser_step = b.step("test-auth-ddl-parser", "Run GQL auth DDL parser unit tests");
+    auth_ddl_parser_step.dependOn(&run_auth_ddl_parser_tests.step);
 }
