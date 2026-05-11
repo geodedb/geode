@@ -57,6 +57,12 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
+// Task 5: GQL auth DDL execution module (CREATE/ALTER/DROP USER|ROLE, GRANT/REVOKE, SHOW *).
+// Task 6 will add dispatch arms in executeStatementWithContext.
+pub const admin_ddl = @import("execution/admin_ddl.zig");
+comptime {
+    _ = admin_ddl;
+}
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
