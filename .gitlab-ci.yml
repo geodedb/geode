@@ -413,7 +413,11 @@ test-zig-unit:
   # 2026-05-11: the durable fix the comments kept calling for — shard
   # the aggregate `test` step. build.zig exposes `-Dtest-shard-total`
   # / `-Dtest-shard-index`; each matrix child builds+runs a round-robin
-  # slice (~44 binaries / shard). Timeout drops back to 2h per shard.
+  # slice. Started at 4 shards (pipeline #2516468881) but the round-robin
+  # clustered the slow integration binaries at index ≡3 mod 4 — shard [3]
+  # hit the 2h cap while [0..2] finished in 5-30 min. Bumped to 8 shards
+  # (the i≡3 cluster splits across indices 3 and 7) with a 3h cap for
+  # margin (shard [3] was killed at 2h so its true length is unknown).
   #
   # Pinned to `company,k8s,linux`: `k8s` is exclusive to "Company
   # Cluster Runner(s)" (fast for short jobs) and excludes "Lab Servers"
@@ -422,13 +426,13 @@ test-zig-unit:
     - company
     - k8s
     - linux
-  timeout: 2h
+  timeout: 3h
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-    TEST_SHARD_TOTAL: "4"
+    TEST_SHARD_TOTAL: "8"
   retry:
     max: 1
     when:
@@ -645,9 +649,10 @@ test-zig-release-safe:
   # CPU-throttled for the ~176-binary build).
   #
   # 2026-05-11: sharded like test-zig-unit via build.zig's
-  # `-Dtest-shard-total` / `-Dtest-shard-index`. Shard 0 also does the
-  # standalone ReleaseSafe binary build + symbol check for REQ-0008
-  # (no need to repeat it on every shard). Timeout drops to 2h/shard.
+  # `-Dtest-shard-total` / `-Dtest-shard-index` (8 shards, 3h cap —
+  # see the test-zig-unit comment for why 4 wasn't enough). Shard 0 also
+  # does the standalone ReleaseSafe binary build + symbol check for
+  # REQ-0008 (no need to repeat it on every shard).
   #
   # Pinned to `company,k8s,linux` (see test-zig-unit comment): `k8s`
   # excludes the slow "Lab Servers" and the broken "OVH Dedicated".
@@ -655,13 +660,13 @@ test-zig-release-safe:
     - company
     - k8s
     - linux
-  timeout: 2h
+  timeout: 3h
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
-    TEST_SHARD_TOTAL: "4"
+    TEST_SHARD_TOTAL: "8"
   before_script:
     - *zig-vendor-cache
   script:
@@ -874,17 +879,17 @@ test-code-coverage:
   image: $ZIG_IMAGE
   # 2026-05-11: this job's `zig build test -Doptimize=Debug` is the same
   # ~176-binary build that blows past 6h on the k8s runner (pipelines
-  # #2510271779, #2512695029). Sharded the same way as test-zig-unit so
-  # each matrix child finishes in ~2h. Pass-rate metric + kcov sampling
-  # are now per-shard — acceptable, this is an informational job.
-  timeout: 2h
+  # #2510271779, #2512695029). Sharded the same way as test-zig-unit
+  # (8 shards, 3h cap — see that job's comment). Pass-rate metric + kcov
+  # sampling are now per-shard — acceptable, this is an informational job.
+  timeout: 3h
   parallel:
     matrix:
-      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3", "4", "5", "6", "7"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     COVERAGE_THRESHOLD: "50"  # Start conservative; raise as coverage improves
-    TEST_SHARD_TOTAL: "4"
+    TEST_SHARD_TOTAL: "8"
   before_script:
     - *zig-vendor-cache
     - 'apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"'
