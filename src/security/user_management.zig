@@ -520,6 +520,25 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     user_ptr.user.auth_version += 1;
 }
 
+/// Change a user's role. Idempotent: re-assigning the current role is a no-op
+/// (no auth_version bump). On a real change, bumps auth_version to invalidate
+/// live sessions (mirrors updateUserPassword). Returns error.Unauthenticated if
+/// the user is not present in the store.
+// CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
+pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role) !void {
+    _ = allocator;
+    if (!try ensureUserCached(username)) return error.Unauthenticated;
+
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (user_store == null) return error.Unauthenticated;
+    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+    if (user_ptr.user.role == role) return; // no-op, no version bump
+    user_ptr.user.role = role;
+    user_ptr.user.auth_version += 1;
+}
+
 pub fn invalidateCachedUser(username: []const u8) void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -971,4 +990,51 @@ test "ensureDefaultUser is ignored when persistent resolver is configured" {
     try ensureDefaultUser(testing.allocator);
     try testing.expectError(error.Unauthenticated, authenticate("geode", "irrelevant-password"));
     try testing.expectEqual(@as(usize, 1), state.lookup_calls);
+}
+
+// CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
+test "assignRole_changes_role_and_bumps_version" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+
+    try createUser(testing.allocator, "ru", "Passw0rd1!", "ru@x.com", .User, false);
+
+    const before = getUser("ru") orelse return error.TestSetupFailed;
+    try testing.expectEqual(Role.User, before.role);
+    try testing.expectEqual(@as(u64, 1), before.auth_version);
+
+    try assignRole(testing.allocator, "ru", .Admin);
+
+    const after = getUser("ru") orelse return error.TestSetupFailed;
+    try testing.expectEqual(Role.Admin, after.role);
+    try testing.expectEqual(@as(u64, 2), after.auth_version);
+}
+
+// CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Idempotent; STATUS=TESTED; TEST=assignRole_same_role_is_noop; OWNER=security; UPDATED=2026-05-11
+test "assignRole_same_role_is_noop" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+
+    try createUser(testing.allocator, "ru2", "Passw0rd1!", "ru2@x.com", .Admin, false);
+
+    try assignRole(testing.allocator, "ru2", .Admin);
+
+    const u = getUser("ru2") orelse return error.TestSetupFailed;
+    try testing.expectEqual(Role.Admin, u.role);
+    // auth_version must not have been incremented (no-op path)
+    try testing.expectEqual(@as(u64, 1), u.auth_version);
+}
+
+// CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=ErrorHandling; STATUS=TESTED; TEST=assignRole_missing_user_returns_unauthenticated; OWNER=security; UPDATED=2026-05-11
+test "assignRole_missing_user_returns_unauthenticated" {
+    deinitUserStore();
+    defer deinitUserStore();
+
+    try initUserStore(testing.allocator);
+
+    try testing.expectError(error.Unauthenticated, assignRole(testing.allocator, "nonexistent_user_xyz", .Admin));
 }

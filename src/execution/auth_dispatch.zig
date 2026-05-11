@@ -227,6 +227,16 @@ fn ensureRolesInit(allocator: std.mem.Allocator) void {
     }
 }
 
+/// Returns true if `name` matches one of the four built-in role names
+/// (case-insensitive). Used to prevent CREATE ROLE from shadowing built-ins
+/// and to deduplicate SHOW ROLES output.
+pub fn isBuiltinRoleName(name: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(name, "admin") or
+        std.ascii.eqlIgnoreCase(name, "user") or
+        std.ascii.eqlIgnoreCase(name, "readwrite") or
+        std.ascii.eqlIgnoreCase(name, "readonly");
+}
+
 fn ensurePoliciesInit(allocator: std.mem.Allocator) void {
     if (!g_policies_init) {
         g_policies = std.StringHashMap([]const u8).init(allocator);
@@ -475,12 +485,37 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
         if (args.len >= 1 and args[0].* == .String) username = args[0].String;
         if (args.len >= 2 and args[1].* == .String) role_name = args[1].String;
     }
+
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
+
+    if (username.len == 0 or role_name.len == 0) {
+        row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and role required") };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // Try built-in roles first.
+    if (user_mgmt.Role.fromString(role_name)) |builtin_role| {
+        user_mgmt.assignRole(allocator, username, builtin_role) catch |err| {
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        };
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s}", .{ role_name, username }) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // Custom roles: membership is noted but not yet tracked structurally.
+    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    ensureRolesInit(allocator);
+    if (g_custom_roles.contains(role_name)) {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "assigned {s} to {s} (custom role; membership not yet tracked structurally)", .{ role_name, username }) };
+    } else {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: unknown role: {s}", .{role_name}) };
+    }
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
@@ -735,16 +770,28 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
         if (args.len >= 1 and args[0].* == .String) role_name = args[0].String;
         if (args.len >= 2 and args[1].* == .String) desc = args[1].String;
     }
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+
+    if (role_name.len == 0) {
+        row[0] = Value{ .Str = try allocator.dupe(u8, "error: role name required") };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // Built-in role names are idempotent — acknowledge without touching g_custom_roles.
+    if (isBuiltinRoleName(role_name)) {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "already exists: {s} (built-in)", .{role_name}) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
     g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     g_custom_roles.put(try allocator.dupe(u8, role_name), try allocator.dupe(u8, desc)) catch {};
-    const columns = try allocator.alloc([]const u8, 1);
-    columns[0] = try allocator.dupe(u8, "status");
-    const row = try allocator.alloc(Value, 1);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{role_name}) };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
@@ -783,6 +830,9 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     ensureRolesInit(allocator);
     var it = g_custom_roles.iterator();
     while (it.next()) |entry| {
+        // Defensive dedup: skip any custom entry whose name collides with a built-in
+        // (guards against state left over before hardening was in place).
+        if (isBuiltinRoleName(entry.key_ptr.*)) continue;
         const row = try allocator.alloc(Value, 1);
         row[0] = Value{ .Str = entry.key_ptr.* };
         try rows_list.append(allocator, row);
@@ -1126,4 +1176,24 @@ pub fn callAuthProcedure(
 
     const maybe = try execute(allocator, proc_name, call_proc, context);
     return maybe orelse error.UnknownProcedure;
+}
+
+// CANARY: REQ=REQ-AUTH-ROLE-002; FEATURE="BuiltinRoleHardening"; ASPECT=Validation; STATUS=TESTED; TEST=isBuiltinRoleName_recognizes_all_variants; OWNER=security; UPDATED=2026-05-11
+test "isBuiltinRoleName_recognizes_all_variants" {
+    const testing = std.testing;
+    // All four built-in names, both cases.
+    try testing.expect(isBuiltinRoleName("admin"));
+    try testing.expect(isBuiltinRoleName("Admin"));
+    try testing.expect(isBuiltinRoleName("ADMIN"));
+    try testing.expect(isBuiltinRoleName("user"));
+    try testing.expect(isBuiltinRoleName("User"));
+    try testing.expect(isBuiltinRoleName("readwrite"));
+    try testing.expect(isBuiltinRoleName("ReadWrite"));
+    try testing.expect(isBuiltinRoleName("readonly"));
+    try testing.expect(isBuiltinRoleName("ReadOnly"));
+
+    // Custom role name is not a built-in.
+    try testing.expect(!isBuiltinRoleName("auditor"));
+    try testing.expect(!isBuiltinRoleName(""));
+    try testing.expect(!isBuiltinRoleName("superuser"));
 }
