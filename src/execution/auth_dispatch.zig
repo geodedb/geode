@@ -1078,3 +1078,52 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
+
+// ---------------------------------------------------------------------------
+// DDL bridge: lets src/execution/admin_ddl.zig invoke the existing geode.auth.*
+// handlers with plain string arguments. Authorization (Admin-required for write
+// procedures), audit, password policy, and __geode_security persistence all run
+// through the unchanged execute() path -- nothing is reimplemented here.
+// ---------------------------------------------------------------------------
+
+/// Build a synthetic `CALL <proc_name>(arg0, arg1, ...)` with String-literal
+/// arguments and dispatch it through `execute()`. Caller owns the returned
+/// ExecutionResult (free with `result.deinit(allocator)`).
+///
+/// Safety note: some handlers store borrowed slices from string_args directly
+/// into the result (e.g. `Value{ .Str = username }` without duping). This is
+/// safe because string_args is caller-owned and outlives the result. The
+/// temporary *ast.Expr heap nodes are freed by the defers below, but the slice
+/// headers they contained (ptr + len) are already copied into the result values
+/// and continue to point into the caller-owned string_args data.
+pub fn callAuthProcedure(
+    allocator: std.mem.Allocator,
+    context: ExecutionContext,
+    proc_name: []const u8,
+    string_args: []const []const u8,
+) !ExecutionResult {
+    const arg_ptrs = try allocator.alloc(*ast.Expr, string_args.len);
+    defer allocator.free(arg_ptrs);
+    var made: usize = 0;
+    defer {
+        var i: usize = 0;
+        while (i < made) : (i += 1) allocator.destroy(arg_ptrs[i]);
+    }
+    for (string_args, 0..) |s, i| {
+        const e = try allocator.create(ast.Expr);
+        e.* = .{ .String = s };
+        arg_ptrs[i] = e;
+        made = i + 1;
+    }
+
+    const callee = try allocator.create(ast.Expr);
+    defer allocator.destroy(callee);
+    callee.* = .{ .Ident = .{ .orig = "", .cnf = "" } };
+
+    const call_proc = ast.CallProcedure{
+        .procedure = .{ .Call = .{ .callee = callee, .args = arg_ptrs } },
+    };
+
+    const maybe = try execute(allocator, proc_name, call_proc, context);
+    return maybe orelse error.UnknownProcedure;
+}
