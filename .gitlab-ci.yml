@@ -404,31 +404,31 @@ governance-conformance-sync:
 test-zig-unit:
   stage: test
   image: $ZIG_IMAGE
-  # Pipeline #2509086665 (commit 7df369a0) hit the 3h deadline at 10802s
-  # mid-suite under "Company Cluster Runner(s)" load. The Debug-mode test
-  # suite has grown past 3h on slow runners; bump headroom to 4h so transient
-  # runner slowness doesn't block releases.
+  # History of the timeout walk: 1h → 2h → 3h → 4h → 6h. Pipeline
+  # #2510271779 (commit bc8cdc91) hit 6h on "Lab Servers"; #2512695029
+  # then hit 6h again on "Company Cluster Runner(s)" — the kubernetes
+  # executor is CPU-constrained for the ~176-binary Debug test build.
+  # No single pool today can run `zig build test` within 6h.
   #
-  # 2026-05-08: pipeline #2509486107 (commit 48a0899a) ALSO hit the 4h
-  # deadline at 14402s on "Lab Servers" — the suite is genuinely longer
-  # than 4h on slow runners. Bump again to 6h. If we hit 6h next, the
-  # right fix is sharded test execution (parallel: matrix), not more
-  # timeout.
+  # 2026-05-11: the durable fix the comments kept calling for — shard
+  # the aggregate `test` step. build.zig exposes `-Dtest-shard-total`
+  # / `-Dtest-shard-index`; each matrix child builds+runs a round-robin
+  # slice (~44 binaries / shard). Timeout drops back to 2h per shard.
   #
-  # 2026-05-09: pipeline #2510271779 hit 6h on "Lab Servers" while the
-  # same suite ran in 32-43min on the Company Cluster Runner(s) pool.
-  # Pin to `company,k8s,linux` — `k8s` is exclusive to Company Cluster
-  # (kubernetes-executor) and excludes both "Lab Servers" (slow) and
-  # "OVH Dedicated Runners" (currently broken: every job hits 1h
-  # server_timeout_running, see pipeline #2512528539). Default tag set
-  # is `company,linux` which matches all three pools.
+  # Pinned to `company,k8s,linux`: `k8s` is exclusive to "Company
+  # Cluster Runner(s)" (fast for short jobs) and excludes "Lab Servers"
+  # (slow) and "OVH Dedicated Runners" (broken — 1h server_timeout).
   tags:
     - company
     - k8s
     - linux
-  timeout: 6h
+  timeout: 2h
+  parallel:
+    matrix:
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+    TEST_SHARD_TOTAL: "4"
   retry:
     max: 1
     when:
@@ -439,7 +439,7 @@ test-zig-unit:
     - *zig-vendor-cache
   script:
     - mkdir -p reports
-    - zig build test --summary all | tee reports/zig_test.log
+    - zig build test -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all | tee reports/zig_test_shard_${TEST_SHARD_INDEX}.log
   rules:
     - if: '$CI_COMMIT_BRANCH'
     - if: '$CI_COMMIT_TAG'
@@ -448,7 +448,7 @@ test-zig-unit:
   artifacts:
     when: always
     paths:
-      - reports/zig_test.log
+      - reports/zig_test_shard_*.log
     expire_in: 1 week
     reports:
       performance: reports/bench_performance.json
@@ -639,47 +639,43 @@ test-macos-unit:
 test-zig-release-safe:
   stage: test
   image: $ZIG_IMAGE
-  # ReleaseSafe build + full test suite straddles the project-default 1h budget
-  # on the shared runner — pipelines #910, #911, #916 all hit the 1h deadline
-  # while #913, #914 (same code) finished in 55-58 min. Pipeline #2509086665
-  # (commit 7df369a0) then hit the 2h deadline mid-suite under "Lab Servers"
-  # load (7203s). Bump headroom to 4h to match test-zig-unit; the suite is
-  # genuinely slower in ReleaseSafe than in Debug mode, and transient runner
-  # slowness shouldn't block releases.
+  # Timeout walk for the ReleaseSafe suite: 1h → 2h → 4h → 6h. Pipeline
+  # #2510271779 hit 6h; #2512695029 hit 6h again on "Company Cluster
+  # Runner(s)" — same root cause as test-zig-unit (kubernetes executor
+  # CPU-throttled for the ~176-binary build).
   #
-  # 2026-05-08: pipeline #2509486107 (commit 48a0899a) ALSO hit the 4h
-  # deadline at 14402s on "Lab Servers". The Debug-mode counterpart hit
-  # the same 4h. Bump both to 6h. If we hit 6h next, the right fix is
-  # sharded test execution (parallel: matrix), not more timeout.
+  # 2026-05-11: sharded like test-zig-unit via build.zig's
+  # `-Dtest-shard-total` / `-Dtest-shard-index`. Shard 0 also does the
+  # standalone ReleaseSafe binary build + symbol check for REQ-0008
+  # (no need to repeat it on every shard). Timeout drops to 2h/shard.
   #
-  # 2026-05-09: pipeline #2510271779 hit 6h. Same suite ran in 32-43min
-  # on Company Cluster Runner(s). Pin to `company,k8s,linux` — `k8s`
-  # is exclusive to Company Cluster (kubernetes-executor) and excludes
-  # both "Lab Servers" (slow) and "OVH Dedicated Runners" (currently
-  # broken: every job hits 1h server_timeout_running, see pipeline
-  # #2512528539). Default tag set is `company,linux` which matches all
-  # three pools.
+  # Pinned to `company,k8s,linux` (see test-zig-unit comment): `k8s`
+  # excludes the slow "Lab Servers" and the broken "OVH Dedicated".
   tags:
     - company
     - k8s
     - linux
-  timeout: 6h
+  timeout: 2h
+  parallel:
+    matrix:
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
+    TEST_SHARD_TOTAL: "4"
   before_script:
     - *zig-vendor-cache
   script:
     - |
-      echo "=== Building with ReleaseSafe optimization ==="
-      zig build -Doptimize=ReleaseSafe --summary all
+      if [ "$TEST_SHARD_INDEX" = "0" ]; then
+        echo "=== [shard 0] Building with ReleaseSafe optimization (REQ-0008) ==="
+        zig build -Doptimize=ReleaseSafe --summary all
+        echo "=== [shard 0] Verifying ReleaseSafe binary ==="
+        ls -la zig-out/bin/geode 2>/dev/null || echo "Binary built successfully"
+        echo "✓ REQ-0008 ReleaseSafe build requirements enforced"
+      fi
 
-      echo "=== Running tests with ReleaseSafe optimization ==="
-      zig build test -Doptimize=ReleaseSafe --summary all
-
-      echo "=== Verifying ReleaseSafe binary size and symbols ==="
-      ls -la zig-out/bin/geode 2>/dev/null || echo "Binary built successfully"
-
-      echo "✓ REQ-0008 ReleaseSafe build requirements enforced"
+      echo "=== Running ReleaseSafe tests, shard ${TEST_SHARD_INDEX}/${TEST_SHARD_TOTAL} ==="
+      zig build test -Doptimize=ReleaseSafe -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all
   rules:
     - if: '$CI_MERGE_REQUEST_ID'
     - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
@@ -831,6 +827,11 @@ bench-timeseries:
 bench-query-path:
   stage: test
   image: $ZIG_IMAGE
+  # 2026-05-11: was hitting the project-default 1h budget while building
+  # four ReleaseFast bench binaries on the CPU-constrained k8s runner
+  # (pipelines #2510271779, #2512695029 both `job_execution_timeout` at
+  # 3601s). Give it 2h; the four bench builds + compare fit comfortably.
+  timeout: 2h
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
   before_script:
@@ -871,9 +872,19 @@ bench-query-path:
 test-code-coverage:
   stage: test
   image: $ZIG_IMAGE
+  # 2026-05-11: this job's `zig build test -Doptimize=Debug` is the same
+  # ~176-binary build that blows past 6h on the k8s runner (pipelines
+  # #2510271779, #2512695029). Sharded the same way as test-zig-unit so
+  # each matrix child finishes in ~2h. Pass-rate metric + kcov sampling
+  # are now per-shard — acceptable, this is an informational job.
+  timeout: 2h
+  parallel:
+    matrix:
+      - TEST_SHARD_INDEX: ["0", "1", "2", "3"]
   variables:
     GIT_SUBMODULE_STRATEGY: recursive
     COVERAGE_THRESHOLD: "50"  # Start conservative; raise as coverage improves
+    TEST_SHARD_TOTAL: "4"
   before_script:
     - *zig-vendor-cache
     - 'apt-get update -qq && apt-get install -y -qq kcov 2>/dev/null || apk add --no-cache kcov 2>/dev/null || echo "WARN: kcov not available, skipping instrumented coverage"'
@@ -893,14 +904,14 @@ test-code-coverage:
       XML
       echo "coverage: test-pass-rate" > metrics.txt
 
-      echo "=== Building Test Binary ==="
-      zig build test -Doptimize=Debug --summary all 2>&1 | tee test_output.log
+      echo "=== Building Test Binary (shard ${TEST_SHARD_INDEX}/${TEST_SHARD_TOTAL}) ==="
+      zig build test -Doptimize=Debug -Dtest-shard-total=$TEST_SHARD_TOTAL -Dtest-shard-index=$TEST_SHARD_INDEX --summary all 2>&1 | tee test_output.log
       build_rc=${PIPESTATUS[0]}
       echo "zig build test exit=${build_rc}"
 
       # Count test pass rate as baseline metric (Zig prints "N/N tests passed").
       TOTAL_TESTS=$(grep -oE '[0-9]+/[0-9]+ tests passed' test_output.log | head -1 | awk -F'/' '{print $1}')
-      echo "Total tests passed: ${TOTAL_TESTS:-0}"
+      echo "Total tests passed (this shard): ${TOTAL_TESTS:-0}"
 
       # If kcov is available, run instrumented coverage
       if command -v kcov >/dev/null 2>&1; then
