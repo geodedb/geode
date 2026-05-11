@@ -58,11 +58,8 @@ const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
 // Task 5: GQL auth DDL execution module (CREATE/ALTER/DROP USER|ROLE, GRANT/REVOKE, SHOW *).
-// Task 6 will add dispatch arms in executeStatementWithContext.
+// Task 6: dispatch arms added in executeStatementWithContext + executeShow.
 pub const admin_ddl = @import("execution/admin_ddl.zig");
-comptime {
-    _ = admin_ddl;
-}
 // CANARY: REQ=REQ-TXN-UNDO-004; FEATURE="TransactionUndoLog"; ASPECT=ExecutionImport; STATUS=TESTED; TEST=geodetestlab/specs/transaction_state_basic.yml; OWNER=engine; UPDATED=2025-12-23
 const txn_undo_log = @import("txn_undo_log.zig");
 
@@ -1772,6 +1769,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .Values => |v| {
             return executeValues(allocator, v, context);
         },
+        .CreateUser => |s| return admin_ddl.executeCreateUser(allocator, s, context),
+        .AlterUser => |s| return admin_ddl.executeAlterUser(allocator, s, context),
+        .DropUser => |s| return admin_ddl.executeDropUser(allocator, s, context),
+        .CreateRole => |s| return admin_ddl.executeCreateRole(allocator, s, context),
+        .DropRole => |s| return admin_ddl.executeDropRole(allocator, s, context),
+        .Grant => |s| return admin_ddl.executeGrant(allocator, s, context),
+        .Revoke => |s| return admin_ddl.executeRevoke(allocator, s, context),
         else => return error.NotImplemented,
     }
 }

@@ -18,6 +18,7 @@ fn tmpDirRealpathAlloc(allocator: std.mem.Allocator, tmp_sub_path: []const u8) !
 const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
+const admin_ddl = @import("admin_ddl.zig");
 const planned_read_runtime = @import("planned_read_runtime.zig");
 
 // Import helper functions used by statement handlers
@@ -101,8 +102,11 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .graphs => &[_][]const u8{"name"},
         .procedures => &[_][]const u8{ "name", "signature" },
         .functions => &[_][]const u8{ "name", "signature", "return_type" },
-        // Task 6 routes these in execution.zig before reaching here
-        .users, .roles, .permissions, .version, .capabilities => return error.NotImplemented,
+        .users => return admin_ddl.executeShowUsers(allocator, context),
+        .roles => return admin_ddl.executeShowRoles(allocator, context),
+        .permissions => return admin_ddl.executeShowPermissions(allocator, s.target, context),
+        .version => return admin_ddl.executeShowVersion(allocator),
+        .capabilities => return admin_ddl.executeShowCapabilities(allocator),
     };
 
     // Allocate and copy column names
@@ -216,7 +220,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Geode currently has no user-defined stored procedures
             // Return empty result set (procedures might be added in future)
         },
-        // Task 6 routes these in execution.zig before reaching here; unreachable in practice
+        // The first switch returns early for these; this arm is unreachable in practice (defensive)
         .users, .roles, .permissions, .version, .capabilities => unreachable,
         .functions => {
             // GAP-0139: SHOW FUNCTIONS implementation
