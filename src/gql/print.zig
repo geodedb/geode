@@ -188,6 +188,13 @@ fn tagName(st: ast.Statement) []const u8 {
         .Profile => "Profile",
         .For => "For",
         .Values => "Values",
+        .CreateUser => "CreateUser",
+        .AlterUser => "AlterUser",
+        .DropUser => "DropUser",
+        .CreateRole => "CreateRole",
+        .DropRole => "DropRole",
+        .Grant => "Grant",
+        .Revoke => "Revoke",
     };
 }
 

@@ -101,6 +101,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .graphs => &[_][]const u8{"name"},
         .procedures => &[_][]const u8{ "name", "signature" },
         .functions => &[_][]const u8{ "name", "signature", "return_type" },
+        // Task 6 routes these in execution.zig before reaching here
+        .users, .roles, .permissions, .version, .capabilities => return error.NotImplemented,
     };
 
     // Allocate and copy column names
@@ -214,6 +216,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Geode currently has no user-defined stored procedures
             // Return empty result set (procedures might be added in future)
         },
+        // Task 6 routes these in execution.zig before reaching here; unreachable in practice
+        .users, .roles, .permissions, .version, .capabilities => unreachable,
         .functions => {
             // GAP-0139: SHOW FUNCTIONS implementation
             // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
