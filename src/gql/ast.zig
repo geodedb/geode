@@ -45,6 +45,14 @@ pub const Statement = union(enum) {
     DropGraph: DropGraphStatement,
     CreateGraphType: CreateGraphTypeStatement,
     DropGraphType: DropGraphTypeStatement,
+    // Geode extension: auth DDL
+    CreateUser: CreateUserStatement,
+    AlterUser: AlterUserStatement,
+    DropUser: DropUserStatement,
+    CreateRole: CreateRoleStatement,
+    DropRole: DropRoleStatement,
+    Grant: GrantStatement,
+    Revoke: RevokeStatement,
     // Query introspection
     Explain: ExplainStatement,
     Profile: ProfileStatement,
@@ -546,6 +554,8 @@ pub const ShowType = enum {
     graphs,
     procedures,
     functions,
+    users,
+    roles,
 };
 
 pub const IndexType = enum {
@@ -640,6 +650,74 @@ pub const DropGraphTypeStatement = struct {
     if_exists: bool = false,
     property_graph: bool = true, // GQL property graphs are default
 };
+
+// ---------------------------------------------------------------------------
+// Geode extension: auth DDL (not part of ISO/IEC 39075:2024).
+// Parsed via soft keywords; executed by src/execution/admin_ddl.zig which maps
+// each variant onto an existing geode.auth.* procedure handler.
+// ---------------------------------------------------------------------------
+
+pub const CreateUserStatement = struct {
+    name: []const u8,
+    password: []const u8,
+    email: ?[]const u8 = null,
+    role: ?[]const u8 = null,
+};
+
+pub const AlterUserAction = union(enum) {
+    set_password: []const u8,
+    set_role: []const u8,
+    enable,
+    disable,
+};
+
+pub const AlterUserStatement = struct {
+    name: []const u8,
+    action: AlterUserAction,
+};
+
+pub const DropUserStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
+
+pub const CreateRoleStatement = struct {
+    name: []const u8,
+    description: ?[]const u8 = null,
+};
+
+pub const DropRoleStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
+
+pub const GrantPrivilege = enum { read, write, schema, all };
+
+pub const GrantSubject = union(enum) {
+    role: []const u8, // GRANT ROLE <name> TO <user>
+    privilege: GrantPrivilege, // GRANT READ|WRITE|SCHEMA|ALL [ON GRAPH g] TO <user>
+};
+
+pub const GrantStatement = struct {
+    subject: GrantSubject,
+    on_graph: ?[]const u8 = null, // only meaningful for privilege form
+    grantee: []const u8, // username
+};
+
+pub const RevokeStatement = struct {
+    privilege: GrantPrivilege, // REVOKE only supports the privilege form
+    on_graph: ?[]const u8 = null,
+    grantee: []const u8,
+};
+
+pub fn grantPrivilegeName(p: GrantPrivilege) []const u8 {
+    return switch (p) {
+        .read => "READ",
+        .write => "WRITE",
+        .schema => "SCHEMA",
+        .all => "ALL",
+    };
+}
 
 // Query introspection statements
 pub const ExplainStatement = struct {
