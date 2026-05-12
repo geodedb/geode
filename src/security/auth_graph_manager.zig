@@ -884,6 +884,31 @@ pub const AuthGraphManager = struct {
         return v;
     }
 
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-023; FEATURE="AuthDDLPersistence"; ASPECT=ListRoles; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Return a slice of all persisted roles. Each entry holds slices into the
+    /// in-memory fixed-size arrays (no heap allocation per record beyond the
+    /// outer slice). Caller must free the returned slice with `allocator.free`.
+    pub const RoleEntry = struct {
+        id: u64,
+        name: []const u8,
+        description: []const u8,
+    };
+    pub fn listRoles(self: *Self, allocator: Allocator) ![]RoleEntry {
+        const count = self.storage.role_cache.count();
+        const entries = try allocator.alloc(RoleEntry, count);
+        var i: usize = 0;
+        var it = self.storage.role_cache.valueIterator();
+        while (it.next()) |record| {
+            entries[i] = .{
+                .id = record.id,
+                .name = record.getName(),
+                .description = record.getDescription(),
+            };
+            i += 1;
+        }
+        return entries[0..i];
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-012; FEATURE="AuthDDLPersistence"; ASPECT=FindRoleIdByName; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     /// Look up a role id by name (case-sensitive). Returns null if not found.
     pub fn findRoleIdByName(self: *Self, name: []const u8) !?u64 {

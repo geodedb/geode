@@ -73,6 +73,37 @@ pub var g_policies: std.StringHashMap([]const u8) = undefined;
 pub var g_policies_init: bool = false;
 pub var g_policies_mu: std.Io.Mutex = std.Io.Mutex.init;
 
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-019; FEATURE="AuthDDLPersistence"; ASPECT=RolePersistCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+/// Callbacks for persisting role DDL to __geode_security. Wired at server
+/// startup (P7) from code that can import auth_graph_manager. auth_dispatch.zig
+/// is part of root_mod and cannot import auth_graph_manager directly (circular).
+pub const RolePersistCallbacks = struct {
+    ctx: ?*anyopaque = null,
+    /// Create a role node (idempotent). Returns role id.
+    create_fn: ?*const fn (ctx: ?*anyopaque, name: []const u8, description: []const u8) anyerror!u64 = null,
+    /// Remove a role node by id.
+    remove_fn: ?*const fn (ctx: ?*anyopaque, role_id: u64) anyerror!void = null,
+    /// Find a role id by name. Returns null if not found.
+    find_id_fn: ?*const fn (ctx: ?*anyopaque, name: []const u8) anyerror!?u64 = null,
+    /// List all role entries as name/description pairs. Caller frees the slice.
+    list_fn: ?*const fn (ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]RoleEntry = null,
+};
+
+/// A single role entry returned by the list callback.
+pub const RoleEntry = struct {
+    id: u64,
+    name: []const u8,
+    description: []const u8,
+};
+
+var g_role_persist: RolePersistCallbacks = .{};
+
+/// Install role persistence callbacks. Called once at server startup from
+/// server_init (after the AuthGraphManager is at its final location).
+pub fn setRolePersistCallbacks(cb: RolePersistCallbacks) void {
+    g_role_persist = cb;
+}
+
 // GAP-0501/0502: Per-user MFA credential store for TOTP secrets and recovery codes.
 const MfaCredential = struct {
     secret_base32: []u8,
@@ -466,13 +497,23 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");
     const row = try allocator.alloc(Value, 2);
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-020; FEATURE="AuthDDLPersistence"; ASPECT=UserEnableDisable; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    user_mgmt.setUserActive(allocator, username, is_enable) catch |err| {
+        log.warn("geode.auth.user_enable/disable failed", &.{
+            Attr.string("username", username),
+            Attr.string("error", @errorName(err)),
+        });
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
+        row[1] = Value{ .Str = username };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    };
     row[0] = Value{ .Str = if (is_enable)
         try std.fmt.allocPrint(allocator, "enabled {s}", .{username})
     else
         try std.fmt.allocPrint(allocator, "disabled {s}", .{username}) };
     row[1] = Value{ .Str = username };
-    const rows = try allocator.alloc([]Value, 1);
-    rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
@@ -791,6 +832,11 @@ fn handleRoleCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     g_custom_roles.put(try allocator.dupe(u8, role_name), try allocator.dupe(u8, desc)) catch {};
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=RoleCreatePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    if (g_role_persist.create_fn) |f| {
+        _ = f(g_role_persist.ctx, role_name, desc) catch |e|
+            log.warn("role_create graph persist failed", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+    }
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "created {s}", .{role_name}) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
@@ -805,6 +851,17 @@ fn handleRoleDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.
     defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
     ensureRolesInit(allocator);
     _ = g_custom_roles.fetchRemove(role_name);
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-022; FEATURE="AuthDDLPersistence"; ASPECT=RoleDeletePersist; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    if (!isBuiltinRoleName(role_name)) {
+        if (g_role_persist.find_id_fn) |find_f| {
+            if (find_f(g_role_persist.ctx, role_name) catch null) |rid| {
+                if (g_role_persist.remove_fn) |rem_f| {
+                    rem_f(g_role_persist.ctx, rid) catch |e|
+                        log.warn("role_delete graph persist failed", &.{ Attr.string("role", role_name), Attr.string("error", @errorName(e)) });
+                }
+            }
+        }
+    }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
@@ -1176,6 +1233,37 @@ pub fn callAuthProcedure(
 
     const maybe = try execute(allocator, proc_name, call_proc, context);
     return maybe orelse error.UnknownProcedure;
+}
+
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-024; FEATURE="AuthDDLPersistence"; ASPECT=CustomRoleHydration; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+/// Called once at server startup (from server_init) after the AGM is ready
+/// and role persistence callbacks are installed.
+/// Loads custom (non-built-in) Role node names from __geode_security into
+/// g_custom_roles so that the in-memory role store is consistent with what was
+/// persisted in a prior run.
+pub fn hydrateCustomRolesFromGraph(allocator: std.mem.Allocator) void {
+    const list_f = g_role_persist.list_fn orelse return;
+    g_custom_roles_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_custom_roles_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    ensureRolesInit(allocator);
+    const entries = list_f(g_role_persist.ctx, allocator) catch |e| {
+        log.warn("hydrateCustomRolesFromGraph: listRoles failed", &.{Attr.string("error", @errorName(e))});
+        return;
+    };
+    defer allocator.free(entries);
+    for (entries) |entry| {
+        if (isBuiltinRoleName(entry.name)) continue;
+        // dupe the name and description so g_custom_roles owns its keys/values
+        const key = allocator.dupe(u8, entry.name) catch continue;
+        const val = allocator.dupe(u8, entry.description) catch {
+            allocator.free(key);
+            continue;
+        };
+        g_custom_roles.put(key, val) catch {
+            allocator.free(key);
+            allocator.free(val);
+        };
+    }
 }
 
 // CANARY: REQ=REQ-AUTH-ROLE-002; FEATURE="BuiltinRoleHardening"; ASPECT=Validation; STATUS=TESTED; TEST=isBuiltinRoleName_recognizes_all_variants; OWNER=security; UPDATED=2026-05-11
