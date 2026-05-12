@@ -80,7 +80,7 @@ pub const GraphRoleKey = struct {
     }
 };
 
-// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-020; FEATURE="AuthDDLPersistence"; ASPECT=GraphGrantKey; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-037; FEATURE="AuthDDLPersistence"; ASPECT=GraphGrantKey; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
 /// Composite key for per-graph explicit privilege grants (distinct from role-based access).
 /// action: 0=read, 1=write, 2=schema
 pub const GraphGrantKey = struct {
@@ -121,7 +121,7 @@ pub const GraphRBACPolicy = struct {
     /// Role hierarchy
     role_hierarchy: std.AutoHashMap(auth.RoleId, std.ArrayList(auth.RoleId)),
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=GraphUserGrantsField; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-038; FEATURE="AuthDDLPersistence"; ASPECT=GraphUserGrantsField; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
     /// Per-graph explicit privilege grants: (user_id, graph_hash, action) -> present.
     /// action: 0=read, 1=write, 2=schema. Distinct from role-based access.
     graph_user_grants: std.AutoHashMap(GraphGrantKey, void),
@@ -312,7 +312,7 @@ pub const GraphRBACPolicy = struct {
         return false;
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-022; FEATURE="AuthDDLPersistence"; ASPECT=GrantGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-039; FEATURE="AuthDDLPersistence"; ASPECT=GrantGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
     /// Record an explicit per-graph privilege grant for a user (idempotent).
     /// action: 0=read, 1=write, 2=schema
     pub fn grantGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
@@ -320,7 +320,7 @@ pub const GraphRBACPolicy = struct {
         try self.graph_user_grants.put(key, {});
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-023; FEATURE="AuthDDLPersistence"; ASPECT=RevokeGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-040; FEATURE="AuthDDLPersistence"; ASPECT=RevokeGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
     /// Remove an explicit per-graph privilege grant for a user.
     /// Returns true if the grant was present (and removed), false if it was absent.
     pub fn revokeGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
@@ -328,7 +328,7 @@ pub const GraphRBACPolicy = struct {
         return self.graph_user_grants.remove(key);
     }
 
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-024; FEATURE="AuthDDLPersistence"; ASPECT=HasGraphGrant; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-041; FEATURE="AuthDDLPersistence"; ASPECT=HasGraphGrant; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
     /// Return true if the user has an explicit per-graph privilege grant.
     /// action: 0=read, 1=write, 2=schema
     pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {

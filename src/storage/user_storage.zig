@@ -233,6 +233,7 @@ pub const UserStorageBackend = struct {
         }
     };
 
+    // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-001; FEATURE="GQL Auth DDL Persistence"; ASPECT=Storage; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
     pub const GraphGrantRecord = extern struct {
         id: u64,
         user_id: u64,

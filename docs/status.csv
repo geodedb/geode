@@ -239,6 +239,10 @@ REQ-AUTH-ENFORCE-028,AuthEnforcement,EscalationPrevention,TESTED,,,security,2026
 REQ-AUTH-ENFORCE-029,AuthEnforcement,UnicodeHomographPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-030,AuthEnforcement,ControlCharacterPrevention,TESTED,,,security,2026-01-28,src/security/test_auth_enforcement.zig
 REQ-AUTH-ENFORCE-031,MutationAuthorization,RoleU8Enforcement,TESTED,,,security,2026-04-09,src/security/test_auth_enforcement.zig
+REQ-AUTH-GRANT-PERSIST-001,GQL Auth DDL Persistence,Storage,TESTED,,,security,2026-05-12,src/storage/user_storage.zig
+REQ-AUTH-GRANT-PERSIST-002,GQL Auth DDL Persistence,WriteThrough,TESTED,,,security,2026-05-12,src/security/user_management.zig
+REQ-AUTH-GRANT-PERSIST-003,GQL Auth DDL Persistence,Enforcement,TESTED,,,security,2026-05-12,src/execution.zig
+REQ-AUTH-GRAPH-GLOBAL-001,AuthGraphManagerGlobal,GlobalAccessor,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-MGR-001,AuthGraphManager,Orchestration,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-MGR-002,AuthGraphManagerTests,ChainIntegrity,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-PERSIST-001,Runtime Auth Graph Persistence,UserCreate,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
@@ -250,6 +254,41 @@ REQ-AUTH-GRAPH-PERSIST-006,Runtime Auth Graph Persistence,LoginState,IMPL,,,secu
 REQ-AUTH-GRAPH-PERSIST-007,Runtime Auth Graph Persistence,PasswordChange,IMPL,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-PERSIST-008,Runtime Auth Graph Persistence,WireCallbacks,IMPL,,,security,2026-02-24,src/server/server_init.zig
 REQ-AUTH-GRAPH-PERSIST-009,Runtime Auth Graph Persistence,Callbacks,IMPL,,,security,2026-02-24,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-010,AuthDDLPersistence,RemoveUser,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-011,AuthDDLPersistence,SetUserActive,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-012,AuthDDLPersistence,FindRoleIdByName,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-013,AuthDDLPersistence,FindUserIdByName,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-014,AuthDDLPersistence,CreateRole,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-015,AuthDDLPersistence,RemoveRole,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-016,AuthDDLPersistence,GrantUserGraphPermission,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-017,AuthDDLPersistence,RevokeUserGraphPermission,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-018,AuthDDLPersistence,ListGraphGrants,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-019,AuthDDLPersistence,RolePersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-020,AuthDDLPersistence,UserEnableDisable,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-021,AuthDDLPersistence,RoleCreatePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,RoleDeletePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,ListRoles,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
+REQ-AUTH-GRAPH-PERSIST-023,AuthDDLPersistence,RevokeGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,CustomRoleHydration,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-024,AuthDDLPersistence,HasGraphGrant,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,IMPL,,,security,2026-05-11,src/security/multi_graph_security.zig
+REQ-AUTH-GRAPH-PERSIST-025,AuthDDLPersistence,LoadGraphGrants,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-GRAPH-PERSIST-026,AuthDDLPersistence,GrantPersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-027,AuthDDLPersistence,HandleGrantRevoke,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
+REQ-AUTH-GRAPH-PERSIST-030,AuthDDLPersistence,LibExport,IMPL,,,security,2026-05-12,src/lib.zig
+REQ-AUTH-GRAPH-PERSIST-031,AuthDDLPersistence,UserWriterCallbacks,IMPL,,,security,2026-05-12,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-032,AuthDDLPersistence,RoleCallbacks,IMPL,,,security,2026-05-12,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-033,AuthDDLPersistence,GrantCallbacks,IMPL,,,security,2026-05-12,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-034,AuthDDLPersistence,GrantCheck,IMPL,,,security,2026-05-12,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-035,AuthDDLPersistence,StartupWiring,IMPL,,,security,2026-05-12,src/server/server_init.zig
+REQ-AUTH-GRAPH-PERSIST-036,AuthDDLPersistence,StartupWiring,IMPL,,,security,2026-05-12,src/server/main.zig
+REQ-AUTH-GRAPH-PERSIST-037,AuthDDLPersistence,GraphGrantKey,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig
+REQ-AUTH-GRAPH-PERSIST-038,AuthDDLPersistence,GraphUserGrantsField,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig
+REQ-AUTH-GRAPH-PERSIST-039,AuthDDLPersistence,GrantGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig
+REQ-AUTH-GRAPH-PERSIST-040,AuthDDLPersistence,RevokeGraphPermission,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig
+REQ-AUTH-GRAPH-PERSIST-041,AuthDDLPersistence,HasGraphGrant,IMPL,,,security,2026-05-12,src/security/multi_graph_security.zig
 REQ-AUTH-GRAPH-WIRE-001,AuthGraphManager Integration,SecurityManager,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
 REQ-AUTH-GRAPH-WIRE-002,AuthGraphManager Integration,InitEmpty,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
 REQ-AUTH-GRAPH-WIRE-003,AuthGraphManager Integration,HydrateUser,IMPL,,,security,2026-02-24,src/security/geode_auth_lib.zig
@@ -283,6 +322,8 @@ REQ-AUTH-MTLS-QUIC-002,mTLS over QUIC,Config,IMPL,,,transport,2026-02-13,src/tra
 REQ-AUTH-MTLS-QUIC-003,mTLS over QUIC,ConnectionAuth,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
 REQ-AUTH-MTLS-QUIC-004,mTLS over QUIC,GlobalProvider,IMPL,,,security,2026-02-13,src/server/quic_connection_handler.zig
 REQ-AUTH-MTLS-QUIC-005,mTLS over QUIC,ServerInit,IMPL,,,security,2026-02-13,src/server/main.zig
+REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
+REQ-AUTH-PERSIST-UNIT-001,AuthDDLPersistence,WriterCallbacks,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
 REQ-AUTH-POLICY-001,AuthPolicy,PasswordReset,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-001,Password Reset Tracking,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-001,UserAuthPolicy,ForceReset,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
@@ -1825,6 +1866,8 @@ REQ-GQL-AUTH-DDL-001,GQL Auth DDL,Execution,TESTED,,,parser,2026-05-11,src/execu
 REQ-GQL-AUTH-DDL-002,GQL Auth DDL,Parser,TESTED,,,parser,2026-05-11,src/gql/parser.zig
 REQ-GQL-AUTH-DDL-002,GQL Auth DDL,Parser,TESTED,,,parser,2026-05-11,tests/test_auth_ddl_parser.zig
 REQ-GQL-AUTH-DDL-003,GQL Auth DDL,RoleAssignment,TESTED,,,auth,2026-05-11,src/security/user_management.zig
+REQ-GQL-AUTH-DDL-004,GQL Auth DDL,SetUserActive,IMPL,,,auth,2026-05-11,src/security/user_management.zig
+REQ-GQL-AUTH-DDL-004,GQL Auth DDL,SetUserActive,TESTED,,,auth,2026-05-11,tests/test_auth_persistence.zig
 REQ-GQL-BACKUP-RESTORE,BackupRestore,Core,TESTED,,,team,2025-10-02,tests/integration/test_backup_restore.zig
 REQ-GQL-BENCH,Distributed Features Benchmark,Performance,TESTED,,,bench,2025-09-29,benchmarks/benchmark_distributed_features.zig
 REQ-GQL-BICONNECTED-001,BiconnectedComponents,Connectivity,TESTED,,,graph,2026-04-01,src/execution/centrality_algorithms.zig

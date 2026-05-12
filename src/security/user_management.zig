@@ -130,6 +130,7 @@ pub const PersistentUserResolver = struct {
     auth_version_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!?u64 = null,
 };
 
+// CANARY: REQ=REQ-AUTH-GRANT-PERSIST-002; FEATURE="GQL Auth DDL Persistence"; ASPECT=WriteThrough; STATUS=TESTED; TEST=tests/test_auth_persistence.zig; OWNER=security; UPDATED=2026-05-12
 /// Write-through callback set for persisting auth DDL mutations to the __geode_security graph.
 /// All callbacks are optional and best-effort: a writer error is logged but never propagates
 /// to the caller — the in-memory mutation is always committed first.
