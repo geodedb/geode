@@ -982,7 +982,7 @@ pub const AuthGraphManager = struct {
 
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     /// List all persisted graph grants. Caller owns the returned slice.
-    pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.GraphGrantRecord {
+    pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.UserStorageBackend.GraphGrantRecord {
         return self.storage.listGraphGrants(allocator);
     }
 

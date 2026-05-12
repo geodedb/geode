@@ -668,3 +668,195 @@ fn graphPersistRoleMembership(opaque_agm: *anyopaque, hmac_key: *const [32]u8, u
             return 0;
         };
 }
+
+// =============================================================================
+// P7: Auth DDL persistence wiring — callbacks + startup hydration
+// =============================================================================
+
+const user_mgmt = geode.user_management;
+const multi_graph_security = geode.multi_graph_security;
+const auth_dispatch = geode.auth_dispatch;
+
+// -- PersistentUserWriter callbacks --
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-031; FEATURE="AuthDDLPersistence"; ASPECT=UserWriterCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+
+fn writerCreateUser(ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: user_mgmt.Role) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = try agm.createUser(&agm.hmac_key, username, email, password_hash, role == .Admin);
+    if (role != .Admin) {
+        // Ensure the built-in role node exists (createRole is idempotent) then assign.
+        _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
+        if (try agm.findRoleIdByName(role.toString())) |rid| {
+            _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
+        }
+    }
+}
+
+fn writerDeleteUser(ctx: ?*anyopaque, username: []const u8) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return;
+    try agm.removeUser(&agm.hmac_key, uid);
+}
+
+fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return;
+    _ = try agm.updateUserPassword(&agm.hmac_key, uid, new_password_hash);
+}
+
+fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return;
+    _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
+    if (try agm.findRoleIdByName(role.toString())) |rid| {
+        _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
+    }
+}
+
+fn writerSetActive(ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const uid = (try agm.findUserIdByName(username)) orelse return;
+    _ = try agm.setUserActive(&agm.hmac_key, uid, active);
+}
+
+// -- RolePersistCallbacks for auth_dispatch --
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-032; FEATURE="AuthDDLPersistence"; ASPECT=RoleCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+
+fn roleCreate(ctx: ?*anyopaque, name: []const u8, description: []const u8) anyerror!u64 {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    return try agm.createRole(&agm.hmac_key, name, description);
+}
+
+fn roleFindId(ctx: ?*anyopaque, name: []const u8) anyerror!?u64 {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    return try agm.findRoleIdByName(name);
+}
+
+fn roleRemove(ctx: ?*anyopaque, role_id: u64) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.removeRole(&agm.hmac_key, role_id);
+}
+
+/// List roles, translating AGM RoleEntry to auth_dispatch.RoleEntry.
+/// The two types have the same fields; names point into the AGM cache and
+/// are stable across this call.  Caller is responsible for freeing the slice.
+fn roleList(ctx: ?*anyopaque, allocator: std.mem.Allocator) anyerror![]auth_dispatch.RoleEntry {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const agm_entries = try agm.listRoles(allocator);
+    defer allocator.free(agm_entries);
+    const out = try allocator.alloc(auth_dispatch.RoleEntry, agm_entries.len);
+    for (agm_entries, 0..) |e, i| {
+        out[i] = .{ .id = e.id, .name = e.name, .description = e.description };
+    }
+    return out;
+}
+
+// -- GrantPersistCallbacks for auth_dispatch --
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-033; FEATURE="AuthDDLPersistence"; ASPECT=GrantCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+
+fn grantResolveUserId(ctx: ?*anyopaque, username: []const u8) ?u64 {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    return agm.findUserIdByName(username) catch null;
+}
+
+fn grantApply(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!void {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    try agm.grantUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
+    // Also update the in-memory policy so the grant takes effect without restart.
+    if (multi_graph_security.getGlobalPolicy()) |pol| {
+        try pol.grantGraphPermission(user_id, graph_name, action);
+    }
+}
+
+fn grantRevoke(ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!bool {
+    const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
+    const removed = try agm.revokeUserGraphPermission(&agm.hmac_key, user_id, graph_name, action);
+    if (multi_graph_security.getGlobalPolicy()) |pol| {
+        _ = pol.revokeGraphPermission(user_id, graph_name, action);
+    }
+    return removed;
+}
+
+// -- graph_grant_check_fn (injected into execution.zig) --
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-034; FEATURE="AuthDDLPersistence"; ASPECT=GrantCheck; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+
+fn graphGrantCheck(username: []const u8, graph_name: []const u8, action: u8) bool {
+    const agm = auth_graph_manager.AuthGraphManager.getGlobal() orelse return false;
+    const uid = (agm.findUserIdByName(username) catch null) orelse return false;
+    const pol = multi_graph_security.getGlobalPolicy() orelse return false;
+    return pol.hasGraphGrant(uid, graph_name, action);
+}
+
+// -- Startup installation function --
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-035; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+
+/// Wire all auth-DDL persistence callbacks and hydrate in-memory state from
+/// __geode_security.  Called from fixupSelfPointers() once the AuthGraphManager
+/// is at its final address.  Every step is best-effort: failures log a warning
+/// and startup continues.
+pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator: std.mem.Allocator) void {
+    // 1. Publish the global AGM pointer (used by graphGrantCheck).
+    auth_graph_manager.AuthGraphManager.setGlobal(agm);
+
+    // 2. User-mutation write-through.
+    user_mgmt.setPersistentUserWriter(.{
+        .ctx = @ptrCast(agm),
+        .create_fn = &writerCreateUser,
+        .delete_fn = &writerDeleteUser,
+        .update_password_fn = &writerUpdatePassword,
+        .set_role_fn = &writerSetRole,
+        .set_active_fn = &writerSetActive,
+    });
+
+    // 3. Role DDL persistence.
+    auth_dispatch.setRolePersistCallbacks(.{
+        .ctx = @ptrCast(agm),
+        .create_fn = &roleCreate,
+        .find_id_fn = &roleFindId,
+        .remove_fn = &roleRemove,
+        .list_fn = &roleList,
+    });
+
+    // 4. Grant DDL persistence.
+    auth_dispatch.setGrantPersistCallbacks(.{
+        .ctx = @ptrCast(agm),
+        .resolve_user_id_fn = &grantResolveUserId,
+        .grant_fn = &grantApply,
+        .revoke_fn = &grantRevoke,
+    });
+
+    // 5. Per-graph grant check function for execution.zig fallback path.
+    geode.execution.graph_grant_check_fn = &graphGrantCheck;
+
+    // 6. Hydrate custom roles (best-effort).
+    auth_dispatch.hydrateCustomRolesFromGraph(allocator);
+
+    // 7. Hydrate in-memory GraphRBACPolicy from persisted grants (best-effort).
+    if (agm.listGraphGrants(allocator)) |grants| {
+        defer allocator.free(grants);
+        if (grants.len > 0) {
+            if (multi_graph_security.getGlobalPolicy()) |pol| {
+                const entries = allocator.alloc(multi_graph_security.GraphGrantLoadEntry, grants.len) catch |e| {
+                    log.warn("Auth DDL startup: OOM allocating grant load entries", &.{Attr.string("error", @errorName(e))});
+                    return;
+                };
+                defer allocator.free(entries);
+                for (grants, 0..) |g, i| {
+                    entries[i] = .{ .user_id = g.user_id, .graph_name = g.getGraphName(), .action = g.action };
+                }
+                pol.loadGraphGrants(entries) catch |e| {
+                    log.warn("Auth DDL startup: loadGraphGrants failed", &.{Attr.string("error", @errorName(e))});
+                };
+                log.info("Auth DDL startup: hydrated graph grants", &.{Attr.int("count", @intCast(grants.len))});
+            } else {
+                log.warn("Auth DDL startup: no global GraphRBACPolicy, skipping grant hydration", &.{});
+            }
+        }
+    } else |e| {
+        log.warn("Auth DDL startup: listGraphGrants failed, skipping grant hydration", &.{
+            Attr.string("error", @errorName(e)),
+        });
+    }
+
+    log.info("Auth DDL persistence callbacks installed", &.{});
+}

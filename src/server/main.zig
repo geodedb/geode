@@ -568,13 +568,16 @@ pub fn main() !void {
 
     phase_start = compat_milliTimestamp();
     if (init_ctx.auth_graph_mgr) |agm| {
-        _ = agm;
         user_mgmt.setPersistentUserResolver(.{
             .lookup_fn = lookupPersistentAuthUser,
             .has_users_fn = persistentAuthUsersExist,
             .list_fn = listPersistentAuthUsers,
             .auth_version_fn = lookupPersistentAuthVersion,
         });
+        // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-036; FEATURE="AuthDDLPersistence"; ASPECT=StartupWiring; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+        // P7: Install write-through callbacks for user/role/grant DDL and hydrate
+        // in-memory state from __geode_security.
+        server_init.wireAuthDDLCallbacks(agm, gpa);
         log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
     } else {
         user_mgmt.setPersistentUserResolver(null);

@@ -706,6 +706,10 @@ pub fn parseGqlCached(
 // Re-export execution and graph_store for integration tests
 pub const execution = @import("execution.zig");
 pub const graph_store = @import("graph_store.zig");
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-030; FEATURE="AuthDDLPersistence"; ASPECT=LibExport; STATUS=IMPL; OWNER=security; UPDATED=2026-05-12
+// Re-export auth_dispatch so server_init can install callbacks without needing a
+// separate module import (auth_dispatch is part of root_mod, not a standalone module).
+pub const auth_dispatch = @import("execution/auth_dispatch.zig");
 pub const uuid = @import("uuid");
 // CANARY: REQ=REQ-PERF-WAL-006; FEATURE="WriteAheadLog"; ASPECT=LibExport; STATUS=TESTED; OWNER=storage; UPDATED=2026-02-17
 // Re-export WAL for server initialization and tests
