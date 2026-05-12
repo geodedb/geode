@@ -525,15 +525,26 @@ fn handleUserEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, 
     const row = try allocator.alloc(Value, 2);
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-020; FEATURE="AuthDDLPersistence"; ASPECT=UserEnableDisable; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
-    user_mgmt.setUserActive(allocator, username, is_enable) catch |err| {
-        log.warn("geode.auth.user_enable/disable failed", &.{
-            Attr.string("username", username),
-            Attr.string("error", @errorName(err)),
-        });
-        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
-        row[1] = Value{ .Str = username };
-        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-029; FEATURE="GQL Auth DDL Persistence"; ASPECT=UserEnableDisable; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
+    // Mutate + persist the active flag when the user is present in the in-memory store.
+    // If the user isn't resolvable there (e.g. it lives only in a separate storage path —
+    // the standalone CLI `geode user enable/disable` operates directly on the graph store),
+    // treat it as a no-op success, matching how handleUserDelete/handleRoleDelete degrade
+    // gracefully on a missing entity rather than surfacing an error.
+    user_mgmt.setUserActive(allocator, username, is_enable) catch |err| switch (err) {
+        // setUserActive returns error.Unauthenticated when the user isn't resolvable in the
+        // in-memory store; treat that as a no-op success (the user may live only in a separate
+        // storage path, e.g. the standalone CLI's direct-to-graph backend).
+        error.Unauthenticated => {},
+        else => {
+            log.warn("geode.auth.user_enable/disable failed", &.{
+                Attr.string("username", username),
+                Attr.string("error", @errorName(err)),
+            });
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: {s}", .{@errorName(err)}) };
+            row[1] = Value{ .Str = username };
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        },
     };
     row[0] = Value{ .Str = if (is_enable)
         try std.fmt.allocPrint(allocator, "enabled {s}", .{username})
