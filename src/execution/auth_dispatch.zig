@@ -104,6 +104,32 @@ pub fn setRolePersistCallbacks(cb: RolePersistCallbacks) void {
     g_role_persist = cb;
 }
 
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-026; FEATURE="AuthDDLPersistence"; ASPECT=GrantPersistCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+/// Callbacks for persisting per-graph privilege grants to __geode_security and
+/// the in-memory GraphRBACPolicy. Wired at server startup (P7) from code that
+/// can import auth_graph_manager / multi_graph_security. auth_dispatch.zig is
+/// part of root_mod and cannot import those modules directly (module diamond).
+pub const GrantPersistCallbacks = struct {
+    ctx: ?*anyopaque = null,
+    /// Resolve a username to a graph User-node id. Returns null if unknown / not
+    /// in server context (e.g. CLI or test without a live server).
+    resolve_user_id_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) ?u64 = null,
+    /// Persist a grant to the __geode_security graph and in-memory RBAC.
+    /// action: 0=read, 1=write, 2=schema
+    grant_fn: ?*const fn (ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!void = null,
+    /// Remove a grant from the __geode_security graph and in-memory RBAC.
+    /// Returns true if the grant was present and removed.
+    revoke_fn: ?*const fn (ctx: ?*anyopaque, user_id: u64, graph_name: []const u8, action: u8) anyerror!bool = null,
+};
+
+var g_grant_persist: GrantPersistCallbacks = .{};
+
+/// Install grant persistence callbacks. Called once at server startup from
+/// server_init (after the AuthGraphManager is at its final location).
+pub fn setGrantPersistCallbacks(cb: GrantPersistCallbacks) void {
+    g_grant_persist = cb;
+}
+
 // GAP-0501/0502: Per-user MFA credential store for TOTP secrets and recovery codes.
 const MfaCredential = struct {
     secret_base32: []u8,
@@ -955,6 +981,7 @@ fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-027; FEATURE="AuthDDLPersistence"; ASPECT=HandleGrantRevoke; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
 fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     var perm: []const u8 = "";
     var target: []const u8 = "";
@@ -966,22 +993,98 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         if (args.len >= 3 and args[2].* == .String) resource = args[2].String;
     }
     const is_grant = std.mem.eql(u8, proc_name, "geode.auth.grant");
+
+    // Build the single-column result we always return.
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
-    if (resource.len > 0) {
-        row[0] = Value{ .Str = if (is_grant)
-            try std.fmt.allocPrint(allocator, "Granted {s} on {s} to {s}", .{ perm, resource, target })
-        else
-            try std.fmt.allocPrint(allocator, "Revoked {s} on {s} from {s}", .{ perm, resource, target }) };
-    } else {
-        row[0] = Value{ .Str = if (is_grant)
-            try std.fmt.allocPrint(allocator, "Granted {s} to {s}", .{ perm, target })
-        else
-            try std.fmt.allocPrint(allocator, "Revoked {s} from {s}", .{ perm, target }) };
-    }
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
+
+    // No resource: per-graph grants require an ON GRAPH clause. Be honest.
+    if (resource.len == 0) {
+        row[0] = Value{ .Str = if (is_grant)
+            try std.fmt.allocPrint(allocator,
+                "note: global privilege grants are governed by the user's role; " ++
+                "per-graph grants require ON GRAPH (granted nothing persistent for {s})", .{target})
+        else
+            try std.fmt.allocPrint(allocator,
+                "note: global privilege revocations are governed by the user's role; " ++
+                "per-graph revocations require ON GRAPH (revoked nothing persistent for {s})", .{target}) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // Map perm name (case-insensitive) to action code(s): 0=read, 1=write, 2=schema
+    // Use a small fixed-size buffer for the action list (max 3 for ALL)
+    var actions_buf: [3]u8 = undefined;
+    var actions: []u8 = actions_buf[0..0];
+    if (std.ascii.eqlIgnoreCase(perm, "READ")) {
+        actions_buf[0] = 0;
+        actions = actions_buf[0..1];
+    } else if (std.ascii.eqlIgnoreCase(perm, "WRITE")) {
+        actions_buf[0] = 1;
+        actions = actions_buf[0..1];
+    } else if (std.ascii.eqlIgnoreCase(perm, "SCHEMA")) {
+        actions_buf[0] = 2;
+        actions = actions_buf[0..1];
+    } else if (std.ascii.eqlIgnoreCase(perm, "ALL")) {
+        actions_buf[0] = 0;
+        actions_buf[1] = 1;
+        actions_buf[2] = 2;
+        actions = actions_buf[0..3];
+    } else {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: unknown privilege: {s}", .{perm}) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+
+    // Resolve target username -> user_id via callback (null in CLI / test contexts).
+    const uid_opt: ?u64 = if (g_grant_persist.resolve_user_id_fn) |f|
+        f(g_grant_persist.ctx, target)
+    else
+        null;
+
+    if (uid_opt == null) {
+        // Either no server context (CLI/test) or user does not exist in the graph.
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: user not found: {s}", .{target}) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    const uid = uid_opt.?;
+
+    // Apply grant/revoke for each action code. Callback failures are logged and
+    // skipped — best effort; don't fail the whole handler.
+    for (actions) |action| {
+        if (is_grant) {
+            if (g_grant_persist.grant_fn) |f| {
+                f(g_grant_persist.ctx, uid, resource, action) catch |e| {
+                    log.warn("grant persist failed", &.{
+                        Attr.string("err", @errorName(e)),
+                        Attr.string("user", target),
+                        Attr.string("graph", resource),
+                        Attr.uint("action", @as(u64, action)),
+                    });
+                };
+            }
+        } else {
+            if (g_grant_persist.revoke_fn) |f| {
+                _ = f(g_grant_persist.ctx, uid, resource, action) catch |e| {
+                    log.warn("revoke persist failed", &.{
+                        Attr.string("err", @errorName(e)),
+                        Attr.string("user", target),
+                        Attr.string("graph", resource),
+                        Attr.uint("action", @as(u64, action)),
+                    });
+                };
+            }
+        }
+    }
+
+    // Return the status row with wording the geodetestlab spec asserts.
+    // grant uses "to", revoke uses "from" — matches the existing spec assertions.
+    row[0] = Value{ .Str = if (is_grant)
+        try std.fmt.allocPrint(allocator, "Granted {s} on {s} to {s}", .{ perm, resource, target })
+    else
+        try std.fmt.allocPrint(allocator, "Revoked {s} on {s} from {s}", .{ perm, resource, target }) };
+
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 

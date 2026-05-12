@@ -80,6 +80,31 @@ pub const GraphRoleKey = struct {
     }
 };
 
+// CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-020; FEATURE="AuthDDLPersistence"; ASPECT=GraphGrantKey; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+/// Composite key for per-graph explicit privilege grants (distinct from role-based access).
+/// action: 0=read, 1=write, 2=schema
+pub const GraphGrantKey = struct {
+    user_id: u64,
+    graph_hash: u64,
+    action: u8,
+
+    pub fn init(user_id: u64, graph_name: []const u8, action: u8) GraphGrantKey {
+        return .{
+            .user_id = user_id,
+            .graph_hash = std.hash.Wyhash.hash(0, graph_name),
+            .action = action,
+        };
+    }
+};
+
+/// Bulk-load entry for hydrating graph grants at startup (P7).
+/// A local struct avoids importing user_storage from this module.
+pub const GraphGrantLoadEntry = struct {
+    user_id: u64,
+    graph_name: []const u8,
+    action: u8,
+};
+
 /// Graph-aware RBAC policy manager
 pub const GraphRBACPolicy = struct {
     allocator: Allocator,
@@ -96,6 +121,11 @@ pub const GraphRBACPolicy = struct {
     /// Role hierarchy
     role_hierarchy: std.AutoHashMap(auth.RoleId, std.ArrayList(auth.RoleId)),
 
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-021; FEATURE="AuthDDLPersistence"; ASPECT=GraphUserGrantsField; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Per-graph explicit privilege grants: (user_id, graph_hash, action) -> present.
+    /// action: 0=read, 1=write, 2=schema. Distinct from role-based access.
+    graph_user_grants: std.AutoHashMap(GraphGrantKey, void),
+
     const Self = @This();
 
     pub fn init(allocator: Allocator) Self {
@@ -105,6 +135,7 @@ pub const GraphRBACPolicy = struct {
             .global_user_roles = std.AutoHashMap(auth.UserId, std.ArrayList(auth.RoleId)).init(allocator),
             .role_permissions = std.AutoHashMap(auth.RoleId, std.ArrayList(auth.Permission)).init(allocator),
             .role_hierarchy = std.AutoHashMap(auth.RoleId, std.ArrayList(auth.RoleId)).init(allocator),
+            .graph_user_grants = std.AutoHashMap(GraphGrantKey, void).init(allocator),
         };
     }
 
@@ -136,6 +167,9 @@ pub const GraphRBACPolicy = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.role_hierarchy.deinit();
+
+        // Free grant set (keys are value types — no heap strings to free)
+        self.graph_user_grants.deinit();
     }
 
     /// Assign a role to a user for a specific graph
@@ -276,6 +310,39 @@ pub const GraphRBACPolicy = struct {
             }
         }
         return false;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-022; FEATURE="AuthDDLPersistence"; ASPECT=GrantGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Record an explicit per-graph privilege grant for a user (idempotent).
+    /// action: 0=read, 1=write, 2=schema
+    pub fn grantGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !void {
+        const key = GraphGrantKey.init(user_id, graph_name, action);
+        try self.graph_user_grants.put(key, {});
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-023; FEATURE="AuthDDLPersistence"; ASPECT=RevokeGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Remove an explicit per-graph privilege grant for a user.
+    /// Returns true if the grant was present (and removed), false if it was absent.
+    pub fn revokeGraphPermission(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        const key = GraphGrantKey.init(user_id, graph_name, action);
+        return self.graph_user_grants.remove(key);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-024; FEATURE="AuthDDLPersistence"; ASPECT=HasGraphGrant; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Return true if the user has an explicit per-graph privilege grant.
+    /// action: 0=read, 1=write, 2=schema
+    pub fn hasGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) bool {
+        const key = GraphGrantKey.init(user_id, graph_name, action);
+        return self.graph_user_grants.contains(key);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-025; FEATURE="AuthDDLPersistence"; ASPECT=LoadGraphGrants; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Bulk-insert graph grants from startup hydration (P7).
+    /// Translates GraphGrantLoadEntry records (local type) into internal keys.
+    pub fn loadGraphGrants(self: *Self, records: []const GraphGrantLoadEntry) !void {
+        for (records) |rec| {
+            try self.grantGraphPermission(rec.user_id, rec.graph_name, rec.action);
+        }
     }
 };
 
