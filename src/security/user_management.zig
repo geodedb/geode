@@ -524,6 +524,7 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
 /// (no auth_version bump). On a real change, bumps auth_version to invalidate
 /// live sessions (mirrors updateUserPassword). Returns error.Unauthenticated if
 /// the user is not present in the store.
+// CANARY: REQ=REQ-GQL-AUTH-DDL-003; FEATURE="GQL Auth DDL"; ASPECT=RoleAssignment; STATUS=TESTED; TEST=tests/test_user_management.zig; OWNER=auth; UPDATED=2026-05-11
 // CANARY: REQ=REQ-AUTH-ROLE-001; FEATURE="RoleAssignment"; ASPECT=Mutation; STATUS=TESTED; TEST=assignRole_changes_role_and_bumps_version; OWNER=security; UPDATED=2026-05-11
 pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role) !void {
     _ = allocator;

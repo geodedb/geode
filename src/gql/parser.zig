@@ -6310,6 +6310,7 @@ pub const Parser = struct {
     // ---------------------------------------------------------------------------
     // Auth DDL parse functions (Geode extension — soft-keyword based)
     // ---------------------------------------------------------------------------
+    // CANARY: REQ=REQ-GQL-AUTH-DDL-002; FEATURE="GQL Auth DDL"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_auth_ddl_parser.zig; OWNER=parser; UPDATED=2026-05-11
 
     // Parse CREATE USER <name> SET PASSWORD '<pw>' [EMAIL '<email>'] [ROLE <role>]
     fn parseCreateUser(self: *Parser) ParserError!ast.Statement {

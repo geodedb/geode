@@ -21,6 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Auth defaults**: Authentication is enabled by default (fail-closed) and must be configured with credentials before deployment.
 - **CANARY coverage gap (GAP-0514, Open)**: ~15% of CANARY markers remain at `IMPL` status (implemented but not yet verified by a named test). This is governance/hygiene, not functional defect — all 1036 existing Zig tests pass. Tracked for a follow-up test-writing sprint targeting `execution.zig` and `graph_store.zig` first (27% of IMPL markers).
 - **MCP server (GAP-0516, Partial)**: the `src/mcp/server.zig` handlers for resource subscriptions (`subscribeResource`/`unsubscribeResource`) are intentionally not implemented — Geode does not yet produce streaming resource-change notifications. Clients should poll via `readResource` instead. `completeHandler` forwards to the LSP completion path; `setLogLevelHandler` is a safe no-op that acknowledges the request without changing runtime verbosity.
+- **Privilege grants not yet persistent**: GRANT/REVOKE `<privilege>` (READ/WRITE/SCHEMA/ALL) route to `geode.auth.grant`/`revoke` which acknowledge but do not yet persist a per-graph grant; `GRANT ROLE … TO …` and `ALTER USER … SET ROLE …` *do* persist (mutate the user's built-in role). Custom-role membership is not yet modeled on the user record. `CREATE POLICY` / FLE DDL / tenant DDL are not part of the GQL surface — use `CALL geode.fle.*` and the RLS engine API.
 - **Full audit report**: See [docs/FULL_AUDIT_2026_04_06.md](docs/FULL_AUDIT_2026_04_06.md) (with 2026-04-11 closure-notes footer) for the comprehensive audit and per-gap resolution details.
 
 ## 📚 Documentation Structure
@@ -47,6 +48,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **[Advanced Security Features](docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md)** - Enhanced RLS implementation
 - **[KMS Provider System](docs/KMS_PROVIDER_SYSTEM.md)** - Enterprise key management
 - **[User Authentication](docs/USER_AUTH.md)** - RBAC/ABAC with MFA support
+- **[GQL Auth DDL](docs/GQL_AUTH_DDL.md)** - CREATE/ALTER/DROP USER, CREATE/DROP ROLE, GRANT/REVOKE, SHOW statements (Geode extension)
 
 ### Advanced Features
 
@@ -87,6 +89,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 10. **Materialized View Refresh** - Complete refresh strategies with dependency tracking
 11. **CLI Subprocess Elimination** - Unified binary architecture eliminating subprocess spawning
 12. **Advanced Security Features** - Enhanced RLS with policy evaluation, expression compilation, and optimization
+13. **GQL Auth DDL** - CREATE/ALTER/DROP USER, CREATE/DROP ROLE, GRANT/REVOKE, SHOW USERS/ROLES/PERMISSIONS/VERSION/CAPABILITIES (Geode extension; see [docs/GQL_AUTH_DDL.md](docs/GQL_AUTH_DDL.md)). Routes to existing geode.auth.* handlers — same authorization, audit, and __geode_security persistence. user_assign_role now mutates the user's built-in role.
 
 ### 🏗️ Architecture Overview
 
@@ -398,7 +401,7 @@ Based on [TODO.md](docs/TODO.md), all major development priorities have been imp
 
 **See the complete documentation in [`./docs/`](docs/)** for detailed technical specifications, API references, performance analysis, and implementation guides.
 
-*Last Updated: April 2026*
+*Last Updated: May 2026*
 *Status: DEVELOPMENT READY (single-tenant) - 100% GQL compliance, 97.4% test pass rate (see Known Limitations for multi-tenant and distributed gaps)*
 *License: Apache License, Version 2.0 - Copyright 2024-2025 CodePros*
 
