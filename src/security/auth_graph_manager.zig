@@ -122,6 +122,16 @@ pub const AuthGraphManager = struct {
 
     const Self = @This();
 
+    // CANARY: REQ=REQ-AUTH-GRAPH-GLOBAL-001; FEATURE="AuthGraphManagerGlobal"; ASPECT=GlobalAccessor; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Global singleton. Null in CLI/test contexts — every caller must handle null.
+    var g_instance: ?*Self = null;
+    pub fn setGlobal(p: ?*Self) void {
+        g_instance = p;
+    }
+    pub fn getGlobal() ?*Self {
+        return g_instance;
+    }
+
     pub fn init(allocator: Allocator, store: *graph_store.GraphStore) !Self {
         var storage = try UserStorageBackend.init(allocator, store);
 
@@ -384,6 +394,9 @@ pub const AuthGraphManager = struct {
         // Verify policy records
         try self.verifyPolicyRecords(hmac_key, &hmac_list);
 
+        // Verify graph grant records
+        try self.verifyGraphGrantRecords(hmac_key, &hmac_list);
+
         // Sort HMACs by their byte representation for deterministic ordering
         sortHmacs(hmac_list.items);
 
@@ -498,6 +511,9 @@ pub const AuthGraphManager = struct {
 
         // Seal policy records
         try self.sealPolicyRecords(hmac_key, &hmac_list);
+
+        // Seal graph grant records
+        try self.sealGraphGrantRecords(hmac_key, &hmac_list);
 
         // Sort HMACs for deterministic chain hash
         sortHmacs(hmac_list.items);
@@ -746,7 +762,8 @@ pub const AuthGraphManager = struct {
         return @as(u64, self.storage.user_cache.count()) +
             @as(u64, self.storage.role_cache.count()) +
             @as(u64, self.storage.permission_cache.count()) +
-            @as(u64, self.storage.policy_cache.count());
+            @as(u64, self.storage.policy_cache.count()) +
+            @as(u64, self.storage.graph_grant_nodes.count());
     }
 
     fn recomputeAndStoreUserHmac(self: *Self, user_id: u64, hmac_key: *const [32]u8) !void {
@@ -842,6 +859,149 @@ pub const AuthGraphManager = struct {
         try self.sealChain(hmac_key);
         self.logSecurityGraphMutation(.configuration_change, "UPDATE_PASSWORD", user_id, record.getUsername(), null);
         return record.auth_version;
+    }
+
+    // -- P2 Write Wrappers --
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-010; FEATURE="AuthDDLPersistence"; ASPECT=RemoveUser; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Remove a user from the security graph and reseal the chain.
+    pub fn removeUser(self: *Self, hmac_key: *const [32]u8, user_id: u64) !void {
+        try self.storage.removeUser(user_id);
+        // next_user_id is monotonically increasing; no need to decrement.
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REMOVE_USER", user_id, "", null);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-011; FEATURE="AuthDDLPersistence"; ASPECT=SetUserActive; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Set a user's active state. Bumps auth_version so existing sessions are
+    /// invalidated when a user is disabled. Reseals the chain.
+    pub fn setUserActive(self: *Self, hmac_key: *const [32]u8, user_id: u64, active: bool) !u64 {
+        try self.storage.updateUser(user_id, null, null, active, null, null);
+        const v = try self.storage.bumpUserAuthVersion(user_id);
+        try self.recomputeAndStoreUserHmac(user_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, if (active) "ENABLE_USER" else "DISABLE_USER", user_id, "", null);
+        return v;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-012; FEATURE="AuthDDLPersistence"; ASPECT=FindRoleIdByName; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Look up a role id by name (case-sensitive). Returns null if not found.
+    pub fn findRoleIdByName(self: *Self, name: []const u8) !?u64 {
+        const record = self.storage.getRoleByName(name) orelse return null;
+        return record.id;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-013; FEATURE="AuthDDLPersistence"; ASPECT=FindUserIdByName; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Look up a user id by username. Returns null if not found.
+    pub fn findUserIdByName(self: *Self, username: []const u8) !?u64 {
+        const record = self.storage.getUserByUsername(username) orelse return null;
+        return record.id;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-014; FEATURE="AuthDDLPersistence"; ASPECT=CreateRole; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Create a named role, persisting it to the security graph. Idempotent —
+    /// if a role with the same name already exists, return its id without
+    /// writing or resealing.
+    pub fn createRole(self: *Self, hmac_key: *const [32]u8, name: []const u8, description: []const u8) !u64 {
+        // Idempotency check: return existing role id without a write.
+        if (try self.findRoleIdByName(name)) |existing_id| {
+            return existing_id;
+        }
+
+        // Derive next role id by scanning the cache for the current max,
+        // mirroring how `init` scans users for next_user_id.
+        var max_id: u64 = 0;
+        var it = self.storage.role_cache.keyIterator();
+        while (it.next()) |key| {
+            if (key.* > max_id) max_id = key.*;
+        }
+        const role_id = max_id + 1;
+
+        try self.storage.persistRole(role_id, name, description, 0, 0, false);
+        try self.recomputeAndStoreRoleHmac(role_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "CREATE_ROLE", role_id, name, null);
+        return role_id;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-015; FEATURE="AuthDDLPersistence"; ASPECT=RemoveRole; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Remove a role from the security graph and reseal the chain.
+    pub fn removeRole(self: *Self, hmac_key: *const [32]u8, role_id: u64) !void {
+        try self.storage.removeRole(role_id);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "REMOVE_ROLE", role_id, "", null);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-016; FEATURE="AuthDDLPersistence"; ASPECT=GrantUserGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Persist a graph-level permission grant for a user. The grant_id is
+    /// derived deterministically from the (user_id, graph_name, action) triple
+    /// using Wyhash so duplicate calls are idempotent at the storage level.
+    pub fn grantUserGraphPermission(self: *Self, hmac_key: *const [32]u8, user_id: u64, graph_name: []const u8, action: u8) !void {
+        const grant_id = graphGrantId(user_id, graph_name, action);
+        try self.storage.persistGraphGrant(grant_id, user_id, graph_name, action);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "GRANT_GRAPH_PERMISSION", user_id, graph_name, null);
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-017; FEATURE="AuthDDLPersistence"; ASPECT=RevokeUserGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// Revoke a graph-level permission grant for a user. Returns true if a
+    /// matching grant was found and removed.
+    pub fn revokeUserGraphPermission(self: *Self, hmac_key: *const [32]u8, user_id: u64, graph_name: []const u8, action: u8) !bool {
+        const removed = try self.storage.revokeGraphGrant(user_id, graph_name, action);
+        if (removed) {
+            try self.sealChain(hmac_key);
+            self.logSecurityGraphMutation(.configuration_change, "REVOKE_GRAPH_PERMISSION", user_id, graph_name, null);
+        }
+        return removed;
+    }
+
+    // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-018; FEATURE="AuthDDLPersistence"; ASPECT=ListGraphGrants; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
+    /// List all persisted graph grants. Caller owns the returned slice.
+    pub fn listGraphGrants(self: *Self, allocator: std.mem.Allocator) ![]user_storage.GraphGrantRecord {
+        return self.storage.listGraphGrants(allocator);
+    }
+
+    // -- GraphGrant HMAC chain support --
+
+    fn sealGraphGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        // GraphGrants use graph_grant_nodes (id -> node_id) but have no in-memory cache.
+        // Collect grant ids from the node map first to avoid iterator invalidation.
+        var ids: std.ArrayList(u64) = .empty;
+        defer ids.deinit(self.allocator);
+        {
+            var it = self.storage.graph_grant_nodes.keyIterator();
+            while (it.next()) |key| {
+                try ids.append(self.allocator, key.*);
+            }
+        }
+
+        for (ids.items) |grant_id| {
+            const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
+            // Read properties from graph to build a stable HMAC input.
+            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+            try hmac_list.append(self.allocator, computed);
+        }
+    }
+
+    fn verifyGraphGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
+        var it = self.storage.graph_grant_nodes.keyIterator();
+        while (it.next()) |key| {
+            const grant_id = key.*;
+            const node_id = self.storage.graph_grant_nodes.get(grant_id) orelse continue;
+            const computed = computeGraphGrantHmacFromNode(hmac_key, self.storage.store, node_id, grant_id);
+            const stored_hmac_prop = self.storage.store.getNodeProperty(node_id, "hmac");
+            if (stored_hmac_prop == null or stored_hmac_prop.? != .String) {
+                return error.RecordHmacMismatch;
+            }
+            const stored_hex = stored_hmac_prop.?.String;
+            const computed_hex = auth_hmac.hmacToHex(&computed);
+            if (!std.mem.eql(u8, &computed_hex, stored_hex)) {
+                return error.RecordHmacMismatch;
+            }
+            try hmac_list.append(self.allocator, computed);
+        }
     }
 };
 
@@ -1031,6 +1191,52 @@ fn computeChainHashChecked(hmac_key: *const [32]u8, record_hmacs: []const [32]u8
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
+}
+
+/// Derive a stable, deterministic grant id from the (user_id, graph_name, action) triple.
+/// Uses Wyhash for speed; collisions are astronomically unlikely for realistic input sets.
+fn graphGrantId(user_id: u64, graph_name: []const u8, action: u8) u64 {
+    var h = std.hash.Wyhash.init(0);
+    h.update(std.mem.asBytes(&user_id));
+    h.update(graph_name);
+    h.update(&[_]u8{action});
+    return h.final();
+}
+
+/// Compute the HMAC for a GraphGrant node by reading its properties from the store.
+fn computeGraphGrantHmacFromNode(hmac_key: *const [32]u8, store: *graph_store.GraphStore, node_id: u64, grant_id: u64) [32]u8 {
+    var id_buf: [20]u8 = undefined;
+    const id_str = std.fmt.bufPrint(&id_buf, "{d}", .{grant_id}) catch "0";
+
+    // Read properties directly from the graph node (grants have no in-memory cache).
+    const user_id_val = if (store.getNodeProperty(node_id, "user_id")) |v| if (v == .Int) v.Int else 0 else 0;
+    var uid_buf: [20]u8 = undefined;
+    const uid_str = std.fmt.bufPrint(&uid_buf, "{d}", .{user_id_val}) catch "0";
+
+    const graph_name = if (store.getNodeProperty(node_id, "graph_name")) |v| if (v == .String) v.String else "" else "";
+
+    const action_val = if (store.getNodeProperty(node_id, "action")) |v| if (v == .Int) v.Int else 0 else 0;
+    var action_buf: [10]u8 = undefined;
+    const action_str = std.fmt.bufPrint(&action_buf, "{d}", .{action_val}) catch "0";
+
+    const granted_at_val = if (store.getNodeProperty(node_id, "granted_at")) |v| if (v == .Int) v.Int else 0 else 0;
+    var granted_at_buf: [20]u8 = undefined;
+    const granted_at_str = std.fmt.bufPrint(&granted_at_buf, "{d}", .{granted_at_val}) catch "0";
+
+    const granted_by_val = if (store.getNodeProperty(node_id, "granted_by")) |v| if (v == .Int) v.Int else 0 else 0;
+    var granted_by_buf: [20]u8 = undefined;
+    const granted_by_str = std.fmt.bufPrint(&granted_by_buf, "{d}", .{granted_by_val}) catch "0";
+
+    const props = [_]auth_hmac.KeyValue{
+        .{ .key = "action", .value = action_str },
+        .{ .key = "grant_id", .value = id_str },
+        .{ .key = "granted_at", .value = granted_at_str },
+        .{ .key = "granted_by", .value = granted_by_str },
+        .{ .key = "graph_name", .value = graph_name },
+        .{ .key = "user_id", .value = uid_str },
+    };
+
+    return computeRecordHmacChecked(hmac_key, &props);
 }
 
 fn sliceUntilZero(bytes: []const u8) ?[]const u8 {
