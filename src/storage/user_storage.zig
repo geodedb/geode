@@ -51,6 +51,7 @@ const PERMISSION_LABEL = "Permission";
 const POLICY_LABEL = "Policy";
 const AUTH_CHAIN_ROOT_LABEL = "AuthChainRoot";
 const HAS_ROLE_EDGE = "HAS_ROLE";
+pub const GRAPH_GRANT_LABEL = "GraphGrant";
 
 fn computeRecordHmacChecked(hmac_key: *const [32]u8, props: []const auth_hmac.KeyValue) [32]u8 {
     return auth_hmac.computeRecordHmac(hmac_key, props) catch unreachable;
@@ -71,6 +72,7 @@ pub const UserStorageBackend = struct {
     role_nodes: std.AutoHashMap(u64, u64),
     permission_nodes: std.AutoHashMap(u64, u64),
     policy_nodes: std.AutoHashMap(u64, u64),
+    graph_grant_nodes: std.AutoHashMap(u64, u64),
 
     // AuthChainRoot singleton node ID (null if not yet created)
     chain_root_node: ?u64,
@@ -231,6 +233,20 @@ pub const UserStorageBackend = struct {
         }
     };
 
+    pub const GraphGrantRecord = extern struct {
+        id: u64,
+        user_id: u64,
+        graph_name: [128]u8,
+        graph_name_len: u16,
+        action: u8, // 0=Read, 1=Write, 2=Schema (mirrors PermissionRecord.action encoding)
+        granted_at: i64,
+        granted_by: u64,
+
+        pub fn getGraphName(self: *const GraphGrantRecord) []const u8 {
+            return self.graph_name[0..self.graph_name_len];
+        }
+    };
+
     pub fn init(allocator: Allocator, store: *graph_store.GraphStore) !Self {
         try ensureSecurityGraph(store);
 
@@ -245,6 +261,7 @@ pub const UserStorageBackend = struct {
             .role_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .permission_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .policy_nodes = std.AutoHashMap(u64, u64).init(allocator),
+            .graph_grant_nodes = std.AutoHashMap(u64, u64).init(allocator),
             .chain_root_node = null,
         };
 
@@ -261,6 +278,7 @@ pub const UserStorageBackend = struct {
         self.role_nodes.deinit();
         self.permission_nodes.deinit();
         self.policy_nodes.deinit();
+        self.graph_grant_nodes.deinit();
     }
 
     fn ensureSecurityGraph(store: *graph_store.GraphStore) !void {
@@ -275,6 +293,7 @@ pub const UserStorageBackend = struct {
         try self.loadRolesFromGraph();
         try self.loadPermissionsFromGraph();
         try self.loadPoliciesFromGraph();
+        try self.loadGraphGrantsFromGraph();
         // Hydrate `chain_root_node` from the persisted AuthChainRoot node so
         // a subsequent `persistChainRoot` call (e.g. during offline
         // reset-password rewriting the seal) updates the existing node
@@ -446,6 +465,101 @@ pub const UserStorageBackend = struct {
             try self.policy_cache.put(policy_id, record);
             try self.policy_nodes.put(policy_id, node_id);
         }
+    }
+
+    fn loadGraphGrantsFromGraph(self: *Self) !void {
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, GRAPH_GRANT_LABEL);
+        if (nodes_opt == null) return;
+
+        for (nodes_opt.?) |node_id| {
+            const node = self.store.getNodePtr(node_id) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+
+            const id_val = getIntProp(self.store, node_id, "id", -1);
+            if (id_val < 0) continue;
+            const grant_id: u64 = @intCast(id_val);
+
+            try self.graph_grant_nodes.put(grant_id, node_id);
+        }
+    }
+
+    // GraphGrant operations
+    pub fn persistGraphGrant(self: *Self, grant_id: u64, user_id: u64, graph_name: []const u8, action: u8) !void {
+        if (graph_name.len > 127) {
+            return error.FieldTooLong;
+        }
+
+        var record = blankGraphGrantRecord(grant_id);
+        record.user_id = user_id;
+        record.graph_name_len = copyIntoField(&record.graph_name, graph_name);
+        record.action = action;
+        record.granted_at = compat_timestamp();
+        record.granted_by = 0;
+
+        try self.upsertGraphGrantNode(record);
+    }
+
+    pub fn revokeGraphGrant(self: *Self, user_id: u64, graph_name: []const u8, action: u8) !bool {
+        // Scan graph_grant_nodes to find the matching node by user_id, graph_name, action
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, GRAPH_GRANT_LABEL);
+        if (nodes_opt == null) return false;
+
+        for (nodes_opt.?) |node_id| {
+            const node = self.store.getNodePtr(node_id) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+
+            const id_val = getIntProp(self.store, node_id, "id", -1);
+            if (id_val < 0) continue;
+            const grant_id: u64 = @intCast(id_val);
+
+            const uid_val = getIntProp(self.store, node_id, "user_id", -1);
+            if (uid_val < 0) continue;
+            const stored_user_id: u64 = @intCast(uid_val);
+            if (stored_user_id != user_id) continue;
+
+            const stored_action: u8 = @intCast(@max(0, getIntProp(self.store, node_id, "action", -1)));
+            if (stored_action != action) continue;
+
+            const stored_graph = getStringProp(self.store, node_id, "graph_name", "");
+            if (!std.mem.eql(u8, stored_graph, graph_name)) continue;
+
+            // Found the matching grant
+            _ = self.graph_grant_nodes.remove(grant_id);
+            self.store.deleteNode(node_id);
+            return true;
+        }
+        return false;
+    }
+
+    pub fn listGraphGrants(self: *Self, allocator: Allocator) ![]GraphGrantRecord {
+        const nodes_opt = self.store.getNodesByLabel(SECURITY_GRAPH_NAME, GRAPH_GRANT_LABEL);
+        if (nodes_opt == null or nodes_opt.?.len == 0) {
+            return allocator.alloc(GraphGrantRecord, 0);
+        }
+
+        var records = std.ArrayList(GraphGrantRecord).empty;
+        defer records.deinit(allocator);
+
+        for (nodes_opt.?) |node_id| {
+            const node = self.store.getNodePtr(node_id) orelse continue;
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+
+            const id_val = getIntProp(self.store, node_id, "id", -1);
+            if (id_val < 0) continue;
+            const grant_id: u64 = @intCast(id_val);
+
+            var record = blankGraphGrantRecord(grant_id);
+            const uid_val = getIntProp(self.store, node_id, "user_id", 0);
+            record.user_id = if (uid_val >= 0) @intCast(uid_val) else 0;
+            record.graph_name_len = copyIntoField(&record.graph_name, getStringProp(self.store, node_id, "graph_name", ""));
+            record.action = @intCast(@max(0, getIntProp(self.store, node_id, "action", 0)));
+            record.granted_at = getIntProp(self.store, node_id, "granted_at", compat_timestamp());
+            const gb_val = getIntProp(self.store, node_id, "granted_by", 0);
+            record.granted_by = if (gb_val >= 0) @intCast(gb_val) else 0;
+
+            try records.append(allocator, record);
+        }
+        return records.toOwnedSlice(allocator);
     }
 
     // User operations
@@ -1010,6 +1124,30 @@ pub const UserStorageBackend = struct {
             .updated_at = compat_milliTimestamp(),
             .created_by = 0,
         };
+    }
+
+    fn blankGraphGrantRecord(grant_id: u64) GraphGrantRecord {
+        return GraphGrantRecord{
+            .id = grant_id,
+            .user_id = 0,
+            .graph_name = [_]u8{0} ** 128,
+            .graph_name_len = 0,
+            .action = 0,
+            .granted_at = compat_timestamp(),
+            .granted_by = 0,
+        };
+    }
+
+    fn upsertGraphGrantNode(self: *Self, record: GraphGrantRecord) !void {
+        const node_id = self.graph_grant_nodes.get(record.id) orelse try self.createEntityNode(GRAPH_GRANT_LABEL);
+        try self.graph_grant_nodes.put(record.id, node_id);
+
+        try self.store.setNodeProperty(node_id, "id", .{ .Int = safeI64(record.id) });
+        try self.store.setNodeProperty(node_id, "user_id", .{ .Int = safeI64(record.user_id) });
+        try self.store.setNodeProperty(node_id, "graph_name", .{ .String = record.getGraphName() });
+        try self.store.setNodeProperty(node_id, "action", .{ .Int = record.action });
+        try self.store.setNodeProperty(node_id, "granted_at", .{ .Int = record.granted_at });
+        try self.store.setNodeProperty(node_id, "granted_by", .{ .Int = safeI64(record.granted_by) });
     }
 
     pub fn copyIntoField(dest: []u8, src: []const u8) u16 {
