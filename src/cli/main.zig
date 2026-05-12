@@ -1853,30 +1853,44 @@ fn executeBatchQueries(
     };
 
     // Single QUIC connection for all queries via the shared Zig client library.
-    var raw_client = zig_quic_bridge.initClient(
-        allocator,
-        host,
-        port,
-        .{
-            .insecure = insecure,
-            .ca_cert_path = ca_cert_path,
-            .client_cert_path = client_cert_path,
-            .client_key_path = client_key_path,
-        },
-        null,
-        null,
-    ) catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
-        return error.ConnectionFailed;
+    // GAP-0260/0263: retry the initial connect a few times. Under CPU contention
+    // (e.g. parallel test runs / stdin batches) the QUIC handshake can fail
+    // transiently; a brief backoff between attempts resolves most of it. Mirrors
+    // the retry already present on the single-query path below.
+    const max_connect_attempts: usize = 3;
+    var connect_attempt: usize = 0;
+    var raw_client = while (true) : (connect_attempt += 1) {
+        var c = zig_quic_bridge.initClient(
+            allocator,
+            host,
+            port,
+            .{
+                .insecure = insecure,
+                .ca_cert_path = ca_cert_path,
+                .client_cert_path = client_cert_path,
+                .client_key_path = client_key_path,
+            },
+            null,
+            null,
+        ) catch |err| {
+            const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to initialize client: {}\n", .{err}) catch "Error: Failed to initialize client\n";
+            stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+            return error.ConnectionFailed;
+        };
+        c.connect() catch |err| {
+            c.deinit();
+            const name = @errorName(err);
+            if (connect_attempt + 1 >= max_connect_attempts or std.mem.indexOf(u8, name, "ConnectionRefused") != null) {
+                const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {s}\n", .{name}) catch "Error: Failed to connect\n";
+                stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
+                return error.ConnectionFailed;
+            }
+            compat_sleepNs(50 * std.time.ns_per_ms);
+            continue;
+        };
+        break c;
     };
     defer raw_client.deinit();
-
-    raw_client.connect() catch |err| {
-        const err_msg = std.fmt.allocPrint(allocator, "Error: Failed to connect: {}\n", .{err}) catch "Error: Failed to connect\n";
-        stderr.writeStreamingAll(std.Io.Threaded.global_single_threaded.io(), err_msg) catch {};
-        return error.ConnectionFailed;
-    };
 
     // Connected — execute all queries over this single connection
     var executed: usize = 0;
