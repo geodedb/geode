@@ -130,6 +130,18 @@ pub const PersistentUserResolver = struct {
     auth_version_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!?u64 = null,
 };
 
+/// Write-through callback set for persisting auth DDL mutations to the __geode_security graph.
+/// All callbacks are optional and best-effort: a writer error is logged but never propagates
+/// to the caller — the in-memory mutation is always committed first.
+pub const PersistentUserWriter = struct {
+    ctx: ?*anyopaque = null,
+    create_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, email: []const u8, password_hash: []const u8, role: Role) anyerror!void = null,
+    delete_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8) anyerror!void = null,
+    update_password_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, new_password_hash: []const u8) anyerror!void = null,
+    set_role_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, role: Role) anyerror!void = null,
+    set_active_fn: ?*const fn (ctx: ?*anyopaque, username: []const u8, active: bool) anyerror!void = null,
+};
+
 const CachedUserNode = struct {
     user: User,
     prev: ?*CachedUserNode = null,
@@ -272,6 +284,7 @@ var user_store_mutex = std.Io.Mutex.init;
 var user_store: ?UserCache = null;
 var auth_enabled: std.atomic.Value(bool) = std.atomic.Value(bool).init(true);
 var persistent_resolver: ?PersistentUserResolver = null;
+var persistent_writer: ?PersistentUserWriter = null;
 
 const default_auth_cache_entries: usize = 256;
 
@@ -303,6 +316,12 @@ pub fn setPersistentUserResolver(resolver: ?PersistentUserResolver) void {
     persistent_resolver = resolver;
 }
 
+pub fn setPersistentUserWriter(w: ?PersistentUserWriter) void {
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+    persistent_writer = w;
+}
+
 pub fn setCacheCapacityForTesting(max_entries: usize) !void {
     user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
     defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
@@ -332,6 +351,7 @@ pub fn deinitUserStore() void {
         user_store = null;
     }
     persistent_resolver = null;
+    persistent_writer = null;
 }
 
 /// Hash password using the canonical Argon2id implementation with OWASP parameters.
@@ -385,7 +405,14 @@ pub fn createUser(allocator: std.mem.Allocator, username: []const u8, password: 
         .auth_version = 1,
     };
 
-    _ = try store.putOrUpdate(user);
+    const inserted = try store.putOrUpdate(user);
+    if (persistent_writer) |w| {
+        if (w.create_fn) |f| {
+            f(w.ctx, username, email, inserted.user.password_hash, role) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
 }
 
 /// Create a user with a pre-hashed password (for syncing from auth graph store).
@@ -418,7 +445,14 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
         .auth_version = 1,
     };
 
-    _ = try store.putOrUpdate(user);
+    const inserted2 = try store.putOrUpdate(user);
+    if (persistent_writer) |w| {
+        if (w.create_fn) |f| {
+            f(w.ctx, username, email, inserted2.user.password_hash, role) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "create_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
 }
 
 /// Authenticate user with username and password.
@@ -477,6 +511,14 @@ pub fn deleteUser(username: []const u8) !void {
 
     if (user_store == null) return error.Unauthenticated;
     if (!user_store.?.remove(username)) return error.Unauthenticated;
+
+    if (persistent_writer) |w| {
+        if (w.delete_fn) |f| {
+            f(w.ctx, username) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "delete_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
 }
 
 /// Check if any users exist
@@ -518,6 +560,14 @@ pub fn updateUserPassword(allocator: std.mem.Allocator, username: []const u8, ne
     user_ptr.user.password_hash = try hashPassword(store_allocator, new_password);
     user_ptr.user.password_reset_required = false;
     user_ptr.user.auth_version += 1;
+
+    if (persistent_writer) |w| {
+        if (w.update_password_fn) |f| {
+            f(w.ctx, username, user_ptr.user.password_hash) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "update_password_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
 }
 
 /// Change a user's role. Idempotent: re-assigning the current role is a no-op
@@ -538,6 +588,40 @@ pub fn assignRole(allocator: std.mem.Allocator, username: []const u8, role: Role
     if (user_ptr.user.role == role) return; // no-op, no version bump
     user_ptr.user.role = role;
     user_ptr.user.auth_version += 1;
+
+    if (persistent_writer) |w| {
+        if (w.set_role_fn) |f| {
+            f(w.ctx, username, role) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_role_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
+}
+
+/// Enable or disable a user account. Idempotent: re-setting the same active state is a no-op.
+/// On a real change, bumps auth_version to invalidate live sessions (mirrors assignRole).
+/// Returns error.Unauthenticated if the user is not present in the store.
+// CANARY: REQ=REQ-GQL-AUTH-DDL-004; FEATURE="GQL Auth DDL"; ASPECT=SetUserActive; STATUS=IMPL; OWNER=auth; UPDATED=2026-05-11
+pub fn setUserActive(allocator: std.mem.Allocator, username: []const u8, active: bool) !void {
+    _ = allocator;
+    if (!try ensureUserCached(username)) return error.Unauthenticated;
+
+    user_store_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer user_store_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (user_store == null) return error.Unauthenticated;
+    const user_ptr = user_store.?.entries.get(username) orelse return error.Unauthenticated;
+    if (user_ptr.user.active == active) return; // no-op
+    user_ptr.user.active = active;
+    user_ptr.user.auth_version += 1;
+
+    if (persistent_writer) |w| {
+        if (w.set_active_fn) |f| {
+            f(w.ctx, username, active) catch |err| {
+                log.warn("persistent user writer failed", &.{ Attr.string("op", "set_active_fn"), Attr.string("error", @errorName(err)) });
+            };
+        }
+    }
 }
 
 pub fn invalidateCachedUser(username: []const u8) void {
