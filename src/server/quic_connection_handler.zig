@@ -2934,6 +2934,15 @@ fn handleClientMessage(
                                     // If RBAC has no entry for this user+graph, fall through to global role
                                     const key = multi_graph_security.GraphRoleKey.init(uid, requested_graph);
                                     if (rbac.graph_user_roles.get(key)) |_| {
+                                        // Explicit graph assignment exists but no read permission via role.
+                                        // A per-graph READ grant (GRANT READ ON GRAPH) widens access here.
+                                        if (rbac.hasGraphGrant(uid, requested_graph, 0)) {
+                                            log.info("bind permitted by per-graph READ grant", &.{
+                                                Attr.string("graph", requested_graph),
+                                                Attr.string("user", username),
+                                            });
+                                            break :blk true;
+                                        }
                                         // Explicit graph assignment exists but no read permission — deny
                                         break :blk false;
                                     }

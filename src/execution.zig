@@ -786,6 +786,18 @@ fn validateHopBounds(pattern: ast.GraphPattern) !void {
     }
 }
 
+/// Optional per-graph grant check (action: 0=read,1=write,2=schema), injected by server_init.
+/// Returns true if `username` has been granted `action` on `graph_name`. Null in CLI/test contexts.
+pub var graph_grant_check_fn: ?*const fn (username: []const u8, graph_name: []const u8, action: u8) bool = null;
+
+fn permissionToActionCode(p: @import("security/user_management.zig").Permission) u8 {
+    return switch (p) {
+        .Read => 0,
+        .Write => 1,
+        .Schema => 2,
+    };
+}
+
 /// Check if user has required permission for operation
 pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
     const user_mgmt = @import("security/user_management.zig");
@@ -802,6 +814,19 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
 
     // Check if user has required permission
     if (!user_mgmt.hasPermission(context.role.?, permission)) {
+        // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
+        // Per-graph grant fallback: a GRANT on the currently-bound graph widens access beyond the
+        // user's global role. This is widening-only — it only runs when the global-role check fails.
+        if (graph_grant_check_fn) |f| {
+            if (context.user) |uname| {
+                const bound_graph: ?[]const u8 = if (context.session_state) |ss| ss.graph else null;
+                if (bound_graph) |g| {
+                    if (f(uname, g, permissionToActionCode(permission))) return; // grant widens
+                }
+                // TODO: bound graph not on ExecutionContext when session_state is null;
+                // per-graph write/schema grant enforcement limited to BIND in that case.
+            }
+        }
         return error.Unauthorized;
     }
 }
