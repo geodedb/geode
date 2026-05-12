@@ -1015,12 +1015,10 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
     // No resource: per-graph grants require an ON GRAPH clause. Be honest.
     if (resource.len == 0) {
         row[0] = Value{ .Str = if (is_grant)
-            try std.fmt.allocPrint(allocator,
-                "note: global privilege grants are governed by the user's role; " ++
+            try std.fmt.allocPrint(allocator, "note: global privilege grants are governed by the user's role; " ++
                 "per-graph grants require ON GRAPH (granted nothing persistent for {s})", .{target})
         else
-            try std.fmt.allocPrint(allocator,
-                "note: global privilege revocations are governed by the user's role; " ++
+            try std.fmt.allocPrint(allocator, "note: global privilege revocations are governed by the user's role; " ++
                 "per-graph revocations require ON GRAPH (revoked nothing persistent for {s})", .{target}) };
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     }

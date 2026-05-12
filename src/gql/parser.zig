@@ -4257,8 +4257,14 @@ pub const Parser = struct {
         }
 
         // Check if this is CREATE USER or CREATE ROLE (auth DDL soft keywords)
-        if (self.softKw("USER")) { self.advance(); return self.parseCreateUser(); }
-        if (self.softKw("ROLE")) { self.advance(); return self.parseCreateRole(); }
+        if (self.softKw("USER")) {
+            self.advance();
+            return self.parseCreateUser();
+        }
+        if (self.softKw("ROLE")) {
+            self.advance();
+            return self.parseCreateRole();
+        }
 
         // Check if this is CREATE INDEX
         if (self.cur.kind == .INDEX or
@@ -5625,8 +5631,14 @@ pub const Parser = struct {
         }
 
         // Check if this is DROP USER or DROP ROLE (auth DDL soft keywords)
-        if (self.softKw("USER")) { self.advance(); return self.parseDropUserOrRole(true); }
-        if (self.softKw("ROLE")) { self.advance(); return self.parseDropUserOrRole(false); }
+        if (self.softKw("USER")) {
+            self.advance();
+            return self.parseDropUserOrRole(true);
+        }
+        if (self.softKw("ROLE")) {
+            self.advance();
+            return self.parseDropUserOrRole(false);
+        }
 
         // Future: handle DROP DATABASE, etc.
         return error.UnexpectedToken;
@@ -6366,8 +6378,14 @@ pub const Parser = struct {
         if (!self.softKw("USER")) return self.unexpected("only ALTER USER is supported");
         self.advance(); // USER
         const name = try self.parseName();
-        if (self.softKw("ENABLE")) { self.advance(); return .{ .AlterUser = .{ .name = name, .action = .enable } }; }
-        if (self.softKw("DISABLE")) { self.advance(); return .{ .AlterUser = .{ .name = name, .action = .disable } }; }
+        if (self.softKw("ENABLE")) {
+            self.advance();
+            return .{ .AlterUser = .{ .name = name, .action = .enable } };
+        }
+        if (self.softKw("DISABLE")) {
+            self.advance();
+            return .{ .AlterUser = .{ .name = name, .action = .disable } };
+        }
         _ = try self.expect(.SET);
         if (self.softKw("PASSWORD")) {
             self.advance();
@@ -6385,10 +6403,22 @@ pub const Parser = struct {
     // Parse READ | WRITE | SCHEMA | ALL into a GrantPrivilege
     fn parseGrantPrivilege(self: *Parser) ParserError!ast.GrantPrivilege {
         switch (self.cur.kind) {
-            .READ => { self.advance(); return .read; },
-            .WRITE => { self.advance(); return .write; },
-            .SCHEMA => { self.advance(); return .schema; },
-            .ALL => { self.advance(); return .all; },
+            .READ => {
+                self.advance();
+                return .read;
+            },
+            .WRITE => {
+                self.advance();
+                return .write;
+            },
+            .SCHEMA => {
+                self.advance();
+                return .schema;
+            },
+            .ALL => {
+                self.advance();
+                return .all;
+            },
             else => return self.unexpected("expected one of READ, WRITE, SCHEMA, ALL"),
         }
     }
