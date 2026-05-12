@@ -242,6 +242,7 @@ REQ-AUTH-ENFORCE-031,MutationAuthorization,RoleU8Enforcement,TESTED,,,security,2
 REQ-AUTH-GRANT-PERSIST-001,GQL Auth DDL Persistence,Storage,TESTED,,,security,2026-05-12,src/storage/user_storage.zig
 REQ-AUTH-GRANT-PERSIST-002,GQL Auth DDL Persistence,WriteThrough,TESTED,,,security,2026-05-12,src/security/user_management.zig
 REQ-AUTH-GRANT-PERSIST-003,GQL Auth DDL Persistence,Enforcement,TESTED,,,security,2026-05-12,src/execution.zig
+REQ-AUTH-GRANT-PERSIST-029,GQL Auth DDL Persistence,UserEnableDisable,TESTED,,,security,2026-05-12,src/execution/auth_dispatch.zig
 REQ-AUTH-GRAPH-GLOBAL-001,AuthGraphManagerGlobal,GlobalAccessor,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-MGR-001,AuthGraphManager,Orchestration,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-MGR-002,AuthGraphManagerTests,ChainIntegrity,TESTED,,,security,2026-02-24,src/security/auth_graph_manager.zig
@@ -264,7 +265,6 @@ REQ-AUTH-GRAPH-PERSIST-016,AuthDDLPersistence,GrantUserGraphPermission,IMPL,,,se
 REQ-AUTH-GRAPH-PERSIST-017,AuthDDLPersistence,RevokeUserGraphPermission,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-PERSIST-018,AuthDDLPersistence,ListGraphGrants,IMPL,,,security,2026-05-11,src/security/auth_graph_manager.zig
 REQ-AUTH-GRAPH-PERSIST-019,AuthDDLPersistence,RolePersistCallbacks,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
-REQ-AUTH-GRAPH-PERSIST-020,AuthDDLPersistence,UserEnableDisable,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
 REQ-AUTH-GRAPH-PERSIST-021,AuthDDLPersistence,RoleCreatePersist,IMPL,,,security,2026-05-11,src/execution/auth_dispatch.zig
 REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
 REQ-AUTH-GRAPH-PERSIST-022,AuthDDLPersistence,GrantGraphPermission,TESTED,,,security,2026-05-11,tests/test_auth_persistence.zig
