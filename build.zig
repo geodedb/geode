@@ -4306,4 +4306,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_auth_ddl_parser_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
     const auth_ddl_parser_step = b.step("test-auth-ddl-parser", "Run GQL auth DDL parser unit tests");
     auth_ddl_parser_step.dependOn(&run_auth_ddl_parser_tests.step);
+
+    // Task 8 (auth DDL persistence): unit tests for PersistentUserWriter callbacks,
+    // setUserActive semantics, and GraphRBACPolicy grant round-trip.
+    const auth_persistence_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_auth_persistence.zig"), .target = target, .optimize = optimize });
+    auth_persistence_test_mod.addImport("geode", root_mod);
+    const auth_persistence_tests = b.addTest(.{ .root_module = auth_persistence_test_mod });
+    const run_auth_persistence_tests = b.addRunArtifact(auth_persistence_tests);
+    shardDep(test_step, &run_auth_persistence_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const auth_persistence_step = b.step("test-auth-persistence", "Run auth DDL persistence unit tests");
+    auth_persistence_step.dependOn(&run_auth_persistence_tests.step);
 }
