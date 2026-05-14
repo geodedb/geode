@@ -57,6 +57,9 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
+// Task 9: fire schema-change notifications after CREATE/DROP GRAPH so LSP
+// SchemaProviders drop their per-session label/edge-type caches.
+const schema_change_notifier = @import("execution/schema_change_notifier.zig");
 // Task 5: GQL auth DDL execution module (CREATE/ALTER/DROP USER|ROLE, GRANT/REVOKE, SHOW *).
 // Task 6: dispatch arms added in executeStatementWithContext + executeShow.
 pub const admin_ddl = @import("execution/admin_ddl.zig");
@@ -1532,6 +1535,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
             try cat.addGraphWithUuid(graph_name, uuid);
 
+            // Task 9: a new graph appears in the visible-graphs set for
+            // every user with READ on it — invalidate LSP caches.
+            schema_change_notifier.notify();
+
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),
                 .rows = try allocator.alloc([]Value, 0),
@@ -1572,6 +1579,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                     Attr.string("error", @errorName(err)),
                 });
             };
+
+            // Task 9: a graph leaving the visible-graphs set affects every
+            // SchemaProvider whose ctx pointed at it — invalidate.
+            schema_change_notifier.notify();
 
             return ExecutionResult{
                 .columns = try allocator.alloc([]const u8, 0),

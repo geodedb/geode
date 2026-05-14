@@ -58,6 +58,9 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionError = execution.ExecutionError;
 const ExecutionContext = execution.ExecutionContext;
+// Task 9: fire schema-change notifications after GRANT/REVOKE so LSP
+// SchemaProviders re-fetch the user's visible-graph/label set.
+const schema_change_notifier = @import("schema_change_notifier.zig");
 
 const Value = value_types.Value;
 
@@ -1093,6 +1096,12 @@ fn handleGrantRevoke(allocator: std.mem.Allocator, proc_name: []const u8, call_s
         try std.fmt.allocPrint(allocator, "Granted {s} on {s} to {s}", .{ perm, resource, target })
     else
         try std.fmt.allocPrint(allocator, "Revoked {s} on {s} from {s}", .{ perm, resource, target }) };
+
+    // Task 9: a grant/revoke changes which graphs a user can see, which
+    // changes the LSP SchemaProvider's user-visible label/edge-type set.
+    // Per-graph callback failures above are best-effort — we still notify
+    // because the in-memory RBAC state will have moved.
+    schema_change_notifier.notify();
 
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }

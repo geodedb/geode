@@ -15,6 +15,12 @@ const testing = std.testing;
 const geode = @import("geode");
 const intro = @import("schema_introspection");
 const SchemaProvider = @import("schema_provider").SchemaProvider;
+// Task 9: notifier is accessed via the `geode` named module (re-exported
+// from lib.zig:715). Registering schema_change_notifier as its own build
+// module would trigger Zig 0.16's "file exists in modules X and X0"
+// diamond — execution.zig + auth_dispatch.zig already pull it via
+// relative @import.
+const notifier = geode.schema_change_notifier;
 const graph_store = geode.graph_store;
 const user_management = geode.user_management;
 
@@ -122,4 +128,27 @@ test "SchemaProvider is safe under concurrent access" {
     var threads: [4]std.Thread = undefined;
     for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Run.go, .{&sp});
     for (threads) |t| t.join();
+}
+
+test "SchemaProvider invalidates on DDL notification" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"A"}, default_graph, "tenant-a");
+
+    var sp = SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+    try sp.registerInvalidation();
+    defer sp.unregisterInvalidation();
+
+    _ = try sp.getLabels();
+    try testing.expect(sp.labels != null);
+    notifier.notify();
+    try testing.expect(sp.labels == null);
 }

@@ -3541,6 +3541,16 @@ pub fn build(b: *std.Build) void {
     // lib.zig would close a module cycle (schema_introspection_mod
     // already depends on geode/root_mod), so this is the named-module
     // diamond escape hatch — same pattern as Task 5.
+    //
+    // Task 9: schema_change_notifier lives at src/execution/schema_change_notifier.zig
+    // and is re-exported from lib.zig (pub const schema_change_notifier).
+    // We deliberately DO NOT register it as a standalone build module —
+    // executing.zig already pulls it via relative @import for the CREATE/DROP
+    // GRAPH + GRANT/REVOKE notify() call sites, and registering it as a
+    // separate module would trigger Zig 0.16's "file exists in modules X
+    // and X0" error. The cross-package consumer (SchemaProvider) reaches
+    // it via `geode.schema_change_notifier` instead, mirroring how
+    // auth_dispatch is reached from server_init (lib.zig:712).
     const schema_provider_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/schema_provider.zig"), .target = target, .optimize = optimize });
     schema_provider_mod.addImport("geode", root_mod);
     schema_provider_mod.addImport("schema_introspection", schema_introspection_mod);

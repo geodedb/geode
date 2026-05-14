@@ -13,8 +13,13 @@
 //     all fetch timestamps so the next accessor call re-fetches.
 //   - Single-owner deinit that releases every cached allocation.
 //
-// Out of scope (deferred):
-//   - DDL-driven schema_change_notifier hook     -> Task 9
+// DDL invalidation (Task 9):
+//   - `registerInvalidation()` subscribes this SchemaProvider's
+//     `invalidate()` to src/execution/schema_change_notifier.zig.
+//     CREATE/DROP GRAPH and GRANT/REVOKE fire `notifier.notify()`,
+//     which drives a fan-out to every subscribed SchemaProvider.
+//     `unregisterInvalidation()` MUST run before deinit() or the
+//     next DDL will dispatch on a dangling pointer.
 //
 // Thread-safety (Task 8):
 //   - A single `std.Io.Mutex` (`mu`) serialises every accessor entry
@@ -56,6 +61,13 @@ const geode = @import("geode");
 const intro = @import("schema_introspection");
 
 const graph_store = geode.graph_store;
+// Task 9: reached via the `geode` named module rather than its own build
+// module — execution.zig and auth_dispatch.zig already pull
+// schema_change_notifier.zig via relative @import for the notify() call
+// sites, so a second module registration would trigger the Zig 0.16
+// "file exists in modules X and X0" diamond. lib.zig re-exports the file
+// as `pub const schema_change_notifier` for exactly this use case.
+const notifier = geode.schema_change_notifier;
 
 pub const SchemaProvider = struct {
     pub const DEFAULT_TTL_NS: i128 = 5 * std.time.ns_per_s;
@@ -143,6 +155,30 @@ pub const SchemaProvider = struct {
         }
         self.properties.clearRetainingCapacity();
         self.properties_fetched_at_ns.clearRetainingCapacity();
+    }
+
+    /// Trampoline used by schema_change_notifier to drop caches on DDL.
+    /// The notifier dispatches with `*anyopaque`, so we restore the type
+    /// here and call invalidate(), which takes its own lock — safe
+    /// because notifier.notify() drops its own lock before invoking
+    /// callbacks (see src/execution/schema_change_notifier.zig).
+    fn onSchemaChange(ctx: *anyopaque) void {
+        const self: *SchemaProvider = @ptrCast(@alignCast(ctx));
+        self.invalidate();
+    }
+
+    /// Subscribe to schema-change notifications. Caller MUST pair with
+    /// `unregisterInvalidation()` before deinit, or the notifier will
+    /// dispatch on a dangling pointer on the next DDL.
+    pub fn registerInvalidation(self: *SchemaProvider) !void {
+        try notifier.register(.{ .ctx = self, .invoke = onSchemaChange });
+    }
+
+    /// Unsubscribe from schema-change notifications. Safe to call even
+    /// if `registerInvalidation()` was never called — `unregister()` is
+    /// a no-op when the ctx isn't found.
+    pub fn unregisterInvalidation(self: *SchemaProvider) void {
+        notifier.unregister(self);
     }
 
     /// Lazy fetch + cache of the user's visible node-label set.
