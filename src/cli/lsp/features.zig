@@ -216,9 +216,58 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
 }
 
 // CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
-pub fn provideHover(allocator: Allocator, doc: *const Document, line: u32, character: u32) !?protocol.Hover {
+// CANARY: REQ=REQ-LSP-SCHEMA-HOVER-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on label shows property list"; OWNER=lsp; UPDATED=2026-05-14
+pub fn provideHover(
+    allocator: Allocator,
+    doc: *const Document,
+    line: u32,
+    character: u32,
+    schema: ?*@import("schema_provider.zig").SchemaProvider,
+) !?protocol.Hover {
     const offset = doc.getOffset(line, character) orelse return null;
     const word = doc.getWordAt(offset) orelse return null;
+
+    // Schema-aware label hover: if the hovered word is a node label visible
+    // to this user/tenant, render the label + its observed property keys as
+    // markdown. The static metadata fallback below still handles keywords,
+    // functions, types, and procedures. Edge-type / property hover land in
+    // Task 22.
+    //
+    // Memory contract: the returned `contents.value` is allocated from
+    // `allocator` and owned by the caller (matches the keyword/function
+    // branches below). `sp.getLabels()` / `sp.getPropertiesFor()` slices
+    // are borrowed from the SchemaProvider cache — we read them inline and
+    // copy what we need into the buffer, so no caller-side free of those.
+    if (schema) |sp| {
+        const labels = sp.getLabels() catch &[_][]const u8{};
+        for (labels) |lbl| {
+            if (!std.mem.eql(u8, lbl, word)) continue;
+            const props = sp.getPropertiesFor(lbl) catch &[_][]const u8{};
+            var buf = std.ArrayList(u8).empty;
+            errdefer buf.deinit(allocator);
+            try buf.appendSlice(allocator, "**Label `");
+            try buf.appendSlice(allocator, lbl);
+            try buf.appendSlice(allocator, "`** *(Node)*\n\nProperties:\n");
+            if (props.len == 0) {
+                try buf.appendSlice(allocator, "_(none observed)_\n");
+            } else {
+                for (props) |p| {
+                    try buf.appendSlice(allocator, "- `");
+                    try buf.appendSlice(allocator, p);
+                    try buf.appendSlice(allocator, "`\n");
+                }
+            }
+            const owned = try buf.toOwnedSlice(allocator);
+            return protocol.Hover{
+                .contents = .{
+                    .kind = .markdown,
+                    .value = owned,
+                },
+            };
+        }
+        // edge_type / property branches land in Task 22; fall through to
+        // legacy keyword/function/type/procedure hover.
+    }
 
     // Check if it's a function (case-sensitive) - check before keywords to avoid
     // false matches like "count" matching keyword "COUNT" instead of function "count"

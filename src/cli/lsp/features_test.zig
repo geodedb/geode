@@ -97,7 +97,7 @@ test "provideHover - MATCH keyword" {
     defer doc.deinit();
 
     // Hover over MATCH (line 0, char 2)
-    const hover = try features.provideHover(allocator, doc, 0, 2);
+    const hover = try features.provideHover(allocator, doc, 0, 2, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -113,7 +113,7 @@ test "provideHover - RETURN keyword" {
     defer doc.deinit();
 
     // Hover over RETURN (line 0, char 12)
-    const hover = try features.provideHover(allocator, doc, 0, 12);
+    const hover = try features.provideHover(allocator, doc, 0, 12, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -128,7 +128,7 @@ test "provideHover - WHERE keyword" {
     defer doc.deinit();
 
     // Hover over WHERE (line 0, char 12)
-    const hover = try features.provideHover(allocator, doc, 0, 12);
+    const hover = try features.provideHover(allocator, doc, 0, 12, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -143,7 +143,7 @@ test "provideHover - count function" {
     defer doc.deinit();
 
     // Hover over count (line 0, char 8)
-    const hover = try features.provideHover(allocator, doc, 0, 8);
+    const hover = try features.provideHover(allocator, doc, 0, 8, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -158,7 +158,7 @@ test "provideHover - distance function" {
     defer doc.deinit();
 
     // Hover over distance (line 0, char 10)
-    const hover = try features.provideHover(allocator, doc, 0, 10);
+    const hover = try features.provideHover(allocator, doc, 0, 10, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -174,7 +174,7 @@ test "provideHover - INTEGER type" {
     defer doc.deinit();
 
     // Hover over INTEGER (line 0, char 26)
-    const hover = try features.provideHover(allocator, doc, 0, 26);
+    const hover = try features.provideHover(allocator, doc, 0, 26, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -189,7 +189,7 @@ test "provideHover - VECTOR type" {
     defer doc.deinit();
 
     // Hover over VECTOR (line 0, char 25)
-    const hover = try features.provideHover(allocator, doc, 0, 25);
+    const hover = try features.provideHover(allocator, doc, 0, 25, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover != null);
@@ -206,7 +206,7 @@ test "provideHover - on whitespace returns null" {
     defer doc.deinit();
 
     // Hover over whitespace (line 0, char 6)
-    const hover = try features.provideHover(allocator, doc, 0, 6);
+    const hover = try features.provideHover(allocator, doc, 0, 6, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover == null);
@@ -220,7 +220,7 @@ test "provideHover - on unknown word returns null" {
     defer doc.deinit();
 
     // Hover over unknownword (line 0, char 10)
-    const hover = try features.provideHover(allocator, doc, 0, 10);
+    const hover = try features.provideHover(allocator, doc, 0, 10, null);
     defer if (hover) |h| allocator.free(h.contents.value);
 
     try testing.expect(hover == null);
@@ -1255,4 +1255,49 @@ test "provideCompletion filters static keywords by prefix" {
     }
     // Sanity bound — without prefix filtering this was 100+ items.
     try testing.expect(items.len < 50);
+}
+
+// Task 21: schema-aware hover. When the cursor sits on a node label that
+// is visible to the user/tenant, `provideHover` should return a markdown
+// payload that names the label and lists the property keys observed on
+// nodes carrying it. The static keyword/function/type fallback below this
+// branch must still fire when no schema is wired or the word is not a
+// known label — `provideHover - MATCH keyword` and the other tests above
+// cover that path.
+//
+// Memory ownership: `hover.contents.value` is allocator-owned (matches
+// the keyword/function/type branches that allocPrint their result), so
+// the caller frees it. The label slice and property-name slices come
+// from the SchemaProvider cache — we copy their bytes into the buffer,
+// so no caller-side free of those is required.
+test "hover on label shows property list" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    const n = try store.createNodeWithGraphAndTenant(&.{"Person"}, default_graph, "tenant-a");
+    try store.setNodeProperty(n, "name", .{ .String = "a" });
+    try store.setNodeProperty(n, "age", .{ .Int = 30 });
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:Person)", 1);
+    defer doc.deinit();
+
+    // Cursor on `Person` — column 11 lands inside the identifier (the
+    // label starts at column 9 and runs through column 14 inclusive).
+    const hover = (try features.provideHover(alloc, doc, 0, 11, &sp)) orelse return error.NoHover;
+    defer alloc.free(hover.contents.value);
+
+    try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "Person") != null);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "name") != null);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "age") != null);
 }

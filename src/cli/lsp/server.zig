@@ -754,7 +754,7 @@ pub const Server = struct {
             return;
         };
 
-        const hover = try features.provideHover(self.allocator, doc, line, character);
+        const hover = try features.provideHover(self.allocator, doc, line, character, self.schema);
         defer if (hover) |h| self.allocator.free(h.contents.value);
 
         if (hover) |h| {
