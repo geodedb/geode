@@ -50,6 +50,27 @@ pub fn analyze(text: []const u8, pos: Pos) Result {
     return .{ .kind = .keyword, .prefix = prefix };
 }
 
+pub fn resolveVarLabel(text: []const u8, var_name: []const u8) ?[]const u8 {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (text[i] != '(') continue;
+        var j = i + 1;
+        while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+        const var_start = j;
+        while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) : (j += 1) {}
+        const found_var = text[var_start..j];
+        if (!std.mem.eql(u8, found_var, var_name)) continue;
+        while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+        if (j >= text.len or text[j] != ':') continue;
+        j += 1;
+        while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+        const lbl_start = j;
+        while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) : (j += 1) {}
+        return text[lbl_start..j];
+    }
+    return null;
+}
+
 fn lineColToOffset(text: []const u8, pos: Pos) ?usize {
     var line: u32 = 0;
     var col: u32 = 0;

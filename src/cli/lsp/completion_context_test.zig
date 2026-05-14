@@ -30,3 +30,9 @@ test "falls back to keyword" {
     try testing.expectEqual(cc.Kind.keyword, ctx.kind);
     try testing.expectEqualStrings("MAT", ctx.prefix);
 }
+
+test "resolveVarLabel finds label from MATCH binding" {
+    const text = "MATCH (n:Person)-[r:KNOWS]->(m:Product) RETURN n.";
+    try testing.expectEqualStrings("Person", cc.resolveVarLabel(text, "n") orelse "");
+    try testing.expectEqualStrings("Product", cc.resolveVarLabel(text, "m") orelse "");
+}
