@@ -97,3 +97,29 @@ test "SchemaProvider.invalidate() drops cached data" {
     sp.invalidate();
     try testing.expect(sp.labels == null);
 }
+
+test "SchemaProvider is safe under concurrent access" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"P"}, default_graph, "tenant-a");
+
+    var sp = SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+
+    const Run = struct {
+        fn go(p: *SchemaProvider) void {
+            var i: usize = 0;
+            while (i < 50) : (i += 1) _ = p.getLabels() catch {};
+        }
+    };
+    var threads: [4]std.Thread = undefined;
+    for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Run.go, .{&sp});
+    for (threads) |t| t.join();
+}

@@ -14,8 +14,25 @@
 //   - Single-owner deinit that releases every cached allocation.
 //
 // Out of scope (deferred):
-//   - Mutex / thread-safety                      -> Task 8
 //   - DDL-driven schema_change_notifier hook     -> Task 9
+//
+// Thread-safety (Task 8):
+//   - A single `std.Io.Mutex` (`mu`) serialises every accessor entry
+//     point (`getLabels`, `getEdgeTypes`, `getPropertiesFor`) plus
+//     `invalidate()`. We hold the lock for the full body — including
+//     the in-cache fast path — because the simplicity of "always
+//     lock" is preferable to a double-checked / atomic pattern, and
+//     the contention surface (a single LSP server thread + the
+//     schema_change_notifier worker) is too low to justify the
+//     complexity. `deinit()` is intentionally NOT locked — the caller
+//     owns the SchemaProvider's lifetime and must guarantee no other
+//     thread is touching it at teardown.
+//
+//     Zig 0.16 retired `std.Thread.Mutex`. We follow the same
+//     `std.Io.Mutex` + `std.Io.Threaded.global_single_threaded.io()`
+//     pattern used everywhere else in geode (`graph_store.zig:422`,
+//     `session_storage.zig:285`, etc.). The `lockHere()` /
+//     `unlockHere()` helpers below keep the call sites readable.
 //
 // The `properties_initialized` flag exists so `invalidate()` can
 // reset the cache without forcing the StringHashMap to be re-initialized
@@ -56,6 +73,16 @@ pub const SchemaProvider = struct {
     labels_fetched_at_ns: i128 = 0,
     edge_types_fetched_at_ns: i128 = 0,
     properties_fetched_at_ns: std.StringHashMap(i128) = undefined,
+
+    mu: std.Io.Mutex = std.Io.Mutex.init,
+
+    fn lockHere(self: *SchemaProvider) void {
+        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    }
+
+    fn unlockHere(self: *SchemaProvider) void {
+        self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    }
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -98,6 +125,9 @@ pub const SchemaProvider = struct {
     /// "drop after DDL → immediate re-warm" path doesn't churn the
     /// allocator.
     pub fn invalidate(self: *SchemaProvider) void {
+        self.lockHere();
+        defer self.unlockHere();
+
         if (self.labels) |ls| intro.freeStringList(self.allocator, ls);
         self.labels = null;
         self.labels_fetched_at_ns = 0;
@@ -119,6 +149,9 @@ pub const SchemaProvider = struct {
     /// First call (or first call after TTL expiry / invalidate()) hits
     /// schema_introspection; otherwise returns the cached slice.
     pub fn getLabels(self: *SchemaProvider) ![]const []const u8 {
+        self.lockHere();
+        defer self.unlockHere();
+
         const now = nowNs();
         const stale = self.labels == null or (now - self.labels_fetched_at_ns) >= self.ttl_ns;
         if (stale) {
@@ -133,6 +166,9 @@ pub const SchemaProvider = struct {
     /// First call (or first call after TTL expiry / invalidate()) hits
     /// schema_introspection; otherwise returns the cached slice.
     pub fn getEdgeTypes(self: *SchemaProvider) ![]const []const u8 {
+        self.lockHere();
+        defer self.unlockHere();
+
         const now = nowNs();
         const stale = self.edge_types == null or (now - self.edge_types_fetched_at_ns) >= self.ttl_ns;
         if (stale) {
@@ -150,6 +186,9 @@ pub const SchemaProvider = struct {
     /// in `properties_fetched_at_ns` keyed by the same duped key as
     /// the `properties` map.
     pub fn getPropertiesFor(self: *SchemaProvider, label: []const u8) ![]const []const u8 {
+        self.lockHere();
+        defer self.unlockHere();
+
         const now = nowNs();
         if (self.properties.getEntry(label)) |entry| {
             const fetched_at = self.properties_fetched_at_ns.get(label) orelse 0;
