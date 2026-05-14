@@ -71,6 +71,36 @@ pub fn resolveVarLabel(text: []const u8, var_name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Extract every variable bound in a node `(var…)` or edge `[var…]` pattern.
+///
+/// The returned slice is owned by `allocator` and must be freed by the caller
+/// with `allocator.free(result)`. **The element strings are NOT owned**: each
+/// `[]const u8` is a subslice of the input `text`. The caller frees only the
+/// outer slice; the strings remain valid for the lifetime of `text`. If a
+/// caller needs names that outlive `text`, they must dupe each element.
+///
+/// Names are deduplicated (each variable appears at most once in the result).
+/// Iteration order matches `StringHashMap` insertion order and is not stable.
+pub fn scopedVariables(allocator: std.mem.Allocator, text: []const u8) ![][]const u8 {
+    var set = std.StringHashMap(void).init(allocator);
+    defer set.deinit();
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        const c = text[i];
+        if (c != '(' and c != '[') continue;
+        var j = i + 1;
+        while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+        const start = j;
+        while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) : (j += 1) {}
+        if (j == start) continue;
+        try set.put(text[start..j], {});
+    }
+    var out = try std.ArrayList([]const u8).initCapacity(allocator, set.count());
+    var it = set.keyIterator();
+    while (it.next()) |k| try out.append(allocator, k.*);
+    return out.toOwnedSlice(allocator);
+}
+
 fn lineColToOffset(text: []const u8, pos: Pos) ?usize {
     var line: u32 = 0;
     var col: u32 = 0;

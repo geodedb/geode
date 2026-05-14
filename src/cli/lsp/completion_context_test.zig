@@ -36,3 +36,19 @@ test "resolveVarLabel finds label from MATCH binding" {
     try testing.expectEqualStrings("Person", cc.resolveVarLabel(text, "n") orelse "");
     try testing.expectEqualStrings("Product", cc.resolveVarLabel(text, "m") orelse "");
 }
+
+test "scopedVariables returns all bound variables" {
+    const text = "MATCH (a:A)-[r:R]->(b:B) RETURN ";
+    const alloc = testing.allocator;
+    const vars = try cc.scopedVariables(alloc, text);
+    defer alloc.free(vars);
+    var have_a = false;
+    var have_r = false;
+    var have_b = false;
+    for (vars) |v| {
+        if (std.mem.eql(u8, v, "a")) have_a = true;
+        if (std.mem.eql(u8, v, "r")) have_r = true;
+        if (std.mem.eql(u8, v, "b")) have_b = true;
+    }
+    try testing.expect(have_a and have_r and have_b);
+}
