@@ -1219,3 +1219,40 @@ test "provideCompletion offers labels after (n:" {
     }
     try testing.expect(found);
 }
+
+// Task 19 of the LSP permission-aware completion plan. The static
+// keyword/function/type/procedure loops in `provideCompletion` filter by
+// the prefix that `completion_context.analyze` derives from the cursor —
+// when the user has typed "MAT" the dropdown returns only items whose
+// names start with that prefix (case-insensitively), not all ~200 static
+// items.
+test "provideCompletion filters static keywords by prefix" {
+    const alloc = testing.allocator;
+    const text = "MAT";
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", text, 1);
+    defer doc.deinit();
+
+    const items = try features.provideCompletion(alloc, doc, 0, 3, null);
+    defer {
+        for (items) |item| {
+            if (item.insertText) |insert_text| {
+                if (!std.mem.eql(u8, insert_text, item.label)) {
+                    alloc.free(insert_text);
+                }
+            }
+            if (item.detail) |detail| {
+                if (item.kind != .Class) {
+                    alloc.free(detail);
+                }
+            }
+        }
+        alloc.free(items);
+    }
+
+    for (items) |it| {
+        try testing.expect(features.startsWithCI(it.label, "MAT"));
+    }
+    // Sanity bound — without prefix filtering this was 100+ items.
+    try testing.expect(items.len < 50);
+}

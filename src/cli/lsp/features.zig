@@ -29,6 +29,17 @@ const GQL_KEYWORDS = language_metadata.getKeywordNames();
 const GQL_FUNCTIONS = language_metadata.getFunctionNames();
 const GQL_TYPES = language_metadata.getTypeNames();
 
+// CANARY: REQ=REQ-LSP-SCHEMA-COMPLETION-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=PrefixFilter; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"provideCompletion filters static keywords by prefix"; OWNER=lsp; UPDATED=2026-05-14
+/// Case-insensitive prefix match. Returns true if `s` starts with `p`,
+/// comparing ASCII letters case-insensitively. Empty `p` always matches.
+/// Used by `provideCompletion` to filter static keyword/function/type/
+/// procedure lists by what the user has typed so far.
+pub fn startsWithCI(s: []const u8, p: []const u8) bool {
+    if (s.len < p.len) return false;
+    for (p, 0..) |c, i| if (std.ascii.toLower(s[i]) != std.ascii.toLower(c)) return false;
+    return true;
+}
+
 pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protocol.Diagnostic {
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
     errdefer diagnostics.deinit(allocator);
@@ -465,6 +476,7 @@ pub fn provideCompletion(
 
     // Add keywords with metadata documentation
     for (language_metadata.keywords) |kw| {
+        if (ctx.prefix.len > 0 and !startsWithCI(kw.name, ctx.prefix)) continue;
         const compliance_str = switch (kw.compliance) {
             .iso_gql => " (ISO GQL)",
             .geode_extension => " (Geode)",
@@ -481,6 +493,7 @@ pub fn provideCompletion(
 
     // Add functions with metadata documentation
     for (language_metadata.functions) |func| {
+        if (ctx.prefix.len > 0 and !startsWithCI(func.name, ctx.prefix)) continue;
         try items.append(allocator, .{
             .label = func.name,
             .kind = .Function,
@@ -492,6 +505,7 @@ pub fn provideCompletion(
 
     // Add types with metadata documentation
     for (language_metadata.types) |typ| {
+        if (ctx.prefix.len > 0 and !startsWithCI(typ.name, ctx.prefix)) continue;
         const compliance_str = switch (typ.compliance) {
             .iso_gql => "ISO GQL Type",
             .geode_extension => "Geode Type",
@@ -508,6 +522,7 @@ pub fn provideCompletion(
 
     // Add procedures with metadata documentation
     for (language_metadata.procedures) |proc| {
+        if (ctx.prefix.len > 0 and !startsWithCI(proc.name, ctx.prefix)) continue;
         try items.append(allocator, .{
             .label = proc.name,
             .kind = .Method,
