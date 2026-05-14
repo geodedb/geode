@@ -1122,6 +1122,67 @@ pub const GraphStore = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    /// Returns a de-duplicated, allocator-owned slice of node label names
+    /// observed in the in-memory node store.
+    ///
+    /// GAP-0509: SHOW TABLES previously leaked label metadata across tenants.
+    /// `listNodeLabels` walked every node in the store and accumulated labels
+    /// into a single de-duplicated set, so a tenant running `SHOW TABLES` on
+    /// graph X saw labels contributed by every other tenant on the same graph
+    /// — a useful reconnaissance primitive for discovering the existence of
+    /// unrelated entity types. Filtering nodes by tenant_id before collecting
+    /// labels restores the tenant isolation property.
+    ///
+    /// `filter_tenant == null` preserves the admin / cross-tenant listing
+    /// (for SHOW TABLES without a session, or explicit admin tooling).
+    ///
+    /// Caller owns the returned slice and each string inside it — both must
+    /// be freed with the same `allocator` that was passed in.
+    ///
+    /// CANARY: REQ=REQ-GAP-0509-SHOW-TABLES-TENANT; FEATURE="ShowTablesTenantIsolation"; ASPECT=LabelEnumeration; STATUS=TESTED; TEST=tests/test_gap0509_tenant_isolation.zig:1; OWNER=security; UPDATED=2026-04-11
+    pub fn listNodeLabels(
+        self: *const GraphStore,
+        allocator: std.mem.Allocator,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
+        // Single-dup ownership pattern (mirrors listEdgeTypes /
+        // listPropertiesForLabel): the set owns each duped key for the
+        // lifetime of the function. On success we transfer ownership to
+        // `out` and deinit only the map shell. On error we free every
+        // key the set still owns.
+        var label_set = std.StringHashMap(void).init(allocator);
+        defer label_set.deinit();
+        errdefer {
+            var k_it = label_set.keyIterator();
+            while (k_it.next()) |k| allocator.free(k.*);
+        }
+
+        var node_it = self.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node = entry.value_ptr.*;
+
+            // Apply tenant isolation when a tenant filter is active.
+            // Without this, SHOW TABLES leaks the existence of labels
+            // used by other tenants sharing the same graph.
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+
+            for (node.labels) |label| {
+                if (label_set.contains(label)) continue;
+                const copy = try allocator.dupe(u8, label);
+                errdefer allocator.free(copy);
+                try label_set.put(copy, {});
+            }
+        }
+
+        var out = try std.ArrayList([]const u8).initCapacity(allocator, label_set.count());
+        errdefer out.deinit(allocator);
+        var k_it = label_set.keyIterator();
+        while (k_it.next()) |k| try out.append(allocator, k.*);
+        return out.toOwnedSlice(allocator);
+    }
+
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
         // Create the persisted graph first so the in-memory registry never
         // diverges from the adapter-backed storage layout.
@@ -7754,4 +7815,22 @@ test "listPropertiesForLabel returns dedup properties for nodes with label in te
     try testing.expect(saw_name);
     try testing.expect(saw_age);
     try testing.expect(saw_email);
+}
+
+test "GraphStore.listNodeLabels is callable and filters by tenant" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var visible_labels = [_][]const u8{"Visible"};
+    var hidden_labels = [_][]const u8{"Hidden"};
+    _ = try store.createNodeWithGraphAndTenant(&visible_labels, "default", "tenant-a");
+    _ = try store.createNodeWithGraphAndTenant(&hidden_labels, "default", "tenant-b");
+
+    const labels = try store.listNodeLabels(testing.allocator, "tenant-a");
+    defer {
+        for (labels) |l| testing.allocator.free(l);
+        testing.allocator.free(labels);
+    }
+    try testing.expectEqual(@as(usize, 1), labels.len);
+    try testing.expectEqualStrings("Visible", labels[0]);
 }
