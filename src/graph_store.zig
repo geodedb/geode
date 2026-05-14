@@ -1058,6 +1058,70 @@ pub const GraphStore = struct {
         return out.toOwnedSlice(allocator);
     }
 
+    /// LSP schema introspection helper: returns the dedup'd set of
+    /// property keys observed on every node carrying `label` in
+    /// `filter_tenant`. Used by the permission-aware LSP completion
+    /// engine to suggest property names after `n.` where `n` is a
+    /// variable bound to a label.
+    ///
+    /// `filter_tenant == null` returns property keys regardless of
+    /// tenant (admin/introspection path); otherwise only nodes whose
+    /// `tenant_id` equals `filter_tenant` contribute.
+    ///
+    /// Caller owns the returned slice and each string inside it — both
+    /// must be freed with the same `allocator` that was passed in.
+    pub fn listPropertiesForLabel(
+        self: *const GraphStore,
+        allocator: std.mem.Allocator,
+        filter_tenant: ?[]const u8,
+        label: []const u8,
+    ) ![][]const u8 {
+        // Single-dup ownership pattern (mirrors listEdgeTypes): the set
+        // owns each duped key for the lifetime of the function. On
+        // success we transfer ownership to `out` and deinit only the
+        // map shell. On error we free every key the set still owns.
+        var prop_set = std.StringHashMap(void).init(allocator);
+        defer prop_set.deinit();
+        errdefer {
+            var k_it = prop_set.keyIterator();
+            while (k_it.next()) |k| allocator.free(k.*);
+        }
+
+        var node_it = self.nodes.iterator();
+        while (node_it.next()) |entry| {
+            const node = entry.value_ptr.*;
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+            }
+            var has_label = false;
+            for (node.labels) |l| {
+                if (std.mem.eql(u8, l, label)) {
+                    has_label = true;
+                    break;
+                }
+            }
+            if (!has_label) continue;
+
+            var p_it = node.properties.iterator();
+            while (p_it.next()) |p| {
+                const key = p.key_ptr.*;
+                // Skip Geode's internal persisted-id property so it
+                // never surfaces in LSP completion / hover output.
+                if (isInternalPersistedPropertyKey(key)) continue;
+                if (prop_set.contains(key)) continue;
+                const copy = try allocator.dupe(u8, key);
+                errdefer allocator.free(copy);
+                try prop_set.put(copy, {});
+            }
+        }
+
+        var out = try std.ArrayList([]const u8).initCapacity(allocator, prop_set.count());
+        errdefer out.deinit(allocator);
+        var k_it = prop_set.keyIterator();
+        while (k_it.next()) |k| try out.append(allocator, k.*);
+        return out.toOwnedSlice(allocator);
+    }
+
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
         // Create the persisted graph first so the in-memory registry never
         // diverges from the adapter-backed storage layout.
@@ -7644,4 +7708,50 @@ test "listEdgeTypes returns unique edge types filtered by tenant" {
         testing.allocator.free(types_all);
     }
     try testing.expectEqual(@as(usize, 3), types_all.len);
+}
+
+test "listPropertiesForLabel returns dedup properties for nodes with label in tenant" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var person_labels = [_][]const u8{"Person"};
+    var product_labels = [_][]const u8{"Product"};
+
+    const alice = try store.createNodeWithGraphAndTenant(&person_labels, "default", "tenant-a");
+    try store.setNodeProperty(alice, "name", .{ .String = "Alice" });
+    try store.setNodeProperty(alice, "age", .{ .Int = 30 });
+
+    const bob = try store.createNodeWithGraphAndTenant(&person_labels, "default", "tenant-a");
+    try store.setNodeProperty(bob, "name", .{ .String = "Bob" });
+    try store.setNodeProperty(bob, "email", .{ .String = "b@x.io" });
+
+    const product = try store.createNodeWithGraphAndTenant(&product_labels, "default", "tenant-a");
+    try store.setNodeProperty(product, "sku", .{ .String = "X" });
+
+    const tenant_b_person = try store.createNodeWithGraphAndTenant(&person_labels, "default", "tenant-b");
+    try store.setNodeProperty(tenant_b_person, "secret", .{ .Int = 1 });
+
+    const props = try store.listPropertiesForLabel(testing.allocator, "tenant-a", "Person");
+    defer {
+        for (props) |p| testing.allocator.free(p);
+        testing.allocator.free(props);
+    }
+
+    // De-dup union of {Alice: name, age} ∪ {Bob: name, email} = {name, age, email}.
+    // Product.sku (different label) and tenant-b's "secret" (different tenant) must NOT appear.
+    try testing.expectEqual(@as(usize, 3), props.len);
+
+    var saw_name = false;
+    var saw_age = false;
+    var saw_email = false;
+    for (props) |p| {
+        if (std.mem.eql(u8, p, "name")) saw_name = true;
+        if (std.mem.eql(u8, p, "age")) saw_age = true;
+        if (std.mem.eql(u8, p, "email")) saw_email = true;
+        try testing.expect(!std.mem.eql(u8, p, "sku"));
+        try testing.expect(!std.mem.eql(u8, p, "secret"));
+    }
+    try testing.expect(saw_name);
+    try testing.expect(saw_age);
+    try testing.expect(saw_email);
 }
