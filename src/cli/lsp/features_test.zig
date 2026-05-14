@@ -6,6 +6,10 @@ const testing = std.testing;
 const protocol = @import("protocol.zig");
 const document = @import("document.zig");
 const features = @import("features.zig");
+const geode = @import("geode");
+const schema_provider_mod = @import("schema_provider.zig");
+const graph_store = geode.graph_store;
+const user_management = geode.user_management;
 
 test "provideDiagnostics - valid GQL query" {
     const allocator = testing.allocator;
@@ -1169,4 +1173,49 @@ test "provideFormattingWithOptions - complex CASE with multiple conditions" {
     try testing.expect(std.mem.indexOf(u8, formatted.?, "    WHEN 5 > 10 THEN") != null);
     try testing.expect(std.mem.indexOf(u8, formatted.?, "    WHEN 5 < 0 THEN") != null);
     try testing.expect(std.mem.indexOf(u8, formatted.?, "    ELSE 'unknown'") != null);
+}
+
+// Task 18: schema-aware completion. After `(n:` at cursor offset 9, the
+// `completion_context.analyze` path resolves `Kind.label` and we expect
+// `provideCompletion` to short-circuit with label items pulled from the
+// SchemaProvider — the static keyword/function/type list must NOT appear
+// in the schema-derived branch's output.
+//
+// Memory ownership note: the schema branch borrows label slices from the
+// SchemaProvider cache without duping (the LSP serializer copies before
+// the cache could expire). `insertText` is set to the same pointer as
+// `label`, and `.detail` is a static literal — the cleanup loop only
+// frees the outer slice for this kind. The SchemaProvider's `deinit()`
+// owns the underlying label memory.
+test "provideCompletion offers labels after (n:" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"Person"}, default_graph, "tenant-a");
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:", 1);
+    defer doc.deinit();
+
+    const items = try features.provideCompletion(alloc, doc, 0, 9, &sp);
+    defer alloc.free(items);
+
+    var found = false;
+    for (items) |it| {
+        if (std.mem.eql(u8, it.label, "Person")) {
+            found = true;
+            try testing.expectEqual(protocol.CompletionItemKind.Class, it.kind.?);
+            break;
+        }
+    }
+    try testing.expect(found);
 }
