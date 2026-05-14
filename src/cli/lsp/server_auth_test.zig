@@ -109,3 +109,72 @@ test "Server.initWithAuth stores verifier and allow_unauth flag" {
     defer srv2.deinit();
     try testing.expect(srv2.allow_unauth);
 }
+
+// Task 13: when started with `--no-auth` the server must accept an
+// `initialize` request that ships no `initializationOptions.geode`
+// block, synthesize a local-admin AuthState from $USER, and open the
+// gate so subsequent textDocument requests are served.
+//
+// We drive the public `handleMessage` with a JSON-RPC `initialize`
+// frame rather than poking the private `handleInitialize` — same
+// pattern `server_invalid_params_test.zig` uses. The Transport's
+// write side does fire (it buffers the response to stdout's framer),
+// but we don't read it back; our assertions look at the gate's state
+// after the request lands.
+//
+// CANARY: REQ=REQ-LSP-AUTH-NOAUTH-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=NoAuthBind; STATUS=TESTED; TEST=src/cli/lsp/server_auth_test.zig; OWNER=lsp; UPDATED=2026-05-14
+test "Server with allow_unauth synthesizes a local AuthState on initialize without token" {
+    const alloc = testing.allocator;
+
+    var srv = try server.Server.initWithAuth(alloc, null, true);
+    defer srv.deinit();
+
+    // Pre-condition: the gate is closed because initialize has not
+    // run yet.
+    try testing.expect(!srv.isMethodAllowed("textDocument/completion"));
+
+    // An `initialize` request that ships NO `initializationOptions` —
+    // exactly what a terminal LSP client (neovim, helix, VS Code over
+    // stdio) sends when it has no JWT to forward.
+    const init_msg =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{},"rootUri":null}}
+    ;
+    try srv.handleMessage(init_msg);
+
+    // Post-condition 1: auth is populated and verified as Admin.
+    try testing.expect(srv.auth != null);
+    const a = srv.auth.?;
+    try testing.expect(a.verified);
+    try testing.expectEqual(@as(@TypeOf(a.role), .Admin), a.role);
+    try testing.expect(a.user.len > 0);
+
+    // Post-condition 2: gate is open for normal LSP requests.
+    try testing.expect(srv.isMethodAllowed("textDocument/completion"));
+    try testing.expect(srv.isMethodAllowed("textDocument/hover"));
+
+    // Post-condition 3: SchemaProvider + ExecutionContext are wired up
+    // the same way the verified-token path wires them — completion
+    // handlers in Task 17+ can read both unconditionally.
+    try testing.expect(srv.schema != null);
+    try testing.expect(srv.exec_context != null);
+}
+
+// Task 13: even when the client omits its token, the default stdio
+// path (allow_unauth=false) MUST stay fail-closed. This is the safety
+// belt for Task 28's TCP listener, which is required to construct
+// the Server with allow_unauth=false regardless of any CLI flag.
+test "Server without allow_unauth rejects initialize that omits the geode auth block" {
+    const alloc = testing.allocator;
+    var srv = try server.Server.initWithAuth(alloc, null, false);
+    defer srv.deinit();
+
+    const init_msg =
+        \\{"jsonrpc":"2.0","id":2,"method":"initialize","params":{"capabilities":{},"rootUri":null}}
+    ;
+    try srv.handleMessage(init_msg);
+
+    // bindSession returned MissingToken; respondInitializeError sent
+    // -32002. Server.auth stays null and the gate stays closed.
+    try testing.expect(srv.auth == null);
+    try testing.expect(!srv.isMethodAllowed("textDocument/completion"));
+}

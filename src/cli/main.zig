@@ -677,18 +677,29 @@ fn printRevokeUsage() void {
 
 // CANARY: REQ=REQ-LSP-001; FEATURE="Language Server Protocol"; ASPECT=LSPServer; STATUS=EXEMPT; OWNER=cli; UPDATED=2025-10-28
 fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
-    // Check for help flag
+    // Task 13: parse `--no-auth` so terminal LSP clients (neovim, helix,
+    // VS Code over stdio) can drive the server without minting a JWT.
+    // The flag synthesizes a local-admin AuthState from $USER inside
+    // Server.bindUnauthSession. It is honored only on the stdio path;
+    // Task 28's TCP listener forces allow_unauth=false regardless.
+    var allow_unauth = false;
     var i: usize = start_idx + 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
             printLspUsage();
             std.process.exit(@intFromEnum(ExitCode.success));
+        } else if (std.mem.eql(u8, argv[i], "--no-auth")) {
+            allow_unauth = true;
+        } else {
+            std.debug.print("Error: unknown argument '{s}'\n\n", .{argv[i]});
+            printLspUsage();
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
         }
     }
 
     // Import and start the LSP server
     const lsp = @import("lsp/server.zig");
-    var server = lsp.Server.init(allocator) catch |err| {
+    var server = lsp.Server.initWithAuth(allocator, null, allow_unauth) catch |err| {
         std.debug.print("Error initializing LSP server: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
@@ -710,11 +721,15 @@ fn printLspUsage() void {
     std.debug.print("    - Go-to-definition support\n", .{});
     std.debug.print("    - Document formatting\n\n", .{});
     std.debug.print("Options:\n", .{});
-    std.debug.print("  -h, --help         Show this help message\n\n", .{});
+    std.debug.print("  -h, --help         Show this help message\n", .{});
+    std.debug.print("  --no-auth          Skip the LSP auth handshake and run as a local admin\n", .{});
+    std.debug.print("                     session ($USER, role=Admin). Stdio only — never use\n", .{});
+    std.debug.print("                     this with a network-listening transport.\n\n", .{});
     std.debug.print("Editor Integration:\n", .{});
     std.debug.print("  See docs/LSP_IMPLEMENTATION.md for setup details\n\n", .{});
     std.debug.print("Examples:\n", .{});
-    std.debug.print("  geode lsp\n\n", .{});
+    std.debug.print("  geode lsp\n", .{});
+    std.debug.print("  geode lsp --no-auth   # local terminal editor (neovim/helix/VS Code)\n\n", .{});
 }
 
 fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {

@@ -405,27 +405,90 @@ pub const Server = struct {
     /// ExecutionContext on a successful `initialize`. Returns
     /// `error.AuthInitFailed` (mapped to a JSON-RPC -32002 response by
     /// `handleInitialize`) when the client did not provide a valid
-    /// `initializationOptions.geode.authToken`. `allow_unauth = true`
-    /// (Task 13's `--no-auth` switch) bypasses verification but the
-    /// no-auth bind itself is stubbed here — Task 13 fills in the
-    /// `$USER` env-var fallback. Until Task 13 lands, allow_unauth
-    /// rejects with `MissingToken` so the gate stays fail-closed by
-    /// default.
+    /// `initializationOptions.geode.authToken`. The `--no-auth` mode
+    /// (Task 13's `bindUnauthSession`) is selected upstream in
+    /// `handleInitialize`; this function always requires a verified
+    /// token.
     fn bindSession(self: *Server, params: ?std.json.Value) auth_mod.AuthError!void {
         const p = params orelse return auth_mod.AuthError.MissingToken;
         if (p != .object) return auth_mod.AuthError.BadFormat;
-        const init_opts = p.object.get("initializationOptions") orelse {
-            // No initializationOptions at all. The `--no-auth` mode
-            // (Task 13) is the only path that should succeed without
-            // a token; Task 12 leaves it as a fail-closed stub so
-            // stdio LSP cannot accidentally start unauthenticated.
-            if (self.allow_unauth) return auth_mod.AuthError.MissingToken;
+        const init_opts = p.object.get("initializationOptions") orelse
             return auth_mod.AuthError.MissingToken;
-        };
 
         var state = try auth_mod.AuthState.fromInitializeOptions(self.allocator, init_opts);
-        errdefer state.deinit(self.allocator);
-        try state.verify(self.allocator, self.verifier);
+        state.verify(self.allocator, self.verifier) catch |e| {
+            state.deinit(self.allocator);
+            return e;
+        };
+
+        // Ownership transfers to publishVerifiedState — it deinits on
+        // its own error path. On success the state lives on as
+        // Server.auth.
+        return self.publishVerifiedState(state);
+    }
+
+    /// Task 13: `--no-auth` stdio path. Synthesize a local-admin
+    /// `AuthState` from `$USER` (fallback to "local") without invoking
+    /// any verifier and bind the same per-session state the token path
+    /// builds. Terminal users already have filesystem access to the
+    /// data dir, so granting `.Admin` is no privilege escalation
+    /// versus running `geode shell` directly. This MUST NEVER be
+    /// reachable from a network-listening transport — Task 28's TCP
+    /// listener forces `allow_unauth = false` regardless of CLI flag.
+    fn bindUnauthSession(self: *Server) auth_mod.AuthError!void {
+        if (!self.allow_unauth) return auth_mod.AuthError.MissingToken;
+
+        // Pull the username from $USER for log/audit clarity; fall back
+        // to "local" if the environment is empty (common in containers).
+        // Zig 0.16 removed std.posix.getenv; std.c.getenv is the non-
+        // allocating equivalent (same call shape src/fle_integration.zig
+        // already uses for GEODE_CURRENT_ROLE).
+        const env_user: []const u8 = blk: {
+            const ptr = std.c.getenv("USER") orelse break :blk "local";
+            const slice = std.mem.span(ptr);
+            if (slice.len == 0) break :blk "local";
+            break :blk slice;
+        };
+        const default_graph = "default";
+
+        // Build the synthetic AuthState. We allocate piecewise and
+        // release earlier allocations explicitly on a later failure
+        // so that, by the time we hand the assembled `state` to
+        // publishVerifiedState, that callee owns deinit from then on
+        // — no errdefer here would double-free what state.deinit
+        // already releases.
+        const token = self.allocator.dupe(u8, "") catch return auth_mod.AuthError.OutOfMemory;
+        const user_dup = self.allocator.dupe(u8, env_user) catch {
+            self.allocator.free(token);
+            return auth_mod.AuthError.OutOfMemory;
+        };
+        const graph_dup = self.allocator.dupe(u8, default_graph) catch {
+            self.allocator.free(token);
+            self.allocator.free(user_dup);
+            return auth_mod.AuthError.OutOfMemory;
+        };
+
+        const state = auth_mod.AuthState{
+            .token = token,
+            .user = user_dup,
+            .role = .Admin,
+            .verified = true,
+            .graph = graph_dup,
+            .tenant_id = null,
+        };
+
+        return self.publishVerifiedState(state);
+    }
+
+    /// Build the SchemaProvider + ExecutionContext from an already-
+    /// verified `AuthState` and publish them onto `self`. Shared by
+    /// `bindSession` (token path) and `bindUnauthSession` (Task 13
+    /// `--no-auth` path) so both ends of the auth dispatch wire up an
+    /// identical session shape. Takes ownership of `state` on success;
+    /// on any failure path it releases `state` before returning.
+    fn publishVerifiedState(self: *Server, state: auth_mod.AuthState) auth_mod.AuthError!void {
+        var st = state;
+        errdefer st.deinit(self.allocator);
 
         // Allocate the SchemaProvider on the heap so the DDL notifier
         // can hold a stable pointer (see registerInvalidation contract
@@ -434,10 +497,10 @@ pub const Server = struct {
         errdefer self.allocator.destroy(sp);
         const store_ptr = graph_store.getWritableGlobalStore(self.allocator);
         sp.* = schema_provider_mod.SchemaProvider.init(self.allocator, store_ptr, .{
-            .user = state.user,
-            .tenant_id = state.tenant_id,
-            .role = state.role,
-            .graph_name = state.graph orelse "default",
+            .user = st.user,
+            .tenant_id = st.tenant_id,
+            .role = st.role,
+            .graph_name = st.graph orelse "default",
         });
         errdefer sp.deinit();
         try sp.registerInvalidation();
@@ -457,13 +520,13 @@ pub const Server = struct {
             else => return auth_mod.AuthError.OutOfMemory,
         };
 
-        self.auth = state;
+        self.auth = st;
         self.schema = sp;
         self.exec_context = .{
             .catalog = catalog,
-            .user = state.user,
-            .role = state.role,
-            .tenant_id = state.tenant_id,
+            .user = st.user,
+            .role = st.role,
+            .tenant_id = st.tenant_id,
         };
     }
 
@@ -484,11 +547,20 @@ pub const Server = struct {
     }
 
     fn handleInitialize(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
-        // Task 12: bind the session before doing anything else with
+        // Task 12/13: bind the session before doing anything else with
         // the request. A failed bind short-circuits with -32002 and
         // leaves Server.auth/schema/exec_context unset so the gate in
         // handleRequest keeps every subsequent method rejected.
-        self.bindSession(params) catch |e| {
+        //
+        // Task 13: when started with `--no-auth` we synthesize a local
+        // admin AuthState instead of parsing/verifying a client token
+        // — used by terminal LSP clients (neovim, helix, VS Code over
+        // stdio) where the caller is already a local filesystem user.
+        const bind_result = if (self.allow_unauth)
+            self.bindUnauthSession()
+        else
+            self.bindSession(params);
+        bind_result catch |e| {
             return self.respondInitializeError(id, e);
         };
 
