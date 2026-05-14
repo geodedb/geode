@@ -1029,11 +1029,14 @@ pub const GraphStore = struct {
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
+        // The set owns each duped key for the lifetime of the function;
+        // on success we transfer ownership to `out` and deinit only the
+        // map shell, so each unique edge type is allocated exactly once.
         var type_set = std.StringHashMap(void).init(allocator);
-        defer {
+        defer type_set.deinit();
+        errdefer {
             var k_it = type_set.keyIterator();
             while (k_it.next()) |k| allocator.free(k.*);
-            type_set.deinit();
         }
 
         var edge_it = self.edges.iterator();
@@ -1045,21 +1048,13 @@ pub const GraphStore = struct {
             if (type_set.contains(edge.label)) continue;
             const copy = try allocator.dupe(u8, edge.label);
             errdefer allocator.free(copy);
-            const r = try type_set.getOrPut(copy);
-            if (r.found_existing) allocator.free(copy);
+            try type_set.put(copy, {});
         }
 
         var out = try std.ArrayList([]const u8).initCapacity(allocator, type_set.count());
-        errdefer {
-            for (out.items) |s| allocator.free(s);
-            out.deinit(allocator);
-        }
+        errdefer out.deinit(allocator);
         var k_it = type_set.keyIterator();
-        while (k_it.next()) |k| {
-            const owned_copy = try allocator.dupe(u8, k.*);
-            errdefer allocator.free(owned_copy);
-            try out.append(allocator, owned_copy);
-        }
+        while (k_it.next()) |k| try out.append(allocator, k.*);
         return out.toOwnedSlice(allocator);
     }
 
