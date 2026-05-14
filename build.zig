@@ -3516,6 +3516,24 @@ pub fn build(b: *std.Build) void {
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     shardDep(test_step, &run_gap0509_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
 
+    // Task 5 of the LSP permission-aware completion plan: register
+    // src/execution/schema_introspection.zig as its own build module so
+    // tests/test_schema_introspection.zig (and Task 6's SchemaProvider)
+    // can pull it in via a named @import. Lives outside root_mod for
+    // the same reason auth_graph_manager_mod does — it depends on
+    // root_mod (geode) and on auth_graph_manager_mod, so re-exporting
+    // from lib.zig would close a module cycle.
+    const schema_introspection_mod = b.createModule(.{ .root_source_file = b.path("src/execution/schema_introspection.zig"), .target = target, .optimize = optimize });
+    schema_introspection_mod.addImport("geode", root_mod);
+    schema_introspection_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+
+    const schema_introspection_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_schema_introspection.zig"), .target = target, .optimize = optimize });
+    schema_introspection_test_mod.addImport("geode", root_mod);
+    schema_introspection_test_mod.addImport("schema_introspection", schema_introspection_mod);
+    const schema_introspection_tests = b.addTest(.{ .root_module = schema_introspection_test_mod });
+    const run_schema_introspection_tests = b.addRunArtifact(schema_introspection_tests);
+    shardDep(test_step, &run_schema_introspection_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
