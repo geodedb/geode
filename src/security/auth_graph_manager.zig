@@ -986,6 +986,69 @@ pub const AuthGraphManager = struct {
         return self.storage.listGraphGrants(allocator);
     }
 
+    // CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=IMPL; OWNER=security; UPDATED=2026-05-14
+    /// Returns true if `user` is a superuser (admin) or holds at least one
+    /// persisted grant of any action on `graph_name`. Intended as a COARSE
+    /// visibility gate for the LSP schema completion path — it answers
+    /// "should this graph appear in this user's autocomplete?" and nothing
+    /// more.
+    ///
+    /// NOT a substitute for action-level permission enforcement. Callers
+    /// that need to distinguish READ vs WRITE vs SCHEMA must layer their
+    /// own check (e.g. via the multi_graph_security policy). The query
+    /// executor remains the source of truth for actual access decisions.
+    ///
+    /// Complexity: O(grants) — scans the in-memory `graph_grant_nodes`
+    /// map and reads per-node properties from the security graph. A
+    /// dedicated (user_id, graph_name) index can be added later if this
+    /// becomes a hot path.
+    ///
+    /// Locking: takes no AuthGraphManager-level lock (the manager has
+    /// none on the grant path). The underlying GraphStore reads are
+    /// safe under the global store rwlock convention used elsewhere in
+    /// this file — `revokeGraphGrant` scans the same data the same way.
+    pub fn canUserAccessGraph(self: *Self, user: []const u8, graph_name: []const u8) bool {
+        // Resolve username -> user_id and short-circuit if the user is a
+        // superuser. getUserByUsername is itself a thin wrapper over the
+        // cache, so the cost is a single hashmap scan.
+        const user_record = self.storage.getUserByUsername(user) orelse return false;
+        if (user_record.is_superuser) return true;
+
+        const user_id = user_record.id;
+
+        // Enumerate the in-memory grant id set and resolve each grant's
+        // backing node properties. We deliberately mirror the lookup
+        // structure used by `revokeGraphGrant` so any future refactor
+        // (e.g. caching grants in-memory like users/roles) only has to
+        // touch one shape.
+        var it = self.storage.graph_grant_nodes.iterator();
+        while (it.next()) |entry| {
+            const node_id = entry.value_ptr.*;
+            const node = self.storage.store.getNodePtr(node_id) orelse continue;
+            // SECURITY_GRAPH_NAME is duplicated as a file-local const in this
+            // module (and in user_storage.zig). Use the local copy so we don't
+            // rely on a cross-module reference.
+            if (!std.mem.eql(u8, node.graph_name, SECURITY_GRAPH_NAME)) continue;
+
+            const uid_prop = self.storage.store.getNodeProperty(node_id, "user_id") orelse continue;
+            const stored_uid: u64 = switch (uid_prop) {
+                .Int => |v| if (v < 0) continue else @intCast(v),
+                else => continue,
+            };
+            if (stored_uid != user_id) continue;
+
+            const gname_prop = self.storage.store.getNodeProperty(node_id, "graph_name") orelse continue;
+            const stored_gname: []const u8 = switch (gname_prop) {
+                .String => |s| s,
+                else => continue,
+            };
+            if (!std.mem.eql(u8, stored_gname, graph_name)) continue;
+
+            return true;
+        }
+        return false;
+    }
+
     // -- GraphGrant HMAC chain support --
 
     fn sealGraphGrantRecords(self: *Self, hmac_key: *const [32]u8, hmac_list: *std.ArrayList([32]u8)) !void {
@@ -1471,6 +1534,72 @@ test "verifyChain on empty store passes" {
     const hmac_key = [_]u8{0xab} ** 32;
     // Should not error - empty chain is valid
     try mgr.verifyChain(&hmac_key);
+}
+
+// CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=CoarseGraphVisibilityGate; STATUS=TESTED; TEST=test_canUserAccessGraph_grant_revoke_round_trip; OWNER=security; UPDATED=2026-05-14
+test "canUserAccessGraph returns true after grant and false after revoke" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0xab} ** 32;
+
+    // Bootstrap so the chain root exists and seals don't fail on first grant.
+    const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer {
+        testing.allocator.free(bootstrap.username);
+        testing.allocator.free(bootstrap.password);
+    }
+
+    // Create a non-superuser "alice" to exercise the grant path (admins
+    // would short-circuit and trivially pass).
+    const pw_hash = try geode_auth.hashPasswordArgon2id(testing.allocator, "testpassword123");
+    defer testing.allocator.free(pw_hash);
+    const alice_id = try mgr.createUser(&hmac_key, "alice", "alice@example.com", pw_hash, false);
+
+    // Pre-grant: alice cannot see the "trade" graph.
+    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+
+    // Action byte 0 == Read per GraphGrantRecord.action encoding.
+    try mgr.grantUserGraphPermission(&hmac_key, alice_id, "trade", 0);
+
+    // Post-grant: alice sees "trade".
+    try testing.expect(mgr.canUserAccessGraph("alice", "trade"));
+    // Other graphs remain hidden.
+    try testing.expect(!mgr.canUserAccessGraph("alice", "other"));
+    // Other users still don't see "trade".
+    try testing.expect(!mgr.canUserAccessGraph("nobody", "trade"));
+
+    // Revoke the same action and verify visibility drops back to false.
+    const removed = try mgr.revokeUserGraphPermission(&hmac_key, alice_id, "trade", 0);
+    try testing.expect(removed);
+    try testing.expect(!mgr.canUserAccessGraph("alice", "trade"));
+}
+
+// CANARY: REQ=REQ-LSP-PERM-GRAPH-VISIBILITY-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=AdminShortcut; STATUS=TESTED; TEST=test_canUserAccessGraph_admin_shortcut; OWNER=security; UPDATED=2026-05-14
+test "canUserAccessGraph short-circuits true for superusers without any grant" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var mgr = try AuthGraphManager.init(testing.allocator, &store);
+    defer mgr.deinit();
+
+    const hmac_key = [_]u8{0xab} ** 32;
+    const bootstrap = try mgr.bootstrapDefaultAdmin(&hmac_key);
+    defer {
+        testing.allocator.free(bootstrap.username);
+        testing.allocator.free(bootstrap.password);
+    }
+
+    // bootstrapDefaultAdmin creates a superuser named "geode" with no
+    // graph grants. The admin shortcut must still return true for any
+    // graph name.
+    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "any_graph_name"));
+    try testing.expect(mgr.canUserAccessGraph(bootstrap.username, "another"));
+    // And an unknown user remains false.
+    try testing.expect(!mgr.canUserAccessGraph("ghost", "any"));
 }
 
 // CANARY: REQ=REQ-AUTH-GRAPH-MGR-002; FEATURE="AuthGraphManagerTests"; ASPECT=ChainIntegrity; STATUS=TESTED; TEST=test_bootstrapDefaultAdmin_creates_user; OWNER=security; UPDATED=2026-02-24
