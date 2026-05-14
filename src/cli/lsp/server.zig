@@ -795,7 +795,7 @@ pub const Server = struct {
             return;
         };
 
-        const items = try features.provideCompletion(self.allocator, doc, line, character);
+        const items = try features.provideCompletion(self.allocator, doc, line, character, self.schema);
         defer {
             for (items) |item| {
                 if (item.insertText) |text| {

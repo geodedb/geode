@@ -229,7 +229,7 @@ test "provideCompletion - returns keywords" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 3);
+    const items = try features.provideCompletion(allocator, doc, 0, 3, null);
     defer {
         for (items) |item| {
             // Free insertText if allocated (different from label)
@@ -267,7 +267,7 @@ test "provideCompletion - returns functions" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 10);
+    const items = try features.provideCompletion(allocator, doc, 0, 10, null);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -304,7 +304,7 @@ test "provideCompletion - returns types" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 20);
+    const items = try features.provideCompletion(allocator, doc, 0, 20, null);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -340,7 +340,7 @@ test "provideCompletion - includes all major keywords" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -381,7 +381,7 @@ test "provideCompletion - includes common functions" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {
@@ -420,7 +420,7 @@ test "provideCompletion - includes common types" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const items = try features.provideCompletion(allocator, doc, 0, 0);
+    const items = try features.provideCompletion(allocator, doc, 0, 0, null);
     defer {
         for (items) |item| {
             if (item.insertText) |insert_text| {

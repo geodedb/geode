@@ -381,10 +381,17 @@ fn formatProcedureHover(allocator: Allocator, info: language_metadata.ProcedureI
 }
 
 // CANARY: REQ=REQ-LSP-METADATA-004; FEATURE="MetadataIntegration"; ASPECT=Completions; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
-pub fn provideCompletion(allocator: Allocator, doc: *const Document, line: u32, character: u32) ![]protocol.CompletionItem {
+pub fn provideCompletion(
+    allocator: Allocator,
+    doc: *const Document,
+    line: u32,
+    character: u32,
+    schema: ?*@import("schema_provider.zig").SchemaProvider,
+) ![]protocol.CompletionItem {
     _ = doc;
     _ = line;
     _ = character;
+    _ = schema; // wired in Task 18
 
     var items = std.ArrayList(protocol.CompletionItem).initCapacity(allocator, 200) catch return error.OutOfMemory;
     errdefer items.deinit(allocator);

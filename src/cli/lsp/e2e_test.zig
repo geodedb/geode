@@ -107,7 +107,7 @@ test "E2E - completion workflow" {
     try testing.expect(doc != null);
 
     // Get completions
-    const items = try features.provideCompletion(allocator, doc.?, 0, 1);
+    const items = try features.provideCompletion(allocator, doc.?, 0, 1, null);
     defer {
         for (items) |item| {
             if (item.insertText) |text| {
