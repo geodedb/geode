@@ -41,3 +41,59 @@ test "SchemaProvider returns labels accessible to the user" {
     try testing.expectEqual(@as(usize, 1), labels.len);
     try testing.expectEqualStrings("Person", labels[0]);
 }
+
+test "SchemaProvider re-fetches labels after TTL expiry" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"Person"}, default_graph, "tenant-a");
+
+    var sp = SchemaProvider.init(alloc, &store, .{
+        .user = "alice",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+    sp.ttl_ns = 1;
+
+    _ = try sp.getLabels();
+    _ = try store.createNodeWithGraphAndTenant(&.{"Product"}, default_graph, "tenant-a");
+    // Zig 0.16 compat: std.Thread.sleep was removed. Use raw nanosleep
+    // (same pattern as src/cli/main.zig:compat_sleepNs). 2ns is enough
+    // because the TTL is 1ns and the monotonic clock has ns granularity.
+    sleepNs(2);
+    const labels = try sp.getLabels();
+    try testing.expectEqual(@as(usize, 2), labels.len);
+}
+
+fn sleepNs(ns: i64) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(@divTrunc(ns, std.time.ns_per_s)),
+            .nsec = @intCast(@mod(ns, std.time.ns_per_s)),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    }
+}
+
+test "SchemaProvider.invalidate() drops cached data" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    const default_graph: []const u8 = "default";
+    _ = try store.createNodeWithGraphAndTenant(&.{"X"}, default_graph, "tenant-a");
+
+    var sp = SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+    _ = try sp.getLabels();
+    sp.invalidate();
+    try testing.expect(sp.labels == null);
+}
