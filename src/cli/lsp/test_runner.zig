@@ -17,4 +17,6 @@ test {
     _ = @import("mcp_input_guards_test.zig");
     _ = @import("framer_test.zig");
     _ = @import("server_debounce_test.zig");
+    // Task 12: per-session auth + schema bind gate tests.
+    _ = @import("server_auth_test.zig");
 }

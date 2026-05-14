@@ -9,6 +9,21 @@ const transport = @import("transport.zig");
 const document = @import("document.zig");
 const features = @import("features.zig");
 const json_helpers = @import("json_helpers.zig");
+const auth_mod = @import("auth.zig");
+const schema_provider_mod = @import("schema_provider.zig");
+
+// Task 12: reach the unified authentication provider and the execution
+// context type via the `geode` named module. We deliberately do not pull
+// these via relative `../../security/authn.zig` / `../../execution.zig`
+// imports because src/cli/lsp/ is reached from two roots (geode_exe and
+// the lsp_tests build module) and Zig 0.16 would treat the relative
+// import as a fresh module root in the test build — triggering the
+// "file exists in modules X and X0" diamond. Both build roots expose the
+// `geode` named module (build.zig:580 + build.zig:2204), so the same
+// import resolves in both contexts.
+const geode = @import("geode");
+const execution = geode.execution;
+const graph_store = geode.graph_store;
 
 const Transport = transport.Transport;
 const DocumentStore = document.DocumentStore;
@@ -69,18 +84,78 @@ pub const Server = struct {
     /// not affect production behavior.
     diagnostics_send_count_for_test: usize = 0,
 
+    // -------- Task 12: per-session auth + schema binding --------
+    /// Verifier vtable the LSP server invokes during `initialize` to
+    /// validate the client's bearer / session token. `null` is the
+    /// stdio-LSP default until Task 28 plumbs the
+    /// `authn.AuthProvider`-backed verifier through `geode serve`. When
+    /// null the only way to pass the auth gate is `allow_unauth =
+    /// true` (the `--no-auth` mode landing in Task 13). The vtable
+    /// shape — `auth_mod.Verifier` — exists so the LSP server does not
+    /// have to import `security/authn.zig` directly; see lib.zig's
+    /// authn note for why that file is currently un-importable on
+    /// Zig 0.16.
+    verifier: ?auth_mod.Verifier = null,
+
+    /// When true, `initialize` is allowed to bind a session without a
+    /// verified auth token (used by `geode lsp --no-auth` in Task 13).
+    /// In Task 12 this is wired to a `error.MissingToken` short-circuit
+    /// because the `--no-auth` binding logic itself lands in Task 13.
+    allow_unauth: bool = false,
+
+    /// Verified-on-`initialize` session state. `null` until the client
+    /// completes the auth handshake; non-null + `verified=true` is
+    /// what the auth gate looks at. Owned by the Server — released in
+    /// `deinit`.
+    auth: ?auth_mod.AuthState = null,
+
+    /// Lazy-fetch schema cache scoped to the verified session. Allocated
+    /// on the heap so DDL notifier hooks can reference a stable address
+    /// (`registerInvalidation` stores `*SchemaProvider`). The
+    /// `unregisterInvalidation` call in `deinit` MUST run before the
+    /// SchemaProvider is destroyed or the next DDL would dispatch on a
+    /// dangling pointer.
+    schema: ?*schema_provider_mod.SchemaProvider = null,
+
+    /// Per-session execution context built from the verified
+    /// AuthState. Task 12 wires the catalog pointer + role + tenant
+    /// onto it; Tasks 17+ start consuming it from inside completion /
+    /// hover / diagnostics handlers.
+    exec_context: ?execution.ExecutionContext = null,
+
     /// F-01: minimum interval between successive diagnostic flushes
     /// for the same document. Real LSP clients debounce around
     /// 100 ms; 80 ms gives plenty of headroom.
     pub const DEBOUNCE_NS: i128 = 80 * std.time.ns_per_ms;
 
+    /// Default constructor: stdio LSP path with no live verifier.
+    /// Equivalent to `initWithAuth(allocator, null, false)`. Kept as a
+    /// distinct entry point so the pre-Task-12 test suite continues
+    /// to compile unchanged — Task 12 only adds new optional state.
     pub fn init(allocator: Allocator) !Server {
+        return initWithAuth(allocator, null, false);
+    }
+
+    /// Task 12 constructor: plumb an optional `Verifier` and a
+    /// `--no-auth` switch. `verifier == null` + `allow_unauth ==
+    /// false` is fail-closed — every `initialize` will reject any
+    /// non-empty token (and every empty one) with MissingToken /
+    /// InvalidToken. Stdio callers pass `(null, false)` for now;
+    /// Task 28's TCP/embedded path will pass a verifier whose ctx is
+    /// the running `authn.AuthProvider` instance.
+    pub fn initWithAuth(
+        allocator: Allocator,
+        verifier: ?auth_mod.Verifier,
+        allow_unauth: bool,
+    ) !Server {
         return .{
             .allocator = allocator,
             .transport = try Transport.init(allocator),
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,
+            .verifier = verifier,
+            .allow_unauth = allow_unauth,
         };
     }
 
@@ -88,6 +163,23 @@ pub const Server = struct {
         if (self.debounce_state_initialized) {
             self.debounce_state.deinit();
         }
+        // Tear down session state in reverse order of allocation so the
+        // DDL notifier never dispatches on a freed SchemaProvider.
+        if (self.schema) |sp| {
+            sp.unregisterInvalidation();
+            sp.deinit();
+            self.allocator.destroy(sp);
+            self.schema = null;
+        }
+        if (self.auth) |a| {
+            a.deinit(self.allocator);
+            self.auth = null;
+        }
+        // exec_context is a value type holding only borrowed pointers
+        // (catalog is a process-global singleton; user/tenant/role come
+        // from AuthState which was freed above). No allocations to
+        // release here.
+        self.exec_context = null;
         self.documents.deinit();
     }
 
@@ -232,7 +324,43 @@ pub const Server = struct {
         }
     }
 
+    /// Task 12: the four methods that are allowed before the LSP session
+    /// has authenticated. Everything else is rejected with JSON-RPC
+    /// -32002 ("not authenticated"). Notification-level `initialized`
+    /// and `exit` are handled in `handleNotification`; this list covers
+    /// only the request side.
+    fn isAuthExemptMethod(method: []const u8) bool {
+        return std.mem.eql(u8, method, "initialize") or
+            std.mem.eql(u8, method, "shutdown");
+    }
+
+    /// Test helper: returns true when a request bearing `method` would
+    /// pass the auth gate. Kept public + side-effect-free so tests can
+    /// assert the gate's behavior without driving the JSON-RPC
+    /// transport (the in-stdio Transport is not test-friendly until
+    /// Task 25 lands the tagged-union refactor).
+    pub fn isMethodAllowed(self: *const Server, method: []const u8) bool {
+        if (isAuthExemptMethod(method)) return true;
+        const a = self.auth orelse return false;
+        return a.verified;
+    }
+
     fn handleRequest(self: *Server, method: []const u8, id: std.json.Value, params: ?std.json.Value) !void {
+        // Task 12 auth gate: every non-init/shutdown request must
+        // come from a session whose AuthState.verify succeeded during
+        // the `initialize` handshake. We respond with JSON-RPC -32002
+        // ("ServerNotInitialized") because LSP clients already know
+        // how to drop a session on that code. The literal -32002 is
+        // the LSP spec value (Microsoft LSP 3.17 §5.1.3); the local
+        // `protocol.ErrorCode` enum only covers the JSON-RPC subset.
+        if (!isAuthExemptMethod(method)) {
+            const a = self.auth;
+            if (a == null or !a.?.verified) {
+                try self.sendError(id, -32002, "not authenticated");
+                return;
+            }
+        }
+
         if (std.mem.eql(u8, method, "initialize")) {
             try self.handleInitialize(id, params);
         } else if (std.mem.eql(u8, method, "shutdown")) {
@@ -273,7 +401,97 @@ pub const Server = struct {
         }
     }
 
+    /// Task 12: bind the per-session AuthState + SchemaProvider +
+    /// ExecutionContext on a successful `initialize`. Returns
+    /// `error.AuthInitFailed` (mapped to a JSON-RPC -32002 response by
+    /// `handleInitialize`) when the client did not provide a valid
+    /// `initializationOptions.geode.authToken`. `allow_unauth = true`
+    /// (Task 13's `--no-auth` switch) bypasses verification but the
+    /// no-auth bind itself is stubbed here — Task 13 fills in the
+    /// `$USER` env-var fallback. Until Task 13 lands, allow_unauth
+    /// rejects with `MissingToken` so the gate stays fail-closed by
+    /// default.
+    fn bindSession(self: *Server, params: ?std.json.Value) auth_mod.AuthError!void {
+        const p = params orelse return auth_mod.AuthError.MissingToken;
+        if (p != .object) return auth_mod.AuthError.BadFormat;
+        const init_opts = p.object.get("initializationOptions") orelse {
+            // No initializationOptions at all. The `--no-auth` mode
+            // (Task 13) is the only path that should succeed without
+            // a token; Task 12 leaves it as a fail-closed stub so
+            // stdio LSP cannot accidentally start unauthenticated.
+            if (self.allow_unauth) return auth_mod.AuthError.MissingToken;
+            return auth_mod.AuthError.MissingToken;
+        };
+
+        var state = try auth_mod.AuthState.fromInitializeOptions(self.allocator, init_opts);
+        errdefer state.deinit(self.allocator);
+        try state.verify(self.allocator, self.verifier);
+
+        // Allocate the SchemaProvider on the heap so the DDL notifier
+        // can hold a stable pointer (see registerInvalidation contract
+        // in src/cli/lsp/schema_provider.zig:170-176).
+        const sp = try self.allocator.create(schema_provider_mod.SchemaProvider);
+        errdefer self.allocator.destroy(sp);
+        const store_ptr = graph_store.getWritableGlobalStore(self.allocator);
+        sp.* = schema_provider_mod.SchemaProvider.init(self.allocator, store_ptr, .{
+            .user = state.user,
+            .tenant_id = state.tenant_id,
+            .role = state.role,
+            .graph_name = state.graph orelse "default",
+        });
+        errdefer sp.deinit();
+        try sp.registerInvalidation();
+
+        // Build the per-session ExecutionContext. We pull the catalog
+        // off the process-global singleton (same path the QUIC handler
+        // takes at src/server/quic_connection_handler.zig:3242). The
+        // `catalog` field is mandatory — there is no default — so we
+        // must succeed at this allocation before publishing any state
+        // back onto Server. `ensureCatalogInstance` returns the global
+        // error set; we collapse non-OOM failures (e.g. filesystem
+        // failures resolving the data dir) to `OutOfMemory` because
+        // the AuthError surface does not differentiate them and the
+        // LSP client would treat the -32002 response identically.
+        const catalog = execution.ensureCatalogInstance(self.allocator) catch |err| switch (err) {
+            error.OutOfMemory => return auth_mod.AuthError.OutOfMemory,
+            else => return auth_mod.AuthError.OutOfMemory,
+        };
+
+        self.auth = state;
+        self.schema = sp;
+        self.exec_context = .{
+            .catalog = catalog,
+            .user = state.user,
+            .role = state.role,
+            .tenant_id = state.tenant_id,
+        };
+    }
+
+    /// Emit a JSON-RPC -32002 ("ServerNotInitialized") error response
+    /// for `initialize`. We map every `AuthError` to -32002 because the
+    /// LSP spec only defines that one code for "this session is not
+    /// usable until you re-handshake" — clients distinguish the cause
+    /// by reading the `message` string.
+    fn respondInitializeError(self: *Server, id: std.json.Value, err: auth_mod.AuthError) !void {
+        const msg: []const u8 = switch (err) {
+            auth_mod.AuthError.MissingToken => "missing auth token",
+            auth_mod.AuthError.InvalidToken => "invalid auth token",
+            auth_mod.AuthError.ExpiredToken => "expired auth token",
+            auth_mod.AuthError.BadFormat => "malformed initializationOptions.geode block",
+            auth_mod.AuthError.OutOfMemory => "out of memory",
+        };
+        try self.sendError(id, -32002, msg);
+    }
+
     fn handleInitialize(self: *Server, id: std.json.Value, params: ?std.json.Value) !void {
+        // Task 12: bind the session before doing anything else with
+        // the request. A failed bind short-circuits with -32002 and
+        // leaves Server.auth/schema/exec_context unset so the gate in
+        // handleRequest keeps every subsequent method rejected.
+        self.bindSession(params) catch |e| {
+            return self.respondInitializeError(id, e);
+        };
+
         // Parse initialization options for formatting settings.
         // LSP-SEC-004: silently ignore malformed entries rather than
         // panicking. The init handshake must succeed for the client to

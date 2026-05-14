@@ -730,6 +730,18 @@ pub const fle_key_types = @import("fle_key_types");
 pub const user_management = @import("security/user_management.zig");
 pub const api_keys = @import("auth_lib").api_keys;
 pub const mtls_provider = @import("security/mtls_provider.zig");
+// CANARY: REQ=REQ-LSP-AUTH-GATE-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=LibExportAuthn; STATUS=IMPL; OWNER=lsp; UPDATED=2026-05-14
+//
+// `security/authn.zig` is the unified AuthProvider chain in the design
+// docs, but it currently does not compile against Zig 0.16's stdlib
+// (uses `std.crypto.random.bytes`, which Zig 0.16 retired in favor of
+// the runtime-instantiated CSPRNG path). It is therefore NOT
+// re-exported here. The LSP `AuthState.verify` reaches the verifier
+// through an opaque vtable (`auth_mod.Verifier`) instead, which lets
+// stdio LSP run unauthenticated (null verifier ⇒ fail-closed) while
+// keeping the wiring ready for Task 28 to install a real verifier once
+// the authn.zig migration lands. See src/cli/lsp/auth.zig for the
+// Verifier type.
 
 // HMAC chain integrity module for internal auth storage
 pub const auth_hmac = @import("auth_lib").hmac;

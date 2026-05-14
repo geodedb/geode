@@ -2199,17 +2199,12 @@ pub fn build(b: *std.Build) void {
     const run_config_integration_tests = b.addRunArtifact(config_integration_tests);
     shardDep(test_step, &run_config_integration_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
 
-    // LSP implementation tests
-    const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/test_runner.zig"), .target = target, .optimize = optimize }) });
-    lsp_tests.root_module.addImport("geode", root_mod);
-    // LSP-SEC-007 / GAP-0819: expose the MCP input_guards module so the
-    // LSP test runner can exercise the cap + chokepoint helpers without
-    // pulling in the rest of the MCP tree (which is intentionally not
-    // wired into `zig build test` — see comment near line 3931).
-    const mcp_input_guards_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/input_guards.zig"), .target = target, .optimize = optimize });
-    lsp_tests.root_module.addImport("mcp_input_guards", mcp_input_guards_mod);
-    const run_lsp_tests = b.addRunArtifact(lsp_tests);
-    shardDep(test_step, &run_lsp_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    // LSP implementation tests — see the moved block lower in build.zig
+    // (search for "Task 12 moved lsp_tests"). The block was relocated so
+    // that `schema_introspection_mod` is in scope; that named module is
+    // now a transitive dep of the LSP test runner because server.zig
+    // pulls `schema_provider.zig` which uses
+    // `@import("schema_introspection")`.
 
     // Task 11 (OTel): shared otel_metrics instance for all txn test modules.
     // manager.zig uses @import("otel_metrics") so every txn_mod_for_* instance
@@ -3526,6 +3521,13 @@ pub fn build(b: *std.Build) void {
     const schema_introspection_mod = b.createModule(.{ .root_source_file = b.path("src/execution/schema_introspection.zig"), .target = target, .optimize = optimize });
     schema_introspection_mod.addImport("geode", root_mod);
     schema_introspection_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    // Task 12: geode_exe now reaches schema_provider.zig via the LSP
+    // server (src/cli/lsp/server.zig), which means the schema_provider
+    // file's `@import("schema_introspection")` needs to resolve in the
+    // geode_exe module too. Wire the named import here so the
+    // production build picks up the same source file the lsp_tests and
+    // schema_provider_tests do.
+    geode_exe.root_module.addImport("schema_introspection", schema_introspection_mod);
 
     const schema_introspection_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_schema_introspection.zig"), .target = target, .optimize = optimize });
     schema_introspection_test_mod.addImport("geode", root_mod);
@@ -3569,6 +3571,40 @@ pub fn build(b: *std.Build) void {
     const test_schema_provider_step = b.step("test-schema-provider", "Run LSP SchemaProvider lazy-fetch tests");
     test_schema_provider_step.dependOn(&run_schema_provider_tests.step);
 
+    // Task 12 moved lsp_tests: the LSP test runner used to live further
+    // up at line ~2202, before any LSP build module existed. Task 12 has
+    // server.zig pulling schema_provider.zig (and therefore the
+    // `schema_introspection` named module) into the test runner's
+    // transitive graph, so the block has to live after both
+    // schema_introspection_mod and schema_provider_mod are defined.
+    // Putting it here keeps the wiring readable: every LSP build module
+    // is now declared in one stretch.
+    const lsp_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/test_runner.zig"), .target = target, .optimize = optimize }) });
+    lsp_tests.root_module.addImport("geode", root_mod);
+    // LSP-SEC-007 / GAP-0819: expose the MCP input_guards module so the
+    // LSP test runner can exercise the cap + chokepoint helpers without
+    // pulling in the rest of the MCP tree (which is intentionally not
+    // wired into `zig build test` — see comment near line 3931).
+    const mcp_input_guards_mod = b.createModule(.{ .root_source_file = b.path("src/mcp/input_guards.zig"), .target = target, .optimize = optimize });
+    lsp_tests.root_module.addImport("mcp_input_guards", mcp_input_guards_mod);
+    // Task 12: server.zig now reaches schema_provider.zig relatively,
+    // and schema_provider.zig uses `@import("schema_introspection")`.
+    // Both lsp_tests and the standalone schema_provider_mod must resolve
+    // that named import to the SAME source file, or Zig 0.16 rejects
+    // the build with "file exists in modules X and X0". We deliberately
+    // do NOT also addImport("schema_provider", schema_provider_mod): the
+    // lsp_tests module owns schema_provider.zig via server.zig's
+    // relative @import, and registering the standalone module would
+    // give Zig two paths to the same file.
+    lsp_tests.root_module.addImport("schema_introspection", schema_introspection_mod);
+    const run_lsp_tests = b.addRunArtifact(lsp_tests);
+    shardDep(test_step, &run_lsp_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    // Task 12: dedicated step so the new server_auth_test.zig can be
+    // run in isolation without sharding the whole suite. Mirrors the
+    // pattern around `test-schema-provider` / `test-auth` etc.
+    const test_lsp_step = b.step("test-lsp", "Run the LSP test runner (all LSP unit + e2e + auth-gate tests)");
+    test_lsp_step.dependOn(&run_lsp_tests.step);
+
     // Task 10 of the LSP permission-aware completion plan: register
     // src/cli/lsp/auth_test.zig as a dedicated test step. auth.zig
     // reaches user_management.zig through the `geode` named module —
@@ -3584,6 +3620,13 @@ pub fn build(b: *std.Build) void {
     // Task 12 will introduce the LSP server bind that uses it).
     const auth_test_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/auth_test.zig"), .target = target, .optimize = optimize });
     auth_test_mod.addImport("geode", root_mod);
+    // Task 12: auth_test.zig now reaches `geode.authn` (re-exported from
+    // lib.zig) so that the positive-path test can issue a real session
+    // token via authn.AuthProvider.createSession(). createSession ends
+    // up calling std.crypto.random.bytes() on Linux, which requires
+    // libc's getrandom / a syscall-providing C runtime. Match the
+    // pattern auth_mod / geode_auth_lib uses at build.zig:2782.
+    auth_test_mod.link_libc = true;
     const auth_tests = b.addTest(.{ .root_module = auth_test_mod });
     const run_auth_tests = b.addRunArtifact(auth_tests);
     shardDep(test_step, &run_auth_tests.step, &test_shard_counter, test_shard_total, test_shard_index);

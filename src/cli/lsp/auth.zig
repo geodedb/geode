@@ -34,6 +34,32 @@ const std = @import("std");
 const geode = @import("geode");
 const user_management = geode.user_management;
 
+/// Verifier vtable: the LSP server passes one of these into
+/// `AuthState.verify`. The opaque-pointer + function-pointer pair is
+/// what unblocks Task 12 in the face of the broken `security/authn.zig`
+/// Zig-0.16 migration (the canonical `AuthProvider` does not compile
+/// under the current toolchain — see lib.zig's authn note). In Task 28
+/// the production wiring will adapt the real `AuthProvider.authenticate`
+/// to this same shape; tests in this file install a fake.
+///
+/// `verifyFn` returns an `Outcome.ok` on success, populating the username
+/// and an optional role string (which the caller maps through
+/// `user_management.Role.fromString`). It returns `Outcome.invalid` on
+/// any error path — auth errors are not differentiated at the LSP layer
+/// because the protocol surface is the same -32002 regardless.
+pub const Verifier = struct {
+    ctx: *anyopaque,
+    verifyFn: *const fn (ctx: *anyopaque, token: []const u8) Outcome,
+
+    pub const Outcome = union(enum) {
+        ok: struct {
+            username: []const u8,
+            role: ?[]const u8 = null,
+        },
+        invalid,
+    };
+};
+
 pub const AuthError = error{
     MissingToken,
     InvalidToken,
@@ -89,53 +115,54 @@ pub const AuthState = struct {
         if (self.user.len > 0) allocator.free(self.user);
     }
 
-    /// Validate the bearer token bound at construction time and, on
+    /// Validate the bearer token bound at construction time. On
     /// success, populate `self.user` / `self.role` and set
     /// `self.verified = true`.
     ///
-    /// **Current scope (Task 11).** Geode does not ship a JWT module.
-    /// The QUIC server's bearer-token path lives behind
-    /// `security/authn.zig:AuthProvider.authenticate({.bearer_token=…})`
-    /// (API-key) and `…authenticate({.session_token=…})` (rotating
-    /// session). Both require a live `AuthProvider` instance bound to
-    /// the running user store — which `AuthState` does not own and
-    /// cannot reach without an explicit plumb from the LSP `Server`.
+    /// **Verifier semantics.** The canonical validator is
+    /// `security/authn.zig:AuthProvider.authenticate()`, but that file
+    /// does not currently compile against Zig 0.16 (it predates the
+    /// `std.crypto.random` removal — see lib.zig's authn note). Until
+    /// the migration lands, the LSP server passes a `Verifier` vtable
+    /// instead of a raw `AuthProvider`. Production code (Task 28) will
+    /// install a verifier whose `ctx` is the real `AuthProvider*` and
+    /// whose `verifyFn` calls `authenticate({.bearer_token=…})` then
+    /// `…({.session_token=…})` — the same in-order chain the QUIC
+    /// handler enforces (authn.zig:261-306).
     ///
-    /// Task 12 lands that plumb (see the plan §"Server session bind +
-    /// auth gate"). Until then `verify` enforces only the structural
-    /// invariant: a non-empty token is required. Every non-empty value
-    /// is reported as `InvalidToken` and leaves `self.verified = false`
-    /// — i.e. `.ReadOnly` (the AuthState default) until a real
-    /// validator runs. This is fail-closed: callers MUST treat the
-    /// session as unauthenticated.
+    /// When `verifier` is `null` we cannot authenticate; every
+    /// non-empty token returns `InvalidToken`. This is the fail-closed
+    /// stdio-LSP path until Task 13 lands `--no-auth` and Task 28
+    /// plumbs the live verifier through `geode serve`.
+    ///
+    /// **Ownership.** On success we dupe the username and (optional)
+    /// role-name slices so they survive the verifier releasing its
+    /// borrowed copies. The dupe is owned by `self` and freed in
+    /// `deinit`.
     ///
     /// Errors:
     ///   - `MissingToken` — `self.token` is empty.
-    ///   - `InvalidToken` — Task 12 replaces this branch with the
-    ///     `AuthProvider` outcome (`AuthenticationRequired`,
-    ///     `SessionIdleTimeout`, …) mapped through the same
-    ///     `AuthError` set so verifier-specific errors never leak.
-    ///   - `ExpiredToken` — reserved for the Task-12 implementation;
-    ///     not produced by the current stub.
-    pub fn verify(self: *AuthState, allocator: std.mem.Allocator) AuthError!void {
+    ///   - `InvalidToken` — verifier rejected the token, or `verifier`
+    ///     was `null` and the token is non-empty.
+    pub fn verify(
+        self: *AuthState,
+        allocator: std.mem.Allocator,
+        verifier: ?Verifier,
+    ) AuthError!void {
         if (self.token.len == 0) return AuthError.MissingToken;
+        const v = verifier orelse return AuthError.InvalidToken;
 
-        // Task-12 placeholder. Real implementation (sketch):
-        //
-        //   const ap = self.auth_provider orelse return AuthError.InvalidToken;
-        //   const result = ap.authenticate(.{ .bearer_token = self.token }) catch |e| switch (e) {
-        //       error.SessionExpired => return AuthError.ExpiredToken,
-        //       else => return AuthError.InvalidToken,
-        //   };
-        //   self.user = try allocator.dupe(u8, result.username);
-        //   self.role = user_management.Role.fromString(...) orelse .ReadOnly;
-        //   self.verified = true;
-        //
-        // Reference the symbol so `user_management` does not silently
-        // become a dead import on the way to Task 12 (and so the
-        // build.zig wiring stays exercised).
-        _ = allocator;
-        _ = user_management.Role.fromString;
-        return AuthError.InvalidToken;
+        switch (v.verifyFn(v.ctx, self.token)) {
+            .invalid => return AuthError.InvalidToken,
+            .ok => |ok| {
+                self.user = try allocator.dupe(u8, ok.username);
+                if (ok.role) |role_name| {
+                    if (user_management.Role.fromString(role_name)) |r| {
+                        self.role = r;
+                    }
+                }
+                self.verified = true;
+            },
+        }
     }
 };
