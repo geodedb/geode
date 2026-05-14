@@ -88,4 +88,54 @@ pub const AuthState = struct {
         if (self.tenant_id) |t| allocator.free(t);
         if (self.user.len > 0) allocator.free(self.user);
     }
+
+    /// Validate the bearer token bound at construction time and, on
+    /// success, populate `self.user` / `self.role` and set
+    /// `self.verified = true`.
+    ///
+    /// **Current scope (Task 11).** Geode does not ship a JWT module.
+    /// The QUIC server's bearer-token path lives behind
+    /// `security/authn.zig:AuthProvider.authenticate({.bearer_token=…})`
+    /// (API-key) and `…authenticate({.session_token=…})` (rotating
+    /// session). Both require a live `AuthProvider` instance bound to
+    /// the running user store — which `AuthState` does not own and
+    /// cannot reach without an explicit plumb from the LSP `Server`.
+    ///
+    /// Task 12 lands that plumb (see the plan §"Server session bind +
+    /// auth gate"). Until then `verify` enforces only the structural
+    /// invariant: a non-empty token is required. Every non-empty value
+    /// is reported as `InvalidToken` and leaves `self.verified = false`
+    /// — i.e. `.ReadOnly` (the AuthState default) until a real
+    /// validator runs. This is fail-closed: callers MUST treat the
+    /// session as unauthenticated.
+    ///
+    /// Errors:
+    ///   - `MissingToken` — `self.token` is empty.
+    ///   - `InvalidToken` — Task 12 replaces this branch with the
+    ///     `AuthProvider` outcome (`AuthenticationRequired`,
+    ///     `SessionIdleTimeout`, …) mapped through the same
+    ///     `AuthError` set so verifier-specific errors never leak.
+    ///   - `ExpiredToken` — reserved for the Task-12 implementation;
+    ///     not produced by the current stub.
+    pub fn verify(self: *AuthState, allocator: std.mem.Allocator) AuthError!void {
+        if (self.token.len == 0) return AuthError.MissingToken;
+
+        // Task-12 placeholder. Real implementation (sketch):
+        //
+        //   const ap = self.auth_provider orelse return AuthError.InvalidToken;
+        //   const result = ap.authenticate(.{ .bearer_token = self.token }) catch |e| switch (e) {
+        //       error.SessionExpired => return AuthError.ExpiredToken,
+        //       else => return AuthError.InvalidToken,
+        //   };
+        //   self.user = try allocator.dupe(u8, result.username);
+        //   self.role = user_management.Role.fromString(...) orelse .ReadOnly;
+        //   self.verified = true;
+        //
+        // Reference the symbol so `user_management` does not silently
+        // become a dead import on the way to Task 12 (and so the
+        // build.zig wiring stays exercised).
+        _ = allocator;
+        _ = user_management.Role.fromString;
+        return AuthError.InvalidToken;
+    }
 };
