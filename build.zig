@@ -3569,6 +3569,27 @@ pub fn build(b: *std.Build) void {
     const test_schema_provider_step = b.step("test-schema-provider", "Run LSP SchemaProvider lazy-fetch tests");
     test_schema_provider_step.dependOn(&run_schema_provider_tests.step);
 
+    // Task 10 of the LSP permission-aware completion plan: register
+    // src/cli/lsp/auth_test.zig as a dedicated test step. auth.zig
+    // reaches user_management.zig through the `geode` named module —
+    // a relative `../../security/...` import fails with
+    //   "import of file outside module path"
+    // because auth_test.zig is the root module for this test build
+    // and its module root is src/cli/lsp/. We propagate the `geode`
+    // named import into the test module so that auth.zig (pulled in
+    // as a relative sibling `@import("auth.zig")`) resolves
+    // `@import("geode")` against root_mod. Same module-diamond escape
+    // hatch the schema_provider tests use, just minus the standalone
+    // auth_mod (auth.zig has no other named-module consumers yet —
+    // Task 12 will introduce the LSP server bind that uses it).
+    const auth_test_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/auth_test.zig"), .target = target, .optimize = optimize });
+    auth_test_mod.addImport("geode", root_mod);
+    const auth_tests = b.addTest(.{ .root_module = auth_test_mod });
+    const run_auth_tests = b.addRunArtifact(auth_tests);
+    shardDep(test_step, &run_auth_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const test_auth_step = b.step("test-auth", "Run LSP AuthState initializeOptions parser tests");
+    test_auth_step.dependOn(&run_auth_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
