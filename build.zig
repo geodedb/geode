@@ -3534,6 +3534,31 @@ pub fn build(b: *std.Build) void {
     const run_schema_introspection_tests = b.addRunArtifact(schema_introspection_tests);
     shardDep(test_step, &run_schema_introspection_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
 
+    // Task 6 of the LSP permission-aware completion plan: register
+    // src/cli/lsp/schema_provider.zig as its own build module. It
+    // imports both `geode` (for graph_store + user_management) and
+    // `schema_introspection` (the Task 5 module). Re-exporting from
+    // lib.zig would close a module cycle (schema_introspection_mod
+    // already depends on geode/root_mod), so this is the named-module
+    // diamond escape hatch — same pattern as Task 5.
+    const schema_provider_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/schema_provider.zig"), .target = target, .optimize = optimize });
+    schema_provider_mod.addImport("geode", root_mod);
+    schema_provider_mod.addImport("schema_introspection", schema_introspection_mod);
+
+    const schema_provider_test_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/schema_provider_test.zig"), .target = target, .optimize = optimize });
+    schema_provider_test_mod.addImport("geode", root_mod);
+    schema_provider_test_mod.addImport("schema_introspection", schema_introspection_mod);
+    schema_provider_test_mod.addImport("schema_provider", schema_provider_mod);
+    const schema_provider_tests = b.addTest(.{ .root_module = schema_provider_test_mod });
+    const run_schema_provider_tests = b.addRunArtifact(schema_provider_tests);
+    shardDep(test_step, &run_schema_provider_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    // Dedicated step so iterative TDD on the LSP SchemaProvider doesn't
+    // require sharding the whole test suite to find which slice this
+    // test landed in. Mirrors `test-perf` / `test-match-parity` /
+    // `test-gap0810-regression` etc.
+    const test_schema_provider_step = b.step("test-schema-provider", "Run LSP SchemaProvider lazy-fetch tests");
+    test_schema_provider_step.dependOn(&run_schema_provider_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
