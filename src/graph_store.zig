@@ -1015,6 +1015,54 @@ pub const GraphStore = struct {
         return names.toOwnedSlice(allocator);
     }
 
+    /// Returns a de-duplicated, allocator-owned slice of edge type names
+    /// observed in the in-memory edge store.
+    ///
+    /// `filter_tenant == null` returns every edge type regardless of tenant
+    /// (admin/introspection path); otherwise only edges whose `tenant_id`
+    /// equals `filter_tenant` contribute to the result.
+    ///
+    /// Caller owns the returned slice and each string inside it — both must
+    /// be freed with the same `allocator` that was passed in.
+    pub fn listEdgeTypes(
+        self: *const GraphStore,
+        allocator: std.mem.Allocator,
+        filter_tenant: ?[]const u8,
+    ) ![][]const u8 {
+        var type_set = std.StringHashMap(void).init(allocator);
+        defer {
+            var k_it = type_set.keyIterator();
+            while (k_it.next()) |k| allocator.free(k.*);
+            type_set.deinit();
+        }
+
+        var edge_it = self.edges.iterator();
+        while (edge_it.next()) |entry| {
+            const edge = entry.value_ptr.*;
+            if (filter_tenant) |tid| {
+                if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+            }
+            if (type_set.contains(edge.label)) continue;
+            const copy = try allocator.dupe(u8, edge.label);
+            errdefer allocator.free(copy);
+            const r = try type_set.getOrPut(copy);
+            if (r.found_existing) allocator.free(copy);
+        }
+
+        var out = try std.ArrayList([]const u8).initCapacity(allocator, type_set.count());
+        errdefer {
+            for (out.items) |s| allocator.free(s);
+            out.deinit(allocator);
+        }
+        var k_it = type_set.keyIterator();
+        while (k_it.next()) |k| {
+            const owned_copy = try allocator.dupe(u8, k.*);
+            errdefer allocator.free(owned_copy);
+            try out.append(allocator, owned_copy);
+        }
+        return out.toOwnedSlice(allocator);
+    }
+
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
         // Create the persisted graph first so the in-memory registry never
         // diverges from the adapter-backed storage layout.
@@ -7565,4 +7613,40 @@ test "PERF-P0-001: edge-type index posting list is sorted ascending" {
     for (1..chain_ids.?.len) |i| {
         try testing.expect(chain_ids.?[i] > chain_ids.?[i - 1]);
     }
+}
+
+test "listEdgeTypes returns unique edge types filtered by tenant" {
+    var store = try GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    var labels = [_][]const u8{"A"};
+    const n1 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant-a");
+    const n2 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant-a");
+    const n3 = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant-b");
+    _ = try store.createEdgeWithGraphAndTenant(n1, n2, "KNOWS", "default", "tenant-a");
+    _ = try store.createEdgeWithGraphAndTenant(n1, n2, "KNOWS", "default", "tenant-a");
+    _ = try store.createEdgeWithGraphAndTenant(n1, n2, "LIKES", "default", "tenant-a");
+    _ = try store.createEdgeWithGraphAndTenant(n3, n3, "FOLLOWS", "default", "tenant-b");
+
+    const types_a = try store.listEdgeTypes(testing.allocator, "tenant-a");
+    defer {
+        for (types_a) |t| testing.allocator.free(t);
+        testing.allocator.free(types_a);
+    }
+    try testing.expectEqual(@as(usize, 2), types_a.len);
+
+    const types_b = try store.listEdgeTypes(testing.allocator, "tenant-b");
+    defer {
+        for (types_b) |t| testing.allocator.free(t);
+        testing.allocator.free(types_b);
+    }
+    try testing.expectEqual(@as(usize, 1), types_b.len);
+    try testing.expectEqualStrings("FOLLOWS", types_b[0]);
+
+    const types_all = try store.listEdgeTypes(testing.allocator, null);
+    defer {
+        for (types_all) |t| testing.allocator.free(t);
+        testing.allocator.free(types_all);
+    }
+    try testing.expectEqual(@as(usize, 3), types_all.len);
 }
