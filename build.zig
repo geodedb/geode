@@ -3633,6 +3633,21 @@ pub fn build(b: *std.Build) void {
     const test_auth_step = b.step("test-auth", "Run LSP AuthState initializeOptions parser tests");
     test_auth_step.dependOn(&run_auth_tests.step);
 
+    // Task 14 of the LSP permission-aware completion plan: register
+    // src/cli/lsp/completion_context_test.zig as a dedicated test step.
+    // completion_context.zig is a pure analyzer — std-only, no named-module
+    // imports — so the test module needs no extra `addImport` wiring. The
+    // test file pulls completion_context.zig in via relative import
+    // (`@import("completion_context.zig")`); both files share the same
+    // module root (src/cli/lsp/), so Zig 0.16 resolves the path without
+    // the diamond-trap we work around for schema_provider / auth.
+    const completion_context_test_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/completion_context_test.zig"), .target = target, .optimize = optimize });
+    const completion_context_tests = b.addTest(.{ .root_module = completion_context_test_mod });
+    const run_completion_context_tests = b.addRunArtifact(completion_context_tests);
+    shardDep(test_step, &run_completion_context_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const test_completion_context_step = b.step("test-completion-context", "Run LSP completion_context cursor-analyzer tests");
+    test_completion_context_step.dependOn(&run_completion_context_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
