@@ -1,6 +1,6 @@
 # Quality Gap Analysis
 
-Last updated: 2026-05-06 (LSP audit Phase 4 — 8 quality findings filed (#767, #768, #769, #771, #773, #774, #775, #778); 3 cross-linked to existing GAP-IDs; prior: 2026-04-16 Phase 4 closeout — 3 of 15 Phase 4 findings closed: #710, #717, #724; 2 more follow-ups committed as sub-fixes for #716 / audit.jsonl; 10 remain open; prior: 2026-04-10 gap closure — all 8 remaining items closed; Q13, Q15, Q17, Q18 closed; migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
+Last updated: 2026-05-15 (Codebase quality review Phase 3 — 7 findings filed: #804, #806, #809, #810, #812, #813, #815; F3 deferred to gap-sync (overlaps GAP-0833); F7/F9 handled out-of-band; F10 dropped; prior: 2026-05-06 LSP audit Phase 4 — 8 quality findings filed (#767, #768, #769, #771, #773, #774, #775, #778); 3 cross-linked to existing GAP-IDs; prior: 2026-04-16 Phase 4 closeout — 3 of 15 Phase 4 findings closed: #710, #717, #724; 2 more follow-ups committed as sub-fixes for #716 / audit.jsonl; 10 remain open; prior: 2026-04-10 gap closure — all 8 remaining items closed; Q13, Q15, Q17, Q18 closed; migration engine re-audit 19 findings, 13 closed via GAP-0306..0321)
 
 ## Summary
 
@@ -413,3 +413,47 @@ Scope: `src/cli/lsp/` + `src/mcp/lsp.zig`. Source: `/tmp/lsp-audit-phase3/qualit
 | Rank | ID | Title | Commit | Status |
 |---|---|---|---|---|
 | 1 | Q1 (LSP-SEC-004 cross-link) | JSON-RPC unwrap panics at ~10 call sites | `1cce1e57` + `6a36651b` | Closed |
+
+## 2026-05-15 — Codebase quality review (Phase 3)
+
+Phase 3 quality-reviewer (audit 2026-05-15) produced 10 findings. 7 elevated to GitLab issues; F3 deferred to gap-sync (overlap with GAP-0833 from gap-detector); F7/F9 handled out-of-band; F10 dropped (no API contract drift confirmed).
+
+### Stack-ranked findings (Phase 3, 2026-05-15)
+
+| Rank | Severity | PriorityScore | Category | Finding | Component | Evidence | GitLab Issue | Fix Summary | Effort | Status |
+|---|---|---:|---|---|---|---|---|---|---|---|
+| 1 | High | 27 | tests / security-correctness | `confidence::confirmed` 3 security-correctness TODOs in FLE enforcement tests need promotion | security/test | `src/security/test_fle_enforcement.zig:222`, `:292`, `:377` | [#813](https://gitlab.com/devnw/codepros/geode/geode/-/issues/813) | Promote TODOs to tracked work; either land missing assertions or rationale-comment + defer | M | Open |
+| 2 | Medium | 27 | maintainability / correctness | `confidence::confirmed` 2 lock-acquisition TODOs in QUIC connection handler need resolution against GAP-0278 tier table | server/transport | `src/server/quic_connection_handler.zig:4292`, `:4399` | [#815](https://gitlab.com/devnw/codepros/geode/geode/-/issues/815) | Classify against mutex-tier ordering; refactor or document | M | Open |
+| 3 | Medium | 24 | error-handling | `confidence::confirmed` 12 bare `unreachable` statements in planned_read_runtime hot path | execution | `src/execution/planned_read_runtime.zig:303,321,322,338,342,346,360,381,382,400,404,408` | [#810](https://gitlab.com/devnw/codepros/geode/geode/-/issues/810) | Replace with diagnostic panic or error-union return | S | Open |
+| 4 | High | 20 | maintainability / complexity | `confidence::confirmed` 2649-LOC `executeMatchQueryImpl` monolith + 1570-LOC and 721-LOC siblings | execution | `src/execution/match_operations.zig:5464-8113`, `:3052`, `:2331` (file 8113 LOC) | [#804](https://gitlab.com/devnw/codepros/geode/geode/-/issues/804) | Extract per-stage helpers (node-bind, edge-bind, tenant gate, RLS gate, project); keep parity + tenant + RLS tests green | L | Open |
+| 5 | Medium | 18 | maintainability / modularity | `confidence::confirmed` 3090-LOC `features.zig` aggregates all LSP handlers in one file | cli/lsp | `src/cli/lsp/features.zig` (3090 LOC) | [#806](https://gitlab.com/devnw/codepros/geode/geode/-/issues/806) | Split by handler family (completion / hover / definition / diagnostics / semantic-tokens / formatting / workspace), thin re-export shim | M | Open |
+| 6 | Medium | 18 | error-handling | `confidence::confirmed` 6 hot-path `catch unreachable` need OOM-vs-bounds class audit | cross-cutting | follow-on for #406 (`rg -n "catch unreachable" src/`, 61 surviving sites) | [#809](https://gitlab.com/devnw/codepros/geode/geode/-/issues/809) | Annotate invariant or rewrite as `try` per site | M | Open |
+| 7 | Low | 8 | cleanup / dead-code | `confidence::confirmed` `if (false)` block guarding `replayLegacy` in WAL | wal | `src/wal.zig:296-306` | [#812](https://gitlab.com/devnw/codepros/geode/geode/-/issues/812) | Delete dead block; remove `replayLegacy` if unreferenced | S | Open |
+
+### Deferred / coordinated
+
+- **F3 (PriorityScore 20)** — CLAUDE.md stale claim about `aggregation_evaluation.zig` / `evaluateAggregation*`. **Not filed here** to avoid duplicate of GAP-0833 (gap-detector §). Coordinated handoff to `gap-sync` agent in this same audit. Recommended doc-edit text: replace the bullet with *"evaluateAggregation/evaluateAggregationWithLabels removed via GAP-0739 (2026-04-16); active aggregation entry points are tenant-safe via the match loop."*
+- **F7** — Pre-commit clamp for `camelCase pub fn` naming. Handled out-of-band via hookify / pre-commit configuration; not a code-base quality gap.
+- **F9** — This section append is the F9 deliverable.
+- **F10** — No API contract drift confirmed in Phase 3 scan; no issue filed.
+
+### PriorityScore distribution (2026-05-15)
+
+| PriorityScore | Count | IDs |
+|---|---:|---|
+| 27 | 2 | #813 (FLE TODOs), #815 (lock TODOs) |
+| 24 | 1 | #810 (unreachable in planned_read_runtime) |
+| 20 | 1 | #804 (match_operations decomposition) |
+| 18 | 2 | #806 (features.zig split), #809 (catch-unreachable audit) |
+| 8 | 1 | #812 (wal dead `if (false)`) |
+
+**Effort mix:** L=1, M=4, S=2.
+**Severity mix:** High=2, Medium=4, Low=1.
+
+### Top risks elevated this pass
+
+1. **#813 — FLE enforcement test gaps** (PS 27): security-correctness signal in a multi-tenant primitive; must not age out.
+2. **#815 — QUIC lock-acquisition TODOs** (PS 27): direct overlap with GAP-0278 mutex tier table; latent deadlock risk under load.
+3. **#810 — bare `unreachable` in hot-path planner runtime** (PS 24): UB in release mode without diagnostic context; small, mechanical fix.
+4. **#804 — `executeMatchQueryImpl` monolith** (PS 20): persistent maintainability tax compounding every match-loop change (RLS, tenant filter, planner).
+5. **#806 — `features.zig` LSP split** (PS 18): 8 LSP audit issues already filed against this single file; per-handler ownership unlocks further per-feature CANARY hygiene.

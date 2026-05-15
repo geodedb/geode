@@ -4745,3 +4745,69 @@ Source: `/codepros:gap-close` for the Geode language server (LSP). Inputs: `/tmp
 - 1 new follow-up filed (GAP-0832 — residual `server.zig:220-221`).
 - Build / format / canary: PASS / PASS / PASS.
 - No regressions detected.
+
+---
+
+## 2026-05-15 Audit Phase 4 closures (GAP-0833..GAP-0837)
+
+5 gaps from the 2026-05-15 audit Phase 4 gap-detector pass (originally tracked at `docs/GAP_ANALYSIS.md` §"2026-05-15 Audit Phase 4") closed in the same session via the gap-closer pipeline.
+
+### GAP-0833: CLAUDE.md stale residual note for aggregation_evaluation.zig (Resolved 2026-05-15)
+
+- **Original Gap:** CLAUDE.md "Known Limitations" GAP-0509 paragraph claimed `evaluateAggregation`/`evaluateAggregationWithLabels` in `src/execution/aggregation_evaluation.zig` were dead code annotated with a `GAP-0509 WARNING` comment. The functions had been **removed** under GAP-0739 (commit `4be895a9`, 2026-04-16).
+- **Severity:** Low / governance.
+- **Resolved date:** 2026-05-15.
+- **Resolution evidence:**
+  - Commit `8b950c07` — `docs: close GAP-0833/0836/0837 doc hygiene cleanup`.
+  - `CLAUDE.md` paragraph now references "GAP-0739 removal" with the correct live entry point `computeBindingGroupAggregation`.
+  - GitLab issue [#801](https://gitlab.com/devnw/codepros/geode/geode/-/issues/801) closed.
+
+### GAP-0834: LDAP authentication delisted (Won't-Do, Resolved 2026-05-15)
+
+- **Original Gap:** REQ-AUTH-LDAP-001 referenced LDAP support in `docs/USER_AUTH.md`, but `grep -rin "ldap" src/` returned 0 hits on protocol code. Documentation overstated support.
+- **Severity:** High / security (originally); Won't-Do disposition after operator decision.
+- **Resolved date:** 2026-05-15.
+- **Disposition rationale:** Delisted per operator decision — docs no longer overstate LDAP support; reopen when customer demand or implementation lands.
+- **Resolution evidence:**
+  - Commit `50fa6510` — `docs(auth): delist LDAP and OAuth/OIDC support (#802 #803)`.
+  - `docs/USER_AUTH.md` and `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md` now explicitly mark LDAP as "Not Supported".
+  - GitLab issue [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) closed (won't-fix / delisted).
+
+### GAP-0835: OAuth/OIDC authentication delisted (Won't-Do, Resolved 2026-05-15)
+
+- **Original Gap:** REQ-AUTH-OIDC-001 referenced OAuth/OIDC support, but `grep -rin "oidc|oauth|jwks" src/` returned 0 hits. Same gap pattern as GAP-0834.
+- **Severity:** High / security (originally); Won't-Do disposition after operator decision.
+- **Resolved date:** 2026-05-15.
+- **Disposition rationale:** Same as GAP-0834 — delisted per operator decision; reopen on demand.
+- **Resolution evidence:**
+  - Commit `50fa6510` — `docs(auth): delist LDAP and OAuth/OIDC support (#802 #803)`.
+  - Both docs now mark OAuth/OIDC as "Not Supported".
+  - GitLab issue [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) closed (won't-fix / delisted).
+
+### GAP-0836: GAP-0510 collision between CLAUDE.md and GAP_ANALYSIS.md (Resolved 2026-05-15)
+
+- **Original Gap:** `CLAUDE.md:19` reused `GAP-0510` for the RLS expression engine wiring (closed 2026-04-11), but the canonical `GAP-0510` in `docs/GAP_ANALYSIS.md:1969` is the QUIC pool-stale-conns gap.
+- **Severity:** Low / governance.
+- **Resolved date:** 2026-05-15.
+- **Resolution evidence:**
+  - Commit `8b950c07` — `docs: close GAP-0833/0836/0837 doc hygiene cleanup`.
+  - CLAUDE.md collision resolved; canonical `GAP-0510` (QUIC pool stale conns) retained at `docs/GAP_ANALYSIS.md:1969`.
+  - GitLab issue [#805](https://gitlab.com/devnw/codepros/geode/geode/-/issues/805) closed.
+
+### GAP-0837: Stale STATUS=COMPLETE CANARY markers in 4 doc files (Resolved 2026-05-15)
+
+- **Original Gap:** 4 doc files carried stale `STATUS=COMPLETE` literals (legal CANARY statuses are `TESTED|IMPL|EXEMPT|BENCHED`): `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md:152`, `docs/ARGON2ID_IMPLEMENTATION.md:205`, `docs/BINARY_PROTOCOL.md:119`, `docs/BINARY_PROTOCOL.md:169`. Doc-drift only.
+- **Severity:** Low / governance.
+- **Resolved date:** 2026-05-15.
+- **Resolution evidence:**
+  - Commit `8b950c07` — `docs: close GAP-0833/0836/0837 doc hygiene cleanup`.
+  - All 4 markers replaced with `STATUS=TESTED`; `tools/canaryscan/status.csv` regenerated.
+  - GitLab issue [#807](https://gitlab.com/devnw/codepros/geode/geode/-/issues/807) closed.
+
+### Closure metrics (2026-05-15 Audit Phase 4 pass)
+
+- 5 commits in this session (3 code + 2 docs) — `f88be7b0`, `8ac5817c`, `b83521c8`, `8b950c07`, `50fa6510`.
+- 5 doc/governance gaps closed (3 fix, 2 won't-do/delist).
+- 3 security findings closed in parallel (#817, #818, #819) — see `docs/SECURITY_GAP_ANALYSIS.md`.
+- Build / format / canary: PASS / PASS / PASS (all acceptance criteria verified).
+- No regressions detected.

@@ -1,9 +1,113 @@
 # Security Gap Analysis
 
-Last updated: 2026-04-16
+Last updated: 2026-05-15
+Scope (Audit Phase 3, 2026-05-15): `src/execution/schema_introspection.zig`, `src/cli/lsp/schema_provider.zig`, `src/cli/auth_init_cli.zig`, `src/server/server_init.zig`, `src/server/main.zig`, `src/cli/session_cli.zig`, `src/security/mfa_risk.zig`, `src/storage/s3_backup.zig`, `build.zig.zon`, `clients/test-harness/certs/` (history)
 Scope (Phase 3, 2026-04-16): `src/security/rls_core.zig`, `src/security/audit.zig`, `src/cli/geode_audit_verify.zig`, `src/security/vault_kms_provider.zig`, `src/security/geode_auth_lib.zig`, `src/distributed/*`, `src/execution/aggregation_evaluation.zig`, `src/monitoring/metrics_server.zig`, `config/nginx/conf.d/geode.conf`, `src/cli/main.zig`, `src/cli/cli_dispatcher.zig`
 Scope (Original, 2026-04-10): `src/migration/mod.zig`, `src/cli/backup_cli.zig`
 Audited by: Claude Opus 4.6 / Opus 4.7 (adversarial security review)
+
+---
+
+## 2026-05-15 — Security review (Audit Phase 3)
+
+### Summary
+
+- **Total new findings:** 12 (from Phase 3 adversarial security-reviewer)
+- **Elevated (tracked as issues):** 8 — SEC-LSP-INTRO-01 (#817 public), SEC-KEY-LEAK-01 (#818 confidential), SEC-BOOT-ADMIN-01 (#819 confidential), SEC-SESS-LOG-01 (#820 public), SEC-MFA-FIPS-01 (#821 public), SEC-SUPPLY-01 (#822 public), SEC-LSP-BIND-01 (#823 public), SEC-S3-SIGV2-01 (#824 public)
+- **Closed in this session (2026-05-15):** 3 — SEC-KEY-LEAK-01 (#818, commit `f88be7b0`), SEC-LSP-INTRO-01 (#817, commit `b83521c8`), SEC-BOOT-ADMIN-01 (#819, commit `8ac5817c`). **Open:** 5 — #820, #821, #822, #823, #824.
+- **Closed / Not-A-Gap:** 4 — F2, F6, F10, F11 (verified safe; see Resolved section below)
+- **Confidential:** 2 (#818, #819 — admin creds + leaked test keys) — both Closed.
+- **Risk distribution (elevated):** 1 High (64), 3 Medium (32 each), 4 Low (4-16)
+
+### Top Findings (this audit)
+
+| Rank | Risk | ID | Finding | CWE | Issue |
+|------|------|-----|---------|-----|-------|
+| 1 | 64 | SEC-KEY-LEAK-01 | **Closed 2026-05-15** (commit `f88be7b0`) — test-harness directory relocated to a separate repo (commit `9530366b`); `.gitleaks.toml` allowlist references historical SHAs to prevent future re-flag | CWE-540 | [#818](https://gitlab.com/devnw/codepros/geode/geode/-/issues/818) confidential |
+| 2 | 32 | SEC-LSP-INTRO-01 | **Closed 2026-05-15** (commit `b83521c8`) — `labelVisible` + `filterLabelsByPermission` applied to `listLabelsForUser` / `listEdgeTypesForUser` / `listPropertiesForLabelForUser` using the existing `isLabelDenied` primitive; 4 new GAP #817 tests pass | CWE-200 / A01:2021 | [#817](https://gitlab.com/devnw/codepros/geode/geode/-/issues/817) |
+| 3 | 32 | SEC-BOOT-ADMIN-01 | **Closed 2026-05-15** (commit `8ac5817c`) — `data_dir` mode check added; bootstrap password no longer printed to stdout, written 0600 only | CWE-538, CWE-732 | [#819](https://gitlab.com/devnw/codepros/geode/geode/-/issues/819) confidential |
+| 4 | 32 | SEC-SUPPLY-01 | Single-signer supply-chain for 24 pinned `devnw/zig/*` modules; add 2-reviewer rule on `build.zig.zon` | CWE-1357 | [#822](https://gitlab.com/devnw/codepros/geode/geode/-/issues/822) suspected |
+| 5 | 16 | SEC-SESS-LOG-01 | Session token printed to stderr after `session rotate` | CWE-532 | [#820](https://gitlab.com/devnw/codepros/geode/geode/-/issues/820) |
+| 6 | 12 | SEC-LSP-BIND-01 | Regression guard for `--lsp-bind-all`: ensure no future MR flips `allow_unauth=true` | CWE-489 | [#823](https://gitlab.com/devnw/codepros/geode/geode/-/issues/823) |
+| 7 | 8 | SEC-S3-SIGV2-01 | Migrate S3 backup from SigV2 to SigV4 (provider-deprecation hardening) | (hygiene) | [#824](https://gitlab.com/devnw/codepros/geode/geode/-/issues/824) |
+| 8 | 4 | SEC-MFA-FIPS-01 | TOTP HMAC-SHA1; add SHA-256/SHA-512 for FIPS-mode customers | CWE-327 | [#821](https://gitlab.com/devnw/codepros/geode/geode/-/issues/821) |
+
+### Stack-Ranked Elevated Findings Table
+
+| Rank | ID | Severity | Risk | Finding | Component | CWE/OWASP | Evidence (file:line) | Issue | Status |
+|------|-----|----------|------|---------|-----------|-----------|----------------------|-------|--------|
+| 1 | SEC-KEY-LEAK-01 | High | 64 | Test private keys in git history (historical) | clients/test-harness | CWE-540 / A02:2021, A07:2021 | clients/test-harness/certs/*.key.bak (history) | [#818](https://gitlab.com/devnw/codepros/geode/geode/-/issues/818) confidential | **Closed 2026-05-15** (commit `f88be7b0`; test-harness moved to separate repo, gitleaks allowlist) |
+| 2 | SEC-LSP-INTRO-01 | Medium-High | 32 | LSP completion gate is graph-coarse | execution/schema_introspection, cli/lsp/schema_provider | CWE-200 / A01:2021 | schema_introspection.zig:61-108; schema_provider.zig:187-250 | [#817](https://gitlab.com/devnw/codepros/geode/geode/-/issues/817) | **Closed 2026-05-15** (commit `b83521c8`; 4 new GAP #817 tests pass) |
+| 3 | SEC-BOOT-ADMIN-01 | Medium | 32 | Admin password leaks via stderr + permissive data_dir | cli/auth_init_cli, server/server_init | CWE-538, CWE-732 / A07:2021 | auth_init_cli.zig:101; server_init.zig:402-428 | [#819](https://gitlab.com/devnw/codepros/geode/geode/-/issues/819) confidential | **Closed 2026-05-15** (commit `8ac5817c`; data_dir mode check + 0600 file) |
+| 4 | SEC-SUPPLY-01 | Medium (suspected) | 32 | Single-signer pinned supply-chain | build.zig.zon | CWE-1357 / A08:2021 | build.zig.zon | [#822](https://gitlab.com/devnw/codepros/geode/geode/-/issues/822) | Open (90-day governance track) |
+| 5 | SEC-SESS-LOG-01 | Low | 16 | Session token printed to stderr after rotate | cli/session_cli | CWE-532 / A09:2021 | session_cli.zig:570 | [#820](https://gitlab.com/devnw/codepros/geode/geode/-/issues/820) | Open (180-day SLA) |
+| 6 | SEC-LSP-BIND-01 | Low | 12 | LSP `--lsp-bind-all` regression-guard test | server/main, cli/lsp/server | CWE-489 / A05:2021 | main.zig:362-389,433 | [#823](https://gitlab.com/devnw/codepros/geode/geode/-/issues/823) | Open (180-day SLA; pair with LSP-AUTH-ADAPTER) |
+| 7 | SEC-S3-SIGV2-01 | Low | 8 | S3 backup SigV2 → migrate to SigV4 | storage/s3_backup | (hygiene) / A02:2021 | s3_backup.zig:351-356 | [#824](https://gitlab.com/devnw/codepros/geode/geode/-/issues/824) | Open (180-day SLA) |
+| 8 | SEC-MFA-FIPS-01 | Info | 4 | TOTP HMAC-SHA1 only — add SHA-256/SHA-512 | security/mfa_risk | CWE-327 (FIPS framing) | mfa_risk.zig:167, 226-256 | [#821](https://gitlab.com/devnw/codepros/geode/geode/-/issues/821) | Backlog (pair with FIPS-mode work) |
+
+### Findings by Area (Audit Phase 3)
+
+**LSP / Introspection:**
+
+- SEC-LSP-INTRO-01 (#817, Risk 32) — coarse graph-gate leaks RLS-denied schema names
+- SEC-LSP-BIND-01 (#823, Risk 12) — embed-TCP regression guard
+
+**Auth / Credential Hygiene:**
+
+- SEC-KEY-LEAK-01 (#818, confidential, Risk 64) — leaked test private keys in history
+- SEC-BOOT-ADMIN-01 (#819, confidential, Risk 32) — admin bootstrap password leak
+- SEC-SESS-LOG-01 (#820, Risk 16) — session token stderr leak
+- SEC-MFA-FIPS-01 (#821, Risk 4) — TOTP SHA-1 only
+
+**Supply-chain / Infra:**
+
+- SEC-SUPPLY-01 (#822, Risk 32 suspected) — single-signer dependency tree
+
+**Storage / Backup:**
+
+- SEC-S3-SIGV2-01 (#824, Risk 8) — SigV2 → SigV4 migration
+
+### Resolved / Not-A-Gap (verified during Phase 3 triage)
+
+Four Phase 2 candidates were verified safe and CLOSED without an issue:
+
+| ID | Phase 2 Concern | File | Verification | Resolution |
+|----|-----------------|------|--------------|-----------|
+| F2 | Magic-string sentinel `auto_generated_password_placeholder` reachable by non-admins | `src/execution/auth_dispatch.zig:405` | The dispatch gate at L364 requires `Role.Admin`; non-admins cannot reach the sentinel branch. | Closed — not a gap |
+| F6 | `--no-auth` flag could land in release builds | `src/cli/cli_dispatcher.zig:996-999` | Hard-exit on Release builds is in place; `comptime` gate refuses to compile the flag handler outside Debug. | Closed — not a gap |
+| F10 | Dead-code aggregation evaluators iterate `store.nodes` without tenant filter | `src/execution/aggregation_evaluation.zig` | Functions DELETED via commit `4be895a9`; only a tombstone comment remains. | Closed — already resolved |
+| F11 | `DefaultPrng.init(0)` weak seed for nonces | `src/security/external_kms_client.zig:899` | Field is stored only; all nonces flow through `compat_fillRandom` which uses the OS CSPRNG. The seeded PRNG is never used for security-critical output. | Closed — not a gap |
+
+### Roadmap (Audit Phase 3)
+
+**Quick Wins (< 1 day):**
+
+- SEC-BOOT-ADMIN-01: replace stderr password print with file-path pointer; assert `chmod 0700` on data_dir.
+- SEC-SESS-LOG-01: drop the new-token stderr print; pointer to credentials file.
+- SEC-SUPPLY-01 (governance track): add CODEOWNERS entry + 2-approval rule on `build.zig.zon`.
+
+**Medium (1-5 days):**
+
+- SEC-LSP-INTRO-01: add `canUserAccessLabel` / `canUserAccessEdgeType` / per-label property gates; LSP regression test.
+- SEC-LSP-BIND-01: write the regression test against the bind-all + verifier=null invariant.
+- SEC-MFA-FIPS-01: HMAC-SHA256 + SHA-512 TOTP paths + `--fips-mode` flag.
+
+**Strategic (> 5 days):**
+
+- SEC-KEY-LEAK-01: full re-key + history rewrite + downstream rotation coordination.
+- SEC-S3-SIGV2-01: SigV4 migration with multi-provider test matrix.
+- SEC-SUPPLY-01 (technical track): cosign / sigstore lockfile signing.
+
+### Immediate Actions
+
+1. **SEC-KEY-LEAK-01 (#818)** — confirm whether the leaked test keys were ever reused beyond test harnesses; if yes, rotate downstream cert chains within 7 days. Re-key + new branch within 7 days even if no reuse confirmed.
+2. **SEC-BOOT-ADMIN-01 (#819)** — operator notice in `docs/USER_AUTH.md`: bootstrap accounts on existing deployments should be assumed compromised if `data_dir` was world-readable at first boot; rotate.
+3. No findings require a fleet-wide live-credential rotation.
+
+### Blockers and Unknowns
+
+- **Downstream reuse of leaked test keys** — confirmation pending from infra. Until confirmed, treat the keys as compromised credentials for any system that ever anchored them.
+- **`build.zig.zon` lockfile signing path** — no upstream tooling in Zig 0.16; SLSA-style attestation is an open design question.
 
 ---
 

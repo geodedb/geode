@@ -1,7 +1,7 @@
 # Gap Analysis
 
-Last updated: 2026-04-16
-Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)**
+Last updated: 2026-05-15
+Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regression (2026-03-21) + DiveLife QA E2E (2026-03-24) + storage engine migration audit (2026-03-28) + GAP-0260 root cause analysis (2026-03-28) + GAP-0261–0269 closure pass (2026-03-28) + full geodetestlab suite audit (2026-03-29, 200 specs / 3952 tests) + GAP-0270–0272 closure (2026-03-30) + **multi-tenancy system audit (2026-04-01, 16-agent pipeline)** + performance-review implementation audit (2026-04-09, un-pushed commit stack) + **perf gap closure (2026-04-10, GAP-0519 through GAP-0525)** + **Requirements audit (2026-04-14)** + **Phase 4 gap sync (2026-04-16, GAP-0538 through GAP-0542)** + **2026-05-15 audit Phase 4 (GAP-0833 through GAP-0837)**
 
 ## Summary
 
@@ -12,6 +12,7 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Low:** 2 (GAP-0529, GAP-0509 residual)
 - **Blocked (external dependency):** 4 (GAP-0246, GAP-0247, GAP-0256, GAP-0526)
 - **Won't Do:** 2 (GAP-0258, **GAP-0542** — extraction deferred per plan)
+- **Closed (2026-05-15):** GAP-0833 (#801), GAP-0836 (#805), GAP-0837 (#807) — docs hygiene cleanup commit `8b950c07`; **Won't-Do (2026-05-15):** GAP-0834 (#802), GAP-0835 (#803) — LDAP/OIDC delisted in `docs/USER_AUTH.md` + `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md`, commit `50fa6510`
 - **Closed (2026-04-16):** GAP-0538 (#710), GAP-0539 (#711), GAP-0540 (#712), GAP-0541 (#713) — 14 gap commits from waves 1-3 (`81dc475d..f9daea3a`); Won't-Do on GAP-0542 (extraction over CI-diff check)
 - **Opened (2026-04-16):** GAP-0538 (#710) → Closed, GAP-0539 (#711) → Closed, GAP-0540 (#712) → Closed, GAP-0541 (#713) → Closed, GAP-0542 (#714) → Won't-Do
 - **Opened (2026-04-14):** GAP-0526, GAP-0527, GAP-0528, GAP-0529
@@ -22,6 +23,29 @@ Audited by: Claude Opus 4.6 (requirements-to-code gap analysis) + load test regr
 - **Closed (2026-03-30):** GAP-0270, GAP-0271, GAP-0272, GAP-0273, GAP-0274, GAP-0276, GAP-0277, GAP-0278
 - **Closed (2026-03-28):** GAP-0264, GAP-0266, GAP-0261, GAP-0263, GAP-0265, GAP-0267, GAP-0268, GAP-0269, GAP-0262
 - **Closed (2026-03-13):** GAP-0248, GAP-0249, GAP-0250, GAP-0251, GAP-0252, GAP-0253
+
+## 2026-05-15 Audit Phase 4
+
+Phase 4 gap sync for the 2026-05-15 audit pipeline. 5 new gaps opened **and all 5 closed in this session** (3 fix, 2 won't-do/delist). Existing GAP-0818 / #754 reconfirmed with refreshed evidence (still partial). Items previously believed regressed (GAP-0282, GAP-0509 residual, GAP-0281, GAP-0539) were verified to be correctly closed in `GAP_ANALYSIS_RESOLVED.md` — no action.
+
+### New gaps (all closed 2026-05-15 — see [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md))
+
+- **GAP-0833** — Closed (commit `8b950c07`, docs fix) — Issue [#801](https://gitlab.com/devnw/codepros/geode/geode/-/issues/801). CLAUDE.md aggregation_evaluation paragraph corrected to reference GAP-0739 removal instead of "dead code".
+- **GAP-0834** — Closed Won't-Do (commit `50fa6510`, delisted) — Issue [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802). LDAP support delisted in `docs/USER_AUTH.md` and `docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md` ("Not Supported"). Reopen when customer demand or implementation lands.
+- **GAP-0835** — Closed Won't-Do (commit `50fa6510`, delisted) — Issue [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803). OAuth/OIDC support delisted in same docs. Reopen on demand.
+- **GAP-0836** — Closed (commit `8b950c07`, docs fix) — Issue [#805](https://gitlab.com/devnw/codepros/geode/geode/-/issues/805). GAP-0510 collision in CLAUDE.md resolved; canonical GAP-0510 (QUIC pool stale conns) retained at `docs/GAP_ANALYSIS.md:1969`.
+- **GAP-0837** — Closed (commit `8b950c07`, docs fix) — Issue [#807](https://gitlab.com/devnw/codepros/geode/geode/-/issues/807). 4 stale `STATUS=COMPLETE` markers replaced with `STATUS=TESTED`; `tools/canaryscan/status.csv` regenerated.
+
+### Updated
+
+- **GAP-0818** / Issue [#754](https://gitlab.com/devnw/codepros/geode/geode/-/issues/754) — confirmed **Partial**; `provideCompletion` (`src/cli/lsp/features.zig:678-684`) still takes `*SchemaProvider` but no `LspContext`. CANARY marker at `features.zig:32` claims `STATUS=TESTED` but coverage is prefix-filter only — not tenant/RLS filtering. Issue updated via note with refreshed evidence quote.
+
+### Verified-still-closed (no action)
+
+- **GAP-0282** — Audit `tenant_id=null`: all 5 occurrences are test-only; production `src/audit.zig:459-462` enriches via `getCurrentAuditTenantId()`. Stays closed (`GAP_ANALYSIS_RESOLVED.md:4304`).
+- **GAP-0509 residual** — `evaluateAggregation`/`evaluateAggregationWithLabels` functions **removed** via GAP-0739 commit `4be895a9` (2026-04-16); only a tombstone comment remains. Stays closed.
+- **GAP-0281** — already closed at `GAP_ANALYSIS_RESOLVED.md:4299`.
+- **GAP-0539** — not regressed; `status.csv` has 0 COMPLETE rows. The doc-side residual literals are addressed by the new GAP-0837.
 
 ## Performance Review Commit Audit (2026-04-09)
 

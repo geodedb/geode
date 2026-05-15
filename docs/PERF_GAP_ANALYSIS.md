@@ -1,14 +1,16 @@
 # Performance Gap Analysis
 
-Last updated: 2026-04-16
+Last updated: 2026-05-15 (Phase 3 perf-reviewer pass — 4 findings filed: PERF-A #808, PERF-B #811, PERF-C #814, PERF-D #816; all OPEN. PERF-A queued for separate `/bench-optimize:run` session per operator decision; prior: 2026-04-16)
 
 ## Summary
 
-- Total findings: 43
-- Open: 0
+- Total findings: 47
+- Open: 4 (2026-05-15 audit Phase 3: PERF-A/B/C/D)
 - Closed / Implemented: 34
 - Closed (Won't Do / Sufficient): 10 (1 transport + 6 migration engine + 3 strategic deferred)
+- Closed (won't-track): 6 (2026-05-15 Phase 3 reviewer triage — see "Not tracked" subsection below)
 - Blocked: 0
+- /bench-optimize candidate: **PERF-A** (PerfScore 40)
 
 Previous 17 findings (2026-02-17 audit) all resolved. March 2026 audit added 7 new findings -- all 7 closed 2026-03-13. April 2026 migration engine audit added 6 new findings (1x P2, 5x P3) -- all closed Won't Do 2026-04-01 (unmeasurable benefit at realistic migration counts). April 9, 2026 core engine perf review added 13 new findings (2x P0, 5x P1, 6x P2) covering execution engine, graph store, transport, and CLI hot paths. **All 13 closed 2026-04-10** (6 implemented, 4 closed earlier, 3 deferred as Won't Do).
 
@@ -431,3 +433,49 @@ Bench harness sketch (proposed in `#776`+follow-up):
 | F-02 | AST cache keystone (KEYSTONE) | n/a | Deferred to follow-up; #770 remains open with all sub-tasks (F-05/06/12/15/16) gated on this |
 
 **Tier-A umbrella #766:** Partial closure — F-01 and F-04 closed; F-09 (static completion JSON), F-14 (completion prefix-cap), F-17 (stack Content-Length buffer) remain open as untouched sub-tasks. Issue stays open with checked sub-task list.
+
+## 2026-05-15 — Performance review (Audit Phase 3)
+
+Context: `/codepros:audit` Phase 3 perf-reviewer pass over execution engine, graph store, transport, and LSP hot paths. Reviewer produced 10 candidate findings; Phase 2 triage corrections demoted/folded 6 of them (see "Not tracked" below). Remaining 4 are evidence-based with verified file:line citations and explicit acceptance criteria. **PERF-A is the recommended `/bench-optimize` session candidate** (highest PerfScore, smallest measurement blast radius).
+
+Triage corrections applied by reviewer before this section:
+
+- The 9 full-scan sites in `match_operations.zig` (#1462, #1796, #2582, #2648, #2847, #3091, #3617, #4061, #5242) are **correct fallbacks** for unlabeled MATCH (the `labels.len == 0` branch with explicit `g_full_scan_count.fetchAdd` instrumentation from GAP-0522). Not unmigrated paths — a graph-scoped node-id index is the only viable fix (tracked as PERF-B).
+- `user_store_mutex` is **not** hit on the RLS hot path. RLS uses `ExecutionContext.user` string, not `user_management.getUser`. Demoted.
+- RLS Wyhash username cost is dwarfed by per-row HashMap rebuild — real bottleneck is row reconstruction (tracked as PERF-A).
+
+### New findings
+
+| Rank | Sev | Score | Finding | Component | Evidence | GitLab | Fix Summary | Status |
+|---|---|---:|---|---|---|---|---|---|
+| 44 | P1 | 40 | RLS row rebuild dominates per-row cost — `nodePropertiesToRLSRowInto` rebuilds StringHashMap per row, 17 call sites | Execution / Security | `src/security/rls_value_bridge.zig:83-95`; 17 call sites in `src/execution/match_operations.zig` (entry `passesRLSExprFilter` at `:125`) | [#808](https://gitlab.com/devnw/codepros/geode/geode/-/issues/808) | Skip when bytecode has no `load_row` opcodes, or memoize by `(node.id, auth_version)`. **`/bench-optimize` candidate.** | Open (Triage) |
+| 45 | P2 | 25 | Graph-scoped node-id list missing — unlabeled MATCH falls back to `read_store.nodes.iterator()` + `std.mem.eql(graph_name)` per node | Execution / Storage | `src/execution/match_operations.zig:1462,1796,2582,2648,2847,3091,3617,4061,5242` (9 sites; paired with `g_full_scan_count` from GAP-0522) | [#811](https://gitlab.com/devnw/codepros/geode/geode/-/issues/811) | Build per-graph `node_id` list as primary scan source; mirror GAP-0510 edge-type index discipline | Open (Triage) |
+| 46 | P2 | 12 | LSP introspection full-store scan on TTL miss — O(N·L) per cache refresh | Graph store / LSP | `src/graph_store.zig:1042,1090,1160` | [#814](https://gitlab.com/devnw/codepros/geode/geode/-/issues/814) | Maintain label/property/type summary index updated on writes (write-amplification trade) | Open (Triage) |
+| 47 | P2 | 12 | nanosleep admission/throttle waits — Zig 0.16 still has `std.Thread.Condition.timedWait` | Transport | `src/server/main.zig:1363-1365` (5ms admission busy-wait); `src/server/active_stream_registry.zig:84-91` (per-stream timeout fallback) | [#816](https://gitlab.com/devnw/codepros/geode/geode/-/issues/816) | Replace `nanosleep` with `Condition.timedWait` on existing signal path | Open (Triage) |
+
+### Acceptance criteria (per finding)
+
+**PERF-A (#808):** ≥ 10% reduction in `geode.query.execute` p50 on `match_authenticated_*` loadtest specs (OTel span scope `com.geodedb.geode`); no correctness regression in `gap_0510_rls_*` specs; `tests/test_rls_expr_engine_wiring.zig` continues to pass.
+
+**PERF-B (#811):** `g_full_scan_count` drops to 0 for graph-scoped unlabeled MATCH workloads (verified via `match_log.warn` "MATCH+CALL full node scan" log absence and OTel logs in `reports/otel-collector.log`); OTel `geode.query.execute` p50 unchanged or improved on `point_read c=8`; `make test-everything-otel` clean.
+
+**PERF-C (#814):** LSP completion p99 on a 1M-node graph stays < 50ms after TTL invalidation; no regression in `make loadtest-compare`; LSP spec coverage in `docs/LSP_FEATURES.md` unchanged.
+
+**PERF-D (#816):** Under `c=32` admission saturation, p50 latency floor drops by ≥ 1ms; no oversubscription beyond `max_connections`; `make test-everything-otel` clean.
+
+### Not tracked (Phase 3 triage)
+
+| ID | Finding | Disposition |
+|---|---|---|
+| E | Per-row `std.mem.eql` on `node.graph_name` | Subset of PERF-B; deferred. Closes when PERF-B lands. |
+| F | `for (node.labels) isLabelDenied` linear scan | Defer until label-deny mutex claim is verified under loadtest. No current contention evidence. |
+| G | 5s metrics nanosleep | Cosmetic; PerfScore 0.5. Not tracked. |
+| H | `StringHashMap` without `ensureTotalCapacity` micro-call sites | Micro; PerfScore 4.0. Not tracked. |
+| I | `graph_handles_mutex` Tier-0 contention claim | No current loadtest evidence. Defer until reproduced. |
+| J | `user_store_mutex` on RLS hot path | Demoted — RLS uses `ExecutionContext.user` string, not `user_management.getUser`. False positive. |
+
+### Roadmap
+
+- **Quick wins (< 1 day):** PERF-D (#816) — mechanical `nanosleep` → `Condition.timedWait` swap on two sites.
+- **Medium (1-5 days):** PERF-A (#808) `requires_row` short-circuit (preferred initial scope); PERF-B (#811) graph-scoped node-id index (mirrors existing GAP-0510 edge-type index pattern).
+- **Strategic (> 5 days):** PERF-C (#814) full label/property/type summary index with write-amplification trade; PERF-A (#808) `(node.id, auth_version)` memoization variant if short-circuit alone is insufficient.
