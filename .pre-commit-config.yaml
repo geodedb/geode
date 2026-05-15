@@ -179,6 +179,35 @@ repos:
     args: [src/, tests/, tools/, benchmarks/, scripts/, build.zig, build.zig.zon]
     stages: [pre-commit, pre-push]
 
+      # Local mirror of the .gitlab-ci.yml governance-no-page-allocator job.
+      # `std.heap.page_allocator` is forbidden in production src/ — pre-commit
+      # was previously CI-only, so an LSP-Task-9 commit shipped a violation
+      # that only surfaced on pipeline 2528699099. Mirroring the rg regex +
+      # exclude globs lets the same check fire on every local commit.
+  - id: no-page-allocator
+    name: governance — no std.heap.page_allocator in production src/
+    entry: bash
+    args:
+    - -c
+    - |
+      set -euo pipefail
+      if rg -n "std\\.heap\\.page_allocator" src \
+        --glob '!src/test*' \
+        --glob '!src/tests/**' \
+        --glob '!src/probe_*' \
+        --glob '!src/lib.zig'; then
+        echo
+        echo "✗ page_allocator usage detected in production source paths"
+        echo "  smp_allocator is the governance-approved alternative — see"
+        echo "  src/monitoring/metrics_server.zig:75-77 for the precedent."
+        exit 1
+      fi
+    language: system
+    files: \.zig$
+    exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/|docker/zig-packages/|zig-pkg/)
+    pass_filenames: false
+    stages: [pre-commit, pre-push]
+
       # Reject .path dependencies in build.zig.zon — they work locally but fail
       # in CI where sibling repos aren't checked out (caused pipeline #847, #848).
   - id: zon-no-path-deps

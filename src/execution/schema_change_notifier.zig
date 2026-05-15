@@ -46,7 +46,12 @@ fn unlockHere() void {
 pub fn register(cb: Callback) !void {
     lockHere();
     defer unlockHere();
-    try g_callbacks.append(std.heap.page_allocator, cb);
+    // smp_allocator is the governance-approved global allocator for
+    // process-lifetime registries — page_allocator is forbidden in
+    // production src/ (see .gitlab-ci.yml governance-no-page-allocator
+    // check, and the documented precedent at
+    // src/monitoring/metrics_server.zig:75-77).
+    try g_callbacks.append(std.heap.smp_allocator, cb);
 }
 
 pub fn unregister(ctx: *anyopaque) void {
