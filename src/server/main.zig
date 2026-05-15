@@ -97,6 +97,16 @@ const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
 const geode_auth = @import("geode_auth");
 
+// Task 28 (Phase 9 of docs/superpowers/plans/2026-05-14-lsp-permission-aware-completion.md):
+// Embedded LSP listener — co-host an LSP JSON-RPC TCP endpoint inside
+// `geode serve` so geode-ui (and any future TCP-based LSP client) can
+// reach the same in-process schema view as QUIC handlers without
+// spawning a side-car `geode lsp --listen` process. The Server is
+// rooted at src/unified_entry.zig, so relative paths into src/cli/lsp/
+// resolve against src/server/main.zig's containing dir.
+const lsp_server = @import("../cli/lsp/server.zig");
+const lsp_transport_mod = @import("../cli/lsp/transport.zig");
+
 fn authRoleFromRecord(record: user_storage.UserStorageBackend.UserRecord) geode.user_management.Role {
     return if (record.is_superuser) .Admin else .ReadWrite;
 }
@@ -247,6 +257,186 @@ fn runGrpcServerTask(context: *anyopaque) void {
 fn runPollLoopTask(context: *anyopaque) void {
     const ctx: *PollLoopContext = @ptrCast(@alignCast(context));
     quic_transport.QuicTransport.pollLoop(ctx.transport, ctx.shutdown);
+}
+
+// Task 28: embedded-LSP listener + per-session thread entry points.
+//
+// `runLspListener` is the long-running accept loop spawned from
+// `main()` once the QUIC server is up. It owns its own
+// `std.Io.Threaded` instance for the lifetime of the listener so the
+// `Io` vtable handed to the listener and to every accepted stream is
+// stable. Each accepted connection is dispatched to a detached
+// `runLspSession` thread — multiple LSP clients can therefore have
+// concurrent sessions, which is what enables a geode-ui tab plus a
+// terminal editor (or two browser tabs) to drive the LSP at the same
+// time without serializing on a single accept-and-run loop the way
+// standalone `geode lsp --listen` does.
+//
+// Auth caveat: `verifier = null` and `allow_unauth = false` mean the
+// session is fail-closed. Until the AuthProvider→Verifier adapter
+// lands (follow-up task tracked in the plan), this listener is bound
+// but cannot satisfy any client's initialize request. See
+// `runLspSession`'s in-body TODO.
+const LspListenerArgs = struct {
+    allocator: std.mem.Allocator,
+    port: u16,
+    loopback_only: bool,
+};
+
+fn runLspListener(args: LspListenerArgs) void {
+    const host: []const u8 = if (args.loopback_only) "127.0.0.1" else "0.0.0.0";
+
+    // Each accept loop and every per-session reader needs to share one
+    // `std.Io` vtable for the lifetime of the listener. A dedicated
+    // `std.Io.Threaded` instance, owned by this thread, satisfies that
+    // (same pattern as `metrics_server.zig` and the standalone
+    // `geode lsp --listen` path in `cli/main.zig`).
+    var threaded = std.Io.Threaded.init(args.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+
+    // Zig 0.16 net stack: `std.Io.net.IpAddress.parse` handles v4 and
+    // falls back to v6. We bind a numeric literal — no DNS — so the
+    // narrow `parseIp4`/`parseIp6` fallbacks would also work, but
+    // `parse` is the more forgiving entry point.
+    var bind_addr = std.Io.net.IpAddress.parse(host, args.port) catch
+        std.Io.net.IpAddress.parseIp4(host, args.port) catch
+        std.Io.net.IpAddress.parseIp6(host, args.port) catch {
+        log.err("LSP listener: failed to parse bind host", &.{
+            Attr.string("host", host),
+            Attr.int("port", @as(i64, args.port)),
+        });
+        return;
+    };
+
+    var listener = std.Io.net.IpAddress.listen(&bind_addr, io, .{ .reuse_address = true }) catch |err| {
+        log.err("LSP listener: bind failed", &.{
+            Attr.string("host", host),
+            Attr.int("port", @as(i64, args.port)),
+            Attr.string("error", @errorName(err)),
+        });
+        return;
+    };
+    defer listener.deinit(io);
+
+    log.info("LSP server started", &.{
+        Attr.string("address", host),
+        Attr.int("port", @as(i64, args.port)),
+        Attr.string("transport", "tcp"),
+    });
+
+    while (true) {
+        const accepted = listener.accept(io) catch |err| {
+            log.warn("LSP accept error", &.{Attr.string("error", @errorName(err))});
+            continue;
+        };
+        // The session takes ownership of `accepted`. Spawning failure
+        // means we still own it and must close it ourselves to avoid
+        // leaking the FD.
+        const session_args = args.allocator.create(LspSessionArgs) catch {
+            log.err("LSP session args alloc failed", &.{});
+            accepted.close(io);
+            continue;
+        };
+        session_args.* = .{
+            .allocator = args.allocator,
+            .io = io,
+            .stream = accepted,
+        };
+        const thr = std.Thread.spawn(.{}, runLspSession, .{session_args}) catch |err| {
+            log.err("LSP session spawn error", &.{Attr.string("error", @errorName(err))});
+            accepted.close(io);
+            args.allocator.destroy(session_args);
+            continue;
+        };
+        thr.detach();
+    }
+}
+
+const LspSessionArgs = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    stream: std.Io.net.Stream,
+};
+
+fn runLspSession(args: *LspSessionArgs) void {
+    // The listener allocated this struct; we own it now and must free
+    // it on every return path.
+    defer args.allocator.destroy(args);
+
+    // TODO(Task-LSP-AUTH-ADAPTER): wire a real AuthProvider→Verifier
+    // adapter so embedded LSP sessions can authenticate against the
+    // same user store the QUIC handler uses. Until then this listener
+    // is bound but cannot satisfy any client's initialize request —
+    // `verifier = null` + `allow_unauth = false` is fail-closed by
+    // design (see src/cli/lsp/server.zig:initWithTransport for the
+    // gate). The TCP-embedded path REQUIRES auth (the `--no-auth`
+    // bypass is unavailable here — it is stdio-only).
+    var tx = lsp_transport_mod.Transport.initTcp(args.allocator, args.io, args.stream) catch |err| {
+        log.warn("LSP transport init error", &.{Attr.string("error", @errorName(err))});
+        args.stream.close(args.io);
+        return;
+    };
+    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, null, false) catch |err| {
+        log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
+        tx.deinit();
+        return;
+    };
+    defer srv.deinit();
+    srv.run() catch |err| {
+        log.warn("LSP session error", &.{Attr.string("error", @errorName(err))});
+    };
+}
+
+const LspBootstrapConfig = struct {
+    port: u16 = 3142,
+    loopback_only: bool = true,
+};
+
+/// Task 28: parse the two embedded-LSP options that
+/// `src/server/cli_args.zig` does NOT know about (`--lsp-port=N` and
+/// `--lsp-bind-all`). We don't extend `ServerConfig` because the plan
+/// limits this task to `src/server/main.zig` only; `parseArgs` ignores
+/// flags it doesn't recognise, so these flags pass through it
+/// untouched and we re-walk argv here.
+///
+/// Zig 0.16: `std.process.argsAlloc` was removed; the same pattern
+/// `cli_args.parseArgs` uses (read `/proc/self/cmdline` and split on
+/// NULs) is the supported way to recover argv. Any I/O failure
+/// degrades silently to the defaults (port=3142, loopback-only).
+fn parseLspBootstrapConfig(allocator: std.mem.Allocator) LspBootstrapConfig {
+    var cfg: LspBootstrapConfig = .{};
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cmdline_file = std.Io.Dir.openFileAbsolute(io, "/proc/self/cmdline", .{}) catch return cfg;
+    defer cmdline_file.close(io);
+
+    const max_cmdline: usize = 64 * 1024;
+    const cmdline_data = allocator.alloc(u8, max_cmdline) catch return cfg;
+    defer allocator.free(cmdline_data);
+
+    var total_read: usize = 0;
+    while (total_read < max_cmdline) {
+        const n = cmdline_file.readPositional(io, &.{cmdline_data[total_read..]}, total_read) catch return cfg;
+        if (n == 0) break;
+        total_read += n;
+    }
+    const filled = cmdline_data[0..total_read];
+
+    var start: usize = 0;
+    for (filled, 0..) |c, i| {
+        if (c != 0) continue;
+        if (i > start) {
+            const arg = filled[start..i];
+            if (std.mem.startsWith(u8, arg, "--lsp-port=")) {
+                const v = arg["--lsp-port=".len..];
+                cfg.port = std.fmt.parseUnsigned(u16, v, 10) catch cfg.port;
+            } else if (std.mem.eql(u8, arg, "--lsp-bind-all")) {
+                cfg.loopback_only = false;
+            }
+        }
+        start = i + 1;
+    }
+    return cfg;
 }
 
 // Distributed query planner accessed via geode module to avoid import path issues
@@ -917,6 +1107,33 @@ pub fn main() !void {
             Attr.int("port", port),
             Attr.string("tls", "1.3"),
         });
+
+        // Task 28 (Phase 9): spawn the embedded LSP TCP listener so
+        // geode-ui / monaco-languageclient sessions can attach to the
+        // same in-process schema view as QUIC handlers. `lsp_port == 0`
+        // disables the listener entirely. The thread is detached and
+        // lives for the lifetime of the server process — there is no
+        // explicit join on shutdown because the listener will be torn
+        // down with the process. Per-session threads are similarly
+        // detached and exit when their LSP session terminates. See
+        // `runLspListener` for the auth caveat.
+        const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
+        if (lsp_bootstrap_cfg.port != 0) {
+            const lsp_thr = std.Thread.spawn(.{}, runLspListener, .{LspListenerArgs{
+                .allocator = gpa,
+                .port = lsp_bootstrap_cfg.port,
+                .loopback_only = lsp_bootstrap_cfg.loopback_only,
+            }}) catch |err| {
+                log.err("Failed to spawn LSP listener thread", &.{
+                    Attr.string("error", @errorName(err)),
+                    Attr.int("port", @as(i64, lsp_bootstrap_cfg.port)),
+                });
+                return err;
+            };
+            lsp_thr.detach();
+        } else {
+            log.info("LSP listener disabled (--lsp-port=0)", &.{});
+        }
 
         // GAP-0260: Start background persistence thread for write coalescing
         graph_store.startPersistenceThread(config.persist_interval_ms);
