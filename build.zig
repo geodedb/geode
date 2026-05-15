@@ -3521,6 +3521,9 @@ pub fn build(b: *std.Build) void {
     const schema_introspection_mod = b.createModule(.{ .root_source_file = b.path("src/execution/schema_introspection.zig"), .target = target, .optimize = optimize });
     schema_introspection_mod.addImport("geode", root_mod);
     schema_introspection_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    // Issue #817: per-label permission gate consults the process-global
+    // label-deny RLS engine via rls_types.getGlobalRLSFilterEngine().
+    schema_introspection_mod.addImport("rls_types", rls_types_mod);
     // Task 12: geode_exe now reaches schema_provider.zig via the LSP
     // server (src/cli/lsp/server.zig), which means the schema_provider
     // file's `@import("schema_introspection")` needs to resolve in the
@@ -3532,9 +3535,14 @@ pub fn build(b: *std.Build) void {
     const schema_introspection_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_schema_introspection.zig"), .target = target, .optimize = optimize });
     schema_introspection_test_mod.addImport("geode", root_mod);
     schema_introspection_test_mod.addImport("schema_introspection", schema_introspection_mod);
+    // Issue #817: tests install a process-global RLSFilterEngine to
+    // exercise the per-label permission gate.
+    schema_introspection_test_mod.addImport("rls_types", rls_types_mod);
     const schema_introspection_tests = b.addTest(.{ .root_module = schema_introspection_test_mod });
     const run_schema_introspection_tests = b.addRunArtifact(schema_introspection_tests);
     shardDep(test_step, &run_schema_introspection_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const schema_introspection_step = b.step("test-schema-introspection", "LSP schema introspection unit tests (incl. issue #817 per-label RLS gate)");
+    schema_introspection_step.dependOn(&run_schema_introspection_tests.step);
 
     // Task 6 of the LSP permission-aware completion plan: register
     // src/cli/lsp/schema_provider.zig as its own build module. It

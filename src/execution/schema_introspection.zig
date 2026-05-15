@@ -19,6 +19,10 @@
 const std = @import("std");
 const geode = @import("geode");
 const auth_graph = @import("auth_graph_manager");
+// Issue #817: per-label permission gate.  rls_types is a named build module
+// (see build.zig:2793) so we can reach the process-global label-deny engine
+// without dragging the rest of the security stack into this leaf module.
+const rls_types = @import("rls_types");
 
 const graph_store = geode.graph_store;
 const user_management = geode.user_management;
@@ -64,18 +68,81 @@ fn graphVisible(ctx: IntrospectionContext) bool {
     return mgr.canUserAccessGraph(ctx.user, ctx.graph_name);
 }
 
+/// Issue #817: per-label permission gate.  Returns `true` when the caller
+/// is allowed to see `label` in `ctx.graph_name`.
+///
+/// - `Role.Admin` always sees every label (admin debugging UX).
+/// - When the process-global label-deny RLS engine is not configured (the
+///   common case in unit tests and `--no-auth` developer flows), every
+///   label is visible (no false positives).
+/// - Otherwise we consult `RLSFilterEngine.isLabelDenied(graph, label, user)`,
+///   the same primitive the match loop uses to filter rows
+///   (`src/execution/match_operations.zig::passesRLSFilter`).  This keeps
+///   schema introspection consistent with query execution: an LSP user
+///   cannot see a label in completion that they would also be denied from
+///   reading at query time.
+///
+/// Acceptance closure for #817: this is the LABEL-LEVEL gate the gap asks
+/// for, layered on top of the existing graph-level `graphVisible` check.
+/// Expression-policy-based row filtering still applies at query time but
+/// is intentionally not consulted here -- evaluating arbitrary RLS row
+/// predicates against the schema is both expensive and meaningless
+/// (there's no real row to evaluate against).
+fn labelVisible(ctx: IntrospectionContext, label: []const u8) bool {
+    if (ctx.role == .Admin) return true;
+    const engine = rls_types.getGlobalRLSFilterEngine() orelse return true;
+    return !engine.isLabelDenied(ctx.graph_name, label, ctx.user);
+}
+
+/// Filter an allocator-owned list of labels in place, keeping only those
+/// the caller may see.  Frees the inner string for every dropped entry
+/// so the returned slice (and its remaining elements) can still be
+/// released with `freeStringList`.
+fn filterLabelsByPermission(
+    allocator: std.mem.Allocator,
+    ctx: IntrospectionContext,
+    list: [][]const u8,
+) ![][]const u8 {
+    // Admins / no-engine short-circuit to avoid an O(n) walk per call.
+    if (ctx.role == .Admin) return list;
+    if (rls_types.getGlobalRLSFilterEngine() == null) return list;
+
+    var keep = try std.ArrayList([]const u8).initCapacity(allocator, list.len);
+    errdefer {
+        // On error, free anything we already moved into `keep` and the
+        // tail of the input that we have not yet inspected.
+        for (keep.items) |s| allocator.free(s);
+        keep.deinit(allocator);
+    }
+    for (list) |name| {
+        if (labelVisible(ctx, name)) {
+            try keep.append(allocator, name);
+        } else {
+            allocator.free(name);
+        }
+    }
+    allocator.free(list);
+    return keep.toOwnedSlice(allocator);
+}
+
 /// Returns the de-duplicated node-label set visible to `ctx`.
 /// Empty slice if the user cannot see `ctx.graph_name`.
 ///
 /// Caller owns the returned slice and each string inside it; use
 /// `freeStringList` to release both.
+///
+/// Issue #817: labels denied by the process-global label-deny RLS engine
+/// are dropped here so LSP completion never leaks names the caller could
+/// not also read via MATCH.  Admin and the no-engine fallback short-circuit
+/// for zero overhead in the common case.
 pub fn listLabelsForUser(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
-    return store.listNodeLabels(allocator, ctx.tenant_id);
+    const all = try store.listNodeLabels(allocator, ctx.tenant_id);
+    return filterLabelsByPermission(allocator, ctx, all);
 }
 
 /// Returns the de-duplicated edge-type set visible to `ctx`.
@@ -83,21 +150,31 @@ pub fn listLabelsForUser(
 ///
 /// Caller owns the returned slice and each string inside it; use
 /// `freeStringList` to release both.
+///
+/// Issue #817: edge types are filtered against the same per-label RLS deny
+/// table as node labels (the engine treats them uniformly via the `table`
+/// field of `LabelPolicy`).
 pub fn listEdgeTypesForUser(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
     ctx: IntrospectionContext,
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
-    return store.listEdgeTypes(allocator, ctx.tenant_id);
+    const all = try store.listEdgeTypes(allocator, ctx.tenant_id);
+    return filterLabelsByPermission(allocator, ctx, all);
 }
 
 /// Returns the de-duplicated property-key set observed on every node
 /// carrying `label` in the caller's tenant. Empty slice if the user
-/// cannot see `ctx.graph_name`.
+/// cannot see `ctx.graph_name` or cannot see `label` itself.
 ///
 /// Caller owns the returned slice and each string inside it; use
 /// `freeStringList` to release both.
+///
+/// Issue #817: when the caller is denied access to `label` itself we
+/// return an empty list rather than an error -- this matches how the LSP
+/// degrades for unknown labels and avoids leaking the existence of a
+/// label via the error channel.
 pub fn listPropertiesForLabelForUser(
     allocator: std.mem.Allocator,
     store: *graph_store.GraphStore,
@@ -105,6 +182,7 @@ pub fn listPropertiesForLabelForUser(
     label: []const u8,
 ) ![][]const u8 {
     if (!graphVisible(ctx)) return try allocator.alloc([]const u8, 0);
+    if (!labelVisible(ctx, label)) return try allocator.alloc([]const u8, 0);
     return store.listPropertiesForLabel(allocator, ctx.tenant_id, label);
 }
 
