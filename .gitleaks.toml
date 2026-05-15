@@ -20,4 +20,19 @@ paths = [
   '''^\.env$''',
   '''^source-test-.*''',
   '''^src/crypto/''',
+  # Issue #818: historical test private keys in commit 1c47e463
+  # (clients/test-harness/certs/*.key.bak) -- superseded by re-keyed certs
+  # in the relocated harness repo (https://gitlab.com/devnw/geode-test-harness,
+  # moved out of this tree by commit 9530366b). Closed via #818.
+  # Do not re-add as production keys.
+  '''^clients/test-harness/certs/.*\.key(\.bak|\.ec|\.rsa\.bak)?$''',
+]
+
+# Targeted commit allowlist: only the specific historical SHAs that carried
+# the now-rotated test keys. Keeps full-repo scans clean without weakening
+# detection for any new commit. See issue #818 for the operator decision to
+# NOT rewrite history; the keys are treated as compromised and never reused.
+commits = [
+  "1c47e463be64886fb8fbd42649461019494e8d44",
+  "0c0f8a583171f97abec6d5bcf23037656d770a91",
 ]
