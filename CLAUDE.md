@@ -41,6 +41,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation
 - **[Types & Functions](docs/TYPES_AND_FUNCTIONS.md)** - 50+ specialized data types
 - **[GQL Compliance](docs/GQL_COMPLIANCE.md)** - ISO/IEC 39075:2024 conformance
+- **[LSP Features](docs/LSP_FEATURES.md)** - Schema-aware completion, hover, and diagnostics with per-user permission filtering (stdio + embedded TCP transports)
 - **[Test Runner Fixes](docs/TEST_RUNNER_FIXES_OCTOBER_2025.md)** - Recent test infrastructure improvements (Oct 2025)
 
 ### Enterprise & Security
