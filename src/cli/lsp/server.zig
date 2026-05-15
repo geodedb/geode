@@ -150,7 +150,7 @@ pub const Server = struct {
     ) !Server {
         return .{
             .allocator = allocator,
-            .transport = try Transport.init(allocator),
+            .transport = try Transport.initStdio(allocator),
             .documents = DocumentStore.init(allocator),
             .debounce_state = std.StringHashMap(DebounceState).init(allocator),
             .debounce_state_initialized = true,

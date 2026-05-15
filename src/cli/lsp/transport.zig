@@ -72,14 +72,59 @@ fn getStderrHandle() TransportError!std.Io.File.Handle {
     }
 }
 
-pub const Transport = struct {
+/// Task 25: `Transport` is now a tagged union so Task 26 can plug in a
+/// TCP variant for the embedded `geode serve` LSP listener. The stdio
+/// behavior is byte-for-byte identical to the previous concrete-struct
+/// implementation — every field and method just lives on
+/// `StdioTransport` now.
+pub const Transport = union(enum) {
+    stdio: StdioTransport,
+    tcp: TcpTransport,
+
+    pub fn initStdio(allocator: Allocator) TransportError!Transport {
+        return .{ .stdio = try StdioTransport.init(allocator) };
+    }
+
+    // Task 26 will add `Transport.initTcp(allocator, stream)`. Task 25
+    // leaves `TcpTransport` as a placeholder so the union compiles.
+
+    pub fn deinit(self: *Transport) void {
+        switch (self.*) {
+            .stdio => |*s| if (@hasDecl(StdioTransport, "deinit")) s.deinit(),
+            .tcp => |*t| t.deinit(),
+        }
+    }
+
+    pub fn readMessage(self: *Transport) ![]const u8 {
+        return switch (self.*) {
+            .stdio => |*s| s.readMessage(),
+            .tcp => |*t| t.readMessage(),
+        };
+    }
+
+    pub fn writeMessage(self: *Transport, msg: []const u8) !void {
+        return switch (self.*) {
+            .stdio => |*s| s.writeMessage(msg),
+            .tcp => |*t| t.writeMessage(msg),
+        };
+    }
+
+    pub fn logMessage(self: *Transport, level: []const u8, msg: []const u8) void {
+        switch (self.*) {
+            .stdio => |*s| s.logMessage(level, msg),
+            .tcp => |*t| t.logMessage(level, msg),
+        }
+    }
+};
+
+pub const StdioTransport = struct {
     allocator: Allocator,
     stdin: std.Io.File,
     stdout: std.Io.File,
     stderr: std.Io.File,
     io: std.Io,
 
-    pub fn init(allocator: Allocator) TransportError!Transport {
+    pub fn init(allocator: Allocator) TransportError!StdioTransport {
         return .{
             .allocator = allocator,
             .stdin = std.Io.File{ .handle = try getStdinHandle(), .flags = .{ .nonblocking = false } },
@@ -94,14 +139,14 @@ pub const Transport = struct {
     /// signature. The framer hands us a destination slice; we forward
     /// it as a single-element [][]u8 vector.
     fn readStreamingAdapter(ctx: *anyopaque, dest: []u8) framer_mod.FramerError!usize {
-        const self: *Transport = @ptrCast(@alignCast(ctx));
+        const self: *StdioTransport = @ptrCast(@alignCast(ctx));
         const n = self.stdin.readStreaming(self.io, &.{dest}) catch {
             return framer_mod.FramerError.ReadFailed;
         };
         return n;
     }
 
-    pub fn readMessage(self: *Transport) ![]const u8 {
+    pub fn readMessage(self: *StdioTransport) ![]const u8 {
         // F-04: delegate to the buffered framer. The framer owns a 4 KiB
         // read-ahead buffer and uses parseContentLength's cap (16 MiB)
         // implicitly via MAX_LSP_MESSAGE.
@@ -117,7 +162,7 @@ pub const Transport = struct {
         return body;
     }
 
-    pub fn writeMessage(self: *Transport, message: []const u8) !void {
+    pub fn writeMessage(self: *StdioTransport, message: []const u8) !void {
         // Write headers
         const header = try std.fmt.allocPrint(
             self.allocator,
@@ -130,9 +175,24 @@ pub const Transport = struct {
         try self.stdout.writeStreamingAll(self.io, message);
     }
 
-    pub fn logMessage(self: *Transport, level: []const u8, message: []const u8) void {
+    pub fn logMessage(self: *StdioTransport, level: []const u8, message: []const u8) void {
         const msg = std.fmt.allocPrint(self.allocator, "[{s}] {s}\n", .{ level, message }) catch return;
         defer self.allocator.free(msg);
         self.stderr.writeStreamingAll(self.io, msg) catch {};
     }
+};
+
+/// Placeholder until Task 26. Returns `error.NotImplemented` on read /
+/// write; `logMessage` is a no-op. The union variant must still exist
+/// so the tagged-union switches in `Transport` are exhaustive at
+/// compile time.
+pub const TcpTransport = struct {
+    pub fn deinit(_: *TcpTransport) void {}
+    pub fn readMessage(_: *TcpTransport) ![]const u8 {
+        return error.NotImplemented;
+    }
+    pub fn writeMessage(_: *TcpTransport, _: []const u8) !void {
+        return error.NotImplemented;
+    }
+    pub fn logMessage(_: *TcpTransport, _: []const u8, _: []const u8) void {}
 };
