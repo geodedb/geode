@@ -217,7 +217,9 @@ REQ-AUDIT-VERIFY-001,Audit Verification,ChainVerification,TESTED,,,security,2026
 REQ-AUDIT-VERIFY-001,Audit Verification,EmptyFileSummaryPhrase,IMPL,,,security,2026-04-16,tests/test_audit_verify_empty_file_phrase.sh
 REQ-AUDIT-VERIFY-002,Audit Signature Verification,Ed25519Verify,TESTED,,,security,2026-01-15,src/cli/geode_audit_verify.zig
 REQ-AUTH-001,AuthenticationLogin,RealImplementation,TESTED,,,cli,2025-09-30,src/cli/main.zig
+REQ-AUTH-001,UserManagement,Authentication,TESTED,,,security,2025-10-14,docs/ADVANCED_SECURITY_FEATURES_OCTOBER_2025.md
 REQ-AUTH-001,UserManagement,Authentication,TESTED,,,security,2026-01-15,src/security/user_management.zig
+REQ-AUTH-002,Argon2idHashing,PasswordSecurity,TESTED,,,security,2025-10-14,docs/ARGON2ID_IMPLEMENTATION.md
 REQ-AUTH-002,Argon2idHashing,PasswordSecurity,TESTED,,,security,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-AUTH-002,AuthenticationLogout,RealImplementation,TESTED,,,cli,2025-09-30,src/cli/main.zig
 REQ-AUTH-APIKEYS-CLI-001,ApiKeyCLI,CLI,IMPL,,,cli,2026-02-04,src/cli/apikey_cli.zig
@@ -1565,6 +1567,7 @@ REQ-GQL-052,FederationOrderedMultiKeyDirMerge,Federation,TESTED,,,federation,202
 REQ-GQL-052,FederationOrderedMultiKeyDirMerge,FederationMergeVarianceEnvelope,BENCHED,,,federation,2025-09-23,benchmarks/benchmark_federation_merge_variance.zig
 REQ-GQL-052,FederationOrderedMultiKeyMerge,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-052,FederationOrderedMultiKeyMerge,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
+REQ-GQL-052,FederationResultLine,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,,,federation,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-052,FederationResultLineMemoryLifecycle,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
 REQ-GQL-052,FederationResultLineOrdering,Federation,TESTED,,,federation,2025-09-23,src/distributed/federation.zig
@@ -1669,6 +1672,7 @@ REQ-GQL-074,Network Transport,QUICTLSConfig,TESTED,,,wire,2025-09-22,tests/e2e_q
 REQ-GQL-074,Network Transport,QuicFrameLatencyVarianceEnvelope,BENCHED,,,wire,2025-09-22,tests/benchmark_quic_frame_latency_variance.zig
 REQ-GQL-074,QUIC Transport,ClientHandshakeStallRegression,TESTED,,,transport,2026-04-16,tests/test_quic_handshake_stall_regression.sh
 REQ-GQL-074,QUIC Transport,ConditionTimedWaitCadence,TESTED,,,transport,2026-04-16,tests/test_quic_condition_timedwait_cadence.zig
+REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-074,RaftFrame/TransportEnvelope,NetworkTransport,TESTED,,,cluster,2025-09-23,tests/test_quic_raft_smoke.zig
 REQ-GQL-074,RaftFrameEntriesArray,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md
 REQ-GQL-074,RaftFrameSnapshotInstall,NetworkTransport,TESTED,,,cluster,2025-09-23,docs/BINARY_PROTOCOL.md

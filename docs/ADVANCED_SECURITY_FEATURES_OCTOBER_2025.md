@@ -149,7 +149,7 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 All security implementations are tracked with CANARY markers:
 
 ```
-CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=COMPLETE; OWNER=security; UPDATED=2025-10-14
+CANARY: REQ=REQ-AUTH-001; FEATURE="UserManagement"; ASPECT=Authentication; STATUS=TESTED; OWNER=security; UPDATED=2025-10-14
 CANARY: REQ=REQ-GQL-TDE-001; FEATURE="TDE"; ASPECT=Encryption; STATUS=TESTED; OWNER=security; UPDATED=2025-10-14
 ```
 
