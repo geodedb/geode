@@ -3662,6 +3662,53 @@ pub fn build(b: *std.Build) void {
     const test_tcp_transport_step = b.step("test-tcp-transport", "Run LSP TcpTransport socketpair-roundtrip test");
     test_tcp_transport_step.dependOn(&run_tcp_transport_tests.step);
 
+    // Task 29 of the LSP permission-aware completion plan: register
+    // tests/test_lsp_embedded_e2e.zig as a dedicated test step. Unlike
+    // the tcp_transport block immediately above, this test reaches into
+    // src/cli/lsp/server.zig (and transitively schema_provider.zig +
+    // features.zig + auth.zig), all of which use the `geode` named
+    // module — so the test module must surface those names to the
+    // resolver.
+    //
+    // Because Zig 0.16 forbids `@import("../src/...")` from a `tests/`
+    // module root ("file outside module path"), we re-export the two
+    // LSP source files as named-module imports (`lsp_transport` and
+    // `lsp_server`). The `lsp_server` module needs the same transitive
+    // imports the LSP test runner sets up: `geode` (root_mod) for the
+    // `geode.execution` / `geode.graph_store` access in server.zig, and
+    // `schema_introspection` for schema_provider.zig's named import.
+    //
+    // No file-diamond: this test file is its own root and is NOT
+    // included in the lsp_tests runner (see src/cli/lsp/test_runner.zig);
+    // server.zig / transport.zig appear in two test executables but
+    // never in the same one.
+    //
+    // libc is linked because server.zig reaches std.c.clock_gettime
+    // (lspMonoNanos) and std.c.getenv (--no-auth path), matching the
+    // wiring of the lsp_tests module via root_mod's transitive needs.
+    // Only ONE module rooted at src/cli/lsp/. The test reaches both
+    // `Server` and `Transport` through this one module — `Transport` is
+    // recovered with `@TypeOf(@as(Server, undefined).transport)` to
+    // avoid (a) creating a second module rooted at transport.zig (which
+    // would put transport.zig in two modules — Zig 0.16 forbids that)
+    // and (b) modifying server.zig to make `transport` / `Transport`
+    // `pub` (the task constraint is "modify only build.zig + the test
+    // file"). The `transport` field on `Server` itself is reachable
+    // because the struct is `pub`, even though the type alias is not.
+    const lsp_server_e2e_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/server.zig"), .target = target, .optimize = optimize });
+    lsp_server_e2e_mod.addImport("geode", root_mod);
+    lsp_server_e2e_mod.addImport("schema_introspection", schema_introspection_mod);
+    lsp_server_e2e_mod.link_libc = true;
+
+    const lsp_embedded_e2e_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_lsp_embedded_e2e.zig"), .target = target, .optimize = optimize });
+    lsp_embedded_e2e_test_mod.addImport("lsp_server", lsp_server_e2e_mod);
+    lsp_embedded_e2e_test_mod.link_libc = true;
+    const lsp_embedded_e2e_tests = b.addTest(.{ .root_module = lsp_embedded_e2e_test_mod });
+    const run_lsp_embedded_e2e_tests = b.addRunArtifact(lsp_embedded_e2e_tests);
+    shardDep(test_step, &run_lsp_embedded_e2e_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const test_lsp_embedded_e2e_step = b.step("test-lsp-embedded-e2e", "Run LSP embedded-TCP listener end-to-end auth-rejection test");
+    test_lsp_embedded_e2e_step.dependOn(&run_lsp_embedded_e2e_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.
