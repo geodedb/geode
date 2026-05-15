@@ -40,7 +40,12 @@ pub fn startsWithCI(s: []const u8, p: []const u8) bool {
     return true;
 }
 
-pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protocol.Diagnostic {
+// CANARY: REQ=REQ-LSP-SCHEMA-DIAG-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=UnknownLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"diagnostics flag unknown labels with hint"; OWNER=lsp; UPDATED=2026-05-14
+pub fn provideDiagnostics(
+    allocator: Allocator,
+    doc: *const Document,
+    schema: ?*@import("schema_provider.zig").SchemaProvider,
+) ![]protocol.Diagnostic {
     var diagnostics = std.ArrayList(protocol.Diagnostic).initCapacity(allocator, 10) catch return error.OutOfMemory;
     errdefer diagnostics.deinit(allocator);
 
@@ -212,7 +217,114 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
         },
     }
 
+    // Schema-aware label validation. Scan the document text for node-pattern
+    // label tokens (`(var:Label` shapes) and warn on labels the user's schema
+    // doesn't know about, with a Levenshtein-based "did you mean" hint when a
+    // close match exists. Skipped when no schema is wired (e.g. --no-auth
+    // stdio or tests). Memory: each `.message` is allocPrint'd and owned by
+    // the caller (matches the parse/semantic branches above).
+    if (schema) |sp| {
+        const known = sp.getLabels() catch &[_][]const u8{};
+        const text = doc.text;
+        var i: usize = 0;
+        while (i < text.len) : (i += 1) {
+            if (text[i] != '(') continue;
+            var j = i + 1;
+            while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+            // skip optional variable identifier
+            while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) : (j += 1) {}
+            while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+            if (j >= text.len or text[j] != ':') continue;
+            j += 1;
+            while (j < text.len and std.ascii.isWhitespace(text[j])) : (j += 1) {}
+            const lbl_start = j;
+            while (j < text.len and (std.ascii.isAlphanumeric(text[j]) or text[j] == '_')) : (j += 1) {}
+            const lbl = text[lbl_start..j];
+            if (lbl.len == 0) continue;
+
+            var is_known = false;
+            for (known) |l| {
+                if (std.mem.eql(u8, l, lbl)) {
+                    is_known = true;
+                    break;
+                }
+            }
+            if (is_known) continue;
+
+            const hint = closestLabel(lbl, known);
+            const msg = if (hint) |h|
+                try std.fmt.allocPrint(allocator, "Unknown label `{s}`. Did you mean `{s}`?", .{ lbl, h })
+            else
+                try std.fmt.allocPrint(allocator, "Unknown label `{s}`.", .{lbl});
+
+            const start_pos = offsetToLineCol(text, lbl_start);
+            const end_pos = offsetToLineCol(text, j);
+            try diagnostics.append(allocator, .{
+                .range = .{ .start = start_pos, .end = end_pos },
+                .severity = .Warning,
+                .source = "geode-lsp",
+                .message = msg,
+            });
+        }
+    }
+
     return diagnostics.toOwnedSlice(allocator);
+}
+
+/// Levenshtein edit distance between two byte slices. Cap inputs at 64
+/// chars (typical labels are 4-16); longer slices return maxInt(usize)
+/// so the caller treats them as "no close match". Allocation-free —
+/// uses two 65-cell stack rows for the dynamic-programming table.
+fn levenshtein(a: []const u8, b: []const u8) usize {
+    if (a.len > 64 or b.len > 64) return std.math.maxInt(usize);
+    var prev: [65]usize = undefined;
+    var curr: [65]usize = undefined;
+    for (0..b.len + 1) |j| prev[j] = j;
+    for (a, 0..) |ca, i| {
+        curr[0] = i + 1;
+        for (b, 0..) |cb, j| {
+            const cost: usize = if (ca == cb) 0 else 1;
+            curr[j + 1] = @min(@min(curr[j] + 1, prev[j + 1] + 1), prev[j] + cost);
+        }
+        @memcpy(prev[0 .. b.len + 1], curr[0 .. b.len + 1]);
+    }
+    return prev[b.len];
+}
+
+/// Find the closest label to `target` from `labels` under Levenshtein
+/// distance, returning null when the best candidate is more than 2 edits
+/// away (the threshold beyond which a "did you mean" hint becomes more
+/// confusing than helpful).
+fn closestLabel(target: []const u8, labels: []const []const u8) ?[]const u8 {
+    var best_dist: usize = std.math.maxInt(usize);
+    var best: ?[]const u8 = null;
+    for (labels) |l| {
+        const d = levenshtein(target, l);
+        if (d < best_dist) {
+            best_dist = d;
+            best = l;
+        }
+    }
+    return if (best_dist <= 2) best else null;
+}
+
+/// Convert a byte offset in `text` to an LSP Position (zero-indexed line
+/// + UTF-16 character — we approximate as byte column, which matches the
+/// `completion_context.lineColToOffset` ASCII convention used elsewhere
+/// in this LSP).
+fn offsetToLineCol(text: []const u8, offset: usize) protocol.Position {
+    var line: u32 = 0;
+    var col: u32 = 0;
+    var i: usize = 0;
+    while (i < offset and i < text.len) : (i += 1) {
+        if (text[i] == '\n') {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    return .{ .line = line, .character = col };
 }
 
 // CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03

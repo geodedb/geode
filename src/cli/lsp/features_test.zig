@@ -18,7 +18,7 @@ test "provideDiagnostics - valid GQL query" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -37,7 +37,7 @@ test "provideDiagnostics - invalid GQL query" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -58,7 +58,7 @@ test "provideDiagnostics - empty document" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -77,7 +77,7 @@ test "provideDiagnostics - multiple errors" {
     var doc = try document.Document.init(allocator, "file:///test.gql", text, 1);
     defer doc.deinit();
 
-    const diagnostics = try features.provideDiagnostics(allocator, doc);
+    const diagnostics = try features.provideDiagnostics(allocator, doc, null);
     defer {
         for (diagnostics) |diag| {
             allocator.free(diag.message);
@@ -1374,4 +1374,41 @@ test "hover on property shows owning label" {
     try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
     try testing.expect(std.mem.indexOf(u8, hover.contents.value, "Person") != null);
     try testing.expect(std.mem.indexOf(u8, hover.contents.value, "age") != null);
+}
+
+// Task 23: schema-aware diagnostics. When the document references a node
+// label that isn't in the user's schema, `provideDiagnostics` should emit
+// a Warning at the label's range with the unknown name plus a "did you
+// mean" hint pointing at the closest match (Levenshtein <= 2). The
+// closest-match suggestion lets a typo like `Persn` surface `Person`
+// without the user needing to look up the schema.
+//
+// Memory ownership matches the parse/semantic branches above: each
+// `.message` is allocPrint'd inside `provideDiagnostics` and owned by
+// this caller, so the cleanup loop frees every message + the outer slice.
+test "diagnostics flag unknown labels with hint" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    var labels_p = [_][]const u8{"Person"};
+    _ = try store.createNodeWithGraphAndTenant(&labels_p, "default", "tenant-a");
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = "default",
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:Persn) RETURN n", 1);
+    defer doc.deinit();
+    const diags = try features.provideDiagnostics(alloc, doc, &sp);
+    defer {
+        for (diags) |d| alloc.free(d.message);
+        alloc.free(diags);
+    }
+    try testing.expect(diags.len >= 1);
+    try testing.expect(std.mem.indexOf(u8, diags[0].message, "Person") != null);
+    try testing.expect(std.mem.indexOf(u8, diags[0].message, "Persn") != null);
 }

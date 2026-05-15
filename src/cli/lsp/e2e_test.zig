@@ -21,7 +21,7 @@ test "E2E - complete document lifecycle with diagnostics" {
     try testing.expect(doc1 != null);
 
     // Get diagnostics - should be empty for valid query
-    const diag1 = try features.provideDiagnostics(allocator, doc1.?);
+    const diag1 = try features.provideDiagnostics(allocator, doc1.?, null);
     defer {
         for (diag1) |d| allocator.free(d.message);
         allocator.free(diag1);
@@ -35,7 +35,7 @@ test "E2E - complete document lifecycle with diagnostics" {
     try testing.expect(doc2 != null);
 
     // Get diagnostics - should have errors
-    const diag2 = try features.provideDiagnostics(allocator, doc2.?);
+    const diag2 = try features.provideDiagnostics(allocator, doc2.?, null);
     defer {
         for (diag2) |d| allocator.free(d.message);
         allocator.free(diag2);
@@ -49,7 +49,7 @@ test "E2E - complete document lifecycle with diagnostics" {
     try testing.expect(doc3 != null);
 
     // Diagnostics should be clear again
-    const diag3 = try features.provideDiagnostics(allocator, doc3.?);
+    const diag3 = try features.provideDiagnostics(allocator, doc3.?, null);
     defer {
         for (diag3) |d| allocator.free(d.message);
         allocator.free(diag3);
@@ -189,7 +189,7 @@ test "E2E - vector search query workflow" {
     try testing.expect(doc != null);
 
     // Get diagnostics - should be valid
-    const diag = try features.provideDiagnostics(allocator, doc.?);
+    const diag = try features.provideDiagnostics(allocator, doc.?, null);
     defer {
         for (diag) |d| allocator.free(d.message);
         allocator.free(diag);
@@ -225,7 +225,7 @@ test "E2E - complex query with multiple features" {
     try testing.expect(doc != null);
 
     // Diagnostics should be clean for valid query
-    const diag = try features.provideDiagnostics(allocator, doc.?);
+    const diag = try features.provideDiagnostics(allocator, doc.?, null);
     defer {
         for (diag) |d| allocator.free(d.message);
         allocator.free(diag);
@@ -328,7 +328,7 @@ test "E2E - error recovery" {
     try testing.expect(doc1 != null);
 
     // Should have errors
-    const diag1 = try features.provideDiagnostics(allocator, doc1.?);
+    const diag1 = try features.provideDiagnostics(allocator, doc1.?, null);
     defer {
         for (diag1) |d| allocator.free(d.message);
         allocator.free(diag1);
@@ -346,7 +346,7 @@ test "E2E - error recovery" {
     try testing.expect(doc2 != null);
 
     // Should be valid now
-    const diag2 = try features.provideDiagnostics(allocator, doc2.?);
+    const diag2 = try features.provideDiagnostics(allocator, doc2.?, null);
     defer {
         for (diag2) |d| allocator.free(d.message);
         allocator.free(diag2);

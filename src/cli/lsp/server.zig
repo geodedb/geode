@@ -1254,7 +1254,7 @@ pub const Server = struct {
         self.diagnostics_send_count_for_test += 1;
         const doc = self.documents.get(uri) orelse return;
 
-        const diagnostics = try features.provideDiagnostics(self.allocator, doc);
+        const diagnostics = try features.provideDiagnostics(self.allocator, doc, self.schema);
         defer {
             for (diagnostics) |diag| {
                 self.allocator.free(diag.message);
