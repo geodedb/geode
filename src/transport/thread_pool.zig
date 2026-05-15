@@ -460,6 +460,10 @@ test "ThreadPool: submit and execute work" {
         }));
     }
 
+    // PERF-D / #816: test-only counter poll. The external thread_pool
+    // dependency doesn't expose a per-counter wake channel, and adding one
+    // here would mean reaching into the upstream crate. Marked as
+    // `no-signal-source` and LEFT ALONE — this is a test, not a hot path.
     // Wait for completion
     var timeout: u32 = 0;
     while (counter.load(.acquire) < 10 and timeout < 1000) {
@@ -496,6 +500,8 @@ test "ThreadPool: statistics tracking" {
         .callback = callback,
     }));
 
+    // PERF-D / #816: same as above — test-only counter poll, no-signal-source,
+    // LEFT ALONE.
     // Wait for completion
     var timeout: u32 = 0;
     while (!completed.load(.acquire) and timeout < 1000) {

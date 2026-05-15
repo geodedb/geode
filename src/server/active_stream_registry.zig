@@ -23,82 +23,88 @@ pub const RegistryError = error{
     StreamRegistryFull,
 };
 
-// CANARY: REQ=PERF-P1-004; FEATURE="GlobalStreamThrottle"; ASPECT=GlobalAtomicCounter; STATUS=TESTED; OWNER=server; UPDATED=2026-04-10
+// CANARY: REQ=PERF-P1-004; FEATURE="GlobalStreamThrottle"; ASPECT=GlobalAtomicCounter; STATUS=TESTED; OWNER=server; UPDATED=2026-05-15
 /// Global throttle that caps the total number of concurrent stream handler
 /// threads across all QUIC connections. Uses an atomic counter for the fast
-/// path and a mutex + condvar for backpressure when the limit is reached.
+/// path and a futex (`futexWaitTimeout`/`futexWake` on the same atomic) for
+/// backpressure when the limit is reached.
+///
+/// PERF-D / #816: prior to 2026-05-15 the slow path used `nanosleep(timeout)`
+/// because `std.Io.Condition.waitTimeout` does not exist in Zig 0.16. That
+/// imposed a fixed wake-up latency floor (the full timeout) even when a slot
+/// freed immediately. We now park the waiter on the `active` counter via
+/// `io.futexWaitTimeout` and have `release()` call `io.futexWake` after
+/// `fetchSub`, so a waiter wakes within the futex wake latency (sub-ms in
+/// the synthetic test, see tests/test_perf_d_admission_signal.zig). Follows
+/// the b3790685 signal-vs-broadcast discipline: `futexWake(..., 1)` rather
+/// than wake-all, since admission has at most one slot freed per release.
 pub const GlobalStreamThrottle = struct {
-    /// Current number of active stream handler threads.
+    /// Current number of active stream handler threads. Used both as the
+    /// admission counter (CAS) and as the futex wait address (so a waiter
+    /// can park on a specific observed value).
     active: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     /// Maximum allowed concurrent stream handler threads.
     max: u32,
-    /// Mutex protecting the condvar wait.
-    mu: std.Io.Mutex = std.Io.Mutex.init,
-    /// Condition variable signalled when a stream handler thread exits.
-    cv: std.Io.Condition = std.Io.Condition.init,
 
     pub fn init(max: u32) GlobalStreamThrottle {
         return .{ .max = max };
     }
 
     /// Try to acquire a slot for a new stream handler thread.
-    /// If below the limit, increments the counter and returns true immediately.
+    /// If below the limit, increments the counter and returns immediately.
     /// If at the limit, waits up to `timeout_ns` for a slot to open.
     /// Returns `ThrottleError.GlobalStreamLimitExceeded` if the wait times out.
     pub fn acquire(self: *GlobalStreamThrottle, timeout_ns: u64) ThrottleError!void {
-        // Fast path: atomically try to increment if below the limit.
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        // Fast path: atomically try to increment if below the limit. If a
+        // slot is available, claim it via CAS and return.
+        if (self.tryClaimSlot()) return;
+
+        // Slow path: at the limit. If the caller gave a zero timeout, fail
+        // immediately (preserves existing semantics for non-blocking
+        // acquire(0) used in the unit tests).
+        if (timeout_ns == 0) return ThrottleError.GlobalStreamLimitExceeded;
+
+        // Park on the atomic counter with a deadline. Each loop iteration:
+        //   1) Snapshot the current count.
+        //   2) If a slot is now free, try to claim it.
+        //   3) Otherwise futexWaitTimeout(..., snapshot, remaining).
+        //      Returns when:
+        //        * release() called futexWake (signal path), or
+        //        * the value already differs from `snapshot` (race), or
+        //        * the timeout fires, or
+        //        * a spurious wakeup occurs.
+        //      Per the canonical futex idiom we re-check on every return.
+        const start_ns = nowMonotonicNs();
+        var remaining_ns: u64 = timeout_ns;
         while (true) {
             const current = self.active.load(.acquire);
             if (current < self.max) {
-                // Try to claim a slot via CAS.
-                if (self.active.cmpxchgWeak(current, current + 1, .acq_rel, .acquire)) |_| {
-                    // CAS failed (contention), retry the loop.
-                    continue;
-                }
-                // Successfully claimed a slot.
-                return;
+                if (self.tryClaimSlot()) return;
+                // CAS lost race; reload and retry.
+                continue;
             }
-            break;
-        }
 
-        // Slow path: at the limit, wait with backpressure.
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-
-        // Re-check under the lock in case a slot opened between the fast
-        // path failure and acquiring the mutex.
-        while (true) {
-            const current = self.active.load(.acquire);
-            if (current < self.max) {
-                if (self.active.cmpxchgWeak(current, current + 1, .acq_rel, .acquire)) |_| {
-                    continue;
-                }
-                return;
-            }
-            break;
-        }
-
-        // Wait for a signal with timeout.
-        // Zig 0.16 compat: Io.Condition.timedWait was removed. Fall back to a
-        // short nanosleep before rechecking; the signalling path remains.
-        {
-            const req = std.os.linux.timespec{
-                .sec = @intCast(timeout_ns / std.time.ns_per_s),
-                .nsec = @intCast(timeout_ns % std.time.ns_per_s),
+            const timeout: std.Io.Timeout = .{ .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(remaining_ns)),
+                .clock = .awake,
+            } };
+            io.futexWaitTimeout(u32, &self.active.raw, current, timeout) catch |err| switch (err) {
+                // We don't introduce cancelation points here (the QUIC
+                // accept loop already treats acquire as a budgeted wait).
+                error.Canceled => return ThrottleError.GlobalStreamLimitExceeded,
             };
-            var rem: std.os.linux.timespec = undefined;
-            _ = std.os.linux.nanosleep(&req, &rem);
-        }
-        // Timeout expired. One final check before giving up.
-        while (true) {
-            const current = self.active.load(.acquire);
-            if (current < self.max) {
-                if (self.active.cmpxchgWeak(current, current + 1, .acq_rel, .acquire)) |_| {
-                    continue;
-                }
-                return;
+
+            // Update remaining budget. If the deadline has passed, do one
+            // final check (in case the wake won the race with the timeout)
+            // and then give up.
+            const elapsed_ns: u64 = @intCast(nowMonotonicNs() - start_ns);
+            if (elapsed_ns >= timeout_ns) {
+                if (self.tryClaimSlot()) return;
+                return ThrottleError.GlobalStreamLimitExceeded;
             }
-            return ThrottleError.GlobalStreamLimitExceeded;
+            remaining_ns = timeout_ns - elapsed_ns;
         }
     }
 
@@ -108,17 +114,47 @@ pub const GlobalStreamThrottle = struct {
         const prev = self.active.fetchSub(1, .release);
         std.debug.assert(prev > 0); // underflow guard
 
-        // Wake one waiter (if any) so it can claim the freed slot.
-        self.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-        self.cv.signal(std.Io.Threaded.global_single_threaded.io());
+        // PERF-D / #816: wake exactly one waiter (per b3790685 — only one
+        // slot freed, so only one waiter needs to advance). The store side
+        // of fetchSub is .release; futexWake performs an acquire-side
+        // synchronization on the kernel queue, so the waker's update is
+        // visible to the woken thread before its re-check of `active`.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        io.futexWake(u32, &self.active.raw, 1);
     }
 
     /// Return the current number of active stream handler threads.
     pub fn count(self: *const GlobalStreamThrottle) u32 {
         return self.active.load(.acquire);
     }
+
+    /// Try to atomically claim one slot. Returns true on success.
+    fn tryClaimSlot(self: *GlobalStreamThrottle) bool {
+        while (true) {
+            const current = self.active.load(.acquire);
+            if (current >= self.max) return false;
+            if (self.active.cmpxchgWeak(current, current + 1, .acq_rel, .acquire)) |_| {
+                // Lost the CAS (contention); retry.
+                continue;
+            }
+            return true;
+        }
+    }
 };
+
+/// Monotonic timestamp in nanoseconds. Used by the throttle wait loop to
+/// compute the remaining timeout across spurious wakeups.
+fn nowMonotonicNs() i128 {
+    if (comptime @import("builtin").os.tag == .linux) {
+        var ts: std.os.linux.timespec = undefined;
+        _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+        return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
+    } else {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        return @as(i128, ts.tv_sec) * std.time.ns_per_s + @as(i128, ts.tv_nsec);
+    }
+}
 
 pub const ActiveStreamRegistry = struct {
     mu: std.Io.Mutex = std.Io.Mutex.init,

@@ -453,6 +453,13 @@ pub const AsyncFile = struct {
 
         _ = try self.readAsync(buffer, offset, callback, &context, timeout_ms);
 
+        // PERF-D / #816: poll loop, no signal source available without
+        // io_uring/epoll integration. The async I/O backend completes
+        // operations via processCompletions(), which is a non-blocking
+        // drain — there's no kernel event we can park on. LEFT ALONE per
+        // the task's "don't break working code" rule. This wrapper is a
+        // sync-on-async convenience; the recommended path is the truly
+        // async one (readAsync + callback), which doesn't busy wait.
         // Busy wait for completion (in production, use proper synchronization)
         while (!completed) {
             _ = self.io_manager.processCompletions(10);
@@ -488,6 +495,8 @@ pub const AsyncFile = struct {
 
         _ = try self.writeAsync(data, offset, callback, &context, timeout_ms);
 
+        // PERF-D / #816: same `no-signal-source` classification as readSync
+        // above. LEFT ALONE.
         // Busy wait for completion
         while (!completed) {
             _ = self.io_manager.processCompletions(10);

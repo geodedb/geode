@@ -399,6 +399,9 @@ pub const AsyncFile = struct {
         });
         self.io_manager.completeOperation(operation_id, sync_result);
 
+        // PERF-D / #816: poll loop, no signal source available without
+        // io_uring/epoll integration. Same classification as the sync
+        // wrappers in src/performance/async_io.zig. LEFT ALONE.
         // Process completions
         while (!completed) {
             _ = self.io_manager.processCompletions(10);

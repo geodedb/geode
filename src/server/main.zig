@@ -1283,16 +1283,33 @@ pub fn main() !void {
             .allocator = gpa,
         };
 
+        // PERF-D / #816: park on `should_stop` via futexWaitTimeout instead
+        // of an unconditional nanosleep. The 5-second tick is preserved (it
+        // remains the heartbeat cadence for the metrics snapshot), but on
+        // shutdown the producer (`metrics_should_stop.store(1, .release)`
+        // below) calls futexWake so this loop exits immediately rather than
+        // burning up to 5s of joinable time. Per the canonical futex idiom
+        // we re-check `should_stop` after futexWaitTimeout returns —
+        // futexWait returns void on timeout, signal, OR spurious wake, and
+        // the caller is responsible for differentiating via the predicate.
         const metricsLoop = struct {
             fn run(ctx_ptr: *anyopaque) void {
                 const ctx: *MetricsCtx = @ptrCast(@alignCast(ctx_ptr));
+                const io = std.Io.Threaded.global_single_threaded.io();
+                const tick_timeout: std.Io.Timeout = .{ .duration = .{
+                    .raw = std.Io.Duration.fromSeconds(5),
+                    .clock = .awake,
+                } };
                 while (ctx.should_stop.load(.acquire) == 0) {
-                    const req = std.os.linux.timespec{
-                        .sec = 5,
-                        .nsec = 0,
+                    // Park until the 5s tick elapses or shutdown is signalled.
+                    // `should_stop` is the futex word: the producer stores 1
+                    // and calls futexWake. If the value already differs from
+                    // 0 (race), futexWait returns immediately.
+                    io.futexWaitTimeout(u32, &ctx.should_stop.raw, 0, tick_timeout) catch |err| switch (err) {
+                        // The worker pool does not cancel us; this would be
+                        // a bug. Treat as shutdown.
+                        error.Canceled => return,
                     };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
                     if (ctx.should_stop.load(.acquire) != 0) break;
                     var buf: std.ArrayList(u8) = .empty;
                     defer buf.deinit(ctx.allocator);
@@ -1303,7 +1320,14 @@ pub fn main() !void {
         }.run;
 
         _ = pool.submitDefault(.{ .context = @ptrCast(metrics_ctx), .callback = metricsLoop });
-        defer metrics_should_stop.store(1, .release);
+        defer {
+            // PERF-D / #816: set the stop flag AND wake the parked metrics
+            // loop. Without the futexWake, shutdown would still take up to
+            // 5s for the current futexWaitTimeout to expire.
+            metrics_should_stop.store(1, .release);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.futexWake(u32, &metrics_should_stop.raw, 1);
+        }
 
         std.debug.print("[startup] thread pool initialized ({d}ms, {d} workers)\n", .{ compat_milliTimestamp() - phase_start, pool.workers.len });
 
@@ -1358,6 +1382,16 @@ pub fn main() !void {
             transport.drainPendingDestroy();
 
             // #49: Admission control — skip accept when at capacity.
+            //
+            // PERF-D / #816: classified as `no-signal-source` and LEFT ALONE.
+            // The producer side (connection removal in `swapRemove` /
+            // `drainPendingDestroy`) lives in `src/transport/quic.zig`, which
+            // is owned by a different agent in this perf pass (see the
+            // task's "do NOT touch" list). Wiring a wake here would require
+            // adding a futex/CV to QuicTransport's `connections_mutex` write
+            // sites — out of scope for this commit. Until then this remains
+            // a 5 ms unconditional poll. The companion task PERF-A (#815)
+            // tracks transport-layer cleanup that would expose that signal.
             if (transport.getConnectionCount() >= transport.config.max_connections) {
                 {
                     const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };

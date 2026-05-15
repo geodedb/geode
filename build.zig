@@ -2423,6 +2423,19 @@ pub fn build(b: *std.Build) void {
     quic_stream_registry_test_step.dependOn(&run_quic_stream_registry_tests.step);
     shardDep(test_step, &quic_stream_registry_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
 
+    // PERF-D / #816: GlobalStreamThrottle wake-on-release regression tests.
+    // Pins that release() unblocks a parked acquire() in sub-ms (via the new
+    // futexWaitTimeout + futexWake path) rather than burning the full
+    // timeout under the old nanosleep poll. Also enforces the
+    // signal-not-broadcast discipline from commit b3790685.
+    // CANARY: REQ=PERF-D-ADMISSION-SIGNAL-001; FEATURE="GlobalStreamThrottle"; ASPECT=FutexWakeOnReleaseBuild; STATUS=TESTED; OWNER=build; UPDATED=2026-05-15
+    const perf_d_admission_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_perf_d_admission_signal.zig"), .target = target, .optimize = optimize }) });
+    perf_d_admission_tests.root_module.addImport("server/active_stream_registry", b.createModule(.{ .root_source_file = b.path("src/server/active_stream_registry.zig"), .target = target, .optimize = optimize }));
+    const run_perf_d_admission_tests = b.addRunArtifact(perf_d_admission_tests);
+    const perf_d_admission_step = b.step("test-perf-d-admission-signal", "PERF-D: GlobalStreamThrottle futex wake-on-release regression (issue #816)");
+    perf_d_admission_step.dependOn(&run_perf_d_admission_tests.step);
+    shardDep(test_step, &perf_d_admission_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+
     // Issue #746: QueryDeadlineState lifetime regression test — pins the
     // contract that `finish()` must join the watchdog thread before
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by
