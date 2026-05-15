@@ -1045,7 +1045,7 @@ REQ-GAP-0490-FEDERATION-SERVER-AUTH,FederationAuth,ServerValidation,TESTED,,,sec
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/rls_core.zig
 REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,security,2026-02-18,src/security/test_rls_injection.zig
 REQ-GAP-0503-DIST-GATE,DistributedMode,ServerStartup,TESTED,,,core,2026-04-05,src/server/main.zig
-REQ-GAP-0509-SHOW-TABLES-TENANT,ShowTablesTenantIsolation,LabelEnumeration,TESTED,,,security,2026-04-11,src/execution/statement_handlers.zig
+REQ-GAP-0509-SHOW-TABLES-TENANT,ShowTablesTenantIsolation,LabelEnumeration,TESTED,,,security,2026-04-11,src/graph_store.zig
 REQ-GAP-0509-TENANT-ISOLATION,TenantIsolationCoverage,Regression,TESTED,,,security,2026-04-11,tests/test_gap0509_tenant_isolation.zig
 REQ-GAP-0510-RLS-EXPR-WIRING,RLSExpressionEngineWiring,Regression,TESTED,,,security,2026-04-11,tests/test_rls_expr_engine_wiring.zig
 REQ-GAP-0511-AUDIT-TENANT,AuditTenantEnrichment,Regression,TESTED,,,security,2026-04-11,tests/test_audit_tenant_enrichment.zig
@@ -2699,6 +2699,10 @@ REQ-LOADTEST-TESTS-005,QuerySuiteTests,UnitTests,EXEMPT,,,loadtest,2026-01-03,lo
 REQ-LOADTEST-WORKLOADS-001,WorkloadPatterns,Definition,EXEMPT,,,loadtest,2026-01-03,loadtest/benchmarks/workloads.py
 REQ-LSP-001,Language Server Protocol,LSPServer,EXEMPT,,,cli,2025-10-28,src/cli/main.zig
 REQ-LSP-001,LanguageServerProtocol,LSPServer,TESTED,,,cli,2026-01-15,tests/test_gap_analysis_january_2026.zig
+REQ-LSP-AUTH-GATE-001,LspPermissionAwareCompletion,AuthGate,TESTED,,,lsp,2026-05-14,src/cli/lsp/server_auth_test.zig
+REQ-LSP-AUTH-GATE-001,LspPermissionAwareCompletion,LibExportAuthn,IMPL,,,lsp,2026-05-14,src/lib.zig
+REQ-LSP-AUTH-NOAUTH-001,LspPermissionAwareCompletion,NoAuthBind,TESTED,,,lsp,2026-05-14,src/cli/lsp/server_auth_test.zig
+REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig
 REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig
 REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server.zig
 REQ-LSP-GOTODEF-001,GoToDefinitionWired,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/server_definition_test.zig
@@ -2706,7 +2710,23 @@ REQ-LSP-METADATA-001,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src
 REQ-LSP-METADATA-002,MetadataIntegration,ComptimeLists,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-003,MetadataIntegration,Hover,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
 REQ-LSP-METADATA-004,MetadataIntegration,Completions,EXEMPT,,,lsp,2026-01-03,src/cli/lsp/features.zig
+REQ-LSP-PERM-GRAPH-VISIBILITY-001,LspPermissionAwareCompletion,CoarseGraphVisibilityGate,IMPL,,,security,2026-05-14,src/security/auth_graph_manager.zig
+REQ-LSP-PERM-GRAPH-VISIBILITY-001,LspPermissionAwareCompletion,CoarseGraphVisibilityGate,TESTED,,,security,2026-05-14,src/security/auth_graph_manager.zig
+REQ-LSP-PERM-GRAPH-VISIBILITY-002,LspPermissionAwareCompletion,AdminShortcut,TESTED,,,security,2026-05-14,src/security/auth_graph_manager.zig
 REQ-LSP-REFS-001,References,FindAllRefs,IMPL,,,lsp,2026-01-27,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-COMPLETION-001,LspPermissionAwareCompletion,PrefixFilter,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-COMPLETION-001,LspPermissionAwareCompletion,SchemaBranches,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-DIAG-001,LspPermissionAwareCompletion,UnknownLabel,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-DIAG-002,LspPermissionAwareCompletion,UnknownEdgeType,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-HOVER-001,LspPermissionAwareCompletion,HoverLabel,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-HOVER-002,LspPermissionAwareCompletion,HoverEdgeType,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-HOVER-003,LspPermissionAwareCompletion,HoverProperty,TESTED,,,lsp,2026-05-14,src/cli/lsp/features.zig
+REQ-LSP-SCHEMA-INTROSPECT-001,LspPermissionAwareCompletion,PermissionFilter,TESTED,,,lsp,2026-05-14,src/execution/schema_introspection.zig
+REQ-LSP-SCHEMA-INTROSPECT-001,LspPermissionAwareCompletion,TenantFilterTest,TESTED,,,lsp,2026-05-14,tests/test_schema_introspection.zig
+REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,LazyFetchCache,TESTED,,,lsp,2026-05-14,src/cli/lsp/schema_provider.zig
+REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,LazyFetchTest,TESTED,,,lsp,2026-05-14,src/cli/lsp/schema_provider_test.zig
+REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,LibExportSchemaChangeNotifier,TESTED,,,lsp,2026-05-14,src/lib.zig
+REQ-LSP-SCHEMA-PROVIDER-001,LspPermissionAwareCompletion,SchemaChangeNotifier,TESTED,,,lsp,2026-05-14,src/execution/schema_change_notifier.zig
 REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport.zig
 REQ-LSP-SEC-001,ContentLengthCap,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/transport_test.zig
 REQ-LSP-SEC-003,JsonDepthGuard,DoSGuard,TESTED,,,lsp,2026-05-06,src/cli/lsp/json_helpers.zig

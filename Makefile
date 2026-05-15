@@ -807,16 +807,37 @@ pre-commit:
 	fi
 
 # Install pre-commit hooks
+#
+# Defensively unsets a worktree-local `core.hooksPath` override before
+# install. Worktrees created by some tools (Claude Code's EnterWorktree,
+# some IDE worktree managers) write `core.hooksPath = .git/hooks` into
+# the worktree's local config. That shadows any global pre-commit shim
+# AND leaves `.git/hooks/pre-commit` empty (worktrees inherit the main
+# repo's hooks via the git-common-dir, not via a populated local hooks
+# dir), so commits run NO hooks at all — the exact failure mode that
+# let an unformatted .zig file slip past local checks and fail in CI
+# (geode pipeline 2527653562). Unsetting the local override lets
+# commits fall back to the global pre-commit shim OR the freshly-
+# installed local hooks below.
 pre-commit-install:
 	@if ! command -v pre-commit >/dev/null 2>&1; then \
 		echo "Installing pre-commit..."; \
 		pip3 install --user pre-commit || pip install --user pre-commit; \
+	fi
+	@if git config --local --get core.hooksPath >/dev/null 2>&1; then \
+		echo "Unsetting worktree-local core.hooksPath override (would shadow pre-commit)..."; \
+		git config --local --unset-all core.hooksPath; \
 	fi
 	@echo "Installing pre-commit hooks..."
 	pre-commit install
 	pre-commit install --hook-type commit-msg
 	pre-commit install --hook-type pre-push
 	@echo "✓ Pre-commit hooks installed"
+	@echo
+	@echo "Sanity check: running zig-fmt against all tracked sources..."
+	@pre-commit run zig-fmt --all-files || \
+		(echo "✗ pre-commit zig-fmt failed — fix with 'zig fmt src/ tests/ tools/ benchmarks/ scripts/ build.zig build.zig.zon'"; exit 1)
+	@echo "✓ pre-commit zig-fmt clean"
 
 # Update pre-commit hooks to latest versions
 pre-commit-update:

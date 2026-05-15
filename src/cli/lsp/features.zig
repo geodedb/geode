@@ -460,15 +460,13 @@ pub fn provideHover(
         // keyword/function/type fallback below still runs.
         var word_start: usize = offset;
         while (word_start > 0 and
-            (std.ascii.isAlphanumeric(doc.text[word_start - 1]) or doc.text[word_start - 1] == '_'))
-            : (word_start -= 1)
+            (std.ascii.isAlphanumeric(doc.text[word_start - 1]) or doc.text[word_start - 1] == '_')) : (word_start -= 1)
         {}
         if (word_start >= 1 and doc.text[word_start - 1] == '.') {
             const dot_pos = word_start - 1;
             var k: usize = dot_pos;
             while (k > 0 and
-                (std.ascii.isAlphanumeric(doc.text[k - 1]) or doc.text[k - 1] == '_'))
-                : (k -= 1)
+                (std.ascii.isAlphanumeric(doc.text[k - 1]) or doc.text[k - 1] == '_')) : (k -= 1)
             {}
             const var_name = doc.text[k..dot_pos];
             if (var_name.len > 0) {
