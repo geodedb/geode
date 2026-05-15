@@ -3648,6 +3648,20 @@ pub fn build(b: *std.Build) void {
     const test_completion_context_step = b.step("test-completion-context", "Run LSP completion_context cursor-analyzer tests");
     test_completion_context_step.dependOn(&run_completion_context_tests.step);
 
+    // Task 26 of the LSP permission-aware completion plan: register
+    // src/cli/lsp/tcp_transport_test.zig as a dedicated test step.
+    // tcp_transport_test.zig only imports transport.zig (which itself
+    // only imports framer.zig + std), so no `geode` named module
+    // wiring is required — same shape as the completion_context block
+    // immediately above. The test verifies that TcpTransport
+    // round-trips an LSP frame end-to-end using a stdlib socketpair.
+    const tcp_transport_test_mod = b.createModule(.{ .root_source_file = b.path("src/cli/lsp/tcp_transport_test.zig"), .target = target, .optimize = optimize });
+    const tcp_transport_tests = b.addTest(.{ .root_module = tcp_transport_test_mod });
+    const run_tcp_transport_tests = b.addRunArtifact(tcp_transport_tests);
+    shardDep(test_step, &run_tcp_transport_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const test_tcp_transport_step = b.step("test-tcp-transport", "Run LSP TcpTransport socketpair-roundtrip test");
+    test_tcp_transport_step.dependOn(&run_tcp_transport_tests.step);
+
     // Reproduction tests for v0.5.11 admin-bootstrap bugs:
     //   1) bootstrapDefaultAdmin reads only GEODE_ADMIN_PASSWORD while docs/CLI
     //      advertise GEODE_DEFAULT_PASSWORD; generated-password disclosure on stderr.

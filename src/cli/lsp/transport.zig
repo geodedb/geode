@@ -85,8 +85,16 @@ pub const Transport = union(enum) {
         return .{ .stdio = try StdioTransport.init(allocator) };
     }
 
-    // Task 26 will add `Transport.initTcp(allocator, stream)`. Task 25
-    // leaves `TcpTransport` as a placeholder so the union compiles.
+    /// Task 26: wrap an already-connected `std.Io.net.Stream` in the
+    /// Transport union. The caller owns the socket lifecycle until
+    /// `deinit` runs (we close on deinit). `io` is the same Io vtable
+    /// the listener / connector used so reads/writes use the same
+    /// scheduler. `framing` is byte-for-byte identical to the stdio
+    /// path — Content-Length headers honoring the
+    /// `MAX_LSP_MESSAGE` cap.
+    pub fn initTcp(allocator: Allocator, io: std.Io, stream: std.Io.net.Stream) TransportError!Transport {
+        return .{ .tcp = try TcpTransport.init(allocator, io, stream) };
+    }
 
     pub fn deinit(self: *Transport) void {
         switch (self.*) {
@@ -182,17 +190,79 @@ pub const StdioTransport = struct {
     }
 };
 
-/// Placeholder until Task 26. Returns `error.NotImplemented` on read /
-/// write; `logMessage` is a no-op. The union variant must still exist
-/// so the tagged-union switches in `Transport` are exhaustive at
-/// compile time.
+/// Task 26: TCP-backed LSP transport. Same Content-Length framing as the
+/// stdio path; only the underlying byte source changes from a stdio
+/// FD pair to a single full-duplex `std.Io.net.Stream`. Used by the
+/// `geode lsp --listen tcp://…` entry point (Task 27) and the embedded
+/// LSP listener inside `geode serve` (Task 28). The `MAX_LSP_MESSAGE`
+/// cap is honored exactly as in stdio — the framer rejects oversize
+/// Content-Length headers before allocating a body buffer.
 pub const TcpTransport = struct {
-    pub fn deinit(_: *TcpTransport) void {}
-    pub fn readMessage(_: *TcpTransport) ![]const u8 {
-        return error.NotImplemented;
+    allocator: Allocator,
+    io: std.Io,
+    stream: std.Io.net.Stream,
+
+    pub fn init(allocator: Allocator, io: std.Io, stream: std.Io.net.Stream) TransportError!TcpTransport {
+        return .{ .allocator = allocator, .io = io, .stream = stream };
     }
-    pub fn writeMessage(_: *TcpTransport, _: []const u8) !void {
-        return error.NotImplemented;
+
+    pub fn deinit(self: *TcpTransport) void {
+        self.stream.close(self.io);
     }
-    pub fn logMessage(_: *TcpTransport, _: []const u8, _: []const u8) void {}
+
+    /// Framer adapter — Zig 0.16 has no `std.net.Stream.read(dest)`;
+    /// the canonical socket-read path goes through
+    /// `io.vtable.netRead(..., handle, [][]u8)`. We pass the framer's
+    /// single-buffer destination as a one-element iovec so the framer's
+    /// 4 KiB read-ahead semantics are identical to the stdio path
+    /// (which uses `std.Io.File.readStreaming`'s identically-shaped
+    /// multi-buffer signature).
+    fn readAdapter(ctx: *anyopaque, dest: []u8) framer_mod.FramerError!usize {
+        const self: *TcpTransport = @ptrCast(@alignCast(ctx));
+        var data: [1][]u8 = .{dest};
+        const n = self.io.vtable.netRead(self.io.userdata, self.stream.socket.handle, &data) catch {
+            return framer_mod.FramerError.ReadFailed;
+        };
+        return n;
+    }
+
+    pub fn readMessage(self: *TcpTransport) ![]const u8 {
+        var f = framer_mod.Framer.init(readAdapter, self);
+        return f.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |e| switch (e) {
+            framer_mod.FramerError.EndOfStream => return TransportError.EndOfStream,
+            framer_mod.FramerError.MissingContentLength => return TransportError.MissingContentLength,
+            framer_mod.FramerError.InvalidContentLength => return TransportError.InvalidContentLength,
+            framer_mod.FramerError.InvalidHeader => return TransportError.InvalidHeader,
+            framer_mod.FramerError.ReadFailed => return TransportError.ReadFailed,
+            framer_mod.FramerError.OutOfMemory => return error.OutOfMemory,
+        };
+    }
+
+    pub fn writeMessage(self: *TcpTransport, message: []const u8) !void {
+        const header = try std.fmt.allocPrint(
+            self.allocator,
+            "Content-Length: {d}\r\n\r\n",
+            .{message.len},
+        );
+        defer self.allocator.free(header);
+
+        // std.Io.net.Stream has no `writeAll` convenience method — the
+        // canonical full-write path is the buffered `Writer` interface.
+        // We use a stack buffer just large enough to hold the LSP header
+        // plus a small body; the buffer is flushed inside `writeAll`
+        // when the framer demands progress, so the 1 KiB cap does not
+        // bound message size.
+        var write_buf: [1024]u8 = undefined;
+        var w = self.stream.writer(self.io, &write_buf);
+        try w.interface.writeAll(header);
+        try w.interface.writeAll(message);
+        try w.interface.flush();
+    }
+
+    pub fn logMessage(_: *TcpTransport, _: []const u8, _: []const u8) void {
+        // TCP transport: no separate stderr channel. LSP clients
+        // already receive structured diagnostics over the JSON-RPC
+        // channel; silently dropping plain log lines is the
+        // spec-compliant choice (vs. polluting the protocol stream).
+    }
 };
