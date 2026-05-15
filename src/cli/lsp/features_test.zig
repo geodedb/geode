@@ -1412,3 +1412,49 @@ test "diagnostics flag unknown labels with hint" {
     try testing.expect(std.mem.indexOf(u8, diags[0].message, "Person") != null);
     try testing.expect(std.mem.indexOf(u8, diags[0].message, "Persn") != null);
 }
+
+// Task 24: schema-aware diagnostics — edge-type branch. When the document
+// references an edge type that isn't in the user's schema, `provideDiagnostics`
+// should emit a Warning at the edge-type's range with the unknown name plus a
+// "did you mean" hint pointing at the closest match (Levenshtein <= 2). The
+// scan looks for the `[<var>?:Type]` opener so it doesn't double-fire on the
+// label scan's `(var:Label)` pattern.
+//
+// Memory ownership matches Task 23's label scan: each `.message` is
+// allocPrint'd inside `provideDiagnostics` and owned by this caller, so the
+// cleanup loop frees every message + the outer slice.
+test "diagnostics flag unknown edge types with hint" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+    var labels = [_][]const u8{"A"};
+    const a = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant-a");
+    const b = try store.createNodeWithGraphAndTenant(&labels, "default", "tenant-a");
+    _ = try store.createEdgeWithGraphAndTenant(a, b, "KNOWS", "default", "tenant-a");
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = "default",
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (a)-[r:NOWS]-(b)", 1);
+    defer doc.deinit();
+    const diags = try features.provideDiagnostics(alloc, doc, &sp);
+    defer {
+        for (diags) |d| alloc.free(d.message);
+        alloc.free(diags);
+    }
+    var found = false;
+    for (diags) |d| {
+        if (std.mem.indexOf(u8, d.message, "NOWS") != null and
+            std.mem.indexOf(u8, d.message, "KNOWS") != null)
+        {
+            found = true;
+            break;
+        }
+    }
+    try testing.expect(found);
+}

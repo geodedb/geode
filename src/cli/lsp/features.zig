@@ -41,6 +41,7 @@ pub fn startsWithCI(s: []const u8, p: []const u8) bool {
 }
 
 // CANARY: REQ=REQ-LSP-SCHEMA-DIAG-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=UnknownLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"diagnostics flag unknown labels with hint"; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-SCHEMA-DIAG-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=UnknownEdgeType; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"diagnostics flag unknown edge types with hint"; OWNER=lsp; UPDATED=2026-05-14
 pub fn provideDiagnostics(
     allocator: Allocator,
     doc: *const Document,
@@ -259,6 +260,53 @@ pub fn provideDiagnostics(
 
             const start_pos = offsetToLineCol(text, lbl_start);
             const end_pos = offsetToLineCol(text, j);
+            try diagnostics.append(allocator, .{
+                .range = .{ .start = start_pos, .end = end_pos },
+                .severity = .Warning,
+                .source = "geode-lsp",
+                .message = msg,
+            });
+        }
+
+        // Task 24: edge-type scan — mirror of the label scan above, but
+        // anchored on `[` (the relationship-pattern opener) so it can't
+        // false-positive on `(var:Label)`. Same memory contract: each
+        // `.message` is allocPrint'd and owned by the caller.
+        const known_types = sp.getEdgeTypes() catch &[_][]const u8{};
+        var t_i: usize = 0;
+        const t_text = doc.text;
+        while (t_i < t_text.len) : (t_i += 1) {
+            if (t_text[t_i] != '[') continue;
+            var k = t_i + 1;
+            while (k < t_text.len and std.ascii.isWhitespace(t_text[k])) : (k += 1) {}
+            // skip optional variable identifier
+            while (k < t_text.len and (std.ascii.isAlphanumeric(t_text[k]) or t_text[k] == '_')) : (k += 1) {}
+            while (k < t_text.len and std.ascii.isWhitespace(t_text[k])) : (k += 1) {}
+            if (k >= t_text.len or t_text[k] != ':') continue;
+            k += 1;
+            while (k < t_text.len and std.ascii.isWhitespace(t_text[k])) : (k += 1) {}
+            const t_start = k;
+            while (k < t_text.len and (std.ascii.isAlphanumeric(t_text[k]) or t_text[k] == '_')) : (k += 1) {}
+            const et = t_text[t_start..k];
+            if (et.len == 0) continue;
+
+            var et_known = false;
+            for (known_types) |kt| {
+                if (std.mem.eql(u8, kt, et)) {
+                    et_known = true;
+                    break;
+                }
+            }
+            if (et_known) continue;
+
+            const hint = closestLabel(et, known_types);
+            const msg = if (hint) |h|
+                try std.fmt.allocPrint(allocator, "Unknown edge type `{s}`. Did you mean `{s}`?", .{ et, h })
+            else
+                try std.fmt.allocPrint(allocator, "Unknown edge type `{s}`.", .{et});
+
+            const start_pos = offsetToLineCol(t_text, t_start);
+            const end_pos = offsetToLineCol(t_text, k);
             try diagnostics.append(allocator, .{
                 .range = .{ .start = start_pos, .end = end_pos },
                 .severity = .Warning,
