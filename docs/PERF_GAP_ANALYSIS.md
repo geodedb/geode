@@ -1,12 +1,12 @@
 # Performance Gap Analysis
 
-Last updated: 2026-05-15 (Phase 3 closure pass — PERF-B #811 Closed (`ab8c2bd9`), PERF-C #814 Closed (`8cda0e65`), PERF-D #816 Closed Partial (`7cf46483`); PERF-A #808 remains Open, queued for `/bench-optimize:run`; prior: 2026-05-15 audit Phase 3 filed all four)
+Last updated: 2026-05-15 (Phase 3 closure pass — PERF-B #811 Closed (`ab8c2bd9`), PERF-C #814 Closed (`8cda0e65`), PERF-D #816 Closed (`7cf46483` initial + `9bbc80b0`/`8746e87a` follow-up: 5 of 6 sites converted, 1 documented out-of-scope test-only); PERF-A #808 remains Open, queued for `/bench-optimize:run`; prior: 2026-05-15 audit Phase 3 filed all four)
 
 ## Summary
 
 - Total findings: 47
 - Open: 1 (PERF-A #808 only — queued for `/bench-optimize:run`)
-- Closed / Implemented: 37 (34 prior + PERF-B #811 + PERF-C #814 + PERF-D #816 (Partial))
+- Closed / Implemented: 37 (34 prior + PERF-B #811 + PERF-C #814 + PERF-D #816 (5 of 6 sites converted, 1 test-only out-of-scope))
 - Closed (Won't Do / Sufficient): 10 (1 transport + 6 migration engine + 3 strategic deferred)
 - Closed (won't-track): 6 (2026-05-15 Phase 3 reviewer triage — see "Not tracked" subsection below)
 - Blocked: 0
@@ -451,7 +451,7 @@ Triage corrections applied by reviewer before this section:
 | 44 | P1 | 40 | RLS row rebuild dominates per-row cost — `nodePropertiesToRLSRowInto` rebuilds StringHashMap per row, 17 call sites | Execution / Security | `src/security/rls_value_bridge.zig:83-95`; 17 call sites in `src/execution/match_operations.zig` (entry `passesRLSExprFilter` at `:125`) | [#808](https://gitlab.com/devnw/codepros/geode/geode/-/issues/808) | Skip when bytecode has no `load_row` opcodes, or memoize by `(node.id, auth_version)`. **`/bench-optimize` candidate.** | Open (Triage) |
 | 45 | P2 | 25 | Graph-scoped node-id list missing — unlabeled MATCH falls back to `read_store.nodes.iterator()` + `std.mem.eql(graph_name)` per node | Execution / Storage | `src/execution/match_operations.zig:1462,1796,2582,2648,2847,3091,3617,4061,5242` (9 sites; paired with `g_full_scan_count` from GAP-0522) | [#811](https://gitlab.com/devnw/codepros/geode/geode/-/issues/811) | Build per-graph `node_id` list as primary scan source; mirror GAP-0510 edge-type index discipline | **Closed 2026-05-15** (`ab8c2bd9`) |
 | 46 | P2 | 12 | LSP introspection full-store scan on TTL miss — O(N·L) per cache refresh | Graph store / LSP | `src/graph_store.zig:1042,1090,1160` | [#814](https://gitlab.com/devnw/codepros/geode/geode/-/issues/814) | Maintain label/property/type summary index updated on writes (write-amplification trade) | **Closed 2026-05-15** (`8cda0e65`) |
-| 47 | P2 | 12 | nanosleep admission/throttle waits — Zig 0.16 still has `std.Thread.Condition.timedWait` | Transport | `src/server/main.zig:1363-1365` (5ms admission busy-wait); `src/server/active_stream_registry.zig:84-91` (per-stream timeout fallback) | [#816](https://gitlab.com/devnw/codepros/geode/geode/-/issues/816) | Replace `nanosleep` with `Condition.timedWait` on existing signal path | **Closed 2026-05-15 (Partial)** (`7cf46483`) |
+| 47 | P2 | 12 | nanosleep admission/throttle waits — Zig 0.16 still has `std.Thread.Condition.timedWait` | Transport | `src/server/main.zig:1363-1365` (5ms admission busy-wait); `src/server/active_stream_registry.zig:84-91` (per-stream timeout fallback) | [#816](https://gitlab.com/devnw/codepros/geode/geode/-/issues/816) | Replace `nanosleep` with `Condition.timedWait` on existing signal path | **Closed 2026-05-15** (`7cf46483` + `9bbc80b0` + `8746e87a`) |
 
 ### Closed 2026-05-15
 
@@ -470,16 +470,16 @@ Triage corrections applied by reviewer before this section:
 - Acceptance: LSP introspection reads now O(distinct_keys); the existing 5s TTL bounds staleness. PerfScore 12.
 - Follow-up: in-code `schema_change_notifier` hook for label-add deferred (not blocking — TTL covers correctness window).
 
-**PERF-D (#816) — Closed / Implemented (Partial)** (commit `7cf46483`)
+**PERF-D (#816) — Closed / Implemented** (commits `7cf46483`, `9bbc80b0`, `8746e87a`)
 
-- 2 of 6 sites converted to `Condition.timedWait`/`Condition.wake` on an existing signal path:
-  - `GlobalStreamThrottle.acquire` (`src/server/active_stream_registry.zig:93,123`).
-  - Metrics loop (`src/server/main.zig:1308,1329`).
-- 4 sites annotated in-code with explicit deferral rationale (no signal source today / out-of-scope this commit):
-  - Admission control loop (`src/server/main.zig:1386`) — blocked on PERF-A (#808) producer-side rework in `transport/quic.zig`.
-  - `src/performance/async_io.zig:498`, `src/performance/simple_async_io.zig`, `src/transport/thread_pool.zig:463,503` — test-only counter polls or paths with no producer signal.
-- Regression cover: 4 new tests in `tests/test_perf_d_admission_signal.zig` PASS (wake-on-release <2ms; timeout path within slop; signal-not-broadcast; N waiters wake from N releases); 4 transport regression suites PASS.
-- PerfScore 12. Acceptance: under `c=32` admission saturation, p50 floor drops by ≥ 1ms on the converted sites; remaining 4 sites are non-hot.
+- 5 of 6 sites converted to futex-based wake on an existing signal path:
+  - `GlobalStreamThrottle.acquire` (`src/server/active_stream_registry.zig:93,123`) — initial commit `7cf46483`.
+  - Metrics shutdown loop (`src/server/main.zig:1308,1329`) — initial commit `7cf46483`.
+  - **Admission control loop (`src/server/main.zig:1395-1402`)** — follow-up commit `9bbc80b0`. Added `connection_slot_freed_gen: std.atomic.Value(u32)` field on `QuicTransport`; producer side (`destroyConnection` + `drainPendingDestroy` in `src/transport/quic.zig`) bumps the gen counter and calls `io.futexWake` after unlock. Consumer reads `gen_at_park` then `io.futexWaitTimeout(..., 5ms)` as a lost-wake safety net.
+  - **`async_io.zig` + `simple_async_io.zig` `readSync`/`writeSync`** — follow-up commit `8746e87a`. The completion **callback** is the signal source; wired atomic+release callback signaling with `std.Thread.yield()` drain (no sleep) since `processCompletions` is single-threaded.
+- 1 site genuinely LEFT ALONE with rationale documented in-code: `src/transport/thread_pool.zig:463,503` — test-only counter polls; external thread_pool dep has no per-counter wake channel; N-submit test waits at most 1 second total.
+- Regression cover: `test-perf-d-admission-signal` (4/4 prior), `test-perf-d-admission-wake` (3/3 new), `test-quic-streams`, `test-thread-pool-lane-parallelism`, `test-stream-pool-concurrent-lanes`, `test-metrics-server`, `test-lsp-server`, `test-lsp-embedded-e2e` — all PASS.
+- PerfScore 12. Acceptance: under `c=32` admission saturation, p50 floor drops by ≥ 1ms on the converted sites; the one remaining site is non-hot test code.
 
 ### Acceptance criteria (per finding)
 
