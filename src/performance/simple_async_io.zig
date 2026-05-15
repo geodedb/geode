@@ -184,7 +184,7 @@ pub const SimpleAsyncIOManager = struct {
         self.mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
-        for (self.pending_operations.items, 0..) |*operation, _| {
+        for (self.pending_operations.items) |*operation| {
             if (operation.id == operation_id and !operation.completed) {
                 operation.completed = true;
                 operation.result = switch (operation.operation) {

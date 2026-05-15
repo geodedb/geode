@@ -141,6 +141,7 @@ test "PERF-C: setProperty / removeProperty maintains listPropertiesForLabel" {
 
     const usr1 = try store.createNodeWithGraphAndTenant(&[_][]const u8{"User"}, "g", "tenant_a");
     const usr2 = try store.createNodeWithGraphAndTenant(&[_][]const u8{"User"}, "g", "tenant_a");
+    try testing.expect(usr1 != usr2);
 
     // No properties yet — listing should be empty.
     {
