@@ -1301,3 +1301,77 @@ test "hover on label shows property list" {
     try testing.expect(std.mem.indexOf(u8, hover.contents.value, "name") != null);
     try testing.expect(std.mem.indexOf(u8, hover.contents.value, "age") != null);
 }
+
+// Task 22: schema-aware hover — edge-type branch. When the cursor sits on
+// an edge-type token (the identifier inside `[r:KNOWS]`) and the schema
+// knows about that edge type, `provideHover` returns a markdown payload
+// that names the type and shows the canonical usage skeleton. Same
+// memory contract as the label branch — `contents.value` is allocator-
+// owned by the caller.
+test "hover on edge type shows usage hint" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    const a = try store.createNodeWithGraphAndTenant(&.{"A"}, default_graph, "tenant-a");
+    const b = try store.createNodeWithGraphAndTenant(&.{"A"}, default_graph, "tenant-a");
+    _ = try store.createEdgeWithGraphAndTenant(a, b, "KNOWS", default_graph, "tenant-a");
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (a)-[r:KNOWS]->(b)", 1);
+    defer doc.deinit();
+
+    // Position cursor inside KNOWS — col 14 lands on the 'N' (KNOWS starts
+    // at col 13 and runs through col 17 inclusive).
+    const hover = (try features.provideHover(alloc, doc, 0, 14, &sp)) orelse return error.NoHover;
+    defer alloc.free(hover.contents.value);
+
+    try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "Edge type") != null);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "KNOWS") != null);
+}
+
+// Task 22: schema-aware hover — property branch. When the cursor sits on
+// the identifier after a `.` AND the variable to the left of the dot
+// resolves (via `completion_context.resolveVarLabel`) to a label the
+// schema knows about, `provideHover` returns a markdown payload that
+// names the owning label. The branch must fall through to the static
+// fallback when no resolvable label is found (covered by the existing
+// `provideHover - on unknown word returns null` test above).
+test "hover on property shows owning label" {
+    const alloc = testing.allocator;
+    var store = try graph_store.GraphStore.init(alloc);
+    defer store.deinit();
+
+    const default_graph: []const u8 = "default";
+    const n = try store.createNodeWithGraphAndTenant(&.{"Person"}, default_graph, "tenant-a");
+    try store.setNodeProperty(n, "age", .{ .Int = 30 });
+
+    var sp = schema_provider_mod.SchemaProvider.init(alloc, &store, .{
+        .user = "u",
+        .tenant_id = "tenant-a",
+        .role = user_management.Role.ReadOnly,
+        .graph_name = default_graph,
+    });
+    defer sp.deinit();
+
+    var doc = try document.Document.init(alloc, "test:///q.gql", "MATCH (n:Person) RETURN n.age", 1);
+    defer doc.deinit();
+
+    // Cursor on `age` — col 26 lands on the 'a' (`n.age` starts at col 24,
+    // the dot is at col 25, the property starts at col 26).
+    const hover = (try features.provideHover(alloc, doc, 0, 26, &sp)) orelse return error.NoHover;
+    defer alloc.free(hover.contents.value);
+
+    try testing.expectEqual(protocol.MarkupKind.markdown, hover.contents.kind);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "Person") != null);
+    try testing.expect(std.mem.indexOf(u8, hover.contents.value, "age") != null);
+}

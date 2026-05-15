@@ -217,6 +217,8 @@ pub fn provideDiagnostics(allocator: Allocator, doc: *const Document) ![]protoco
 
 // CANARY: REQ=REQ-LSP-METADATA-003; FEATURE="MetadataIntegration"; ASPECT=Hover; STATUS=EXEMPT; OWNER=lsp; UPDATED=2026-01-03
 // CANARY: REQ=REQ-LSP-SCHEMA-HOVER-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverLabel; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on label shows property list"; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-SCHEMA-HOVER-002; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverEdgeType; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on edge type shows usage hint"; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-SCHEMA-HOVER-003; FEATURE="LspPermissionAwareCompletion"; ASPECT=HoverProperty; STATUS=TESTED; TEST=src/cli/lsp/features_test.zig:"hover on property shows owning label"; OWNER=lsp; UPDATED=2026-05-14
 pub fn provideHover(
     allocator: Allocator,
     doc: *const Document,
@@ -265,8 +267,66 @@ pub fn provideHover(
                 },
             };
         }
-        // edge_type / property branches land in Task 22; fall through to
-        // legacy keyword/function/type/procedure hover.
+        // Edge type hover — render a usage skeleton when the hovered word
+        // matches an edge type the schema knows about. Memory contract
+        // mirrors the label branch above: `contents.value` is allocPrint'd
+        // and owned by the caller; the `t` slice is borrowed from the
+        // SchemaProvider cache (copied into the format buffer by `{s}`).
+        const types = sp.getEdgeTypes() catch &[_][]const u8{};
+        for (types) |t| {
+            if (!std.mem.eql(u8, t, word)) continue;
+            return protocol.Hover{
+                .contents = .{
+                    .kind = .markdown,
+                    .value = try std.fmt.allocPrint(
+                        allocator,
+                        "**Edge type `{s}`**\n\nUse in: `()-[r:{s}]->()`",
+                        .{ t, t },
+                    ),
+                },
+            };
+        }
+
+        // Property hover — only when the hovered word's left neighbour is
+        // `.` AND the variable to the left of the dot resolves (via
+        // `completion_context.resolveVarLabel`) to a known label.
+        //
+        // `getOffset` returns the cursor position, and `getWordAt` scans
+        // back/forward from it to span the surrounding identifier. So
+        // `offset` may sit anywhere inside `word` — we have to re-scan
+        // back to locate the word's true start before checking the
+        // preceding `.`. Falls through (no early return) when the word
+        // isn't dot-prefixed or no label resolves, so the legacy
+        // keyword/function/type fallback below still runs.
+        var word_start: usize = offset;
+        while (word_start > 0 and
+            (std.ascii.isAlphanumeric(doc.text[word_start - 1]) or doc.text[word_start - 1] == '_'))
+            : (word_start -= 1)
+        {}
+        if (word_start >= 1 and doc.text[word_start - 1] == '.') {
+            const dot_pos = word_start - 1;
+            var k: usize = dot_pos;
+            while (k > 0 and
+                (std.ascii.isAlphanumeric(doc.text[k - 1]) or doc.text[k - 1] == '_'))
+                : (k -= 1)
+            {}
+            const var_name = doc.text[k..dot_pos];
+            if (var_name.len > 0) {
+                const ctx_mod = @import("completion_context.zig");
+                if (ctx_mod.resolveVarLabel(doc.text, var_name)) |lbl| {
+                    return protocol.Hover{
+                        .contents = .{
+                            .kind = .markdown,
+                            .value = try std.fmt.allocPrint(
+                                allocator,
+                                "**Property `{s}.{s}`**\n\nOn label `{s}`",
+                                .{ var_name, word, lbl },
+                            ),
+                        },
+                    };
+                }
+            }
+        }
     }
 
     // Check if it's a function (case-sensitive) - check before keywords to avoid
