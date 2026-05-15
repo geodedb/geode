@@ -366,16 +366,20 @@ pub const AsyncFile = struct {
     /// Promise-based asynchronous read (blocks until completion)
     pub fn readSync(self: *Self, buffer: []u8, offset: u64) !IOResult {
         var result: ?IOResult = null;
-        var completed = false;
 
+        // PERF-D / #816 follow-up: same rationale as async_io.zig's readSync
+        // — the callback fires in-thread inside processCompletions, so the
+        // right pattern is `processCompletions; yield` rather than a 1 ms
+        // sleep. completeOperation has already been called synchronously
+        // above (this simplified backend doesn't even use worker threads),
+        // so the first processCompletions iteration will fire the callback.
         const Context = struct {
             result_ptr: *?IOResult,
-            completed_ptr: *bool,
+            completed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
         };
 
         var context = Context{
             .result_ptr = &result,
-            .completed_ptr = &completed,
         };
 
         const callback = struct {
@@ -383,7 +387,7 @@ pub const AsyncFile = struct {
                 _ = operation_id;
                 const ctx = @as(*Context, @ptrCast(@alignCast(user_data.?)));
                 ctx.result_ptr.* = io_result;
-                ctx.completed_ptr.* = true;
+                ctx.completed.store(1, .release);
             }
         }.cb;
 
@@ -399,14 +403,14 @@ pub const AsyncFile = struct {
         });
         self.io_manager.completeOperation(operation_id, sync_result);
 
-        // PERF-D / #816: poll loop, no signal source available without
-        // io_uring/epoll integration. Same classification as the sync
-        // wrappers in src/performance/async_io.zig. LEFT ALONE.
-        // Process completions
-        while (!completed) {
+        // Tight drain loop with yield. The first iteration drains the
+        // completion we just produced, but we keep the loop for the case
+        // where the backend grows real worker threads (which would still
+        // dispatch completions through processCompletions on this thread).
+        while (context.completed.load(.acquire) == 0) {
             _ = self.io_manager.processCompletions(10);
-            if (!completed) {
-                std.time.sleep(std.time.ns_per_ms); // 1ms sleep
+            if (context.completed.load(.acquire) == 0) {
+                std.Thread.yield() catch {};
             }
         }
 

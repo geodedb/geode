@@ -430,16 +430,26 @@ pub const AsyncFile = struct {
     /// Promise-based asynchronous read (blocks until completion)
     pub fn readSync(self: *Self, buffer: []u8, offset: u64, timeout_ms: ?u32) !IOResult {
         var result: ?IOResult = null;
-        var completed = false;
 
+        // PERF-D / #816 follow-up: the prior agent classified this site as
+        // "no-signal-source" and left a 1 ms sleep between processCompletions
+        // calls. Re-scout: the callback fires from inside processCompletions
+        // (drains AsyncIOManager.completion_queue on the calling thread —
+        // see src/performance/async_io.zig:241-250). So the "signal source"
+        // IS the in-thread drain itself; there is no other thread that can
+        // wake us. The right pattern here is `processCompletions; yield;
+        // repeat` (no sleep) — the 1 ms sleep added an unconditional latency
+        // floor with no upside. Yielding lets other threads (e.g. the worker
+        // running runWorkItem which calls notifyCompletion) actually make
+        // progress and enqueue the completion we're waiting for, then we
+        // drain on the next iteration.
         const Context = struct {
             result_ptr: *?IOResult,
-            completed_ptr: *bool,
+            completed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0), // 0 = pending, 1 = done
         };
 
         var context = Context{
             .result_ptr = &result,
-            .completed_ptr = &completed,
         };
 
         const callback = struct {
@@ -447,23 +457,24 @@ pub const AsyncFile = struct {
                 _ = operation_id;
                 const ctx = @as(*Context, @ptrCast(@alignCast(user_data.?)));
                 ctx.result_ptr.* = io_result;
-                ctx.completed_ptr.* = true;
+                // Atomic release-store so a parallel `completed.load(.acquire)`
+                // sees `result_ptr.*` populated before observing the flag.
+                ctx.completed.store(1, .release);
             }
         }.cb;
 
         _ = try self.readAsync(buffer, offset, callback, &context, timeout_ms);
 
-        // PERF-D / #816: poll loop, no signal source available without
-        // io_uring/epoll integration. The async I/O backend completes
-        // operations via processCompletions(), which is a non-blocking
-        // drain — there's no kernel event we can park on. LEFT ALONE per
-        // the task's "don't break working code" rule. This wrapper is a
-        // sync-on-async convenience; the recommended path is the truly
-        // async one (readAsync + callback), which doesn't busy wait.
-        // Busy wait for completion (in production, use proper synchronization)
-        while (!completed) {
+        // Tight drain loop with yield. processCompletions is non-blocking
+        // (just drains AsyncIOManager.completion_queue and fires callbacks
+        // in-thread). Yielding instead of sleeping eliminates the prior
+        // 1 ms latency floor; total completion latency drops to whatever
+        // it takes the worker thread to finish executeIOOperation and
+        // call notifyCompletion (a few µs for an in-memory cache hit, the
+        // disk read time for a cold read).
+        while (context.completed.load(.acquire) == 0) {
             _ = self.io_manager.processCompletions(10);
-            std.time.sleep(std.time.ns_per_ms); // 1ms sleep
+            std.Thread.yield() catch {};
         }
 
         return result.?;
@@ -472,16 +483,14 @@ pub const AsyncFile = struct {
     /// Promise-based asynchronous write (blocks until completion)
     pub fn writeSync(self: *Self, data: []const u8, offset: u64, timeout_ms: ?u32) !IOResult {
         var result: ?IOResult = null;
-        var completed = false;
 
         const Context = struct {
             result_ptr: *?IOResult,
-            completed_ptr: *bool,
+            completed: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
         };
 
         var context = Context{
             .result_ptr = &result,
-            .completed_ptr = &completed,
         };
 
         const callback = struct {
@@ -489,18 +498,17 @@ pub const AsyncFile = struct {
                 _ = operation_id;
                 const ctx = @as(*Context, @ptrCast(@alignCast(user_data.?)));
                 ctx.result_ptr.* = io_result;
-                ctx.completed_ptr.* = true;
+                ctx.completed.store(1, .release);
             }
         }.cb;
 
         _ = try self.writeAsync(data, offset, callback, &context, timeout_ms);
 
-        // PERF-D / #816: same `no-signal-source` classification as readSync
-        // above. LEFT ALONE.
-        // Busy wait for completion
-        while (!completed) {
+        // PERF-D / #816 follow-up: yield-based drain, same rationale as
+        // readSync above.
+        while (context.completed.load(.acquire) == 0) {
             _ = self.io_manager.processCompletions(10);
-            std.time.sleep(std.time.ns_per_ms);
+            std.Thread.yield() catch {};
         }
 
         return result.?;
