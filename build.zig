@@ -3539,6 +3539,15 @@ pub fn build(b: *std.Build) void {
     const perf_b_step = b.step("test-perf-b-graph-scoped", "PERF-B (issue #811) per-graph node-id index regression suite");
     perf_b_step.dependOn(&run_perf_b_tests.step);
 
+    // PERF-C (issue #814): LSP introspection label/property/edge-type index.
+    const perf_c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_c_lsp_introspection_index.zig"), .target = target, .optimize = optimize });
+    perf_c_test_mod.addImport("geode", root_mod);
+    const perf_c_tests = b.addTest(.{ .root_module = perf_c_test_mod });
+    const run_perf_c_tests = b.addRunArtifact(perf_c_tests);
+    shardDep(test_step, &run_perf_c_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const perf_c_step = b.step("test-perf-c-introspection-index", "PERF-C (issue #814) LSP introspection index regression suite");
+    perf_c_step.dependOn(&run_perf_c_tests.step);
+
     // Task 5 of the LSP permission-aware completion plan: register
     // src/execution/schema_introspection.zig as its own build module so
     // tests/test_schema_introspection.zig (and Task 6's SchemaProvider)
