@@ -11,6 +11,15 @@ const cli_auth = @import("cli_auth_helpers.zig");
 const AuthGraphManager = cli_auth.AuthGraphManager;
 const auth_graph_manager = @import("auth_graph_manager");
 
+// Zig 0.16 compat: std.process.getEnvVarOwned was removed.  Mirrors the
+// shim used in src/server/server_init.zig and src/cli/cli_auth_helpers.zig.
+fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
+    const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
+    defer allocator.free(name_z);
+    const ptr = std.c.getenv(name_z) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, std.mem.span(ptr));
+}
+
 const ExitCode = enum(u8) {
     success = 0,
     general_error = 1,
@@ -98,8 +107,88 @@ pub fn cmdAuthInit(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usiz
         std.process.exit(@intFromEnum(ExitCode.general_error));
     };
 
-    std.debug.print("Admin user created: {s}\nGenerated password: {s}\n", .{ result.username, result.password });
-    std.debug.print("WARNING: Change this password immediately after first login.\n", .{});
+    // Issue #819 (CWE-200 information disclosure / CWE-538 file/dir info
+    // exposure): never echo the bootstrap password to stdout.  Mirror the
+    // server-init path -- when neither `GEODE_ADMIN_PASSWORD` nor
+    // `GEODE_DEFAULT_PASSWORD` is set, write the generated value to
+    // `<data_dir>/.geode_admin_password` at mode 0o600 and surface only a
+    // pointer.  When an env var seeded the password the operator already
+    // has the plaintext; we just confirm the user was created.
+    const admin_env_present = blk_env: {
+        if (getEnvVarOwned(allocator, "GEODE_ADMIN_PASSWORD")) |env_pw| {
+            allocator.free(env_pw);
+            break :blk_env true;
+        } else |_| {}
+        if (getEnvVarOwned(allocator, "GEODE_DEFAULT_PASSWORD")) |env_pw| {
+            allocator.free(env_pw);
+            break :blk_env true;
+        } else |_| {}
+        break :blk_env false;
+    };
+
+    if (admin_env_present) {
+        std.debug.print(
+            "Admin user created: {s}\n" ++
+                "Password sourced from GEODE_ADMIN_PASSWORD / GEODE_DEFAULT_PASSWORD env (not echoed).\n" ++
+                "WARNING: Rotate this password immediately after first login.\n",
+            .{result.username},
+        );
+        return;
+    }
+
+    // No env-supplied password.  Resolve the same data_dir that
+    // initCliAuthManager used (--data-dir flag → GEODE_DATA_DIR →
+    // /var/lib/geode) so the pointer message matches the file we write.
+    const env_dir_owned: ?[]u8 = if (data_dir == null)
+        (getEnvVarOwned(allocator, "GEODE_DATA_DIR") catch null)
+    else
+        null;
+    defer if (env_dir_owned) |d| allocator.free(d);
+
+    const pw_dir: []const u8 = if (data_dir) |d|
+        d
+    else if (env_dir_owned) |d|
+        d
+    else
+        "/var/lib/geode";
+
+    const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch {
+        std.debug.print(
+            "Error: Failed to allocate bootstrap password file path; rotate via 'geode user reset-password'.\n",
+            .{},
+        );
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    };
+    defer allocator.free(pw_path);
+
+    const io_pw = std.Io.Threaded.global_single_threaded.io();
+    if (std.Io.Dir.cwd().createFile(io_pw, pw_path, .{
+        .truncate = true,
+        .permissions = std.Io.File.Permissions.fromMode(0o600),
+    })) |file| {
+        defer file.close(io_pw);
+        file.writeStreamingAll(io_pw, result.password) catch |err| {
+            std.debug.print(
+                "Error: Failed to write bootstrap password file at {s}: {s}\n" ++
+                    "Use 'geode user reset-password' after setting GEODE_ADMIN_PASSWORD to recover.\n",
+                .{ pw_path, @errorName(err) },
+            );
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        std.debug.print(
+            "Admin user created: {s}\n" ++
+                "Bootstrap password written to: {s} (mode 0600, read once; rotate immediately).\n" ++
+                "WARNING: Move this file to secure storage and delete after first login.\n",
+            .{ result.username, pw_path },
+        );
+    } else |err| {
+        std.debug.print(
+            "Error: Failed to create bootstrap password file at {s}: {s}\n" ++
+                "Set GEODE_ADMIN_PASSWORD before re-running 'geode auth init', or rotate via 'geode user reset-password'.\n",
+            .{ pw_path, @errorName(err) },
+        );
+        std.process.exit(@intFromEnum(ExitCode.general_error));
+    }
 }
 
 // -- geode auth reseal --

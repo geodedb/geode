@@ -3773,6 +3773,23 @@ pub fn build(b: *std.Build) void {
     const admin_bootstrap_step = b.step("test-admin-bootstrap", "Reproduction tests for admin-bootstrap env-var + offline-reset bugs (must fail pre-fix)");
     admin_bootstrap_step.dependOn(&run_admin_bootstrap_tests.step);
 
+    // Issue #819: admin-bootstrap data-dir permission hardening (CWE-538 /
+    // CWE-732).  Exercises the pure permission-check helper in
+    // src/server/data_dir_permissions.zig via std.testing.tmpDir fixtures.
+    // The helper calls libc chmod/fstatat directly because std.Io.Dir's
+    // fchmod path panics with BADF on Linux for handles opened via path
+    // lookup, so both modules must link libc.
+    const data_dir_permissions_mod = b.createModule(.{ .root_source_file = b.path("src/server/data_dir_permissions.zig"), .target = target, .optimize = optimize });
+    data_dir_permissions_mod.link_libc = true;
+    const admin_bootstrap_hardening_mod = b.createModule(.{ .root_source_file = b.path("tests/test_admin_bootstrap_hardening.zig"), .target = target, .optimize = optimize });
+    admin_bootstrap_hardening_mod.addImport("data_dir_permissions", data_dir_permissions_mod);
+    admin_bootstrap_hardening_mod.link_libc = true;
+    const admin_bootstrap_hardening_tests = b.addTest(.{ .root_module = admin_bootstrap_hardening_mod });
+    const run_admin_bootstrap_hardening_tests = b.addRunArtifact(admin_bootstrap_hardening_tests);
+    shardDep(test_step, &run_admin_bootstrap_hardening_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const admin_bootstrap_hardening_step = b.step("test-admin-bootstrap-hardening", "Issue #819: data-dir permission check before persisting bootstrap secret");
+    admin_bootstrap_hardening_step.dependOn(&run_admin_bootstrap_hardening_tests.step);
+
     // Parallel-ingest hang reproduction tests — see triage of the
     // "thread-pool deinit timed out after 30000ms with 1 active tasks"
     // shutdown warning under a 16-worker Go-client ingest workload.

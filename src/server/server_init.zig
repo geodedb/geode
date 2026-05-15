@@ -246,6 +246,36 @@ pub fn initializeSecurityManager(allocator: std.mem.Allocator) !geode_auth.Secur
     return geode_auth.SecurityManager.init(allocator);
 }
 
+// CANARY: REQ=REQ-ADMIN-BOOTSTRAP-HARDEN-001; FEATURE="AdminBootstrapHardening"; ASPECT=DataDirPermissions; STATUS=TESTED; TEST=tests/test_admin_bootstrap_hardening.zig; OWNER=security; UPDATED=2026-05-15
+// Issue #819 (CWE-538 file/dir info exposure, CWE-732 incorrect permissions).
+// The pure permission-check helper lives in `data_dir_permissions.zig` so
+// it can be unit-tested without dragging in the rest of the server module.
+const data_dir_permissions = @import("data_dir_permissions.zig");
+pub const DataDirPermissionResult = data_dir_permissions.DataDirPermissionResult;
+pub const ensureSecureDataDirPermissions = data_dir_permissions.ensureSecureDataDirPermissions;
+
+/// Wrap `ensureSecureDataDirPermissions` with structured log emission so
+/// the audit trail captures every tightening / refusal.  Returns the same
+/// enum so callers can branch on `.refuse` to fail-closed.
+fn logAndApplyDataDirPermissionCheck(data_dir_opt: ?[]const u8) DataDirPermissionResult {
+    const result = ensureSecureDataDirPermissions(data_dir_opt);
+    const path: []const u8 = data_dir_opt orelse ".";
+    switch (result) {
+        .ok, .not_applicable => {},
+        .tightened => log.warn("Tightened data directory permissions to 0700 before bootstrap (was world/group-readable; CWE-538)", &.{
+            Attr.string("path", path),
+        }),
+        .refuse => log.err("AUTH BOOTSTRAP REFUSED: data directory is world/group-readable and chmod failed; refusing to write bootstrap password (CWE-538/CWE-732)", &.{
+            Attr.string("path", path),
+            Attr.string("remediation", "chmod 700 <data_dir> as root and restart, or set GEODE_ADMIN_PASSWORD before bootstrap"),
+        }),
+        .unknown => log.warn("Unable to verify data directory permissions before bootstrap (open/stat failed; proceeding)", &.{
+            Attr.string("path", path),
+        }),
+    }
+    return result;
+}
+
 /// Complete server initialization
 pub fn initialize(
     allocator: std.mem.Allocator,
@@ -400,30 +430,38 @@ pub fn initialize(
                     break :blk_env false;
                 };
                 if (!admin_env_present) {
-                    const pw_dir: []const u8 = data_dir orelse ".";
-                    const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch null;
-                    if (pw_path) |path| {
-                        defer allocator.free(path);
-                        const io_pw = std.Io.Threaded.global_single_threaded.io();
-                        if (std.Io.Dir.cwd().createFile(io_pw, path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
-                            defer file.close(io_pw);
-                            file.writeStreamingAll(io_pw, result.password) catch |err| {
-                                log.warn("Failed to write generated admin password file", &.{
+                    // Issue #819 (CWE-538/CWE-732): ensure data_dir is mode
+                    // 0o700 or stricter before persisting the bootstrap
+                    // password.  Fail-closed on chmod failure.
+                    const perm_check = logAndApplyDataDirPermissionCheck(data_dir);
+                    if (perm_check == .refuse) {
+                        log.err("Bootstrap password NOT written: parent data directory permissions could not be secured; rotate via 'geode user reset-password' after hardening the directory", &.{});
+                    } else {
+                        const pw_dir: []const u8 = data_dir orelse ".";
+                        const pw_path = std.fmt.allocPrint(allocator, "{s}/.geode_admin_password", .{pw_dir}) catch null;
+                        if (pw_path) |path| {
+                            defer allocator.free(path);
+                            const io_pw = std.Io.Threaded.global_single_threaded.io();
+                            if (std.Io.Dir.cwd().createFile(io_pw, path, .{ .truncate = true, .permissions = std.Io.File.Permissions.fromMode(0o600) })) |file| {
+                                defer file.close(io_pw);
+                                file.writeStreamingAll(io_pw, result.password) catch |err| {
+                                    log.warn("Failed to write generated admin password file", &.{
+                                        Attr.string("path", path),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                };
+                                log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
+                                    Attr.string("path", path),
+                                });
+                            } else |err| {
+                                log.err("Failed to create generated admin password file (operator must rotate via reset-password)", &.{
                                     Attr.string("path", path),
                                     Attr.string("error", @errorName(err)),
                                 });
-                            };
-                            log.warn("Auto-generated admin password written to file (set GEODE_ADMIN_PASSWORD or GEODE_DEFAULT_PASSWORD for production)", &.{
-                                Attr.string("path", path),
-                            });
-                        } else |err| {
-                            log.err("Failed to create generated admin password file (operator must rotate via reset-password)", &.{
-                                Attr.string("path", path),
-                                Attr.string("error", @errorName(err)),
-                            });
+                            }
+                        } else {
+                            log.err("Failed to allocate path for generated admin password file (operator must rotate via reset-password)", &.{});
                         }
-                    } else {
-                        log.err("Failed to allocate path for generated admin password file (operator must rotate via reset-password)", &.{});
                     }
                 }
                 log.info("Default admin user bootstrapped via auth graph", &.{

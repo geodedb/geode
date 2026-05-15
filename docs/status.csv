@@ -127,6 +127,9 @@ REQ-ADDITIONAL-002,AdditionalCoverage,Aggregations,TESTED,,,engine,2026-01-15,te
 REQ-ADDITIONAL-003,AdditionalCoverage,SubqueryPatterns,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-ADDITIONAL-004,AdditionalCoverage,UnionQueries,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
 REQ-ADDITIONAL-005,AdditionalCoverage,OptionalMatch,TESTED,,,engine,2026-01-15,tests/test_gap_0193_remaining_categories.zig
+REQ-ADMIN-BOOTSTRAP-HARDEN-001,AdminBootstrapHardening,DataDirPermissions,TESTED,,,security,2026-05-15,src/server/server_init.zig
+REQ-ADMIN-BOOTSTRAP-HARDEN-002,AdminBootstrapHardening,DataDirPermissionsHelper,TESTED,,,security,2026-05-15,src/server/data_dir_permissions.zig
+REQ-ADMIN-BOOTSTRAP-HARDEN-003,AdminBootstrapHardening,Tests,TESTED,,,security,2026-05-15,tests/test_admin_bootstrap_hardening.zig
 REQ-ADV-TYPE-MIGRATION-001,AdvancedPropertyMigration,ExecutionMutation,IMPL,,,engine,2026-04-01,src/execution/property_mutation.zig
 REQ-AGG-001,Aggregation,AggFunctions,TESTED,,,engine,2026-01-16,tests/test_gap_0193_batch3_comprehensive.zig
 REQ-AGG-001,WithGroupByAggregation,CountAgg,TESTED,,,engine,2026-01-15,tests/test_gap_0193_priority_categories.zig
