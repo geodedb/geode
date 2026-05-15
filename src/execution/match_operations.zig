@@ -1455,17 +1455,19 @@ pub fn executeMatchCallQuery(allocator: std.mem.Allocator, q: ast.Query, context
                 }
             }
         } else {
-            // Fallback: no labels available, full node scan required
-            // GAP-0522: Diagnostic warning for full-scan MATCH+CALL
+            // Fallback: no labels available, graph-scoped scan required.
+            // PERF-B (issue #811): graph-scoped iterator eliminates per-row
+            // graph_name eql — the index already narrows to nodes in
+            // `filter_graph`. Tenant + RLS filters are correctness and stay.
+            // GAP-0522: Diagnostic warning for full-scan MATCH+CALL (counter
+            // semantics unchanged so OTel dashboards keep working).
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
-            match_log.warn("MATCH+CALL full node scan: no labels specified on node pattern", .{});
-            var node_iter = read_store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node_id = entry.key_ptr.*;
-                const node = entry.value_ptr.*;
+            match_log.warn("MATCH+CALL graph-scoped scan: no labels specified on node pattern", .{});
+            var node_iter = read_store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node_ptr| {
+                const node_id = node_ptr.id;
+                const node = node_ptr.*;
 
-                // Filter by graph - only include nodes from the current graph
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
                 // GAP-0279: Filter by tenant
                 if (!passesTenantFilter(node, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
@@ -1789,15 +1791,12 @@ pub fn executeMultiNodeMatch(allocator: std.mem.Allocator, q: ast.Query, param_n
                 }
             }
         } else {
-            // No labels - fall back to full scan
-            // GAP-0522: Diagnostic warning for full-scan multi-node MATCH
+            // No labels - graph-scoped scan (PERF-B, issue #811).
+            // GAP-0522: Diagnostic warning for full-scan multi-node MATCH.
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
-            match_log.warn("multi-node MATCH full node scan: no labels specified on node pattern", .{});
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            match_log.warn("multi-node MATCH graph-scoped scan: no labels specified on node pattern", .{});
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 // GAP-0510: Filter by RLS denied labels
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
@@ -2575,14 +2574,14 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 }
             }
         } else {
-            // No labels and no relationship type — true full scan fallback (unavoidable)
-            // GAP-0522: Diagnostic warning for full-scan relationship MATCH
+            // No labels and no relationship type — graph-scoped scan
+            // (PERF-B, issue #811); still expensive without label / rel
+            // narrowing, but per-row graph_name eql is gone.
+            // GAP-0522: Diagnostic warning for full-scan relationship MATCH.
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
-            match_log.warn("relationship MATCH full node scan: no labels or relationship type specified", .{});
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const left_node = entry.value_ptr;
-                if (!std.mem.eql(u8, left_node.graph_name, filter_graph)) continue;
+            match_log.warn("relationship MATCH graph-scoped scan: no labels or relationship type specified", .{});
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |left_node| {
                 if (!passesTenantFilter(left_node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, left_node.*)) continue;
 
@@ -2642,13 +2641,12 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 try bindings.append(allocator, binding);
             }
         } else {
-            // GAP-0522: Diagnostic warning for full-scan simple node-pattern MATCH
+            // PERF-B (issue #811): graph-scoped scan replaces full-store scan.
+            // GAP-0522: Diagnostic warning for simple node-pattern MATCH.
             _ = g_full_scan_count.fetchAdd(1, .monotonic);
-            match_log.warn("simple node-pattern MATCH full node scan: no labels specified", .{});
-            var node_iter = store.nodes.iterator();
-            while (node_iter.next()) |entry| {
-                const node = entry.value_ptr;
-                if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+            match_log.warn("simple node-pattern MATCH graph-scoped scan: no labels specified", .{});
+            var node_iter = store.iterateNodesInGraph(filter_graph);
+            while (node_iter.next()) |node| {
                 if (!passesTenantFilter(node.*, filter_tenant)) continue;
                 if (!passesRLSFilter(&rls_row_local, node.*)) continue;
                 var binding = MatchBinding.init(allocator);
@@ -2843,15 +2841,15 @@ fn executeMultiChainRelationshipMatch(allocator: std.mem.Allocator, q: ast.Query
                 // CANARY: REQ=REQ-GQL-CARTESIAN-PRODUCT-001; FEATURE="CartesianProductMatch"; ASPECT=IndependentChains; STATUS=TESTED; TEST=geodetestlab/specs/gql_pattern_matching_comprehensive.yml; OWNER=engine; UPDATED=2026-01-09
                 // No shared variable - this is a Cartesian product case
                 // Find all matching relationships for this chain and combine with existing binding
+                // PERF-B (issue #811): graph-scoped iterator (still O(N) over
+                // this graph but skips cross-graph nodes for free).
                 const left_labels = hop.left.labels;
-                var node_iter = store.nodes.iterator();
+                var node_iter = store.iterateNodesInGraph(filter_graph);
                 // PERF-P1-003: LIMIT pushdown — stop Cartesian product expansion
                 // once we have enough bindings, avoiding full N*M generation.
                 var cart_reached_cap = false;
-                while (node_iter.next()) |node_entry| {
+                while (node_iter.next()) |new_left_node| {
                     if (cart_reached_cap) break;
-                    const new_left_node = node_entry.value_ptr;
-                    if (!std.mem.eql(u8, new_left_node.graph_name, filter_graph)) continue;
                     if (!passesTenantFilter(new_left_node.*, filter_tenant)) continue;
                     if (!passesRLSFilter(&rls_row_local, new_left_node.*)) continue;
                     if (!matchesLabels(new_left_node, left_labels)) continue;
@@ -3088,12 +3086,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
     var base_nodes = std.ArrayList(*graph_store.Node).empty;
     defer base_nodes.deinit(allocator);
 
-    var node_iter = store.nodes.iterator();
-    while (node_iter.next()) |entry| {
-        const node = entry.value_ptr;
-
-        // Filter by graph - only include nodes from the current graph
-        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+    // PERF-B (issue #811): graph-scoped iterator skips the per-row
+    // graph_name eql; tenant/RLS filters are correctness and stay.
+    var node_iter = store.iterateNodesInGraph(filter_graph);
+    while (node_iter.next()) |node| {
         // GAP-0279: Filter by tenant
         if (!passesTenantFilter(node.*, filter_tenant)) continue;
         if (!passesRLSFilter(&rls_row_local, node.*)) continue;
@@ -3614,10 +3610,9 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         .allocator = allocator,
                     };
 
-                    var opt_node_iter = store.nodes.iterator();
-                    while (opt_node_iter.next()) |entry| {
-                        const opt_node = entry.value_ptr;
-                        if (!std.mem.eql(u8, opt_node.graph_name, filter_graph)) continue;
+                    // PERF-B (issue #811): graph-scoped iterator.
+                    var opt_node_iter = store.iterateNodesInGraph(filter_graph);
+                    while (opt_node_iter.next()) |opt_node| {
                         if (!passesTenantFilter(opt_node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, opt_node.*)) continue;
 
@@ -4056,14 +4051,10 @@ fn executeMatchWithOptionalPatterns(allocator: std.mem.Allocator, q: ast.Query, 
                         }
                     }
 
-                    // Find matching node
+                    // Find matching node — PERF-B (issue #811): graph-scoped.
                     var matched_node: ?*graph_store.Node = null;
-                    var req_node_iter = store.nodes.iterator();
-                    while (req_node_iter.next()) |entry| {
-                        const node = entry.value_ptr;
-
-                        // Filter by graph
-                        if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+                    var req_node_iter = store.iterateNodesInGraph(filter_graph);
+                    while (req_node_iter.next()) |node| {
                         if (!passesTenantFilter(node.*, filter_tenant)) continue;
                         if (!passesRLSFilter(&rls_row_local, node.*)) continue;
 
@@ -5239,10 +5230,9 @@ fn executeMultiHopGroupBy(
             try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);
         }
     } else {
-        var init_iter_mh = store.nodes.iterator();
-        while (init_iter_mh.next()) |entry| {
-            const node = entry.value_ptr;
-            if (!std.mem.eql(u8, node.graph_name, filter_graph)) continue;
+        // PERF-B (issue #811): graph-scoped multi-hop initial bindings.
+        var init_iter_mh = store.iterateNodesInGraph(filter_graph);
+        while (init_iter_mh.next()) |node| {
             if (!passesTenantFilter(node.*, filter_tenant)) continue;
             if (!passesRLSFilter(&rls_row_local, node.*)) continue;
             try NodeCollector.addBinding(arena, allocator, node, first_hop.left, param_names, param_values, &current_bindings_mh, current_schema);

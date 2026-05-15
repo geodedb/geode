@@ -466,6 +466,32 @@ pub const GraphStore = struct {
     // (`mg.rwlock`) — inserting a new key rehashes the map, which must remain
     // exclusive.
     label_index: std.StringHashMap(LabelPosting),
+    // CANARY: REQ=REQ-PERF-GRAPH-SCOPED-NODES-001; FEATURE="GraphScopedNodeIndex"; ASPECT=NodesByGraph; STATUS=TESTED; TEST=tests/test_perf_b_graph_scoped_iteration.zig; OWNER=perf; UPDATED=2026-05-15
+    // PERF-B (issue #811): Per-graph node-id index so MATCH (n) and equivalent
+    // full-store iterators can scope to a single graph in O(nodes_in_graph)
+    // instead of O(total_nodes_across_all_graphs). Maintained under the SAME
+    // outer-graph rwlock (Tier 1) that protects `nodes` — no new ordering risk.
+    // Empty graphs are tracked by an empty inner map; absent outer entry =
+    // graph has never seen a node insert.
+    nodes_by_graph: std.StringHashMap(std.AutoHashMap(u64, void)),
+    // CANARY: REQ=REQ-PERF-LSP-INTROSPECTION-INDEX-001; FEATURE="LspIntrospectionIndex"; ASPECT=LabelEdgeProperty; STATUS=TESTED; TEST=tests/test_perf_c_lsp_introspection_index.zig; OWNER=perf; UPDATED=2026-05-15
+    // PERF-C (issue #814): Tenant-keyed multiset of node labels, edge types,
+    // and (label, property) pairs. Lets `listNodeLabels`, `listEdgeTypes`,
+    // and `listPropertiesForLabel` answer in O(distinct_labels_for_tenant)
+    // instead of O(nodes_in_store * labels_per_node). Reference counts are
+    // maintained on every create/delete/addLabel/removeLabel/setProperty/
+    // removeProperty path; when a refcount hits zero the entry is dropped
+    // so the index never reports labels/types/properties no node still
+    // carries. `filter_tenant == null` (admin path) aggregates across every
+    // tenant via the outer map.
+    // Outer key: tenant_id (owned by store allocator)
+    // Inner key: label / edge type / property — owned by store allocator
+    node_labels_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
+    edge_types_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
+    // tenant -> "label\x00prop_key" -> refcount. The composite key lets a
+    // single map serve `listPropertiesForLabel`; pointers stay stable across
+    // refcount changes (we only insert/remove on 0↔1 transitions).
+    label_properties_by_tenant: std.StringHashMap(std.StringHashMap(usize)),
     // MERGE property index: enables O(1) candidate lookup by (graph, label, property_key, property_value).
     // Key format: "graph\x00label\x00prop_key\x00prop_value_bytes" → node_id.
     // Updated synchronously by setNodeProperty/removeNodeProperty/deleteNodeNoSave.
@@ -520,6 +546,12 @@ pub const GraphStore = struct {
             .graphs = std.StringHashMap(void).init(allocator),
             // Issue #391, #392: Initialize performance optimization indexes
             .label_index = std.StringHashMap(LabelPosting).init(allocator),
+            // PERF-B (issue #811): per-graph node-id index for O(nodes_in_graph) scans.
+            .nodes_by_graph = std.StringHashMap(std.AutoHashMap(u64, void)).init(allocator),
+            // PERF-C (issue #814): tenant-keyed multiset for O(1) LSP introspection.
+            .node_labels_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
+            .edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
+            .label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(allocator),
             .merge_prop_index = std.StringHashMap(u64).init(allocator),
             // PERF-P0-001: Edge-type index for O(1) edge-type lookups
             .edge_type_index = std.StringHashMap(std.ArrayList(u64)).init(allocator),
@@ -581,6 +613,19 @@ pub const GraphStore = struct {
             entry.value_ptr.deinit(self.allocator);
         }
         self.label_index.deinit();
+
+        // PERF-B (issue #811): Clean up per-graph node-id index.
+        var nbg_iter = self.nodes_by_graph.iterator();
+        while (nbg_iter.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            entry.value_ptr.deinit();
+        }
+        self.nodes_by_graph.deinit();
+
+        // PERF-C (issue #814): Clean up tenant-keyed introspection indexes.
+        deinitTenantStringMultiset(&self.node_labels_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.edge_types_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
 
         // Clean up merge property index
         var mpi_iter = self.merge_prop_index.iterator();
@@ -695,6 +740,25 @@ pub const GraphStore = struct {
         }
         self.label_index.deinit();
         self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
+
+        // PERF-B (issue #811): Reset per-graph node-id index.
+        {
+            var nbg_iter = self.nodes_by_graph.iterator();
+            while (nbg_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit();
+            }
+            self.nodes_by_graph.deinit();
+            self.nodes_by_graph = std.StringHashMap(std.AutoHashMap(u64, void)).init(self.allocator);
+        }
+
+        // PERF-C (issue #814): Reset tenant-keyed introspection indexes.
+        deinitTenantStringMultiset(&self.node_labels_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.edge_types_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
+        self.node_labels_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
+        self.edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
+        self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
 
         // Reset merge property index
         var mpi_iter = self.merge_prop_index.iterator();
@@ -877,6 +941,23 @@ pub const GraphStore = struct {
             for (src_node.labels) |label| {
                 try self.addToLabelIndex(src_node.graph_name, label, src_node.id);
             }
+            // PERF-B/C (issues #811, #814): mirror the per-graph and
+            // tenant-keyed indexes into the snapshot store so reads against
+            // the snapshot match reads against the live store.
+            try self.addNodeToGraphIndex(src_node.graph_name, src_node.id);
+            for (src_node.labels) |label| {
+                try self.bumpLabelCount(src_node.tenant_id, label);
+            }
+            // Properties: replay PERF-C label-property counters for every
+            // non-internal key carried on the snapshotted node.
+            var prop_replay = src_node.properties.iterator();
+            while (prop_replay.next()) |p| {
+                const pkey = p.key_ptr.*;
+                if (isInternalPersistedPropertyKey(pkey)) continue;
+                for (src_node.labels) |label| {
+                    try self.bumpLabelPropertyCount(src_node.tenant_id, label, pkey);
+                }
+            }
         }
 
         self.next_node_id = source.next_node_id;
@@ -907,6 +988,8 @@ pub const GraphStore = struct {
             try self.addToAdjacencyIndex(src_edge.from_id, src_edge.to_id, src_edge.id);
             // PERF-P0-001: Maintain edge-type index during clone
             try self.addToEdgeTypeIndex(src_edge.graph_name, src_edge.label, src_edge.id);
+            // PERF-C (issue #814): tenant-keyed edge-type counter.
+            try self.bumpEdgeTypeCount(src_edge.tenant_id, src_edge.label);
         }
     }
 
@@ -1029,6 +1112,13 @@ pub const GraphStore = struct {
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
+        // PERF-C (issue #814): O(distinct_types_for_tenant) read from
+        // `edge_types_by_tenant`. The previous implementation walked every
+        // edge in the store, deduping on each tick — that was O(E) per LSP
+        // completion. Reference counts in the index drop entries when the
+        // last carrier edge is deleted, so this never reports a type no
+        // edge still carries.
+        //
         // The set owns each duped key for the lifetime of the function;
         // on success we transfer ownership to `out` and deinit only the
         // map shell, so each unique edge type is allocated exactly once.
@@ -1039,16 +1129,29 @@ pub const GraphStore = struct {
             while (k_it.next()) |k| allocator.free(k.*);
         }
 
-        var edge_it = self.edges.iterator();
-        while (edge_it.next()) |entry| {
-            const edge = entry.value_ptr.*;
-            if (filter_tenant) |tid| {
-                if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+        if (filter_tenant) |tid| {
+            // Single-tenant fast path: scan only the inner map for `tid`.
+            if (self.edge_types_by_tenant.getPtr(tid)) |inner| {
+                var it = inner.keyIterator();
+                while (it.next()) |kp| {
+                    if (type_set.contains(kp.*)) continue;
+                    const copy = try allocator.dupe(u8, kp.*);
+                    errdefer allocator.free(copy);
+                    try type_set.put(copy, {});
+                }
             }
-            if (type_set.contains(edge.label)) continue;
-            const copy = try allocator.dupe(u8, edge.label);
-            errdefer allocator.free(copy);
-            try type_set.put(copy, {});
+        } else {
+            // Admin / no-filter path: union across every tenant.
+            var outer_it = self.edge_types_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                var inner_it = outer_entry.value_ptr.keyIterator();
+                while (inner_it.next()) |kp| {
+                    if (type_set.contains(kp.*)) continue;
+                    const copy = try allocator.dupe(u8, kp.*);
+                    errdefer allocator.free(copy);
+                    try type_set.put(copy, {});
+                }
+            }
         }
 
         var out = try std.ArrayList([]const u8).initCapacity(allocator, type_set.count());
@@ -1076,6 +1179,12 @@ pub const GraphStore = struct {
         filter_tenant: ?[]const u8,
         label: []const u8,
     ) ![][]const u8 {
+        // PERF-C (issue #814): O(distinct_property_keys_for_label_in_tenant)
+        // via `label_properties_by_tenant`. The composite index key is
+        // "label\x00prop_key" — we walk the inner map and strip the prefix.
+        // Internal persisted-id property keys are never bumped on insert, so
+        // they're naturally absent from the index here.
+        //
         // Single-dup ownership pattern (mirrors listEdgeTypes): the set
         // owns each duped key for the lifetime of the function. On
         // success we transfer ownership to `out` and deinit only the
@@ -1087,31 +1196,39 @@ pub const GraphStore = struct {
             while (k_it.next()) |k| allocator.free(k.*);
         }
 
-        var node_it = self.nodes.iterator();
-        while (node_it.next()) |entry| {
-            const node = entry.value_ptr.*;
-            if (filter_tenant) |tid| {
-                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
-            }
-            var has_label = false;
-            for (node.labels) |l| {
-                if (std.mem.eql(u8, l, label)) {
-                    has_label = true;
-                    break;
+        const collect = struct {
+            fn run(
+                set: *std.StringHashMap(void),
+                alloc: std.mem.Allocator,
+                inner: *const std.StringHashMap(usize),
+                want_label: []const u8,
+            ) !void {
+                var it = inner.keyIterator();
+                while (it.next()) |kp| {
+                    const composite = kp.*;
+                    // Layout: "label\x00prop_key". Match the label prefix
+                    // first; reject keys that aren't long enough or whose
+                    // separator is at the wrong offset.
+                    if (composite.len < want_label.len + 1) continue;
+                    if (composite[want_label.len] != 0) continue;
+                    if (!std.mem.eql(u8, composite[0..want_label.len], want_label)) continue;
+                    const pkey = composite[want_label.len + 1 ..];
+                    if (set.contains(pkey)) continue;
+                    const copy = try alloc.dupe(u8, pkey);
+                    errdefer alloc.free(copy);
+                    try set.put(copy, {});
                 }
             }
-            if (!has_label) continue;
+        }.run;
 
-            var p_it = node.properties.iterator();
-            while (p_it.next()) |p| {
-                const key = p.key_ptr.*;
-                // Skip Geode's internal persisted-id property so it
-                // never surfaces in LSP completion / hover output.
-                if (isInternalPersistedPropertyKey(key)) continue;
-                if (prop_set.contains(key)) continue;
-                const copy = try allocator.dupe(u8, key);
-                errdefer allocator.free(copy);
-                try prop_set.put(copy, {});
+        if (filter_tenant) |tid| {
+            if (self.label_properties_by_tenant.getPtr(tid)) |inner| {
+                try collect(&prop_set, allocator, inner, label);
+            }
+        } else {
+            var outer_it = self.label_properties_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                try collect(&prop_set, allocator, outer_entry.value_ptr, label);
             }
         }
 
@@ -1145,6 +1262,13 @@ pub const GraphStore = struct {
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
+        // PERF-C (issue #814): O(distinct_labels_for_tenant) read from
+        // `node_labels_by_tenant`. The previous implementation walked every
+        // node in the store on every LSP completion call. Reference counts
+        // in the index drop entries when the last carrier node is deleted,
+        // so this never reports a label no node still carries (preserving
+        // the GAP-0509 tenant-isolation property).
+        //
         // Single-dup ownership pattern (mirrors listEdgeTypes /
         // listPropertiesForLabel): the set owns each duped key for the
         // lifetime of the function. On success we transfer ownership to
@@ -1157,22 +1281,26 @@ pub const GraphStore = struct {
             while (k_it.next()) |k| allocator.free(k.*);
         }
 
-        var node_it = self.nodes.iterator();
-        while (node_it.next()) |entry| {
-            const node = entry.value_ptr.*;
-
-            // Apply tenant isolation when a tenant filter is active.
-            // Without this, SHOW TABLES leaks the existence of labels
-            // used by other tenants sharing the same graph.
-            if (filter_tenant) |tid| {
-                if (!std.mem.eql(u8, node.tenant_id, tid)) continue;
+        if (filter_tenant) |tid| {
+            if (self.node_labels_by_tenant.getPtr(tid)) |inner| {
+                var it = inner.keyIterator();
+                while (it.next()) |kp| {
+                    if (label_set.contains(kp.*)) continue;
+                    const copy = try allocator.dupe(u8, kp.*);
+                    errdefer allocator.free(copy);
+                    try label_set.put(copy, {});
+                }
             }
-
-            for (node.labels) |label| {
-                if (label_set.contains(label)) continue;
-                const copy = try allocator.dupe(u8, label);
-                errdefer allocator.free(copy);
-                try label_set.put(copy, {});
+        } else {
+            var outer_it = self.node_labels_by_tenant.iterator();
+            while (outer_it.next()) |outer_entry| {
+                var inner_it = outer_entry.value_ptr.keyIterator();
+                while (inner_it.next()) |kp| {
+                    if (label_set.contains(kp.*)) continue;
+                    const copy = try allocator.dupe(u8, kp.*);
+                    errdefer allocator.free(copy);
+                    try label_set.put(copy, {});
+                }
             }
         }
 
@@ -1348,6 +1476,14 @@ pub const GraphStore = struct {
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, reserved_id);
         }
+        // PERF-B (issue #811): per-graph node-id index.
+        try self.addNodeToGraphIndex(graph_name, reserved_id);
+        // PERF-C (issue #814): tenant-keyed label counters. New nodes
+        // carry no user properties at create time, so only the label
+        // dimension fires here.
+        for (labels) |label| {
+            try self.bumpLabelCount(tenant, label);
+        }
 
         self.dirty.store(true, .release);
         incrementMutationEpoch();
@@ -1409,6 +1545,12 @@ pub const GraphStore = struct {
         // CANARY: REQ=REQ-PERF-LABEL-INDEX-002; FEATURE="LabelBasedIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_match_set_label_scan_regression.zig; OWNER=perf; UPDATED=2026-04-11
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, id);
+        }
+        // PERF-B (issue #811): per-graph node-id index.
+        try self.addNodeToGraphIndex(graph_name, id);
+        // PERF-C (issue #814): tenant-keyed label counters.
+        for (labels) |label| {
+            try self.bumpLabelCount(tenant, label);
         }
 
         // Mark store as dirty - persistence happens at query completion, not per-node
@@ -1575,6 +1717,17 @@ pub const GraphStore = struct {
             for (labels) |label| {
                 try self.appendToLabelIndex(graph_name, label, public_id);
             }
+            // PERF-B (issue #811): per-graph node-id index.
+            try self.addNodeToGraphIndex(graph_name, public_id);
+            // PERF-C (issue #814): tenant-keyed label counters. Batch path
+            // creates nodes with the same label set, so we could hoist the
+            // bumpLabelCount out of the per-node loop — but the bump itself
+            // is a HashMap probe + integer-add, so the per-node cost is
+            // negligible and the simpler call shape matches the other
+            // create paths.
+            for (labels) |label| {
+                try self.bumpLabelCount(tenant, label);
+            }
 
             // WAL / mutation notification per node.
             notifyMutation(.create_node, public_id, 0, 0, if (labels.len > 0) labels[0] else null, null, null, graph_name);
@@ -1690,6 +1843,15 @@ pub const GraphStore = struct {
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, node_id);
         }
+        // PERF-B (issue #811): per-graph node-id index.
+        try self.addNodeToGraphIndex(graph_name, node_id);
+        // PERF-C (issue #814): tenant-keyed label counters.
+        // This path always tags with DEFAULT_TENANT_ID (see above) so the
+        // bump targets that bucket; a future change that lets the caller
+        // supply a tenant should pass it through here too.
+        for (labels) |label| {
+            try self.bumpLabelCount(DEFAULT_TENANT_ID, label);
+        }
 
         if (node_id >= self.next_node_id) {
             self.next_node_id = node_id + 1;
@@ -1709,6 +1871,241 @@ pub const GraphStore = struct {
     /// Create a node with a specified ID without marking dirty (used for rollback).
     pub fn createNodeWithIdNoSave(self: *GraphStore, node_id: u64, labels: []const []const u8, graph_name: []const u8) !void {
         return self.createNodeWithIdInternal(node_id, labels, graph_name, false, false);
+    }
+
+    /// PERF-C teardown helper: free every (outer key, inner key) owned by the
+    /// allocator and deinit every inner StringHashMap, then deinit the outer.
+    fn deinitTenantStringMultiset(
+        outer: *std.StringHashMap(std.StringHashMap(usize)),
+        allocator: std.mem.Allocator,
+    ) void {
+        var outer_it = outer.iterator();
+        while (outer_it.next()) |outer_entry| {
+            allocator.free(outer_entry.key_ptr.*);
+            var inner = outer_entry.value_ptr.*;
+            var inner_it = inner.iterator();
+            while (inner_it.next()) |inner_entry| {
+                allocator.free(inner_entry.key_ptr.*);
+            }
+            inner.deinit();
+        }
+        outer.deinit();
+    }
+
+    // CANARY: REQ=REQ-PERF-GRAPH-SCOPED-NODES-002; FEATURE="GraphScopedNodeIndex"; ASPECT=IndexMaintenance; STATUS=TESTED; TEST=tests/test_perf_b_graph_scoped_iteration.zig; OWNER=perf; UPDATED=2026-05-15
+    // PERF-B (issue #811): Add a node-id to the per-graph node-id index.
+    // Idempotent: re-adding the same id is a no-op (AutoHashMap.put dedupes).
+    fn addNodeToGraphIndex(self: *GraphStore, graph_name: []const u8, node_id: u64) !void {
+        const result = try self.nodes_by_graph.getOrPut(graph_name);
+        if (!result.found_existing) {
+            const key_copy = try self.allocator.dupe(u8, graph_name);
+            errdefer self.allocator.free(key_copy);
+            result.key_ptr.* = key_copy;
+            result.value_ptr.* = std.AutoHashMap(u64, void).init(self.allocator);
+        }
+        try result.value_ptr.put(node_id, {});
+    }
+
+    // PERF-B (issue #811): Remove a node-id from the per-graph node-id index.
+    // The outer entry survives even when the inner set is empty — schema
+    // introspection paths use `graphs` for graph-existence checks, not this
+    // index, and recreating the inner map on the next insert is cheap. Keeps
+    // the read-side path stateless (no need to retry on missing key).
+    fn removeNodeFromGraphIndex(self: *GraphStore, graph_name: []const u8, node_id: u64) void {
+        if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
+            _ = inner.remove(node_id);
+        }
+    }
+
+    /// Iterator over node pointers belonging to a single graph.
+    /// Lifetime: borrowed from the GraphStore — caller must hold the same
+    /// graph read lock that `store.nodes.iterator()` would require.
+    pub const NodesByGraphIterator = struct {
+        // Empty iterator when the graph is absent.
+        inner: ?std.AutoHashMap(u64, void).KeyIterator,
+        nodes: *const sharded_store.ShardedStore(u64, Node),
+
+        pub fn next(it: *NodesByGraphIterator) ?*Node {
+            const inner = &(it.inner orelse return null);
+            while (inner.next()) |id_ptr| {
+                if (it.nodes.getPtr(id_ptr.*)) |node_ptr| return node_ptr;
+                // Stale id (deleted in the same tick as a concurrent reader?
+                // shouldn't happen under the caller-held graph rwlock, but be
+                // defensive — skip and continue).
+            }
+            return null;
+        }
+    };
+
+    /// PERF-B (issue #811): O(nodes_in_graph) iterator that replaces
+    /// `store.nodes.iterator()` for sites that filter by graph_name. Returns
+    /// node *Node pointers stable for the duration of the caller's read lock.
+    /// Empty graphs / absent graphs yield an empty iterator without error.
+    ///
+    /// Callers MUST still apply `passesTenantFilter` / `passesRLSFilter` —
+    /// this index is graph-scoped, not tenant- or RLS-scoped.
+    pub fn iterateNodesInGraph(self: *const GraphStore, graph_name: []const u8) NodesByGraphIterator {
+        if (self.nodes_by_graph.getPtr(graph_name)) |inner| {
+            return .{ .inner = inner.keyIterator(), .nodes = &self.nodes };
+        }
+        return .{ .inner = null, .nodes = &self.nodes };
+    }
+
+    /// Test-only: returns the size of the per-graph node-id index for the
+    /// given graph (0 when the graph is absent).
+    pub fn nodesInGraphCount(self: *const GraphStore, graph_name: []const u8) usize {
+        if (self.nodes_by_graph.getPtr(graph_name)) |inner| return inner.count();
+        return 0;
+    }
+
+    // CANARY: REQ=REQ-PERF-LSP-INTROSPECTION-INDEX-002; FEATURE="LspIntrospectionIndex"; ASPECT=RefcountMaintenance; STATUS=TESTED; TEST=tests/test_perf_c_lsp_introspection_index.zig; OWNER=perf; UPDATED=2026-05-15
+    // PERF-C (issue #814): Bump the refcount for (tenant, key) in a nested
+    // StringHashMap. Allocates outer + inner keys on first sight; on success
+    // increments the existing usize. Failure propagates with the partial-key
+    // allocation freed.
+    fn bumpRefcount(
+        outer: *std.StringHashMap(std.StringHashMap(usize)),
+        allocator: std.mem.Allocator,
+        outer_key: []const u8,
+        inner_key: []const u8,
+    ) !void {
+        const outer_result = try outer.getOrPut(outer_key);
+        if (!outer_result.found_existing) {
+            const okey_copy = try allocator.dupe(u8, outer_key);
+            errdefer allocator.free(okey_copy);
+            outer_result.key_ptr.* = okey_copy;
+            outer_result.value_ptr.* = std.StringHashMap(usize).init(allocator);
+        }
+        const inner_result = try outer_result.value_ptr.getOrPut(inner_key);
+        if (!inner_result.found_existing) {
+            const ikey_copy = try allocator.dupe(u8, inner_key);
+            errdefer allocator.free(ikey_copy);
+            inner_result.key_ptr.* = ikey_copy;
+            inner_result.value_ptr.* = 0;
+        }
+        inner_result.value_ptr.* += 1;
+    }
+
+    /// PERF-C: Decrement the refcount; remove the key when it hits zero so the
+    /// index never reports a label/type/property no node carries.
+    fn decRefcount(
+        outer: *std.StringHashMap(std.StringHashMap(usize)),
+        allocator: std.mem.Allocator,
+        outer_key: []const u8,
+        inner_key: []const u8,
+    ) void {
+        const outer_ptr = outer.getPtr(outer_key) orelse return;
+        const entry = outer_ptr.getEntry(inner_key) orelse return;
+        if (entry.value_ptr.* > 1) {
+            entry.value_ptr.* -= 1;
+            return;
+        }
+        // Final reference: drop the inner key and (if empty) the outer entry.
+        const owned_inner = entry.key_ptr.*;
+        _ = outer_ptr.remove(inner_key);
+        allocator.free(owned_inner);
+        if (outer_ptr.count() == 0) {
+            if (outer.fetchRemove(outer_key)) |kv| {
+                allocator.free(kv.key);
+                var inner_map = kv.value;
+                inner_map.deinit();
+            }
+        }
+    }
+
+    fn bumpLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) !void {
+        try bumpRefcount(&self.node_labels_by_tenant, self.allocator, tenant_id, label);
+    }
+
+    fn decLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) void {
+        decRefcount(&self.node_labels_by_tenant, self.allocator, tenant_id, label);
+    }
+
+    fn bumpEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) !void {
+        try bumpRefcount(&self.edge_types_by_tenant, self.allocator, tenant_id, edge_type);
+    }
+
+    fn decEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) void {
+        decRefcount(&self.edge_types_by_tenant, self.allocator, tenant_id, edge_type);
+    }
+
+    /// Compose "label\x00prop_key" into a stack buffer when small enough;
+    /// otherwise heap-allocate via `allocator`. Returns (buf-or-owned-slice,
+    /// is_heap_owned) so the caller can free conditionally.
+    fn formatLabelPropKey(
+        scratch: []u8,
+        allocator: std.mem.Allocator,
+        label: []const u8,
+        prop_key: []const u8,
+    ) !struct { key: []const u8, owned: ?[]u8 } {
+        const total = label.len + 1 + prop_key.len;
+        if (total <= scratch.len) {
+            @memcpy(scratch[0..label.len], label);
+            scratch[label.len] = 0;
+            @memcpy(scratch[label.len + 1 ..][0..prop_key.len], prop_key);
+            return .{ .key = scratch[0..total], .owned = null };
+        }
+        const buf = try allocator.alloc(u8, total);
+        @memcpy(buf[0..label.len], label);
+        buf[label.len] = 0;
+        @memcpy(buf[label.len + 1 ..][0..prop_key.len], prop_key);
+        return .{ .key = buf, .owned = buf };
+    }
+
+    fn bumpLabelPropertyCount(
+        self: *GraphStore,
+        tenant_id: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+    ) !void {
+        var scratch: [512]u8 = undefined;
+        const k = try formatLabelPropKey(&scratch, self.allocator, label, prop_key);
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        try bumpRefcount(&self.label_properties_by_tenant, self.allocator, tenant_id, k.key);
+    }
+
+    fn decLabelPropertyCount(
+        self: *GraphStore,
+        tenant_id: []const u8,
+        label: []const u8,
+        prop_key: []const u8,
+    ) void {
+        var scratch: [512]u8 = undefined;
+        const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
+        defer if (k.owned) |buf| self.allocator.free(buf);
+        decRefcount(&self.label_properties_by_tenant, self.allocator, tenant_id, k.key);
+    }
+
+    /// Per-node helper: bump (tenant, label) and (tenant, label\x00prop_key)
+    /// counters for every label on the node and every persisted property key
+    /// (excluding internal IDs). Used by the node-create paths.
+    fn bumpIntrospectionForNode(self: *GraphStore, node: *const Node) !void {
+        for (node.labels) |label| {
+            try self.bumpLabelCount(node.tenant_id, label);
+        }
+        var prop_it = node.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = prop.key_ptr.*;
+            if (isInternalPersistedPropertyKey(key)) continue;
+            for (node.labels) |label| {
+                try self.bumpLabelPropertyCount(node.tenant_id, label, key);
+            }
+        }
+    }
+
+    /// Inverse of `bumpIntrospectionForNode`. Used on the delete path.
+    fn decIntrospectionForNode(self: *GraphStore, node: *const Node) void {
+        var prop_it = node.properties.iterator();
+        while (prop_it.next()) |prop| {
+            const key = prop.key_ptr.*;
+            if (isInternalPersistedPropertyKey(key)) continue;
+            for (node.labels) |label| {
+                self.decLabelPropertyCount(node.tenant_id, label, key);
+            }
+        }
+        for (node.labels) |label| {
+            self.decLabelCount(node.tenant_id, label);
+        }
     }
 
     // Issue #391: Helper to add node to label index
@@ -2122,6 +2519,25 @@ pub const GraphStore = struct {
         self.label_index.deinit();
         self.label_index = std.StringHashMap(LabelPosting).init(self.allocator);
 
+        // PERF-B (issue #811): Reset per-graph node-id index for rebuild.
+        {
+            var nbg_iter = self.nodes_by_graph.iterator();
+            while (nbg_iter.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                entry.value_ptr.deinit();
+            }
+            self.nodes_by_graph.deinit();
+            self.nodes_by_graph = std.StringHashMap(std.AutoHashMap(u64, void)).init(self.allocator);
+        }
+
+        // PERF-C (issue #814): Reset tenant-keyed introspection indexes for rebuild.
+        deinitTenantStringMultiset(&self.node_labels_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.edge_types_by_tenant, self.allocator);
+        deinitTenantStringMultiset(&self.label_properties_by_tenant, self.allocator);
+        self.node_labels_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
+        self.edge_types_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
+        self.label_properties_by_tenant = std.StringHashMap(std.StringHashMap(usize)).init(self.allocator);
+
         // Reset merge property index
         var mpi_iter = self.merge_prop_index.iterator();
         while (mpi_iter.next()) |entry| {
@@ -2162,6 +2578,20 @@ pub const GraphStore = struct {
             for (node.labels) |label| {
                 try self.addToLabelIndex(node.graph_name, label, node.id);
             }
+            // PERF-B/C (issues #811, #814): rebuild graph-scoped node-id set
+            // and tenant-keyed introspection counters for this node.
+            try self.addNodeToGraphIndex(node.graph_name, node.id);
+            for (node.labels) |label| {
+                try self.bumpLabelCount(node.tenant_id, label);
+            }
+            var prop_iter_for_pc = node.properties.iterator();
+            while (prop_iter_for_pc.next()) |prop_entry| {
+                const pkey = prop_entry.key_ptr.*;
+                if (isInternalPersistedPropertyKey(pkey)) continue;
+                for (node.labels) |label| {
+                    try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+                }
+            }
             // Rebuild merge property index entries for this node
             var prop_iter = node.properties.iterator();
             while (prop_iter.next()) |prop_entry| {
@@ -2177,6 +2607,8 @@ pub const GraphStore = struct {
             try self.addToAdjacencyIndex(edge.from_id, edge.to_id, edge.id);
             // PERF-P0-001: Rebuild edge-type index
             try self.addToEdgeTypeIndex(edge.graph_name, edge.label, edge.id);
+            // PERF-C (issue #814): rebuild tenant-keyed edge-type counter.
+            try self.bumpEdgeTypeCount(edge.tenant_id, edge.label);
         }
     }
 
@@ -2242,7 +2674,8 @@ pub const GraphStore = struct {
 
             // Use getOrPut to avoid memory leak - only allocate key if it doesn't exist
             const result = try node.properties.getOrPut(key);
-            if (!result.found_existing) {
+            const was_new = !result.found_existing;
+            if (was_new) {
                 // Key doesn't exist, allocate a copy
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
             } else {
@@ -2254,6 +2687,17 @@ pub const GraphStore = struct {
 
             // Update merge property index with new value
             self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
+
+            // PERF-C (issue #814): only bump the label-property counter on
+            // the new-key transition. Value updates do not change the set of
+            // property keys reported by `listPropertiesForLabel`. Internal
+            // persisted-id keys are skipped (they're filtered out at read
+            // time too).
+            if (was_new and !isInternalPersistedPropertyKey(key)) {
+                for (node.labels) |label| {
+                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                }
+            }
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -2478,6 +2922,14 @@ pub const GraphStore = struct {
             if (node.properties.fetchRemove(key)) |kv| {
                 // Remove from merge property index before freeing
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                // PERF-C (issue #814): decrement the label-property counter
+                // for every label still carried by the node. Internal keys
+                // are filtered out (they were never bumped on insert).
+                if (!isInternalPersistedPropertyKey(kv.key)) {
+                    for (node.labels) |label| {
+                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                    }
+                }
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
@@ -2542,6 +2994,18 @@ pub const GraphStore = struct {
 
             // Maintain label index
             try self.addToLabelIndex(node.graph_name, label, node_id);
+            // PERF-C (issue #814): bump tenant-keyed label counter and, for
+            // every existing property on the node, the label-property counter
+            // — because the new label "inherits" all the node's properties
+            // for introspection purposes (`listPropertiesForLabel` reports
+            // every property carried by any node holding `label`).
+            try self.bumpLabelCount(node.tenant_id, label);
+            var prop_it_for_pc = node.properties.iterator();
+            while (prop_it_for_pc.next()) |p| {
+                const pkey = p.key_ptr.*;
+                if (isInternalPersistedPropertyKey(pkey)) continue;
+                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+            }
 
             // Mark as dirty - persistence happens at query completion
             self.dirty.store(true, .release);
@@ -2591,6 +3055,16 @@ pub const GraphStore = struct {
 
                 // Remove label from index and free label memory
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
+                // PERF-C (issue #814): mirror the bump done by `addNodeLabel`
+                // — decrement the label-property counter for every property
+                // still carried by the node, then drop the label counter.
+                var prop_it_for_pc_rm = node.properties.iterator();
+                while (prop_it_for_pc_rm.next()) |p| {
+                    const pkey = p.key_ptr.*;
+                    if (isInternalPersistedPropertyKey(pkey)) continue;
+                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                }
+                self.decLabelCount(node.tenant_id, label);
                 self.allocator.free(removed_label);
 
                 // Mark as dirty - persistence happens at query completion
@@ -3296,6 +3770,8 @@ pub const GraphStore = struct {
         try self.addToAdjacencyIndex(from_id, to_id, id);
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, id);
+        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
+        try self.bumpEdgeTypeCount(tenant, edge_type);
 
         // CANARY: REQ=REQ-BINARY-PERSIST-EDGE-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
         // Mark store as dirty - persistence happens at query completion, not per-edge
@@ -3378,6 +3854,9 @@ pub const GraphStore = struct {
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
         // PERF-P0-001: Maintain edge-type index for fast getEdgesByType
         try self.addToEdgeTypeIndex(graph_name, edge_type, edge_id);
+        // PERF-C (issue #814): tenant-keyed edge-type counter for LSP introspection.
+        // This path tags with DEFAULT_TENANT_ID — see tenant_id_copy above.
+        try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, edge_type);
 
         if (edge_id >= self.next_edge_id) {
             self.next_edge_id = edge_id + 1;
@@ -5290,6 +5769,14 @@ pub const GraphStore = struct {
             self.removeFromLabelIndex(node_ptr.graph_name, label, node_id);
         }
 
+        // PERF-B (issue #811): per-graph node-id index.
+        self.removeNodeFromGraphIndex(node_ptr.graph_name, node_id);
+        // PERF-C (issue #814): tenant-keyed label + label-property counters.
+        // Walk properties first because dec-label-property reads the node's
+        // tenant_id which is still alive at this point. Properties carrying
+        // internal IDs are skipped (they were never bumped on insert).
+        self.decIntrospectionForNode(node_ptr);
+
         // Remove all merge property index entries for this node
         self.removeAllMergePropertyIndexEntries(node_ptr);
 
@@ -5334,6 +5821,10 @@ pub const GraphStore = struct {
             self.removeFromAdjacencyIndex(edge.from_id, edge.to_id, edge_id);
             // PERF-P0-001: Remove from edge-type index before freeing label/graph_name
             self.removeFromEdgeTypeIndex(edge.graph_name, edge.label, edge_id);
+            // PERF-C (issue #814): tenant-keyed edge-type counter. Decrement
+            // before we free label/tenant_id strings (they're still alive in
+            // the `edge` struct copy we own here).
+            self.decEdgeTypeCount(edge.tenant_id, edge.label);
 
             // Free label
             self.allocator.free(edge.label);
@@ -5451,7 +5942,8 @@ pub const GraphStore = struct {
             errdefer freePropertyValue(self, value_copy);
 
             const result = try node.properties.getOrPut(key);
-            if (!result.found_existing) {
+            const was_new = !result.found_existing;
+            if (was_new) {
                 result.key_ptr.* = try self.allocator.dupe(u8, key);
             } else {
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, key, result.value_ptr.*);
@@ -5459,6 +5951,14 @@ pub const GraphStore = struct {
             }
             result.value_ptr.* = value_copy;
             self.addToMergePropertyIndex(node.graph_name, node.labels, key, value_copy, node_id) catch {};
+            // PERF-C (issue #814): mirror the bump from setNodeProperty so
+            // the rollback / WAL replay path keeps the introspection index in
+            // sync with the in-memory state.
+            if (was_new and !isInternalPersistedPropertyKey(key)) {
+                for (node.labels) |label| {
+                    self.bumpLabelPropertyCount(node.tenant_id, label, key) catch {};
+                }
+            }
         }
     }
 
@@ -5467,6 +5967,12 @@ pub const GraphStore = struct {
         if (self.nodes.getPtr(node_id)) |node| {
             if (node.properties.fetchRemove(key)) |kv| {
                 self.removeFromMergePropertyIndex(node.graph_name, node.labels, kv.key, kv.value);
+                // PERF-C (issue #814): mirror the dec from removeNodeProperty.
+                if (!isInternalPersistedPropertyKey(kv.key)) {
+                    for (node.labels) |label| {
+                        self.decLabelPropertyCount(node.tenant_id, label, kv.key);
+                    }
+                }
                 self.allocator.free(kv.key);
                 freePropertyValue(self, kv.value);
             }
@@ -5524,6 +6030,14 @@ pub const GraphStore = struct {
         for (labels) |label| {
             try self.addToLabelIndex(graph_name, label, node_id);
         }
+        // PERF-B/C (issues #811, #814): restoreNodeNoSave is the rollback
+        // counterpart to createNode — mirror the index bumps. The restored
+        // node carries no properties (rollback re-runs SetProperty ops
+        // separately), so only label-level counters fire here.
+        try self.addNodeToGraphIndex(graph_name, node_id);
+        for (labels) |label| {
+            try self.bumpLabelCount(DEFAULT_TENANT_ID, label);
+        }
     }
 
     /// Restore a deleted edge without saving (used during rollback)
@@ -5548,6 +6062,8 @@ pub const GraphStore = struct {
         try self.addToAdjacencyIndex(from_id, to_id, edge_id);
         // PERF-P0-001: Maintain edge-type index during rollback restore
         try self.addToEdgeTypeIndex(graph_name, label, edge_id);
+        // PERF-C (issue #814): tenant-keyed edge-type counter for rollback.
+        try self.bumpEdgeTypeCount(DEFAULT_TENANT_ID, label);
     }
 
     /// Add a label to a node without saving (used during rollback)
@@ -5572,6 +6088,14 @@ pub const GraphStore = struct {
             node.labels = new_labels;
 
             try self.addToLabelIndex(node.graph_name, label, node_id);
+            // PERF-C (issue #814): mirror addNodeLabel.
+            try self.bumpLabelCount(node.tenant_id, label);
+            var prop_it_nosave_add = node.properties.iterator();
+            while (prop_it_nosave_add.next()) |p| {
+                const pkey = p.key_ptr.*;
+                if (isInternalPersistedPropertyKey(pkey)) continue;
+                try self.bumpLabelPropertyCount(node.tenant_id, label, pkey);
+            }
         }
     }
 
@@ -5606,6 +6130,14 @@ pub const GraphStore = struct {
                 node.labels = new_labels;
 
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
+                // PERF-C (issue #814): mirror removeNodeLabel.
+                var prop_it_nosave_rm = node.properties.iterator();
+                while (prop_it_nosave_rm.next()) |p| {
+                    const pkey = p.key_ptr.*;
+                    if (isInternalPersistedPropertyKey(pkey)) continue;
+                    self.decLabelPropertyCount(node.tenant_id, label, pkey);
+                }
+                self.decLabelCount(node.tenant_id, label);
             }
         }
     }

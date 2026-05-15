@@ -3523,6 +3523,21 @@ pub fn build(b: *std.Build) void {
     const gap0509_tests = b.addTest(.{ .root_module = gap0509_test_mod });
     const run_gap0509_tests = b.addRunArtifact(gap0509_tests);
     shardDep(test_step, &run_gap0509_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    // PERF-B/PERF-C verification rides on this — invoke directly to confirm
+    // the introspection-index + per-graph-node-id refactor preserves the
+    // GAP-0509 tenant-isolation invariants for `listNodeLabels` and
+    // `getNodesByLabels(..., filter_tenant)`.
+    const gap0509_step = b.step("test-gap0509-tenant-isolation", "GAP-0509 regression (tenant isolation for MATCH and SHOW TABLES)");
+    gap0509_step.dependOn(&run_gap0509_tests.step);
+
+    // PERF-B (issue #811): graph-scoped node-id index for unlabeled MATCH.
+    const perf_b_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_b_graph_scoped_iteration.zig"), .target = target, .optimize = optimize });
+    perf_b_test_mod.addImport("geode", root_mod);
+    const perf_b_tests = b.addTest(.{ .root_module = perf_b_test_mod });
+    const run_perf_b_tests = b.addRunArtifact(perf_b_tests);
+    shardDep(test_step, &run_perf_b_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const perf_b_step = b.step("test-perf-b-graph-scoped", "PERF-B (issue #811) per-graph node-id index regression suite");
+    perf_b_step.dependOn(&run_perf_b_tests.step);
 
     // Task 5 of the LSP permission-aware completion plan: register
     // src/execution/schema_introspection.zig as its own build module so
