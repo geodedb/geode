@@ -159,6 +159,30 @@ pub const Server = struct {
         };
     }
 
+    /// Task 27: same as `initWithAuth` but accepts a pre-constructed
+    /// `Transport` (typically a `Transport.initTcp(..)` value built by
+    /// `geode lsp --listen` or the embedded LSP listener inside
+    /// `geode serve`). The Server takes ownership of `tx` — its
+    /// `deinit` will tear the transport down. Stdio callers should keep
+    /// using `initWithAuth`, which constructs the stdio transport
+    /// internally.
+    pub fn initWithTransport(
+        allocator: Allocator,
+        tx: Transport,
+        verifier: ?auth_mod.Verifier,
+        allow_unauth: bool,
+    ) !Server {
+        return .{
+            .allocator = allocator,
+            .transport = tx,
+            .documents = DocumentStore.init(allocator),
+            .debounce_state = std.StringHashMap(DebounceState).init(allocator),
+            .debounce_state_initialized = true,
+            .verifier = verifier,
+            .allow_unauth = allow_unauth,
+        };
+    }
+
     pub fn deinit(self: *Server) void {
         if (self.debounce_state_initialized) {
             self.debounce_state.deinit();
@@ -181,6 +205,11 @@ pub const Server = struct {
         // release here.
         self.exec_context = null;
         self.documents.deinit();
+        // Task 27: tear the transport down so a TCP-backed session
+        // closes its socket FD. For stdio the dispatch is a no-op
+        // (StdioTransport has no `deinit` decl; the union guards on
+        // `@hasDecl`). Safe to call from every Server constructor.
+        self.transport.deinit();
     }
 
     /// F-01: record a didChange event for `uri`. Sets the pending flag

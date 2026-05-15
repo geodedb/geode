@@ -681,8 +681,12 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
     // VS Code over stdio) can drive the server without minting a JWT.
     // The flag synthesizes a local-admin AuthState from $USER inside
     // Server.bindUnauthSession. It is honored only on the stdio path;
-    // Task 28's TCP listener forces allow_unauth=false regardless.
+    // Task 27 enforces `--no-auth` + `--listen` is a usage error and the
+    // TCP listener always runs with allow_unauth=false.
     var allow_unauth = false;
+    // Task 27: `--listen=tcp://HOST:PORT` (or bare `HOST:PORT`) switches
+    // the LSP entry point from stdio framing to a TCP accept loop.
+    var listen_addr: ?[]const u8 = null;
     var i: usize = start_idx + 1;
     while (i < argv.len) : (i += 1) {
         if (std.mem.eql(u8, argv[i], "-h") or std.mem.eql(u8, argv[i], "--help")) {
@@ -690,6 +694,8 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
             std.process.exit(@intFromEnum(ExitCode.success));
         } else if (std.mem.eql(u8, argv[i], "--no-auth")) {
             allow_unauth = true;
+        } else if (std.mem.startsWith(u8, argv[i], "--listen=")) {
+            listen_addr = argv[i]["--listen=".len..];
         } else {
             std.debug.print("Error: unknown argument '{s}'\n\n", .{argv[i]});
             printLspUsage();
@@ -697,8 +703,95 @@ fn cmdLsp(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void 
         }
     }
 
-    // Import and start the LSP server
+    // Task 27: TCP transport always requires auth. `--no-auth` is a
+    // local-terminal-only convenience; combining it with a
+    // network-listening transport would let any LAN client mint an
+    // admin session against this server. Fail closed.
+    if (listen_addr != null and allow_unauth) {
+        std.debug.print("Error: --no-auth is incompatible with --listen (TCP transport requires auth)\n\n", .{});
+        printLspUsage();
+        std.process.exit(@intFromEnum(ExitCode.usage_error));
+    }
+
     const lsp = @import("lsp/server.zig");
+    const lsp_transport = @import("lsp/transport.zig");
+
+    if (listen_addr) |addr_raw| {
+        // Strip optional `tcp://` scheme; everything after must be
+        // `HOST:PORT`. We don't accept `tcp6://`, `unix:`, etc. —
+        // Task 28 / Task 30 introduce additional listener kinds.
+        const stripped = if (std.mem.startsWith(u8, addr_raw, "tcp://"))
+            addr_raw["tcp://".len..]
+        else
+            addr_raw;
+        const colon = std.mem.lastIndexOfScalar(u8, stripped, ':') orelse {
+            std.debug.print("Error: --listen address must be host:port (got '{s}')\n", .{addr_raw});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        const host = stripped[0..colon];
+        const port_str = stripped[colon + 1 ..];
+        const port = std.fmt.parseInt(u16, port_str, 10) catch {
+            std.debug.print("Error: invalid port '{s}'\n", .{port_str});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+
+        // Zig 0.16: the net stack is `std.Io.net.*` — `IpAddress.parseIp4`
+        // / `parseIp6` build the address and `IpAddress.listen` returns a
+        // `std.Io.net.Server` whose `accept(io)` hands out streams. The
+        // `parse` umbrella tries v4 first, falls back to v6, so it
+        // handles both numeric forms (no DNS — listener binds want a
+        // numeric host).
+        var bind_addr = std.Io.net.IpAddress.parse(host, port) catch
+            std.Io.net.IpAddress.parseIp4(host, port) catch
+            std.Io.net.IpAddress.parseIp6(host, port) catch {
+            std.debug.print("Error: --listen host '{s}' is not a valid IPv4/IPv6 literal\n", .{host});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+
+        // Dedicated Threaded backend so the accept loop and the per-
+        // session reads share one Io vtable for the lifetime of this
+        // CLI invocation. Matches metrics_server.zig's pattern.
+        var threaded = std.Io.Threaded.init(allocator, .{});
+        defer threaded.deinit();
+        const io = threaded.io();
+
+        var listener = std.Io.net.IpAddress.listen(&bind_addr, io, .{ .reuse_address = true }) catch |err| {
+            std.debug.print("Error: failed to bind {s}:{d}: {s}\n", .{ host, port, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        defer listener.deinit(io);
+
+        std.debug.print("LSP listening on {s}:{d}\n", .{ host, port });
+
+        // Phase 9 (Task 28) introduces concurrent per-session threads
+        // in the embedded `geode serve` listener; the standalone
+        // `geode lsp --listen` is typically used as a single-editor
+        // stdio replacement, so serial accept-and-run is sufficient
+        // here. Each session always runs with allow_unauth=false
+        // because the constraint check above rejected the combination.
+        while (true) {
+            const accepted = listener.accept(io) catch |err| {
+                std.debug.print("LSP accept error: {s}\n", .{@errorName(err)});
+                continue;
+            };
+            var tx = lsp_transport.Transport.initTcp(allocator, io, accepted) catch |err| {
+                std.debug.print("LSP transport init error: {s}\n", .{@errorName(err)});
+                accepted.close(io);
+                continue;
+            };
+            var srv = lsp.Server.initWithTransport(allocator, tx, null, false) catch |err| {
+                std.debug.print("LSP server init error: {s}\n", .{@errorName(err)});
+                tx.deinit();
+                continue;
+            };
+            defer srv.deinit();
+            srv.run() catch |err| {
+                std.debug.print("LSP session error: {s}\n", .{@errorName(err)});
+            };
+        }
+    }
+
+    // Default: stdio LSP path (Task 13's `--no-auth` is honored here).
     var server = lsp.Server.initWithAuth(allocator, null, allow_unauth) catch |err| {
         std.debug.print("Error initializing LSP server: {}\n", .{err});
         std.process.exit(@intFromEnum(ExitCode.general_error));
@@ -724,12 +817,19 @@ fn printLspUsage() void {
     std.debug.print("  -h, --help         Show this help message\n", .{});
     std.debug.print("  --no-auth          Skip the LSP auth handshake and run as a local admin\n", .{});
     std.debug.print("                     session ($USER, role=Admin). Stdio only — never use\n", .{});
-    std.debug.print("                     this with a network-listening transport.\n\n", .{});
+    std.debug.print("                     this with a network-listening transport.\n", .{});
+    std.debug.print("  --listen=ADDR      Listen for LSP JSON-RPC on a TCP socket instead of\n", .{});
+    std.debug.print("                     stdin/stdout. ADDR is \"tcp://HOST:PORT\" or just\n", .{});
+    std.debug.print("                     \"HOST:PORT\". Each accepted connection runs one LSP\n", .{});
+    std.debug.print("                     session before accepting the next. Network-listening\n", .{});
+    std.debug.print("                     transport REQUIRES auth (the --no-auth flag is\n", .{});
+    std.debug.print("                     refused if --listen is also set).\n\n", .{});
     std.debug.print("Editor Integration:\n", .{});
     std.debug.print("  See docs/LSP_IMPLEMENTATION.md for setup details\n\n", .{});
     std.debug.print("Examples:\n", .{});
     std.debug.print("  geode lsp\n", .{});
-    std.debug.print("  geode lsp --no-auth   # local terminal editor (neovim/helix/VS Code)\n\n", .{});
+    std.debug.print("  geode lsp --no-auth                       # local terminal editor (stdio)\n", .{});
+    std.debug.print("  geode lsp --listen=tcp://127.0.0.1:3142   # TCP listener (auth required)\n\n", .{});
 }
 
 fn cmdServe(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !void {
