@@ -154,6 +154,17 @@ pub const QuicTransport = struct {
     connections: std.ArrayList(*QuicConnection),
     // GAP-0202: Mutex for thread-safe connection list access in async mode
     connections_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    /// PERF-D / #816 follow-up: generation counter that is incremented every
+    /// time a connection slot is freed (via `destroyConnection`'s swapRemove
+    /// or via `drainPendingDestroy` completing a batch). The server's accept
+    /// loop parks on this word via `io.futexWaitTimeout` when at
+    /// `max_connections`; producers call `io.futexWake(..., 1)` after
+    /// dropping the slot to wake exactly one parked acceptor. This replaces
+    /// the prior unconditional 5 ms nanosleep poll. The wake is best-effort
+    /// (lost-wake race is bounded by the 5 ms timeout the acceptor still
+    /// applies as a safety net). Follows the b3790685 signal-not-broadcast
+    /// discipline since there is at most one accept loop.
+    connection_slot_freed_gen: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
     // GAP-0203: Deferred connection destruction to prevent use-after-free.
     // Handler threads add inner connections here after sending CONNECTION_CLOSE;
     // the main accept loop thread processes them via drainPendingDestroy()
@@ -245,24 +256,39 @@ pub const QuicTransport = struct {
     /// GAP-0203: Fix use-after-free race condition between handler threads
     /// calling deinit() and the main thread's poll() accessing freed memory.
     pub fn drainPendingDestroy(self: *QuicTransport) void {
-        self.pending_destroy_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        defer self.pending_destroy_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
-        if (self.pending_destroy.items.len == 0) return;
+        var drained: usize = 0;
+        {
+            self.pending_destroy_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+            defer self.pending_destroy_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+            if (self.pending_destroy.items.len == 0) return;
 
-        // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
-        // without acquiring ep.mu. Acquire it here to prevent racing with poll().
-        if (self.endpoint) |ep| {
-            ep.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-            defer ep.mu.unlock(std.Io.Threaded.global_single_threaded.io());
-            for (self.pending_destroy.items) |inner_conn| {
-                api.destroy(ep, inner_conn);
+            // api.destroy() modifies endpoint internal maps (conns, accepted, retired)
+            // without acquiring ep.mu. Acquire it here to prevent racing with poll().
+            if (self.endpoint) |ep| {
+                ep.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer ep.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+                for (self.pending_destroy.items) |inner_conn| {
+                    api.destroy(ep, inner_conn);
+                }
+            } else {
+                for (self.pending_destroy.items) |inner_conn| {
+                    inner_conn.deinit();
+                }
             }
-        } else {
-            for (self.pending_destroy.items) |inner_conn| {
-                inner_conn.deinit();
-            }
+            drained = self.pending_destroy.items.len;
+            self.pending_destroy.clearRetainingCapacity();
         }
-        self.pending_destroy.clearRetainingCapacity();
+
+        // PERF-D / #816 follow-up: signal admission waiter outside the lock
+        // (b3790685 signal-after-unlock pattern). Each call to drain that
+        // actually freed inner connections bumps the gen counter once — the
+        // accept loop only needs to know "at least one slot may be free", not
+        // the precise count. Wake exactly one waiter (single accept loop).
+        if (drained > 0) {
+            _ = self.connection_slot_freed_gen.fetchAdd(1, .release);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.futexWake(u32, &self.connection_slot_freed_gen.raw, 1);
+        }
     }
 
     pub fn listen(self: *QuicTransport) !void {
@@ -501,15 +527,28 @@ pub const QuicTransport = struct {
         // GAP-0202: Lock mutex for thread-safe list modification
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         // Remove connection from the tracked list using O(1) swapRemove
+        var removed: bool = false;
         var idx: usize = 0;
         while (idx < self.connections.items.len) {
             if (self.connections.items[idx] == conn) {
                 _ = self.connections.swapRemove(idx);
+                removed = true;
                 break;
             }
             idx += 1;
         }
         self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+        // PERF-D / #816 follow-up: signal the admission control waiter that a
+        // slot has freed. Done AFTER unlock (b3790685 signal-after-unlock
+        // pattern) to avoid waking a thread that immediately blocks on the
+        // mutex we still hold. Wake exactly one — there's only a single
+        // accept loop.
+        if (removed) {
+            _ = self.connection_slot_freed_gen.fetchAdd(1, .release);
+            const io = std.Io.Threaded.global_single_threaded.io();
+            io.futexWake(u32, &self.connection_slot_freed_gen.raw, 1);
+        }
 
         // Close streams and send CONNECTION_CLOSE frame, but DO NOT call
         // inner.deinit() here. The inner connection is still referenced by

@@ -2436,6 +2436,24 @@ pub fn build(b: *std.Build) void {
     perf_d_admission_step.dependOn(&run_perf_d_admission_tests.step);
     shardDep(test_step, &perf_d_admission_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
 
+    // PERF-D / #816 follow-up: QuicTransport.connection_slot_freed_gen
+    // wake regression. Pins that the admission-loop futex word can be
+    // signalled by the producer-side fetchAdd+futexWake exactly as
+    // destroyConnection/drainPendingDestroy do. Tests the wire-up
+    // contract; the canonical wake pattern itself is covered by
+    // test-perf-d-admission-signal.
+    // CANARY: REQ=PERF-D-ADMISSION-WAKE-001; FEATURE="QuicTransport.connection_slot_freed_gen"; ASPECT=AdmissionFutexWakeBuild; STATUS=TESTED; OWNER=build; UPDATED=2026-05-15
+    const perf_d_admission_wake_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_perf_d_admission_wake.zig"), .target = target, .optimize = optimize }) });
+    perf_d_admission_wake_tests.root_module.addImport("transport/quic", transport_quic_mod);
+    // vendor QUIC's logger uses getenv() at deinit time — pulled in by
+    // QuicTransport.deinit() even when no endpoint was opened. Same
+    // requirement as remote_kms_tests above.
+    perf_d_admission_wake_tests.root_module.link_libc = true;
+    const run_perf_d_admission_wake_tests = b.addRunArtifact(perf_d_admission_wake_tests);
+    const perf_d_admission_wake_step = b.step("test-perf-d-admission-wake", "PERF-D follow-up: QuicTransport admission-loop futex wake regression (issue #816)");
+    perf_d_admission_wake_step.dependOn(&run_perf_d_admission_wake_tests.step);
+    shardDep(test_step, &perf_d_admission_wake_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+
     // Issue #746: QueryDeadlineState lifetime regression test — pins the
     // contract that `finish()` must join the watchdog thread before
     // returning, so callers (cmdQuery) are safe to free the state (e.g. by

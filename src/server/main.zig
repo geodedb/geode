@@ -1383,20 +1383,34 @@ pub fn main() !void {
 
             // #49: Admission control — skip accept when at capacity.
             //
-            // PERF-D / #816: classified as `no-signal-source` and LEFT ALONE.
-            // The producer side (connection removal in `swapRemove` /
-            // `drainPendingDestroy`) lives in `src/transport/quic.zig`, which
-            // is owned by a different agent in this perf pass (see the
-            // task's "do NOT touch" list). Wiring a wake here would require
-            // adding a futex/CV to QuicTransport's `connections_mutex` write
-            // sites — out of scope for this commit. Until then this remains
-            // a 5 ms unconditional poll. The companion task PERF-A (#815)
-            // tracks transport-layer cleanup that would expose that signal.
+            // PERF-D / #816 follow-up: parks on `transport.connection_slot_freed_gen`,
+            // a generation counter that `destroyConnection` and `drainPendingDestroy`
+            // increment after dropping a slot (and then call `futexWake(..., 1)`).
+            // The 5 ms `futexWaitTimeout` upper bound is preserved as a safety net
+            // against a lost wake (race between our gen-read and the producer's
+            // increment) — under load, the typical wake latency is sub-ms instead
+            // of the prior unconditional 5 ms. Per the canonical futex idiom we
+            // re-check the predicate (`getConnectionCount() < max`) on every loop
+            // iteration; futexWaitTimeout returns void on signal, value-mismatch,
+            // timeout, OR spurious wake, so the caller MUST re-check.
             if (transport.getConnectionCount() >= transport.config.max_connections) {
-                {
-                    const req = std.os.linux.timespec{ .sec = 0, .nsec = 5 * std.time.ns_per_ms };
-                    var rem: std.os.linux.timespec = undefined;
-                    _ = std.os.linux.nanosleep(&req, &rem);
+                const gen_at_park = transport.connection_slot_freed_gen.load(.acquire);
+                // Re-check after the gen snapshot to close the gap where the
+                // producer increments between our count check above and the
+                // snapshot below. If the count dropped in that gap, fall
+                // through to accept without parking.
+                if (transport.getConnectionCount() >= transport.config.max_connections) {
+                    const io = std.Io.Threaded.global_single_threaded.io();
+                    const wait_timeout: std.Io.Timeout = .{ .duration = .{
+                        .raw = std.Io.Duration.fromNanoseconds(5 * std.time.ns_per_ms),
+                        .clock = .awake,
+                    } };
+                    io.futexWaitTimeout(u32, &transport.connection_slot_freed_gen.raw, gen_at_park, wait_timeout) catch |err| switch (err) {
+                        // No cancelation source is wired in the accept loop —
+                        // treat as a spurious wake and re-check on the next
+                        // iteration.
+                        error.Canceled => {},
+                    };
                 }
                 continue;
             }
