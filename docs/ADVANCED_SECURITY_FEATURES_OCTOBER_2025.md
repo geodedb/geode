@@ -75,12 +75,12 @@ ALTER TABLE employees ENABLE ROW LEVEL SECURITY;
 | API Keys | ✅ Implemented | Service accounts, automation | Medium-High | `src/security/api_keys.zig` |
 | mTLS (Certificate) | ✅ Implemented | Zero-trust, service mesh | Very High | `src/security/mtls_provider.zig` |
 
-### Planned Authentication Methods (Roadmap)
+### Not Supported (Tracking Issues Open)
 
-| Method | Status | Target | Use Case |
-|--------|--------|--------|----------|
-| LDAP/Active Directory | 🔜 Planned | Q2 2026 | Enterprise directory integration |
-| OAuth2/OIDC | 🔜 Planned | Q3 2026 | SSO, cloud-native deployments |
+| Method | Status | Tracking | Notes |
+|--------|--------|----------|-------|
+| LDAP/Active Directory | ❌ Not supported | [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
+| OAuth2/OIDC | ❌ Not supported | [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 
 ### Features
 

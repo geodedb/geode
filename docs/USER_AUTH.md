@@ -6,6 +6,25 @@
 
 Geode implements a comprehensive authentication system with post-quantum ready security features, configurable policies, and enterprise-grade password requirements. All users follow the same high security standards with extensive environment-based customization.
 
+### Supported / Not Supported Mechanisms
+
+**Supported today:**
+
+- Password-based authentication (Argon2id, RFC 9106)
+- Multi-factor authentication (TOTP)
+- Session tokens (with rotation)
+- API tokens (service accounts, automation)
+- mTLS certificate-based authentication
+- Role-based access control (RBAC)
+- Row-level security (RLS, single-tenant)
+
+**Not supported (no implementation in `src/security/`):**
+
+- LDAP / Active Directory — see issue [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834). Will be implemented when a customer requires it.
+- OAuth2 / OIDC — see issue [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835). Will be implemented when a customer requires it.
+
+For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
+
 ## 1. Default User Configuration
 
 ### Basic Setup
@@ -467,14 +486,14 @@ geode shell --cert /path/to/client.crt --key /path/to/client.key --server geode.
 # - Certificate fingerprint
 ```
 
-### Planned Methods (Roadmap)
+### Not Supported (Tracking Issues Open)
 
-| Method | Status | Target | Use Case |
-|--------|--------|--------|----------|
-| **LDAP/Active Directory** | 🔜 Planned | Q2 2026 | Enterprise directory integration |
-| **OAuth2/OIDC** | 🔜 Planned | Q3 2026 | SSO, cloud-native deployments |
+| Method | Status | Tracking | Notes |
+|--------|--------|----------|-------|
+| **LDAP/Active Directory** | ❌ Not supported | [#802](https://gitlab.com/devnw/codepros/geode/geode/-/issues/802) (GAP-0834) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
+| **OAuth2/OIDC** | ❌ Not supported | [#803](https://gitlab.com/devnw/codepros/geode/geode/-/issues/803) (GAP-0835) | The previous documentation overstated current capability. Will be implemented when a customer requires it. |
 
-**Note**: LDAP/AD and OAuth2/OIDC are on the roadmap for future releases. For enterprise SSO requirements before these are available, consider using mTLS certificate-based authentication with your PKI infrastructure.
+**Note**: LDAP/AD and OAuth2/OIDC are NOT supported. Earlier revisions of this document advertised them on a 2026 roadmap; that was inaccurate — no implementation exists in `src/security/`. For enterprise SSO requirements today, use mTLS certificate-based authentication with your PKI infrastructure.
 
 ---
 
