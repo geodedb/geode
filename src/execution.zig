@@ -303,6 +303,28 @@ pub fn getCatalog(_: std.mem.Allocator, context: ExecutionContext) *catalog_mod.
     return context.catalog;
 }
 
+/// Test-only teardown for the process-global catalog singleton.
+///
+/// `ensureCatalogInstance` is intentionally process-scoped — production
+/// servers keep the catalog alive for the lifetime of the process. Tests
+/// that exercise paths reaching `ensureCatalogInstance` (e.g. the LSP
+/// session bind in `src/cli/lsp/server.zig:publishVerifiedState`) trip
+/// the testing allocator's leak detector because the singleton is never
+/// freed. Call this from a final test in the binary to release the
+/// instance with the same allocator that initialized it. Safe to call
+/// when the singleton was never set — it's a no-op then.
+pub fn tearDownGlobalCatalogForTest() void {
+    catalog_instance_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer catalog_instance_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
+    if (global_catalog_instance) |instance| {
+        const a = instance.allocator;
+        instance.deinit();
+        a.destroy(instance);
+        @atomicStore(?*catalog_mod.Catalog, &global_catalog_instance, null, .release);
+    }
+}
+
 // CANARY: REQ=REQ-M5.3-EXECUTION-INIT-001; FEATURE="Circular Dependency Resolution"; ASPECT=CallbacksInitialization; STATUS=EXEMPT; OWNER=execution; UPDATED=2025-11-13
 /// Initialize evaluator with execution callbacks
 /// This must be called once during module initialization to provide eval.zig

@@ -126,6 +126,14 @@ test "Server.initWithAuth stores verifier and allow_unauth flag" {
 test "Server with allow_unauth synthesizes a local AuthState on initialize without token" {
     const alloc = testing.allocator;
 
+    // publishVerifiedState reaches ensureCatalogInstance which initializes
+    // the process-global catalog with this test's allocator. The
+    // singleton outlives the test, so without an explicit teardown the
+    // testing allocator's leak detector flags the catalog + its data_dir
+    // dupe. Tear it down WITHIN this test (deferred to fire AFTER
+    // srv.deinit) so the bucket metadata is still in scope.
+    defer @import("geode").execution.tearDownGlobalCatalogForTest();
+
     var srv = try server.Server.initWithAuth(alloc, null, true);
     defer srv.deinit();
 

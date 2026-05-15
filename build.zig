@@ -3605,6 +3605,40 @@ pub fn build(b: *std.Build) void {
     const test_lsp_step = b.step("test-lsp", "Run the LSP test runner (all LSP unit + e2e + auth-gate tests)");
     test_lsp_step.dependOn(&run_lsp_tests.step);
 
+    // Per-file LSP test steps. The aggregated test-lsp binary above
+    // links every LSP test file into ONE artifact; when the build runner
+    // pipes saturate (a Zig 0.16 build-runner IPC quirk observed during
+    // the permission-aware completion plan) the aggregator can hang.
+    // These per-file steps give every test file its own short-lived
+    // pipe so a single misbehaving file or environmental hiccup can
+    // not stall the entire LSP suite, and CI can shard them.
+    const LspPerFile = struct { name: []const u8, file: []const u8, needs_geode: bool, needs_intro: bool, needs_mcp_guards: bool };
+    const lsp_per_file = [_]LspPerFile{
+        .{ .name = "test-lsp-protocol",           .file = "src/cli/lsp/protocol_test.zig",              .needs_geode = false, .needs_intro = false, .needs_mcp_guards = false },
+        .{ .name = "test-lsp-framer",             .file = "src/cli/lsp/framer_test.zig",                .needs_geode = false, .needs_intro = false, .needs_mcp_guards = false },
+        .{ .name = "test-lsp-json-helpers",       .file = "src/cli/lsp/json_helpers_test.zig",          .needs_geode = false, .needs_intro = false, .needs_mcp_guards = false },
+        .{ .name = "test-lsp-document",           .file = "src/cli/lsp/document_test.zig",              .needs_geode = false, .needs_intro = false, .needs_mcp_guards = false },
+        .{ .name = "test-lsp-transport",          .file = "src/cli/lsp/transport_test.zig",             .needs_geode = false, .needs_intro = false, .needs_mcp_guards = false },
+        .{ .name = "test-lsp-mcp-input-guards",   .file = "src/cli/lsp/mcp_input_guards_test.zig",      .needs_geode = false, .needs_intro = false, .needs_mcp_guards = true  },
+        .{ .name = "test-lsp-features",           .file = "src/cli/lsp/features_test.zig",              .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-server",             .file = "src/cli/lsp/server_test.zig",                .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-e2e",                .file = "src/cli/lsp/e2e_test.zig",                   .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-debounce",           .file = "src/cli/lsp/server_debounce_test.zig",       .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-definition",         .file = "src/cli/lsp/server_definition_test.zig",     .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-invalid-params",     .file = "src/cli/lsp/server_invalid_params_test.zig", .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+        .{ .name = "test-lsp-server-auth",        .file = "src/cli/lsp/server_auth_test.zig",           .needs_geode = true,  .needs_intro = true,  .needs_mcp_guards = false },
+    };
+    for (lsp_per_file) |entry| {
+        const per_file_mod = b.createModule(.{ .root_source_file = b.path(entry.file), .target = target, .optimize = optimize });
+        if (entry.needs_geode) per_file_mod.addImport("geode", root_mod);
+        if (entry.needs_intro) per_file_mod.addImport("schema_introspection", schema_introspection_mod);
+        if (entry.needs_mcp_guards) per_file_mod.addImport("mcp_input_guards", mcp_input_guards_mod);
+        const per_file_tests = b.addTest(.{ .root_module = per_file_mod });
+        const per_file_run = b.addRunArtifact(per_file_tests);
+        const per_file_step = b.step(entry.name, "Run one LSP test file in isolation (bypasses test-lsp aggregator)");
+        per_file_step.dependOn(&per_file_run.step);
+    }
+
     // Task 10 of the LSP permission-aware completion plan: register
     // src/cli/lsp/auth_test.zig as a dedicated test step. auth.zig
     // reaches user_management.zig through the `geode` named module —
