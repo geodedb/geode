@@ -295,10 +295,36 @@ repos:
     pass_filenames: false
     stages: [pre-push]      # Only on push, too slow for commit
 
-      # Quick unit tests
+      # Quick unit tests — sharded 4x to keep local pre-push tractable.
+      # Unsharded `zig build test` runs ~6 h locally (memory: shard [3] at
+      # 2 h CI limit; pipeline #2516770059 cut 6 h → 56 min via sharding).
+      # Running the 4 shards in parallel keeps the pre-push hook within a
+      # tolerable window (~25 min wall, dominated by the slowest shard).
   - id: zig-test
-    name: zig build test
-    entry: zig build test
+    name: zig build test (sharded x4 parallel)
+    entry: bash
+    args:
+    - -c
+    - |
+      set -uo pipefail
+      pids=()
+      for idx in 0 1 2 3; do
+        zig build test -Dtest-shard-total=4 -Dtest-shard-index="$idx" --summary all \
+          > ".zig-cache/pre-push-shard-${idx}.log" 2>&1 &
+        pids+=($!)
+      done
+      rc=0
+      for i in "${!pids[@]}"; do
+        wait "${pids[$i]}" || { echo "shard ${i} FAILED — see .zig-cache/pre-push-shard-${i}.log"; rc=1; }
+      done
+      if [ "$rc" -ne 0 ]; then
+        for i in 0 1 2 3; do
+          echo
+          echo "=== shard ${i} tail (.zig-cache/pre-push-shard-${i}.log) ==="
+          tail -30 ".zig-cache/pre-push-shard-${i}.log" || true
+        done
+      fi
+      exit "$rc"
     language: system
     files: \.(zig|zon)$
     exclude: ^(vendor/|dist/|zig-out/|\.zig-cache/)
