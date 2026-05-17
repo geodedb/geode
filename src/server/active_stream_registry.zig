@@ -150,9 +150,16 @@ fn nowMonotonicNs() i128 {
         _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
         return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
     } else {
-        var ts: std.c.timespec = undefined;
+        // Non-Linux: mirror the std.posix.timespec + std.c.clock_gettime
+        // pattern already established in src/performance/simple_async_io.zig
+        // (compat_milliTimestamp etc.). std.c.timespec on macOS lacks
+        // .tv_sec / .tv_nsec entirely (release pipeline #2530555362
+        // build-release caught this on aarch64-macos cross-compile);
+        // std.posix.timespec exposes .sec / .nsec uniformly across
+        // platforms.
+        var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
         _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
-        return @as(i128, ts.tv_sec) * std.time.ns_per_s + @as(i128, ts.tv_nsec);
+        return @as(i128, ts.sec) * std.time.ns_per_s + @as(i128, ts.nsec);
     }
 }
 

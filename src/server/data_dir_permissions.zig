@@ -66,12 +66,17 @@ fn statMode(path: []const u8) ?u32 {
         if (std.os.linux.errno(rc) != .SUCCESS) return null;
         return @as(u32, @intCast(sx.mode & 0o777));
     } else {
-        // BSD / macOS: use libc stat() through std.c.  (std.c.stat is only
-        // wired up on these platforms; on linux the symbol resolves to
-        // `private.stat` which is undefined, hence the comptime branch.)
-        var sb: std.c.Stat = undefined;
-        if (std.c.stat(path_z, &sb) != 0) return null;
-        return @as(u32, @intCast(sb.mode & 0o777));
+        // Non-Linux (macOS / BSD): std.c.stat is unwired in Zig 0.16 —
+        // the symbol resolves to `private.stat` which is undefined on
+        // these targets, breaking aarch64-macos cross-compile (release
+        // pipeline #2530555362 build-release stage). Geode's production
+        // deployment target is Linux and the security model (chmod 0o700
+        // data_dir) is a Linux-only concern, so non-Linux falls through
+        // to `.unknown` and the operator notices via the structured log.
+        // ensureSecureDataDirPermissions already returns `.not_applicable`
+        // for Windows; non-Linux Unix lands here without blocking
+        // bootstrap.
+        return null;
     }
 }
 
