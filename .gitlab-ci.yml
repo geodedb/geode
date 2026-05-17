@@ -26,7 +26,12 @@ include:
   # `sh -c "..."` script wrapper works — fixes the v1.14.0 deterministic
   # failure "argument command: Found invalid choice 'sh'"). allow_failure
   # restored to false so the deploy gate now blocks on apt publishing.
-  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.24.2
+  # 2026-05-17: bumped to v1.25.2, which carries upstream fix 90147ec
+  # (replaces `find | sort | head -50` with `awk 'NR<=50'` so SIGPIPE on
+  # `sort` no longer fails the apt-repo job under `set -o pipefail` once
+  # the repo has grown past 50 files). Caught in v0.5.17 release pipeline
+  # #2531568850 (apt-repo job 14407557997 + retry 14409676608).
+  - component: gitlab.com/devnw/ci-catalog/apt-publish@v1.25.2
     inputs:
       apt_domain: apt.geodedb.com
       job_suffix: apt-geodedb-com
