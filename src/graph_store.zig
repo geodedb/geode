@@ -509,6 +509,15 @@ pub const GraphStore = struct {
     // — every access is leaf-level so there is no nesting / lock-order
     // risk.  Tier 1 per CLAUDE.md (alongside store_mutex).
     merge_prop_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // GAP-825 (issue #825): per-store rwlock that serialises the
+    // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
+    // `removeNodeLabel`, and their `NoSave` variants) against the
+    // snapshot reader in `cloneNodesFrom`.  Held EXCLUSIVE for the brief
+    // free+reassign window in the writers; held SHARED across the
+    // `source.nodes` walk in `cloneNodesFrom`.  Leaf-level: no other
+    // mutex/lock may be acquired while it is held, so there is no
+    // nesting / ordering risk with `g_store_rwlock` or per-graph rwlocks.
+    labels_rwlock: std.Io.RwLock = std.Io.RwLock.init,
     // CANARY: REQ=REQ-PERF-EDGE-TYPE-INDEX-001; FEATURE="EdgeTypeIndex"; ASPECT=EdgeTypeLookup; STATUS=TESTED; TEST=src/graph_store.zig; OWNER=perf; UPDATED=2026-04-10
     // PERF-P0-001: Edge-type index for O(1) getEdgesByType lookups instead of O(E) full scan
     // Maps "graph_name:edge_type" composite key to sorted list of edge IDs
@@ -909,7 +918,17 @@ pub const GraphStore = struct {
             try self.graphs.put(key, {});
         }
 
-        // Clone nodes
+        // Clone nodes.
+        //
+        // GAP-825 (issue #825): hold `source.labels_rwlock` SHARED across
+        // the entire walk so concurrent `addNodeLabel`/`removeNodeLabel`
+        // writers cannot free `node.labels` while we are dereferencing it.
+        // The writers grab the same lock EXCLUSIVE around their
+        // free+reassign window.  Leaf lock, no nesting/ordering risk.
+        const io_clone = std.Io.Threaded.global_single_threaded.io();
+        @constCast(&source.labels_rwlock).lockSharedUncancelable(io_clone);
+        defer @constCast(&source.labels_rwlock).unlockShared(io_clone);
+
         var node_it = source.nodes.iterator();
         while (node_it.next()) |entry| {
             const src_node = entry.value_ptr.*;
@@ -2985,6 +3004,20 @@ pub const GraphStore = struct {
             @memcpy(new_labels[0..node.labels.len], node.labels);
             new_labels[node.labels.len] = label_copy;
 
+            // GAP-825: hold `labels_rwlock` EXCLUSIVE across the entire
+            // mutation window (free-then-reassign + label_index update +
+            // PERF-C counter bumps).  Without this, a snapshot reader in
+            // `cloneNodesFrom` (which holds the same lock SHARED for the
+            // duration of its walk) could observe `node.labels == []`
+            // between `free(node.labels)` and `node.labels = new_labels`
+            // (the freed-page zero-fill bug) OR an inconsistent
+            // (node.labels, label_index) pair after the slice update but
+            // before the index update.  Leaf lock — nothing else inside
+            // this critical section acquires another lock.
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.labels_rwlock.lockUncancelable(io);
+            defer self.labels_rwlock.unlock(io);
+
             // Free old labels array if it was allocated
             if (node.labels.len > 0) {
                 self.allocator.free(node.labels);
@@ -3045,6 +3078,13 @@ pub const GraphStore = struct {
                         new_index += 1;
                     }
                 }
+
+                // GAP-825: hold `labels_rwlock` EXCLUSIVE across the
+                // entire mutation window. See addNodeLabel for the full
+                // rationale.
+                const io = std.Io.Threaded.global_single_threaded.io();
+                self.labels_rwlock.lockUncancelable(io);
+                defer self.labels_rwlock.unlock(io);
 
                 // Free old labels array if it was allocated
                 if (node.labels.len > 0) {
@@ -5431,6 +5471,19 @@ pub const GraphStore = struct {
                     try self.addToLabelIndex(graph_name, label, node_uuid);
                 }
 
+                // GAP-825 (issue #825): the adapter hydration path used to
+                // rebuild `label_index` only, leaving `nodes_by_graph`
+                // (PERF-B) and `node_labels_by_tenant` /
+                // `label_properties_by_tenant` (PERF-C) empty after a
+                // restart.  That made `iterateNodesInGraph`,
+                // `nodesInGraphCount`, and `listNodeLabels` silently
+                // return zero rows even though `getNodesByLabel` worked.
+                // Mirror the introspection counters now so the in-memory
+                // store matches a freshly-created one.
+                const stored_node_ptr = self.nodes.getPtr(node_uuid) orelse return error.NodeNotFound;
+                try self.addNodeToGraphIndex(graph_name, node_uuid);
+                try self.bumpIntrospectionForNode(stored_node_ptr);
+
                 var out_edges = try adapter.iterateOutgoingEdges(graph_name, slot_id, self.allocator);
                 defer out_edges.deinit();
 
@@ -6081,11 +6134,19 @@ pub const GraphStore = struct {
             @memcpy(new_labels[0..node.labels.len], node.labels);
             new_labels[node.labels.len] = label_copy;
 
-            if (node.labels.len > 0) {
-                self.allocator.free(node.labels);
-            }
+            // GAP-825: same free+reassign window as addNodeLabel — must be
+            // serialised against `cloneNodesFrom` snapshot readers.
+            {
+                const io = std.Io.Threaded.global_single_threaded.io();
+                self.labels_rwlock.lockUncancelable(io);
+                defer self.labels_rwlock.unlock(io);
 
-            node.labels = new_labels;
+                if (node.labels.len > 0) {
+                    self.allocator.free(node.labels);
+                }
+
+                node.labels = new_labels;
+            }
 
             try self.addToLabelIndex(node.graph_name, label, node_id);
             // PERF-C (issue #814): mirror addNodeLabel.
@@ -6123,11 +6184,20 @@ pub const GraphStore = struct {
                     }
                 }
 
-                if (node.labels.len > 0) {
-                    self.allocator.free(node.labels);
-                }
+                // GAP-825: same free+reassign window as removeNodeLabel —
+                // must be serialised against `cloneNodesFrom` snapshot
+                // readers.
+                {
+                    const io = std.Io.Threaded.global_single_threaded.io();
+                    self.labels_rwlock.lockUncancelable(io);
+                    defer self.labels_rwlock.unlock(io);
 
-                node.labels = new_labels;
+                    if (node.labels.len > 0) {
+                        self.allocator.free(node.labels);
+                    }
+
+                    node.labels = new_labels;
+                }
 
                 self.removeFromLabelIndex(node.graph_name, label, node_id);
                 // PERF-C (issue #814): mirror removeNodeLabel.
