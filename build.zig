@@ -3557,6 +3557,18 @@ pub fn build(b: *std.Build) void {
     const perf_b_step = b.step("test-perf-b-graph-scoped", "PERF-B (issue #811) per-graph node-id index regression suite");
     perf_b_step.dependOn(&run_perf_b_tests.step);
 
+    // GAP-825 (issue #825): label-aware MATCH returns 0 rows.
+    // Covers (a) the cloneNodesFrom snapshot race against concurrent
+    // addNodeLabel/removeNodeLabel and (b) the loadOneGraphFromAdapter
+    // index-rebuild gap (nodes_by_graph / node_labels_by_tenant).
+    const gap825_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gap_825_label_index_invariants.zig"), .target = target, .optimize = optimize });
+    gap825_test_mod.addImport("geode", root_mod);
+    const gap825_tests = b.addTest(.{ .root_module = gap825_test_mod });
+    const run_gap825_tests = b.addRunArtifact(gap825_tests);
+    shardDep(test_step, &run_gap825_tests.step, &test_shard_counter, test_shard_total, test_shard_index);
+    const gap825_step = b.step("test-gap-825", "GAP-825 (issue #825) label-index invariants under snapshot/restart");
+    gap825_step.dependOn(&run_gap825_tests.step);
+
     // PERF-C (issue #814): LSP introspection label/property/edge-type index.
     const perf_c_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_perf_c_lsp_introspection_index.zig"), .target = target, .optimize = optimize });
     perf_c_test_mod.addImport("geode", root_mod);
