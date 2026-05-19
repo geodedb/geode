@@ -1534,8 +1534,10 @@ pub fn build(b: *std.Build) void {
     const ts_gql_mod = b.createModule(.{ .root_source_file = b.path("src/timeseries/gql_functions.zig"), .target = target, .optimize = optimize });
     ts_gql_mod.addImport("timeseries_lib", timeseries_ext_mod);
 
-    // GAP-0279: e2e_timeseries test (Store, ChunkStorage, GQL functions)
-    const e2e_ts_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_timeseries.zig"), .target = target, .optimize = optimize }) });
+    // GAP-0279: e2e_timeseries test (Store, ChunkStorage, GQL functions).
+    // link_libc: the CI-quarantine guard in the "performance benchmark"
+    // test calls `std.c.getenv` to skip under shared-runner contention.
+    const e2e_ts_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/e2e_timeseries.zig"), .target = target, .optimize = optimize, .link_libc = true }) });
     e2e_ts_tests.root_module.addImport("timeseries_lib", timeseries_ext_mod);
     e2e_ts_tests.root_module.addImport("gql_functions", ts_gql_mod);
     const run_e2e_ts_tests = b.addRunArtifact(e2e_ts_tests);

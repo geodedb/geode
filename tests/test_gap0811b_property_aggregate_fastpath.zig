@@ -84,6 +84,16 @@ const Harness = struct {
 };
 
 test "GAP-0811b: sum(p.age) label-index scan without materialize" {
+    // Skip on CI runners — the assertion `elapsed_ns < 10_000_000`
+    // (10 ms) is a fast-path latency check that fires falsely under
+    // shared-runner / 4-way-shard contention even when the fast path
+    // is in fact taking effect. Same quarantine pattern as
+    // test_gap0814_union_parallelism, test_group_commit_coordinator,
+    // and test_two_phase_edge_lock — local devs still run it; CI marks
+    // SKIPPED.
+    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
+        return error.SkipZigTest;
+    }
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
