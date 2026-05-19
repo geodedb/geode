@@ -80,6 +80,7 @@ fn getStderrHandle() TransportError!std.Io.File.Handle {
 pub const Transport = union(enum) {
     stdio: StdioTransport,
     tcp: TcpTransport,
+    noop: NoopTransport,
 
     pub fn initStdio(allocator: Allocator) TransportError!Transport {
         return .{ .stdio = try StdioTransport.init(allocator) };
@@ -96,10 +97,22 @@ pub const Transport = union(enum) {
         return .{ .tcp = try TcpTransport.init(allocator, io, stream) };
     }
 
+    /// Test-only: a transport that discards every write and returns
+    /// `EndOfStream` on every read. Lets unit tests drive
+    /// `Server.handleMessage` without polluting real stdout — which
+    /// matters specifically under `zig build test --listen=-`, where
+    /// the binary's stdout IS the test runner protocol pipe and any
+    /// stray byte corrupts the framing and deadlocks the runner. See
+    /// `server_auth_test.zig` for the call site.
+    pub fn initNoop(allocator: Allocator) Transport {
+        return .{ .noop = NoopTransport.init(allocator) };
+    }
+
     pub fn deinit(self: *Transport) void {
         switch (self.*) {
             .stdio => |*s| if (@hasDecl(StdioTransport, "deinit")) s.deinit(),
             .tcp => |*t| t.deinit(),
+            .noop => |*n| n.deinit(),
         }
     }
 
@@ -107,6 +120,7 @@ pub const Transport = union(enum) {
         return switch (self.*) {
             .stdio => |*s| s.readMessage(),
             .tcp => |*t| t.readMessage(),
+            .noop => |*n| n.readMessage(),
         };
     }
 
@@ -114,6 +128,7 @@ pub const Transport = union(enum) {
         return switch (self.*) {
             .stdio => |*s| s.writeMessage(msg),
             .tcp => |*t| t.writeMessage(msg),
+            .noop => |*n| n.writeMessage(msg),
         };
     }
 
@@ -121,6 +136,7 @@ pub const Transport = union(enum) {
         switch (self.*) {
             .stdio => |*s| s.logMessage(level, msg),
             .tcp => |*t| t.logMessage(level, msg),
+            .noop => |*n| n.logMessage(level, msg),
         }
     }
 };
@@ -264,5 +280,37 @@ pub const TcpTransport = struct {
         // already receive structured diagnostics over the JSON-RPC
         // channel; silently dropping plain log lines is the
         // spec-compliant choice (vs. polluting the protocol stream).
+    }
+};
+
+/// Test-only transport that discards every write and returns
+/// `EndOfStream` on every read. Used by tests that exercise
+/// `Server.handleMessage` end-to-end without touching the process's
+/// real stdout. Under `zig build test --listen=-` the test binary's
+/// stdout is the test-runner protocol pipe; an LSP test writing a
+/// Content-Length response there corrupts the framing and deadlocks
+/// the runner (zig polls for protocol messages it will never see,
+/// child blocks on stdin for instructions it can no longer parse).
+pub const NoopTransport = struct {
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) NoopTransport {
+        return .{ .allocator = allocator };
+    }
+
+    pub fn deinit(_: *NoopTransport) void {}
+
+    pub fn readMessage(_: *NoopTransport) TransportError![]const u8 {
+        return TransportError.EndOfStream;
+    }
+
+    pub fn writeMessage(_: *NoopTransport, _: []const u8) TransportError!void {
+        // Drop the message on the floor. Tests that need to inspect
+        // the response should reach into Server state directly
+        // (see `server_auth_test.zig`'s post-condition asserts).
+    }
+
+    pub fn logMessage(_: *NoopTransport, _: []const u8, _: []const u8) void {
+        // Drop log lines on the floor.
     }
 };

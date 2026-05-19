@@ -23,6 +23,7 @@ const std = @import("std");
 const testing = std.testing;
 const server = @import("server.zig");
 const auth = @import("auth.zig");
+const transport = @import("transport.zig");
 
 test "Server.isMethodAllowed exempts initialize and shutdown by default" {
     const alloc = testing.allocator;
@@ -134,7 +135,15 @@ test "Server with allow_unauth synthesizes a local AuthState on initialize witho
     // srv.deinit) so the bucket metadata is still in scope.
     defer @import("geode").execution.tearDownGlobalCatalogForTest();
 
-    var srv = try server.Server.initWithAuth(alloc, null, true);
+    // Use a noop transport — `handleMessage(initialize)` below sends
+    // the LSP `initialize` response via `transport.writeMessage`. With
+    // the default stdio transport that write lands on process stdout,
+    // which under `zig build test --listen=-` IS the test-runner
+    // protocol pipe; the stray LSP headers corrupt the framing and
+    // deadlock the runner. NoopTransport drops the write so the
+    // protocol stream stays clean. Test still asserts on Server state
+    // post-call (no observation of the dropped response needed).
+    var srv = try server.Server.initWithTransport(alloc, transport.Transport.initNoop(alloc), null, true);
     defer srv.deinit();
 
     // Pre-condition: the gate is closed because initialize has not
@@ -173,7 +182,14 @@ test "Server with allow_unauth synthesizes a local AuthState on initialize witho
 // the Server with allow_unauth=false regardless of any CLI flag.
 test "Server without allow_unauth rejects initialize that omits the geode auth block" {
     const alloc = testing.allocator;
-    var srv = try server.Server.initWithAuth(alloc, null, false);
+    // Use noop transport — even though this test EXPECTS bindSession
+    // to reject the request, the rejection path still calls
+    // `respondInitializeError` which writes a JSON-RPC error response
+    // through the transport. On stdio that lands on the test-runner
+    // protocol pipe under `zig build test --listen=-` and corrupts
+    // the framing. NoopTransport drops the write; the test still
+    // asserts on `srv.auth == null` and `isMethodAllowed == false`.
+    var srv = try server.Server.initWithTransport(alloc, transport.Transport.initNoop(alloc), null, false);
     defer srv.deinit();
 
     const init_msg =

@@ -10,10 +10,24 @@
 const std = @import("std");
 const testing = std.testing;
 const server = @import("server.zig");
+const transport = @import("transport.zig");
+
+// All three F-01 tests below reach `Server.sendDiagnostics`
+// (src/cli/lsp/server.zig ~1367), which calls
+// `transport.writeMessage`. Under the default stdio transport that
+// write lands on process stdout — which IS the test-runner protocol
+// pipe under `zig build test --listen=-`. A stray LSP frame there
+// corrupts the framing and deadlocks the runner. Use a noop
+// transport: tests only assert on the in-memory counter
+// `srv.diagnostics_send_count_for_test`, never on the bytes
+// dispatched to the wire.
+fn newDebounceServer(alloc: std.mem.Allocator) !server.Server {
+    return try server.Server.initWithTransport(alloc, transport.Transport.initNoop(alloc), null, false);
+}
 
 test "F-01: 20 rapid didChange notifications do not eagerly send diagnostics" {
     const allocator = testing.allocator;
-    var srv = try server.Server.init(allocator);
+    var srv = try newDebounceServer(allocator);
     defer srv.deinit();
 
     const uri = "file:///debounce.gql";
@@ -37,7 +51,7 @@ test "F-01: 20 rapid didChange notifications do not eagerly send diagnostics" {
 
 test "F-01: flushPendingDiagnostics with sufficient delay sends one diagnostic" {
     const allocator = testing.allocator;
-    var srv = try server.Server.init(allocator);
+    var srv = try newDebounceServer(allocator);
     defer srv.deinit();
 
     const uri = "file:///debounce-flush.gql";
@@ -56,7 +70,7 @@ test "F-01: flushPendingDiagnostics with sufficient delay sends one diagnostic" 
 
 test "F-01: flushPendingDiagnostics within debounce window does not send" {
     const allocator = testing.allocator;
-    var srv = try server.Server.init(allocator);
+    var srv = try newDebounceServer(allocator);
     defer srv.deinit();
 
     const uri = "file:///debounce-hold.gql";
