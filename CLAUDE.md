@@ -343,6 +343,8 @@ When acquiring multiple mutexes, always acquire in this order (lower tier first)
 |------|-------|--------|-------|
 | 0 | `graph_handles_mutex` | `graph_storage_adapter.zig` | Graph handle map — brief lookups only, NEVER during data ops |
 | 1 | `store_mutex` / per-graph `rwlock` | `graph_store.zig` / `graph_storage_adapter.zig` | Graph data — per-graph locks use alphabetical acquire order for multi-graph |
+| 1 | `merge_prop_index_mutex` | `graph_store.zig` | MERGE property index — leaf-level, serializes `addToMergePropertyIndex` / `removeFromMergePropertyIndex` / `lookupMergeCandidate` |
+| 1 | `perf_c_refcount_mutex` | `graph_store.zig` | PERF-C tenant-keyed refcount maps (issue #814) — leaf-level; serializes `bumpRefcount` / `decRefcount` and the `listNodeLabels` / `listEdgeTypes` / `listPropertiesForLabel` readers. MAY be acquired while `labels_rwlock` is held EXCLUSIVE (writers reach `bumpLabelCount` / `decLabelCount` inside their labels critical section), so the strict ordering is `labels_rwlock` → `perf_c_refcount_mutex`. |
 | 2 | `catalog_mutex` | `execution.zig` | Schema catalog |
 | 3 | `connections_mutex` | `transport/quic.zig` | QUIC connection list |
 | 3 | `pending_destroy_mutex` | `transport/quic.zig` | Deferred cleanup |

@@ -509,6 +509,24 @@ pub const GraphStore = struct {
     // — every access is leaf-level so there is no nesting / lock-order
     // risk.  Tier 1 per CLAUDE.md (alongside store_mutex).
     merge_prop_index_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    // PERF-C (issue #814) race fix (2026-05-18): serialize every access to
+    // the three tenant-keyed refcount maps (`node_labels_by_tenant`,
+    // `edge_types_by_tenant`, `label_properties_by_tenant`).  The bump/dec
+    // paths reach `std.StringHashMap.getOrPut`, which trips its
+    // `pointer_stability.lock` assertion on a concurrent rehash; the
+    // reader paths (`listNodeLabels`, `listEdgeTypes`,
+    // `listPropertiesForLabel`) iterate the same maps and must observe a
+    // stable structure for the duration of the walk.
+    //
+    // Acquired by `bumpRefcount`, `decRefcount`, `listNodeLabels`,
+    // `listEdgeTypes`, and `listPropertiesForLabel`.  Leaf-level (no
+    // other lock is acquired while it is held), but it MAY be acquired
+    // while `labels_rwlock` is held EXCLUSIVE (the addNodeLabel /
+    // removeNodeLabel writers reach `bumpLabelCount` /
+    // `decLabelCount` while inside the labels_rwlock critical section)
+    // — so the strict ordering is `labels_rwlock` → `perf_c_refcount_mutex`.
+    // Tier 1 per CLAUDE.md (alongside merge_prop_index_mutex).
+    perf_c_refcount_mutex: std.Io.Mutex = std.Io.Mutex.init,
     // GAP-825 (issue #825): per-store rwlock that serialises the
     // free-then-reassign sequences on `Node.labels` (in `addNodeLabel`,
     // `removeNodeLabel`, and their `NoSave` variants) against the
@@ -1127,7 +1145,7 @@ pub const GraphStore = struct {
     /// Caller owns the returned slice and each string inside it — both must
     /// be freed with the same `allocator` that was passed in.
     pub fn listEdgeTypes(
-        self: *const GraphStore,
+        self: *GraphStore,
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
@@ -1141,6 +1159,14 @@ pub const GraphStore = struct {
         // The set owns each duped key for the lifetime of the function;
         // on success we transfer ownership to `out` and deinit only the
         // map shell, so each unique edge type is allocated exactly once.
+        //
+        // PERF-C race fix (2026-05-18): hold `perf_c_refcount_mutex` for
+        // the duration of the walk so concurrent `bumpRefcount` /
+        // `decRefcount` cannot rehash the map under us.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
         var type_set = std.StringHashMap(void).init(allocator);
         defer type_set.deinit();
         errdefer {
@@ -1193,7 +1219,7 @@ pub const GraphStore = struct {
     /// Caller owns the returned slice and each string inside it — both
     /// must be freed with the same `allocator` that was passed in.
     pub fn listPropertiesForLabel(
-        self: *const GraphStore,
+        self: *GraphStore,
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
         label: []const u8,
@@ -1208,6 +1234,14 @@ pub const GraphStore = struct {
         // owns each duped key for the lifetime of the function. On
         // success we transfer ownership to `out` and deinit only the
         // map shell. On error we free every key the set still owns.
+        //
+        // PERF-C race fix (2026-05-18): hold `perf_c_refcount_mutex` for
+        // the duration of the walk so concurrent `bumpRefcount` /
+        // `decRefcount` cannot rehash the map under us.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
         var prop_set = std.StringHashMap(void).init(allocator);
         defer prop_set.deinit();
         errdefer {
@@ -1277,7 +1311,7 @@ pub const GraphStore = struct {
     ///
     /// CANARY: REQ=REQ-GAP-0509-SHOW-TABLES-TENANT; FEATURE="ShowTablesTenantIsolation"; ASPECT=LabelEnumeration; STATUS=TESTED; TEST=tests/test_gap0509_tenant_isolation.zig:1; OWNER=security; UPDATED=2026-04-11
     pub fn listNodeLabels(
-        self: *const GraphStore,
+        self: *GraphStore,
         allocator: std.mem.Allocator,
         filter_tenant: ?[]const u8,
     ) ![][]const u8 {
@@ -1293,6 +1327,14 @@ pub const GraphStore = struct {
         // lifetime of the function. On success we transfer ownership to
         // `out` and deinit only the map shell. On error we free every
         // key the set still owns.
+        //
+        // PERF-C race fix (2026-05-18): hold `perf_c_refcount_mutex` for
+        // the duration of the walk so concurrent `bumpRefcount` /
+        // `decRefcount` cannot rehash the map under us.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
         var label_set = std.StringHashMap(void).init(allocator);
         defer label_set.deinit();
         errdefer {
@@ -1983,22 +2025,33 @@ pub const GraphStore = struct {
     // increments the existing usize. Failure propagates with the partial-key
     // allocation freed.
     fn bumpRefcount(
+        self: *GraphStore,
         outer: *std.StringHashMap(std.StringHashMap(usize)),
-        allocator: std.mem.Allocator,
         outer_key: []const u8,
         inner_key: []const u8,
     ) !void {
+        // PERF-C race fix (2026-05-18): serialize every mutation to the
+        // tenant-keyed refcount maps.  `setNodeProperty` is called from
+        // 16+ shard worker threads concurrently and races on
+        // `std.StringHashMap.getOrPut` here.  Leaf-level lock — no other
+        // lock is acquired inside this critical section.  See the field
+        // comment on `perf_c_refcount_mutex` for ordering vs.
+        // `labels_rwlock`.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
         const outer_result = try outer.getOrPut(outer_key);
         if (!outer_result.found_existing) {
-            const okey_copy = try allocator.dupe(u8, outer_key);
-            errdefer allocator.free(okey_copy);
+            const okey_copy = try self.allocator.dupe(u8, outer_key);
+            errdefer self.allocator.free(okey_copy);
             outer_result.key_ptr.* = okey_copy;
-            outer_result.value_ptr.* = std.StringHashMap(usize).init(allocator);
+            outer_result.value_ptr.* = std.StringHashMap(usize).init(self.allocator);
         }
         const inner_result = try outer_result.value_ptr.getOrPut(inner_key);
         if (!inner_result.found_existing) {
-            const ikey_copy = try allocator.dupe(u8, inner_key);
-            errdefer allocator.free(ikey_copy);
+            const ikey_copy = try self.allocator.dupe(u8, inner_key);
+            errdefer self.allocator.free(ikey_copy);
             inner_result.key_ptr.* = ikey_copy;
             inner_result.value_ptr.* = 0;
         }
@@ -2008,11 +2061,16 @@ pub const GraphStore = struct {
     /// PERF-C: Decrement the refcount; remove the key when it hits zero so the
     /// index never reports a label/type/property no node carries.
     fn decRefcount(
+        self: *GraphStore,
         outer: *std.StringHashMap(std.StringHashMap(usize)),
-        allocator: std.mem.Allocator,
         outer_key: []const u8,
         inner_key: []const u8,
     ) void {
+        // PERF-C race fix (2026-05-18): see `bumpRefcount` for rationale.
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.perf_c_refcount_mutex.lockUncancelable(io);
+        defer self.perf_c_refcount_mutex.unlock(io);
+
         const outer_ptr = outer.getPtr(outer_key) orelse return;
         const entry = outer_ptr.getEntry(inner_key) orelse return;
         if (entry.value_ptr.* > 1) {
@@ -2022,10 +2080,10 @@ pub const GraphStore = struct {
         // Final reference: drop the inner key and (if empty) the outer entry.
         const owned_inner = entry.key_ptr.*;
         _ = outer_ptr.remove(inner_key);
-        allocator.free(owned_inner);
+        self.allocator.free(owned_inner);
         if (outer_ptr.count() == 0) {
             if (outer.fetchRemove(outer_key)) |kv| {
-                allocator.free(kv.key);
+                self.allocator.free(kv.key);
                 var inner_map = kv.value;
                 inner_map.deinit();
             }
@@ -2033,19 +2091,19 @@ pub const GraphStore = struct {
     }
 
     fn bumpLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) !void {
-        try bumpRefcount(&self.node_labels_by_tenant, self.allocator, tenant_id, label);
+        try self.bumpRefcount(&self.node_labels_by_tenant, tenant_id, label);
     }
 
     fn decLabelCount(self: *GraphStore, tenant_id: []const u8, label: []const u8) void {
-        decRefcount(&self.node_labels_by_tenant, self.allocator, tenant_id, label);
+        self.decRefcount(&self.node_labels_by_tenant, tenant_id, label);
     }
 
     fn bumpEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) !void {
-        try bumpRefcount(&self.edge_types_by_tenant, self.allocator, tenant_id, edge_type);
+        try self.bumpRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
     }
 
     fn decEdgeTypeCount(self: *GraphStore, tenant_id: []const u8, edge_type: []const u8) void {
-        decRefcount(&self.edge_types_by_tenant, self.allocator, tenant_id, edge_type);
+        self.decRefcount(&self.edge_types_by_tenant, tenant_id, edge_type);
     }
 
     /// Compose "label\x00prop_key" into a stack buffer when small enough;
@@ -2080,7 +2138,7 @@ pub const GraphStore = struct {
         var scratch: [512]u8 = undefined;
         const k = try formatLabelPropKey(&scratch, self.allocator, label, prop_key);
         defer if (k.owned) |buf| self.allocator.free(buf);
-        try bumpRefcount(&self.label_properties_by_tenant, self.allocator, tenant_id, k.key);
+        try self.bumpRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
     }
 
     fn decLabelPropertyCount(
@@ -2092,7 +2150,7 @@ pub const GraphStore = struct {
         var scratch: [512]u8 = undefined;
         const k = formatLabelPropKey(&scratch, self.allocator, label, prop_key) catch return;
         defer if (k.owned) |buf| self.allocator.free(buf);
-        decRefcount(&self.label_properties_by_tenant, self.allocator, tenant_id, k.key);
+        self.decRefcount(&self.label_properties_by_tenant, tenant_id, k.key);
     }
 
     /// Per-node helper: bump (tenant, label) and (tenant, label\x00prop_key)
