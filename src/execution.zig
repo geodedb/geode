@@ -1749,6 +1749,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 }
                 return error.GraphBound;
             }
+            // CANARY: REQ=REQ-GPS-BIND-002; FEATURE="GPS BindGraph Action"; ASPECT=UseGraphAuthorization; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
+            // Phase 3: gate USE GRAPH on gps.decide(.bind_graph). When the
+            // execution context carries a Principal, the decision determines
+            // whether the switch is permitted. Legacy paths without a
+            // principal (tests, internal callers) bypass this check —
+            // Phase 3+ will narrow that exemption.
+            if (context.principal) |princ| {
+                const gps_mod = @import("security/gps.zig");
+                const req_bind = gps_mod.DecisionRequest{
+                    .principal = princ,
+                    .action = .bind_graph,
+                    .resource = .{ .graph = ug.graph_name },
+                };
+                const decision_bind = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
+                if (decision_bind.kind != .allow) {
+                    return error.Unauthorized;
+                }
+            }
             // CANARY: REQ=REQ-MULTI-GRAPH-032; FEATURE="MultiGraphIsolation"; ASPECT=UseGraphValidation; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-27
             // USE GRAPH implementation - switch active graph context
             // Must validate graph exists before switching
