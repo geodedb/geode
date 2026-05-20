@@ -1095,6 +1095,8 @@ REQ-GPS-PRINCIPAL-002,GPS Canonical Principal,FromAuthStateBuilder,TESTED,,,secu
 REQ-GPS-PRINCIPAL-002,GPS Canonical Principal,FromAuthStateBuilderMfa,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-003,GPS Canonical Principal,ExecutionContextField,TESTED,,,security,2026-05-20,src/execution.zig
 REQ-GPS-PRINCIPAL-003,GPS Canonical Principal,ExecutionContextField,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
+REQ-GPS-PRINCIPAL-004,GPS Canonical Principal,AuthVersionFromState,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig
+REQ-GPS-PRINCIPAL-004,GPS Canonical Principal,AuthVersionFromState,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig
 REQ-GPS-PRINCIPAL-004,GPS Canonical Principal,QuicHandlerWiring,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig
 REQ-GPS-PRINCIPAL-005,GPS Canonical Principal,GrpcHandlerWiring,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig
 REQ-GPS-PRINCIPAL-006,GPS Canonical Principal,BackwardCompat,TESTED,,,security,2026-05-20,tests/test_gps_principal_propagation.zig

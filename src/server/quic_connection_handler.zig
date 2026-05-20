@@ -3259,11 +3259,11 @@ fn handleClientMessage(
                         .roles = role_names,
                         .custom_roles = &.{},
                         .auth_method = .password,
-                        // Phase 1: auth_version=0 because no public accessor on
-                        // user_management.zig exposes the persistent version by
-                        // username. Phase 2 introduces a single principal-derivation
-                        // helper that consults the persistent resolver chain.
-                        .auth_version = 0,
+                        // CANARY: REQ=REQ-GPS-PRINCIPAL-004; FEATURE="GPS Canonical Principal"; ASPECT=AuthVersionFromState; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+                        // Use the auth_version captured from AuthResult at authentication
+                        // time so cache invalidation works correctly when role/active/password
+                        // change. Phase 2's principal-derivation helper will centralize this.
+                        .auth_version = state.authenticated_auth_version,
                         .mfa_state = .none,
                         .elevation_until = null,
                         .api_key_id = null,

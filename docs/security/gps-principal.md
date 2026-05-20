@@ -51,10 +51,6 @@ single compatibility-mode exception (auth disabled in development).
   instead. `src/distributed/query_coordinator.zig` uses
   `@import("../security/principal.zig")` because it is not reachable via
   the `geode` module.
-- `auth_version` is set to `0` at Phase 1 construction sites because
-  `src/security/user_management.zig` has no public lookup helper by
-  username. Phase 2's principal-derivation helper will populate it from
-  the persistent resolver chain.
 - The optional black-box smoke spec in `../geode-test-harness/` was skipped
   because (a) the actual harness spec format differs significantly from
   what the plan prescribed, and (b) the in-process Zig test in
