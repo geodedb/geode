@@ -4690,4 +4690,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_decide_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_decide_step = b.step("test-gps-decide", "Run GPS decision API unit tests");
     gps_decide_step.dependOn(&run_gps_decide_tests.step);
+
+    // GPS Phase 2 (Task 2-2): transport-agnostic Principal derivation helper.
+    const gps_principal_derive_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_principal_derive.zig"), .target = target, .optimize = optimize });
+    gps_principal_derive_test_mod.addImport("geode", root_mod);
+    const gps_principal_derive_tests = b.addTest(.{ .root_module = gps_principal_derive_test_mod });
+    const run_gps_principal_derive_tests = b.addRunArtifact(gps_principal_derive_tests);
+    shardDep(test_step, &run_gps_principal_derive_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_principal_derive_step = b.step("test-gps-principal-derive", "Run GPS Principal derivation helper unit tests");
+    gps_principal_derive_step.dependOn(&run_gps_principal_derive_tests.step);
 }

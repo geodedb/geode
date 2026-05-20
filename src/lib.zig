@@ -445,6 +445,8 @@ pub const security = struct {
     pub const authn = @import("security/authn.zig");
     // GPS Phase 2: decision types and central decide() entry point
     pub const gps = @import("security/gps.zig");
+    // GPS Phase 2 (Task 2-2): transport-agnostic Principal builder
+    pub const principal_derive = @import("security/principal_derive.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
