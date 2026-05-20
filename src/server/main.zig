@@ -679,7 +679,7 @@ pub fn main() !void {
     // will persist to __geode_security; for now the catalog is in-memory only
     // and does not survive restart.
     // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ServerStartupCatalog; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
-    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    const policy_catalog_mod = @import("geode").security.policy_catalog;
     var global_policy_catalog = policy_catalog_mod.PolicyCatalog.init(gpa);
     defer global_policy_catalog.deinit();
     policy_catalog_mod.setGlobalCatalog(&global_policy_catalog);
