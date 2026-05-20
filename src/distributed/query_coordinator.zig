@@ -354,7 +354,34 @@ pub const QueryCoordinator = struct {
                 .ordered = false,
             };
         };
-        const context = execution.ExecutionContext{ .catalog = catalog };
+        // CANARY: REQ=REQ-GPS-PRINCIPAL-006; FEATURE="GPS Canonical Principal"; ASPECT=DistributedCoordinatorWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
+        // Phase 1: the coordinator runs synthetic queries on behalf of internal
+        // shard-coordination logic. Tag the principal as internal_service so
+        // GPS Phase 6 (distributed envelope) can distinguish coordinator-originated
+        // work from user-originated work even when both reach the same shard worker.
+        const principal_mod = @import("../security/principal.zig");
+        const coordinator_principal = principal_mod.Principal{
+            .user_id = null,
+            .username = "geode-coordinator",
+            .session_id = null,
+            .tenant_id = null,
+            .active_graph = null,
+            .roles = &.{},
+            .custom_roles = &.{},
+            .auth_method = .anonymous,
+            .auth_version = 0,
+            .mfa_state = .none,
+            .elevation_until = null,
+            .api_key_id = null,
+            .certificate_subject = null,
+            .risk_context = principal_mod.RiskContext.unknown,
+            .attributes = principal_mod.AttributeMap.emptySentinel(),
+            .source = .internal_service,
+        };
+        const context = execution.ExecutionContext{
+            .catalog = catalog,
+            .principal = &coordinator_principal,
+        };
 
         // Execute the program
         var exec_result = execution.executeProgramWithContext(self.allocator, &parse_result.program, context) catch {
