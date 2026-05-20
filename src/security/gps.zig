@@ -74,6 +74,21 @@ pub const DecisionRequest = struct {
     resource: ResourceRef,
 };
 
+// CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+const user_mgmt = @import("user_management.zig");
+
+/// Map a GPS Action to the user_management.Permission it requires.
+/// Returns null for actions that have no legacy permission analogue (admin-only
+/// actions are handled separately in later Phase 2 tasks).
+fn actionToPermission(action: Action) ?user_mgmt.Permission {
+    return switch (action) {
+        .read, .match_, .show_metadata => .Read,
+        .write, .create, .update, .delete => .Write,
+        .schema => .Schema,
+        else => null,
+    };
+}
+
 pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !PolicyDecision {
     _ = allocator;
     if (req.principal.username == null) {
@@ -82,9 +97,24 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             .reason_code = "no_principal",
         };
     }
-    // Phase 2 task 2-4 layers builtin-role evaluation; task 2-5 layers graph
-    // grants; task 2-9 layers the insecure-allow-all flag. For now, an
-    // authenticated principal with no other evidence returns unauthorized.
+
+    // Phase 2 task 2-4: builtin-role evaluation.
+    // Walk the principal's roles slice, resolve each to a user_management.Role,
+    // and ask hasPermission() — preserving legacy semantics bit-identically.
+    // Task 2-5 layers graph grants; task 2-9 layers the insecure-allow-all flag.
+    if (actionToPermission(req.action)) |perm| {
+        for (req.principal.roles) |role_name| {
+            if (user_mgmt.Role.fromString(role_name)) |role| {
+                if (user_mgmt.hasPermission(role, perm)) {
+                    return PolicyDecision{
+                        .kind = .allow,
+                        .reason_code = "builtin_role",
+                    };
+                }
+            }
+        }
+    }
+
     return PolicyDecision{
         .kind = .unauthorized,
         .reason_code = "no_evidence",
