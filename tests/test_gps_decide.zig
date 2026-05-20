@@ -152,3 +152,35 @@ test "decide() widens via graph grant on active_graph only" {
     const d_ng = try gps.decide(std.testing.allocator, &req_ng);
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_ng.kind);
 }
+
+// CANARY: REQ=REQ-GPS-PDP-004; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionAdapter; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "checkPermission with no principal still works through legacy synthesis" {
+    const user_mgmt = geode.user_management;
+
+    execution.cleanupCatalogInstance();
+    defer execution.cleanupCatalogInstance();
+    const catalog = try execution.ensureCatalogInstance(std.testing.allocator);
+
+    // Save and force-enable auth (isAuthEnabled() defaults to true, but be explicit).
+    const was_enabled = user_mgmt.isAuthEnabled();
+    user_mgmt.setAuthEnabled(true);
+    defer user_mgmt.setAuthEnabled(was_enabled);
+
+    // Legacy-style: only role+user, no principal pointer.
+    const ctx_admin = execution.ExecutionContext{
+        .catalog = catalog,
+        .user = "alice",
+        .role = .Admin,
+    };
+    // Admin can Write — should not error.
+    try execution.checkPermission(ctx_admin, .Write);
+
+    const ctx_readonly = execution.ExecutionContext{
+        .catalog = catalog,
+        .user = "alice",
+        .role = .ReadOnly,
+    };
+    // ReadOnly cannot Write — should return Unauthorized.
+    const err = execution.checkPermission(ctx_readonly, .Write);
+    try std.testing.expectError(error.Unauthorized, err);
+}

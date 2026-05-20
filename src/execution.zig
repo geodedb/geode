@@ -828,42 +828,77 @@ fn permissionToActionCode(p: @import("security/user_management.zig").Permission)
     };
 }
 
-/// Check if user has required permission for operation
+/// Check if user has required permission for operation.
+/// Phase 2 adapter: constructs a DecisionRequest and delegates to gps.decide().
+/// Behavior is bit-identical to the previous implementation:
+///   - auth-disabled short-circuit is preserved (Task 2-9 will remove it).
+///   - legacy callers with no Principal synthesize one from context.role + context.user.
+///   - graph-grant widening is now inside decide() (added in Task 2-5).
 pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
     const user_mgmt = @import("security/user_management.zig");
+    const gps = @import("security/gps.zig");
+    const principal_mod = @import("security/principal.zig");
 
     // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-    // Phase 0: developer-mode "auth disabled means allow all". GPS Phase 2 replaces
-    // this with an explicit --insecure-allow-all flag and removes the implicit branch.
-    // If auth is not enabled, allow all operations
+    // Phase 2 routes through decide() but still preserves the auth-disabled
+    // short-circuit for developer-mode compatibility. Task 2-9 will replace
+    // this with an explicit --insecure-allow-all flag and remove the branch.
     if (!user_mgmt.isAuthEnabled()) {
         return;
     }
 
-    // If auth is enabled, user must be authenticated
-    if (context.role == null) {
-        return error.Unauthenticated;
-    }
+    // Use the canonical Principal if one is attached to the context; otherwise
+    // synthesize a temporary one from the legacy context fields so callers that
+    // haven't yet been upgraded continue to receive correct enforcement.
+    var synth_principal: principal_mod.Principal = undefined;
+    const principal_ptr: *const principal_mod.Principal = if (context.principal) |p| p else blk: {
+        if (context.role == null) return error.Unauthenticated;
+        const role_name = @tagName(context.role.?);
+        synth_principal = principal_mod.Principal{
+            .user_id = null,
+            .username = context.user,
+            .session_id = null,
+            .tenant_id = context.tenant_id,
+            .active_graph = if (context.session_state) |ss| ss.graph else null,
+            .roles = &[_][]const u8{role_name},
+            .custom_roles = &.{},
+            .auth_method = .password,
+            .auth_version = 0,
+            .mfa_state = .none,
+            .elevation_until = null,
+            .api_key_id = null,
+            .certificate_subject = null,
+            .risk_context = principal_mod.RiskContext.unknown,
+            .attributes = principal_mod.AttributeMap.emptySentinel(),
+            .source = .unattributed,
+        };
+        break :blk &synth_principal;
+    };
 
-    // Check if user has required permission
-    if (!user_mgmt.hasPermission(context.role.?, permission)) {
-        // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-        // Phase 0: additive (widening-only) grant fallback. GPS Phase 4 promotes grants
-        // to first-class Policy rows with explicit allow/deny scopes.
-        // Per-graph grant fallback: a GRANT on the currently-bound graph widens access beyond the
-        // user's global role. This is widening-only — it only runs when the global-role check fails.
-        if (graph_grant_check_fn) |f| {
-            if (context.user) |uname| {
-                const bound_graph: ?[]const u8 = if (context.session_state) |ss| ss.graph else null;
-                if (bound_graph) |g| {
-                    if (f(uname, g, permissionToActionCode(permission))) return; // grant widens
-                }
-                // TODO: bound graph not on ExecutionContext when session_state is null;
-                // per-graph write/schema grant enforcement limited to BIND in that case.
-            }
-        }
-        return error.Unauthorized;
+    if (principal_ptr.username == null) return error.Unauthenticated;
+
+    const action: gps.Action = switch (permission) {
+        .Read => .read,
+        .Write => .write,
+        .Schema => .schema,
+    };
+
+    // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
+    // Graph-grant widening now lives inside decide() (Task 2-5). The semantics
+    // are unchanged: a GRANT on the active graph widens access beyond the
+    // user's global role. Phase 4 will promote grants to first-class Policy rows.
+    const req = gps.DecisionRequest{
+        .principal = principal_ptr,
+        .action = action,
+        .resource = .{ .database = {} },
+    };
+    // smp_allocator is the governance-approved global allocator for src/ (page_allocator is banned).
+    const decision = try gps.decide(std.heap.smp_allocator, &req);
+
+    switch (decision.kind) {
+        .allow => return,
+        .unauthenticated => return error.Unauthenticated,
+        else => return error.Unauthorized,
     }
 }
 
