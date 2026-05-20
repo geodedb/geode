@@ -898,3 +898,57 @@ pub fn wireAuthDDLCallbacks(agm: *auth_graph_manager.AuthGraphManager, allocator
 
     log.info("Auth DDL persistence callbacks installed", &.{});
 }
+
+// CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+/// Hydrate the in-memory PolicyCatalog from __geode_security and install
+/// write-through hooks so CREATE/DROP POLICY DDL persists automatically.
+///
+/// Called from main.zig after wireAuthDDLCallbacks, inside the
+/// `if (init_ctx.auth_graph_mgr)` block.
+pub fn wireGpsPolicyHooks(
+    allocator: std.mem.Allocator,
+    agm: *auth_graph_manager.AuthGraphManager,
+    catalog: *geode.security.policy_catalog.PolicyCatalog,
+) void {
+    const policy_persistence = @import("policy_persistence");
+    const policy_catalog_mod = geode.security.policy_catalog;
+
+    // 1. Hydrate the catalog from persisted :Policy nodes.
+    policy_persistence.hydrateCatalog(allocator, agm, catalog) catch |err| {
+        log.warn("GPS policy hydration from __geode_security failed — in-memory catalog may be empty", &.{
+            Attr.string("error", @errorName(err)),
+        });
+    };
+
+    // 2. Install write-through hooks.  The AGM pointer is stashed in a
+    //    comptime-visible static so the function pointers (which have no
+    //    userdata beyond the opaque ctx) can reach it.  The dummy_ctx byte
+    //    must live for the duration of the server; it is declared as a
+    //    package-level var below.
+    const HookCtx = struct {
+        var g_agm: ?*auth_graph_manager.AuthGraphManager = null;
+
+        fn persistFn(ctx: *anyopaque, spec: policy_catalog_mod.PolicySpec) anyerror!void {
+            _ = ctx;
+            const am = g_agm orelse return;
+            const pp = @import("policy_persistence");
+            try pp.persistPolicy(am, &am.hmac_key, spec);
+        }
+
+        fn dropFn(ctx: *anyopaque, name: []const u8) anyerror!void {
+            _ = ctx;
+            const am = g_agm orelse return;
+            const pp = @import("policy_persistence");
+            try pp.dropPolicy(am, &am.hmac_key, name);
+        }
+    };
+    HookCtx.g_agm = agm;
+
+    policy_catalog_mod.setWriteThroughHooks(.{
+        .ctx = @ptrCast(agm), // non-null; actual state is in HookCtx.g_agm
+        .persist = HookCtx.persistFn,
+        .drop = HookCtx.dropFn,
+    });
+
+    log.info("GPS policy persistence hooks installed", &.{});
+}

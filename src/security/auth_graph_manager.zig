@@ -957,6 +957,75 @@ pub const AuthGraphManager = struct {
         self.logSecurityGraphMutation(.configuration_change, "REMOVE_ROLE", role_id, "", null);
     }
 
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=FindPolicyIdByName; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    /// Look up a policy id by name. Returns null if not found.
+    pub fn findPolicyIdByName(self: *Self, name: []const u8) ?u64 {
+        const record = self.storage.getPolicyByName(name) orelse return null;
+        return record.id;
+    }
+
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    /// Persist a GPS policy to the security graph and reseal the HMAC chain.
+    /// Idempotent: if a policy with the same name already exists, returns its id
+    /// without writing a duplicate node or resealing.
+    pub fn createPolicy(
+        self: *Self,
+        hmac_key: *const [32]u8,
+        name: []const u8,
+        scope_graph: []const u8,
+        operation: u8,
+        permissive: bool,
+        using_clause: ?[]const u8,
+        enabled: bool,
+    ) !u64 {
+        if (self.findPolicyIdByName(name)) |existing_id| return existing_id;
+
+        // Derive next policy id: max across the cache + 1.
+        var max_id: u64 = 0;
+        var it = self.storage.policy_cache.keyIterator();
+        while (it.next()) |key| {
+            if (key.* > max_id) max_id = key.*;
+        }
+        const policy_id = max_id + 1;
+
+        try self.storage.persistPolicy(.{
+            .policy_id = policy_id,
+            .name = name,
+            .description = "",
+            .graph = scope_graph,
+            .table = "",
+            .operation = operation,
+            .permissive = permissive,
+            .enabled = enabled,
+            .using_clause = using_clause,
+            .check_clause = null,
+            .audit_level = 0,
+            .created_by = 0,
+        });
+        try self.recomputeAndStorePolicyHmac(policy_id, hmac_key);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "CREATE_POLICY", policy_id, name, null);
+        return policy_id;
+    }
+
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicy; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    /// Remove a policy by name from the security graph and reseal the chain.
+    /// Returns error.PolicyNotFound if no matching policy exists.
+    pub fn dropPolicy(self: *Self, hmac_key: *const [32]u8, name: []const u8) !void {
+        const policy_id = self.findPolicyIdByName(name) orelse return error.PolicyNotFound;
+        try self.storage.removePolicy(policy_id);
+        try self.sealChain(hmac_key);
+        self.logSecurityGraphMutation(.configuration_change, "DROP_POLICY", policy_id, name, null);
+    }
+
+    fn recomputeAndStorePolicyHmac(self: *Self, policy_id: u64, hmac_key: *const [32]u8) !void {
+        const record = self.storage.getPolicy(policy_id) orelse return error.PolicyNotFound;
+        const computed = computePolicyHmac(hmac_key, &record);
+        const computed_hex = auth_hmac.hmacToHex(&computed);
+        const node_id = self.storage.policy_nodes.get(policy_id) orelse return error.PolicyNotFound;
+        try self.storage.store.setNodeProperty(node_id, "hmac", .{ .String = &computed_hex });
+    }
+
     // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-016; FEATURE="AuthDDLPersistence"; ASPECT=GrantUserGraphPermission; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
     /// Persist a graph-level permission grant for a user. The grant_id is
     /// derived deterministically from the (user_id, graph_name, action) triple

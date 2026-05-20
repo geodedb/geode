@@ -129,3 +129,35 @@ pub fn setGlobalCatalog(c: *PolicyCatalog) void {
 pub fn getGlobalCatalog() ?*PolicyCatalog {
     return g_catalog;
 }
+
+// ---------------------------------------------------------------------------
+// Write-through hooks — set by server startup to persist DDL to
+// __geode_security without creating a circular import from execution.zig.
+//
+// If no hooks are installed (CLI / test contexts) DDL is in-memory only.
+// ---------------------------------------------------------------------------
+
+// CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=WriteThroughHooks; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+
+/// Called with the same PolicySpec passed to addPolicy.  Errors are non-fatal
+/// and logged by the server; execution continues with the in-memory update.
+pub const PersistFn = *const fn (ctx: *anyopaque, spec: PolicySpec) anyerror!void;
+
+/// Called with the policy name before removePolicy. Errors are non-fatal.
+pub const DropFn = *const fn (ctx: *anyopaque, name: []const u8) anyerror!void;
+
+pub const WriteThroughHooks = struct {
+    ctx: *anyopaque,
+    persist: PersistFn,
+    drop: DropFn,
+};
+
+var g_hooks: ?WriteThroughHooks = null;
+
+pub fn setWriteThroughHooks(hooks: ?WriteThroughHooks) void {
+    g_hooks = hooks;
+}
+
+pub fn getWriteThroughHooks() ?WriteThroughHooks {
+    return g_hooks;
+}

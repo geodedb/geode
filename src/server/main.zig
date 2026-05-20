@@ -803,6 +803,13 @@ pub fn main() !void {
         // in-memory state from __geode_security.
         server_init.wireAuthDDLCallbacks(agm, gpa);
         log.info("Authentication configured for persistent auth graph with LRU cache", &.{});
+
+        // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=StartupHydration; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+        // GPS Phase 4 (Task 4-5): hydrate the in-memory PolicyCatalog from the
+        // persisted :Policy nodes in __geode_security.  Errors are non-fatal —
+        // the server continues without pre-loaded policies (operators can
+        // recreate them via DDL).
+        server_init.wireGpsPolicyHooks(gpa, agm, &global_policy_catalog);
     } else {
         user_mgmt.setPersistentUserResolver(null);
         user_mgmt.ensureDefaultUser(gpa) catch |err| {

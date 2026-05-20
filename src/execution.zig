@@ -1923,14 +1923,30 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 };
             }
 
-            try pol_cat.addPolicy(.{
+            const new_policy_spec = policy_catalog_mod.PolicySpec{
                 .name = cp_stmt.name,
                 .scope_graph = cp_stmt.scope_graph,
                 .actions = cat_actions,
                 .effect = .allow, // Phase 4: only allow effect
                 .expression_source = "true", // Phase 4: only unconditional
                 .enabled = true,
-            });
+            };
+
+            try pol_cat.addPolicy(new_policy_spec);
+
+            // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=CreatePolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+            // Write-through to __geode_security via hooks installed at server startup.
+            // In CLI / test contexts hooks are null and the policy is in-memory only.
+            if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
+                hooks.persist(hooks.ctx, new_policy_spec) catch |err| {
+                    const logging_mod = @import("logging");
+                    const log_ex = logging_mod.scoped("execution");
+                    log_ex.warn("GPS CREATE POLICY persistence to __geode_security failed — policy is in-memory only", &.{
+                        logging_mod.Attr.string("name", cp_stmt.name),
+                        logging_mod.Attr.string("error", @errorName(err)),
+                    });
+                };
+            }
 
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
@@ -1954,6 +1970,26 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
                 // IF EXISTS: swallow error.PolicyNotFound.
             };
+
+            // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+            // Write-through to __geode_security via hooks installed at server startup.
+            // In CLI / test contexts hooks are null and the policy is in-memory only.
+            {
+                const drop_name = dp_stmt.name;
+                const drop_if_exists = dp_stmt.if_exists;
+                if (policy_catalog_mod.getWriteThroughHooks()) |hooks| {
+                    hooks.drop(hooks.ctx, drop_name) catch |err| {
+                        if (err != error.PolicyNotFound or !drop_if_exists) {
+                            const logging_mod = @import("logging");
+                            const log_ex = logging_mod.scoped("execution");
+                            log_ex.warn("GPS DROP POLICY persistence to __geode_security failed", &.{
+                                logging_mod.Attr.string("name", drop_name),
+                                logging_mod.Attr.string("error", @errorName(err)),
+                            });
+                        }
+                    };
+                }
+            }
 
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");

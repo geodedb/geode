@@ -2940,6 +2940,14 @@ pub fn build(b: *std.Build) void {
     // directly via their own build module imports.
     geode_exe.root_module.addImport("auth_graph_manager", auth_graph_manager_mod);
 
+    // GPS Phase 4 (Task 4-5): policy_persistence — bridge between PolicyCatalog and
+    // AuthGraphManager.  Same circular-dependency constraint as auth_graph_manager:
+    // cannot be added to root_mod; added only to consumers that need it.
+    const policy_persistence_mod = b.createModule(.{ .root_source_file = b.path("src/security/policy_persistence.zig"), .target = target, .optimize = optimize });
+    policy_persistence_mod.addImport("geode", root_mod);
+    policy_persistence_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    geode_exe.root_module.addImport("policy_persistence", policy_persistence_mod);
+
     // Auth graph manager unit tests
     const auth_graph_manager_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -4783,4 +4791,16 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_ddl_integration_tests.step, 2, test_shard_loads, test_shard_index);
     const gps_policy_ddl_integration_step = b.step("test-gps-policy-ddl-integration", "Run GPS policy DDL integration tests (CREATE/DROP/SHOW POLICY execution)");
     gps_policy_ddl_integration_step.dependOn(&run_gps_policy_ddl_integration_tests.step);
+
+    // GPS Phase 4 (Task 4-5): round-trip persistence tests for policy_persistence.zig.
+    // Requires auth_graph_manager (named module) in addition to geode (root_mod).
+    const gps_policy_persistence_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_persistence.zig"), .target = target, .optimize = optimize });
+    gps_policy_persistence_test_mod.addImport("geode", root_mod);
+    gps_policy_persistence_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    gps_policy_persistence_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    const gps_policy_persistence_tests = b.addTest(.{ .root_module = gps_policy_persistence_test_mod });
+    const run_gps_policy_persistence_tests = b.addRunArtifact(gps_policy_persistence_tests);
+    shardDep(test_step, &run_gps_policy_persistence_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
+    gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
 }

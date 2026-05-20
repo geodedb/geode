@@ -937,6 +937,17 @@ pub const UserStorageBackend = struct {
         return null;
     }
 
+    // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=GetPolicyByName; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+    pub fn getPolicyByName(self: *Self, name: []const u8) ?PolicyRecord {
+        var it = self.policy_cache.valueIterator();
+        while (it.next()) |record| {
+            if (std.mem.eql(u8, record.getName(), name)) {
+                return record.*;
+            }
+        }
+        return null;
+    }
+
     // Permission operations
     pub fn persistPermission(self: *Self, permission_id: u64, name: []const u8, resource: []const u8, action: u8, conditions: ?[]const u8) !void {
         if (name.len > 63 or resource.len > 127) {
