@@ -1083,6 +1083,11 @@ REQ-GEODETESTLAB-001,GeodeTestlab,TestExecution,TESTED,,,test,2026-01-15,tests/t
 REQ-GEODETESTLAB-ASSERT-001,GeodeTestlab,Assertions,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GEODETESTLAB-SPEC-001,GeodeTestlab,SpecExecution,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GITLAB-LABELS-001,GitLab Label Taxonomy,Tooling,EXEMPT,,,tooling,2026-01-14,scripts/gitlab/create_type_labels.sh
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,ClassifierUnused,TESTED,,,security,2026-05-20,src/execution/procedure_registry.zig
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,TESTED,,,security,2026-05-20,src/execution.zig
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,TESTED,,,security,2026-05-20,src/execution.zig
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,TESTED,,,security,2026-05-20,src/security/rls_core.zig
+REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,TESTED,,,security,2026-05-20,src/security/rls_core.zig
 REQ-GPU-002,Vulkan Shader Compilation,Implementation,EXEMPT,,,core,2026-01-17,src/gpu/vulkan_shaders.zig
 REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
