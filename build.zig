@@ -4663,4 +4663,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_auth_persistence_tests.step, 1, test_shard_loads, test_shard_index);
     const auth_persistence_step = b.step("test-auth-persistence", "Run auth DDL persistence unit tests");
     auth_persistence_step.dependOn(&run_auth_persistence_tests.step);
+
+    // GPS Phase 1 (Task 1-1): canonical Principal type unit tests.
+    const gps_principal_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_principal.zig"), .target = target, .optimize = optimize });
+    gps_principal_test_mod.addImport("geode", root_mod);
+    const gps_principal_tests = b.addTest(.{ .root_module = gps_principal_test_mod });
+    const run_gps_principal_tests = b.addRunArtifact(gps_principal_tests);
+    shardDep(test_step, &run_gps_principal_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_principal_step = b.step("test-gps-principal", "Run GPS Principal type unit tests");
+    gps_principal_step.dependOn(&run_gps_principal_tests.step);
 }

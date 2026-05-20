@@ -440,6 +440,9 @@ pub const security = struct {
     pub const multi_graph_security = @import("security/multi_graph_security.zig");
     pub const audit = @import("security/audit.zig");
     pub const tenant_quota = @import("security/tenant_quota.zig");
+    // GPS Phase 1: canonical Principal type and authentication result type
+    pub const principal = @import("security/principal.zig");
+    pub const authn = @import("security/authn.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
