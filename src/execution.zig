@@ -1901,10 +1901,73 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .DropRole => |s| return admin_ddl.executeDropRole(allocator, s, context),
         .Grant => |s| return admin_ddl.executeGrant(allocator, s, context),
         .Revoke => |s| return admin_ddl.executeRevoke(allocator, s, context),
-        // GPS policy DDL (Phase 4 stubs) — full execution wired in Phase 5 (Task 4-4).
-        // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ExecutionStub; STATUS=IMPL; OWNER=security; UPDATED=2026-05-20
-        .CreatePolicy => return error.NotImplemented,
-        .DropPolicy => return error.NotImplemented,
+        // GPS policy DDL (Phase 4) — wired to in-memory PolicyCatalog (Task 4-4).
+        // Persistence to __geode_security is Task 4-5.
+        // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
+        .CreatePolicy => |cp_stmt| {
+            const policy_catalog_mod = @import("security/policy_catalog.zig");
+            const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
+
+            // Map AST PolicyAction -> catalog Action (enums are kept in sync).
+            const cat_actions = try allocator.alloc(policy_catalog_mod.Action, cp_stmt.actions.len);
+            defer allocator.free(cat_actions);
+            for (cp_stmt.actions, 0..) |a, i| {
+                cat_actions[i] = switch (a) {
+                    .read => .read,
+                    .write => .write,
+                    .match_ => .match_,
+                    .create => .create,
+                    .update => .update,
+                    .delete => .delete,
+                    .schema => .schema,
+                };
+            }
+
+            try pol_cat.addPolicy(.{
+                .name = cp_stmt.name,
+                .scope_graph = cp_stmt.scope_graph,
+                .actions = cat_actions,
+                .effect = .allow, // Phase 4: only allow effect
+                .expression_source = "true", // Phase 4: only unconditional
+                .enabled = true,
+            });
+
+            const columns = try allocator.alloc([]const u8, 1);
+            columns[0] = try allocator.dupe(u8, "status");
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = try allocator.dupe(u8, "Policy created") };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+                .owns_value_memory = true,
+            };
+        },
+        // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=DropPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
+        .DropPolicy => |dp_stmt| {
+            const policy_catalog_mod = @import("security/policy_catalog.zig");
+            const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
+
+            pol_cat.removePolicy(dp_stmt.name) catch |err| {
+                if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
+                // IF EXISTS: swallow error.PolicyNotFound.
+            };
+
+            const columns = try allocator.alloc([]const u8, 1);
+            columns[0] = try allocator.dupe(u8, "status");
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = try allocator.dupe(u8, "Policy dropped") };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+                .owns_value_memory = true,
+            };
+        },
         else => return error.NotImplemented,
     }
 }

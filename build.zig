@@ -4774,4 +4774,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_ddl_parser_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_policy_ddl_parser_step = b.step("test-gps-policy-ddl-parser", "Run GPS policy DDL parser unit tests (CREATE/DROP/SHOW POLICY)");
     gps_policy_ddl_parser_step.dependOn(&run_gps_policy_ddl_parser_tests.step);
+
+    // GPS Phase 4 (Task 4-4): integration tests for CREATE/DROP/SHOW POLICY execution dispatch.
+    const gps_policy_ddl_integration_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_ddl_integration.zig"), .target = target, .optimize = optimize });
+    gps_policy_ddl_integration_test_mod.addImport("geode", root_mod);
+    const gps_policy_ddl_integration_tests = b.addTest(.{ .root_module = gps_policy_ddl_integration_test_mod });
+    const run_gps_policy_ddl_integration_tests = b.addRunArtifact(gps_policy_ddl_integration_tests);
+    shardDep(test_step, &run_gps_policy_ddl_integration_tests.step, 2, test_shard_loads, test_shard_index);
+    const gps_policy_ddl_integration_step = b.step("test-gps-policy-ddl-integration", "Run GPS policy DDL integration tests (CREATE/DROP/SHOW POLICY execution)");
+    gps_policy_ddl_integration_step.dependOn(&run_gps_policy_ddl_integration_tests.step);
 }

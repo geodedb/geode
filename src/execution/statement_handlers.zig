@@ -238,9 +238,30 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         // The first switch returns early for these; this arm is unreachable in practice (defensive)
         .users, .roles, .permissions, .version, .capabilities => unreachable,
-        // GPS policy DDL (Phase 4): SHOW POLICIES — empty result until Phase 5 catalog.
-        // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ShowPoliciesStub; STATUS=IMPL; OWNER=security; UPDATED=2026-05-20
-        .policies => {},
+        // GPS policy DDL (Phase 4, Task 4-4): enumerate in-memory PolicyCatalog.
+        // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=ShowPoliciesExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
+        .policies => {
+            const policy_catalog_mod = @import("../security/policy_catalog.zig");
+            if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+                for (pol_cat.listPolicies()) |pol| {
+                    // Build "actions" column: comma-separated action names.
+                    var actions_buf = std.ArrayList(u8).empty;
+                    for (pol.actions, 0..) |a, ai| {
+                        if (ai > 0) try actions_buf.appendSlice(allocator, ", ");
+                        try actions_buf.appendSlice(allocator, @tagName(a));
+                    }
+                    const actions_str = try actions_buf.toOwnedSlice(allocator);
+
+                    var row = try allocator.alloc(Value, 4);
+                    row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
+                    row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+                    row[2] = Value{ .Str = actions_str };
+                    row[3] = Value{ .Bool = pol.enabled };
+                    try rows_list.append(allocator, row);
+                }
+            }
+            // If catalog not yet initialized, return empty rows (safe for pre-startup tests).
+        },
         .functions => {
             // GAP-0139: SHOW FUNCTIONS implementation
             // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13

@@ -71,10 +71,10 @@ const mfa_mod = @import("mfa");
 pub var g_custom_roles: std.StringHashMap([]const u8) = undefined;
 pub var g_custom_roles_init: bool = false;
 pub var g_custom_roles_mu: std.Io.Mutex = std.Io.Mutex.init;
-// GAP-0270: Global policy store for geode.auth.policy_create
-pub var g_policies: std.StringHashMap([]const u8) = undefined;
-pub var g_policies_init: bool = false;
-pub var g_policies_mu: std.Io.Mutex = std.Io.Mutex.init;
+// GAP-0270 / GPS Phase 4 (Task 4-4): g_policies replaced by policy_catalog.PolicyCatalog.
+// The geode.auth.policy_* procedure handlers below now delegate to the global
+// PolicyCatalog singleton (bootstrapped in server/main.zig at startup).
+// The old StringHashMap fields are removed to avoid duplication.
 
 // CANARY: REQ=REQ-AUTH-GRAPH-PERSIST-019; FEATURE="AuthDDLPersistence"; ASPECT=RolePersistCallbacks; STATUS=IMPL; OWNER=security; UPDATED=2026-05-11
 /// Callbacks for persisting role DDL to __geode_security. Wired at server
@@ -297,12 +297,7 @@ pub fn isBuiltinRoleName(name: []const u8) bool {
         std.ascii.eqlIgnoreCase(name, "readonly");
 }
 
-fn ensurePoliciesInit(allocator: std.mem.Allocator) void {
-    if (!g_policies_init) {
-        g_policies = std.StringHashMap([]const u8).init(allocator);
-        g_policies_init = true;
-    }
-}
+// ensurePoliciesInit removed — GPS Phase 4 (Task 4-4) delegates to policy_catalog.
 
 // ---------------------------------------------------------------------------
 // StaticStringMap dispatch table -- O(1) lookup replaces sequential if-else chain.
@@ -937,18 +932,29 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
     return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
 }
 
+// GPS Phase 4 (Task 4-4): geode.auth.policy_* procedures now delegate to the
+// global PolicyCatalog singleton (mirrors the GQL DDL path via execution.zig).
+// The old g_policies StringHashMap is removed.
+// CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyCreate; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     var name: []const u8 = "";
-    var desc: []const u8 = "";
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) name = args[0].String;
-        if (args.len >= 2 and args[1].* == .String) desc = args[1].String;
     }
-    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensurePoliciesInit(allocator);
-    g_policies.put(try allocator.dupe(u8, name), try allocator.dupe(u8, desc)) catch {};
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+        // Procedure path: name-only, READ action, allow effect.
+        const actions = [_]policy_catalog_mod.Action{.read};
+        try pol_cat.addPolicy(.{
+            .name = name,
+            .scope_graph = "*",
+            .actions = &actions,
+            .effect = .allow,
+            .expression_source = "true",
+            .enabled = true,
+        });
+    }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
@@ -958,34 +964,38 @@ fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: as
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyList; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
-    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensurePoliciesInit(allocator);
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "name");
-    columns[1] = try allocator.dupe(u8, "description");
+    columns[1] = try allocator.dupe(u8, "scope_graph");
     var rows_list = std.ArrayList([]Value).empty;
-    var iter = g_policies.iterator();
-    while (iter.next()) |entry| {
-        const row = try allocator.alloc(Value, 2);
-        row[0] = Value{ .Str = entry.key_ptr.* };
-        row[1] = Value{ .Str = entry.value_ptr.* };
-        try rows_list.append(allocator, row);
+    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+        for (pol_cat.listPolicies()) |pol| {
+            const row = try allocator.alloc(Value, 2);
+            row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
+            row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+            try rows_list.append(allocator, row);
+        }
     }
     return .{ .columns = columns, .rows = try rows_list.toOwnedSlice(allocator), .flags = std.ArrayList([]const u8).empty };
 }
 
+// CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyDelete; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyDelete(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
     var name: []const u8 = "";
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) name = args[0].String;
     }
-    g_policies_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_policies_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensurePoliciesInit(allocator);
-    _ = g_policies.fetchRemove(name);
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+        // Swallow PolicyNotFound — procedure interface is idempotent.
+        pol_cat.removePolicy(name) catch |err| {
+            if (err != error.PolicyNotFound) return err;
+        };
+    }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);

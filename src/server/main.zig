@@ -672,6 +672,19 @@ pub fn main() !void {
     }
 
     std.debug.print("[startup] user store initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
+
+    // GPS Phase 4 (Task 4-4): bootstrap in-memory PolicyCatalog so that
+    // CREATE POLICY / DROP POLICY / SHOW POLICIES can resolve it at runtime.
+    // Lifetime: scoped to this function (the server process). Phase 5 (Task 4-5)
+    // will persist to __geode_security; for now the catalog is in-memory only
+    // and does not survive restart.
+    // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ServerStartupCatalog; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
+    const policy_catalog_mod = @import("../security/policy_catalog.zig");
+    var global_policy_catalog = policy_catalog_mod.PolicyCatalog.init(gpa);
+    defer global_policy_catalog.deinit();
+    policy_catalog_mod.setGlobalCatalog(&global_policy_catalog);
+    defer policy_catalog_mod.setGlobalCatalog(undefined);
+
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a
     // second admin with a different password).
