@@ -1363,10 +1363,11 @@ pub const RLSEngine = struct {
             return self.valueToBool(stack[sp - 1]);
         }
 
-        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-        // Phase 0: VM no-result default-allow. GPS Phase 2 will surface this as
-        // error.IndeterminatePolicy and map it to a deny decision.
-        return true; // Default allow if no expression result
+        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=COMPLETE; OWNER=security; UPDATED=2026-05-20
+        // GPS Phase 2 (task 2-8): VM no-result is now surfaced as
+        // error.IndeterminatePolicy. Consumers (checkRowAccessByUsername,
+        // passesRLSExprFilter) map this to a deny outcome.
+        return error.IndeterminatePolicy;
     }
 };
 

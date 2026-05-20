@@ -5,8 +5,18 @@
 // Phase 2 scope: define decision types and a skeleton decide() that handles
 // the empty/unauthenticated case. Later Phase 2 tasks layer in builtin-role
 // grants (2-4), graph grants (2-5), the --insecure-allow-all flag (2-9), and
-// the RLS-VM IndeterminatePolicy mapping (2-8). The decision API is the only
-// place Phase 3+ code should consult for authorization outcomes.
+// the RLS-VM IndeterminatePolicy mapping (2-8, COMPLETE). The decision API is
+// the only place Phase 3+ code should consult for authorization outcomes.
+//
+// RLS-VM linkage (task 2-8, complete):
+//   rls_core.evaluateCompiledExpressionWithUsername now returns
+//   error.IndeterminatePolicy when the bytecode program terminates with an
+//   empty stack (no result produced). This propagates up through
+//   checkRowAccessByUsername and is caught by match_operations.passesRLSExprFilter
+//   via `catch false`, mapping the indeterminate outcome to a row-level deny.
+//   In Phase 4, this error will be surfaced through the policy layer here in
+//   decide() and map to PolicyDecisionKind.indeterminate, giving callers
+//   structured visibility into the reason for denial.
 //
 // Reference: docs/geode-policy-plan.md "Canonical principal, resource, action,
 // and decision models".

@@ -3519,6 +3519,15 @@ pub fn build(b: *std.Build) void {
     const run_rls_vm_bounds_tests = b.addRunArtifact(rls_vm_bounds_tests);
     shardDep(test_step, &run_rls_vm_bounds_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // GPS Phase 2 task 2-8 regression: RLS VM no-result returns error.IndeterminatePolicy.
+    const rls_indeterminate_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_indeterminate_policy.zig"), .target = target, .optimize = optimize });
+    rls_indeterminate_test_mod.addImport("rls", rls_mod);
+    const rls_indeterminate_tests = b.addTest(.{ .root_module = rls_indeterminate_test_mod });
+    const run_rls_indeterminate_tests = b.addRunArtifact(rls_indeterminate_tests);
+    shardDep(test_step, &run_rls_indeterminate_tests.step, 1, test_shard_loads, test_shard_index);
+    const rls_indeterminate_step = b.step("test-rls-indeterminate-policy", "Run GPS Phase 2 task 2-8: RLS VM no-result → IndeterminatePolicy regression tests");
+    rls_indeterminate_step.dependOn(&run_rls_indeterminate_tests.step);
+
     // GAP-0727 / SEC-AUD-01 regression: audit verifier validates seq_no monotonicity.
     const audit_verify_seq_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_verify_seq_no.zig"), .target = target, .optimize = optimize });
     audit_verify_seq_test_mod.addImport("audit_verify", audit_mod);
