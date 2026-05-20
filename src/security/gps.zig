@@ -224,8 +224,62 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         }
     }
 
+    // CANARY: REQ=REQ-GPS-POLICY-EVAL-001; FEATURE="GPS Policy Evaluation"; ASPECT=ExplicitAllow; STATUS=TESTED; TEST=tests/test_gps_policy_evaluation.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 4: explicit policy match via the global PolicyCatalog.
+    // Only the trivial predicate expression_source="true" is evaluated here;
+    // full expression compilation and attribute-based predicates land in Phase 5.
+    const pc = @import("policy_catalog.zig");
+    if (pc.getGlobalCatalog()) |cat| {
+        for (cat.listPolicies()) |policy| {
+            if (!policy.enabled) continue;
+            if (!policyMatchesAction(policy, req.action)) continue;
+            if (!policyMatchesResource(policy, req.resource)) continue;
+            if (std.mem.eql(u8, policy.expression_source, "true") and policy.effect == .allow) {
+                return PolicyDecision{
+                    .kind = .allow,
+                    .reason_code = "policy_match",
+                };
+            }
+            // deny-effect or non-"true" expression: skip in Phase 4.
+        }
+    }
+
     return PolicyDecision{
         .kind = .unauthorized,
         .reason_code = "no_evidence",
+    };
+}
+
+fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Action) bool {
+    const pc = @import("policy_catalog.zig");
+    for (policy.actions) |a| {
+        const matches = switch (action) {
+            .read => a == .read,
+            .match_ => a == .read or a == .match_,
+            .write => a == .write,
+            .create => a == .write or a == .create,
+            .update => a == .write or a == .update,
+            .delete => a == .write or a == .delete,
+            .schema => a == .schema,
+            // Actions without a policy_catalog.Action analogue are never matched
+            // by a catalog policy; they rely on builtin-role or special-case paths.
+            else => false,
+        };
+        _ = pc;
+        if (matches) return true;
+    }
+    return false;
+}
+
+fn policyMatchesResource(policy: @import("policy_catalog.zig").Policy, resource: ResourceRef) bool {
+    // "*" scope is a wildcard that matches any resource.
+    if (std.mem.eql(u8, policy.scope_graph, "*")) return true;
+    return switch (resource) {
+        // Named graph: compare against policy scope directly.
+        .graph => |g| std.mem.eql(u8, policy.scope_graph, g),
+        // Non-graph resources (database, tenant, node, edge, procedure, metadata)
+        // are matched by any non-wildcard scope in Phase 4.  A more precise
+        // resource-type filter arrives with the Phase 5 expression engine.
+        .database, .tenant, .node, .edge, .procedure, .metadata => true,
     };
 }

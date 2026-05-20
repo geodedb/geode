@@ -1205,6 +1205,14 @@ REQ-GPS-PDP-008,GPS Canonical Principal,AuthRoleGraphLookupIsolated,TESTED,,,sec
 REQ-GPS-PDP-008,GPS Canonical Principal,RoleResolverModule,TESTED,,,security,2026-05-20,src/security/role_resolver.zig
 REQ-GPS-PDP-008,GPS Decision Engine,AuthRoleGraphLookup,TESTED,,,security,2026-05-20,src/server/main.zig
 REQ-GPS-PDP-008,GPS Decision Engine,CheckPermissionDecideParity,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,ActionMismatch,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,DisabledPolicy,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,ExplicitAllow,TESTED,,,security,2026-05-20,src/security/gps.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,ExplicitAllow,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,GraphMismatch,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,NoCatalog,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,NonTrueExpression,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
+REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,WildcardScopeMatchesGraph,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,ConstructionDefaults,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,LegacyRoleMapping,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,TypeDefinition,TESTED,,,security,2026-05-20,src/security/principal.zig

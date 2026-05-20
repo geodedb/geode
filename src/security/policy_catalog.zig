@@ -126,6 +126,12 @@ pub fn setGlobalCatalog(c: *PolicyCatalog) void {
     g_catalog = c;
 }
 
+/// Set the global catalog pointer to null.  Use in tests or on shutdown to
+/// prevent stale pointers from escaping scope.
+pub fn clearGlobalCatalog() void {
+    g_catalog = null;
+}
+
 pub fn getGlobalCatalog() ?*PolicyCatalog {
     return g_catalog;
 }

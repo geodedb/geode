@@ -4803,4 +4803,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_persistence_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_persistence_step = b.step("test-gps-policy-persistence", "Run GPS policy persistence round-trip tests (persist/drop/hydrate in __geode_security)");
     gps_policy_persistence_step.dependOn(&run_gps_policy_persistence_tests.step);
+
+    // GPS Phase 4 (Task 4-6): policy-catalog evaluation in decide().
+    const gps_policy_evaluation_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_evaluation.zig"), .target = target, .optimize = optimize });
+    gps_policy_evaluation_test_mod.addImport("geode", root_mod);
+    const gps_policy_evaluation_tests = b.addTest(.{ .root_module = gps_policy_evaluation_test_mod });
+    const run_gps_policy_evaluation_tests = b.addRunArtifact(gps_policy_evaluation_tests);
+    shardDep(test_step, &run_gps_policy_evaluation_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_policy_evaluation_step = b.step("test-gps-policy-evaluation", "Run GPS policy-catalog evaluation tests (decide() consults PolicyCatalog for explicit allow)");
+    gps_policy_evaluation_step.dependOn(&run_gps_policy_evaluation_tests.step);
 }
