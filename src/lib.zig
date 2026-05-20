@@ -447,6 +447,10 @@ pub const security = struct {
     pub const gps = @import("security/gps.zig");
     // GPS Phase 2 (Task 2-2): transport-agnostic Principal builder
     pub const principal_derive = @import("security/principal_derive.zig");
+    // GPS Phase 4 (Task 4-1): graph-based role resolution (authRoleFromRecord + resolveRoleFromGraph).
+    // Exposed as a named build module ("role_resolver") because role_resolver.zig imports
+    // user_storage, which itself imports geode — making a direct relative import circular.
+    pub const role_resolver = @import("role_resolver");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");

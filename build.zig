@@ -2916,6 +2916,17 @@ pub fn build(b: *std.Build) void {
     user_storage_mod.addImport("auth_lib", auth_ext_mod);
     geode_exe.root_module.addImport("user_storage", user_storage_mod);
 
+    // GPS Phase 4 (Task 4-1): role_resolver — extracted from server/main.zig so it can
+    // be unit-tested in isolation. role_resolver.zig imports user_storage (which imports
+    // geode), so it must be a separate named module to avoid the file-in-two-modules error.
+    const role_resolver_mod = b.createModule(.{ .root_source_file = b.path("src/security/role_resolver.zig"), .target = target, .optimize = optimize });
+    role_resolver_mod.addImport("geode", root_mod);
+    role_resolver_mod.addImport("user_storage", user_storage_mod);
+    // Expose role_resolver through the geode lib so lib.zig can re-export it.
+    root_mod.addImport("role_resolver", role_resolver_mod);
+    // Also wire it to the server binary directly for the call sites in main.zig.
+    geode_exe.root_module.addImport("role_resolver", role_resolver_mod);
+
     // Create auth graph manager module (orchestration layer for HMAC auth)
     const auth_graph_manager_mod = b.createModule(.{ .root_source_file = b.path("src/security/auth_graph_manager.zig"), .target = target, .optimize = optimize });
     auth_graph_manager_mod.addImport("geode", root_mod);
@@ -4735,4 +4746,14 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_metadata_filtering_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_metadata_filtering_step = b.step("test-gps-metadata-filtering", "Run GPS metadata filtering (db.labels/relationshipTypes/propertyKeys) tenant isolation tests");
     gps_metadata_filtering_step.dependOn(&run_gps_metadata_filtering_tests.step);
+
+    // GPS Phase 4 (Task 4-1): isolated unit tests for role_resolver.zig
+    const gps_role_resolver_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_role_resolver.zig"), .target = target, .optimize = optimize });
+    gps_role_resolver_test_mod.addImport("geode", root_mod);
+    gps_role_resolver_test_mod.addImport("user_storage", user_storage_mod);
+    const gps_role_resolver_tests = b.addTest(.{ .root_module = gps_role_resolver_test_mod });
+    const run_gps_role_resolver_tests = b.addRunArtifact(gps_role_resolver_tests);
+    shardDep(test_step, &run_gps_role_resolver_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_role_resolver_step = b.step("test-gps-role-resolver", "Run GPS role_resolver isolated unit tests (HAS_ROLE graph traversal)");
+    gps_role_resolver_step.dependOn(&run_gps_role_resolver_tests.step);
 }
