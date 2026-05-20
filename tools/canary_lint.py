@@ -43,9 +43,10 @@ CANARY_COMPLETE_PATTERN = re.compile(
 CANARY_LOOSE_PATTERN = re.compile(r'CANARY:\s*REQ=[^;]+;\s*FEATURE=\\?"')
 
 # Pattern to identify documentation/example markers (not real markers)
-# These use "..." or placeholders like REQ-XXX or REQ-GQL-###
+# These use "..." or placeholders like REQ-XXX or REQ-GQL-### or angle-bracket <id>
 CANARY_EXAMPLE_PATTERN = re.compile(
     r'CANARY:\s*REQ=REQ-(?:XXX|GQL-###|GQL-XXX);.*FEATURE="(?:\.{3}|Name)"'
+    r"|CANARY:\s*REQ=<"  # Angle-bracket placeholder templates (e.g. REQ=<id>)
     r"|CANARY pattern:"  # Lines documenting the CANARY pattern
     r"|f\'.* CANARY:"  # Python f-string templates generating markers
     r'|FEATURE="[^"]*\{[^}]+\}"'  # Python f-string templates with {variable}

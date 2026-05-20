@@ -137,6 +137,41 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         };
     }
 
+    // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=GrantWidening; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 3 task 3-1: bind_graph — Admin always allowed; non-admin requires a
+    // Read grant on the target graph via graph_grant_check_fn. This is the
+    // non-bypassable gate for USE GRAPH and any operation that switches the
+    // active graph context. Evaluated before generic role/permission mapping so
+    // it cannot be widened by a permission-level grant for unrelated actions.
+    if (req.action == .bind_graph) {
+        for (req.principal.roles) |role_name| {
+            if (std.mem.eql(u8, role_name, "Admin")) {
+                return PolicyDecision{
+                    .kind = .allow,
+                    .reason_code = "bind_graph_admin",
+                };
+            }
+        }
+        if (req.resource == .graph) {
+            const target_graph = req.resource.graph;
+            if (execution.graph_grant_check_fn) |grant_fn| {
+                if (req.principal.username) |uname| {
+                    if (grant_fn(uname, target_graph, 0)) {
+                        return PolicyDecision{
+                            .kind = .allow,
+                            .reason_code = "bind_graph_grant",
+                        };
+                    }
+                }
+            }
+        }
+        return PolicyDecision{
+            .kind = .unauthorized,
+            .reason_code = "bind_graph_no_evidence",
+        };
+    }
+
     // Phase 2 task 2-4: builtin-role evaluation.
     // Walk the principal's roles slice, resolve each to a user_management.Role,
     // and ask hasPermission() — preserving legacy semantics bit-identically.
