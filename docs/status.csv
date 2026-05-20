@@ -1110,8 +1110,14 @@ REQ-GPS-METADATA-001,GPS Metadata Isolation,DbLabelsTenantFilter,TESTED,,,securi
 REQ-GPS-METADATA-001,GPS Metadata Isolation,LibExportMetaDispatch,TESTED,,,security,2026-05-20,src/lib.zig
 REQ-GPS-METADATA-002,GPS Metadata Isolation,DbRelationshipTypesFilter,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
 REQ-GPS-METADATA-002,GPS Metadata Isolation,DbRelationshipTypesTenantFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
+REQ-GPS-METADATA-002,GPS Metadata Isolation,ShowGraphsFilter,TESTED,,,security,2026-05-20,src/execution/statement_handlers.zig
+REQ-GPS-METADATA-002,GPS Metadata Isolation,ShowGraphsFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
 REQ-GPS-METADATA-003,GPS Metadata Isolation,DbPropertyKeysFilter,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
 REQ-GPS-METADATA-003,GPS Metadata Isolation,DbPropertyKeysTenantFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
+REQ-GPS-METADATA-003,GPS Metadata Isolation,ShowIndexesFilter,TESTED,,,security,2026-05-20,src/execution/statement_handlers.zig
+REQ-GPS-METADATA-003,GPS Metadata Isolation,ShowIndexesFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
+REQ-GPS-METADATA-004,GPS Metadata Isolation,ShowConstraintsFilter,TESTED,,,security,2026-05-20,src/execution/statement_handlers.zig
+REQ-GPS-METADATA-004,GPS Metadata Isolation,ShowConstraintsFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DecisionTypes,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DefaultDeny,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,TypeDefinition,TESTED,,,security,2026-05-20,src/security/gps.zig

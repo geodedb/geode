@@ -73,27 +73,59 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
 
     switch (s.show_type) {
         .indexes => {
-            // Return index data from catalog
-            var iter = cat.indexes.iterator();
-            while (iter.next()) |entry| {
-                const info = entry.value_ptr.*;
-                var row = try allocator.alloc(Value, 4);
-                row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
-                row[1] = Value{ .Str = try allocator.dupe(u8, info.index_type) };
-                row[2] = Value{ .Str = try allocator.dupe(u8, info.table_name) };
-
-                // Join columns with comma
-                var columns_str = std.ArrayList(u8).empty;
-                for (info.columns, 0..) |col, i| {
-                    if (i > 0) try columns_str.appendSlice(allocator, ", ");
-                    try columns_str.appendSlice(allocator, col);
+            // CANARY: REQ=REQ-GPS-METADATA-003; FEATURE="GPS Metadata Isolation"; ASPECT=ShowIndexesFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+            // Task 3-8: Gate SHOW INDEXES by tenant + active graph. When the
+            // execution context carries a Principal with an active_graph, verify
+            // the principal can bind that graph via gps.decide(.bind_graph). If
+            // denied, return an empty result. Catalog indexes have no per-graph
+            // field (they are registered globally); the active_graph gate is the
+            // practical proxy for scoping visibility. When principal is null
+            // (legacy/test paths) all indexes are returned unchanged.
+            const gps_mod_idx = @import("../security/gps.zig");
+            const active_graph_idx: ?[]const u8 = if (context.session_state) |ss| ss.graph else null;
+            const idx_allowed = blk: {
+                if (context.principal) |princ| {
+                    if (active_graph_idx) |graph| {
+                        const req_bind = gps_mod_idx.DecisionRequest{
+                            .principal = princ,
+                            .action = .bind_graph,
+                            .resource = .{ .graph = graph },
+                        };
+                        const decision = try gps_mod_idx.decide(std.heap.smp_allocator, &req_bind);
+                        break :blk decision.kind == .allow;
+                    }
                 }
-                row[3] = Value{ .Str = try columns_str.toOwnedSlice(allocator) };
+                break :blk true;
+            };
+            if (idx_allowed) {
+                var iter = cat.indexes.iterator();
+                while (iter.next()) |entry| {
+                    const info = entry.value_ptr.*;
+                    var row = try allocator.alloc(Value, 4);
+                    row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
+                    row[1] = Value{ .Str = try allocator.dupe(u8, info.index_type) };
+                    row[2] = Value{ .Str = try allocator.dupe(u8, info.table_name) };
 
-                try rows_list.append(allocator, row);
+                    // Join columns with comma
+                    var columns_str = std.ArrayList(u8).empty;
+                    for (info.columns, 0..) |col, i| {
+                        if (i > 0) try columns_str.appendSlice(allocator, ", ");
+                        try columns_str.appendSlice(allocator, col);
+                    }
+                    row[3] = Value{ .Str = try columns_str.toOwnedSlice(allocator) };
+
+                    try rows_list.append(allocator, row);
+                }
             }
         },
         .graphs => {
+            // CANARY: REQ=REQ-GPS-METADATA-002; FEATURE="GPS Metadata Isolation"; ASPECT=ShowGraphsFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+            // Task 3-7: Filter SHOW GRAPHS by bind_graph access. When the
+            // execution context carries a Principal, each graph is checked via
+            // gps.decide(.bind_graph). Only graphs that return .allow are
+            // included in the result. When principal is null (legacy/test paths)
+            // all graphs are returned to preserve backward compatibility.
+            const gps_mod = @import("../security/gps.zig");
             const storage_graphs = read_store.listGraphNames(allocator) catch null;
             if (storage_graphs) |names| {
                 defer {
@@ -101,6 +133,16 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
                     allocator.free(names);
                 }
                 for (names) |name| {
+                    // GPS filter: skip graphs the principal cannot bind
+                    if (context.principal) |princ| {
+                        const req_bind = gps_mod.DecisionRequest{
+                            .principal = princ,
+                            .action = .bind_graph,
+                            .resource = .{ .graph = name },
+                        };
+                        const decision = try gps_mod.decide(std.heap.smp_allocator, &req_bind);
+                        if (decision.kind != .allow) continue;
+                    }
                     var row = try allocator.alloc(Value, 1);
                     row[0] = Value{ .Str = try allocator.dupe(u8, name) };
                     try rows_list.append(allocator, row);
@@ -110,32 +152,54 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .constraints => {
             // GAP-0139: SHOW CONSTRAINTS implementation
             // CANARY: REQ=REQ-SHOW-CONSTRAINTS-002; FEATURE="SHOW CONSTRAINTS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13
-            // Return constraint data from catalog
-            var iter = cat.constraints.iterator();
-            while (iter.next()) |entry| {
-                const info = entry.value_ptr.*;
-                var row = try allocator.alloc(Value, 4);
-                row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
-
-                // Convert constraint type enum to string
-                const type_str = switch (info.constraint_type) {
-                    .unique => "UNIQUE",
-                    .node_key => "NODE KEY",
-                    .not_null => "NOT NULL",
-                    .exists => "EXISTS",
-                };
-                row[1] = Value{ .Str = try allocator.dupe(u8, type_str) };
-                row[2] = Value{ .Str = try allocator.dupe(u8, info.label) };
-
-                // Join properties with comma
-                var props_str = std.ArrayList(u8).empty;
-                for (info.properties, 0..) |prop, i| {
-                    if (i > 0) try props_str.appendSlice(allocator, ", ");
-                    try props_str.appendSlice(allocator, prop);
+            // CANARY: REQ=REQ-GPS-METADATA-004; FEATURE="GPS Metadata Isolation"; ASPECT=ShowConstraintsFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+            // Task 3-8: Gate SHOW CONSTRAINTS by tenant + active graph. Same
+            // policy as SHOW INDEXES above — when a Principal with an active_graph
+            // is present, verify bind_graph access before exposing constraint
+            // metadata. Legacy paths without a principal see everything.
+            const gps_mod_con = @import("../security/gps.zig");
+            const active_graph_con: ?[]const u8 = if (context.session_state) |ss| ss.graph else null;
+            const con_allowed = blk: {
+                if (context.principal) |princ| {
+                    if (active_graph_con) |graph| {
+                        const req_bind = gps_mod_con.DecisionRequest{
+                            .principal = princ,
+                            .action = .bind_graph,
+                            .resource = .{ .graph = graph },
+                        };
+                        const decision = try gps_mod_con.decide(std.heap.smp_allocator, &req_bind);
+                        break :blk decision.kind == .allow;
+                    }
                 }
-                row[3] = Value{ .Str = try props_str.toOwnedSlice(allocator) };
+                break :blk true;
+            };
+            if (con_allowed) {
+                var iter = cat.constraints.iterator();
+                while (iter.next()) |entry| {
+                    const info = entry.value_ptr.*;
+                    var row = try allocator.alloc(Value, 4);
+                    row[0] = Value{ .Str = try allocator.dupe(u8, info.name) };
 
-                try rows_list.append(allocator, row);
+                    // Convert constraint type enum to string
+                    const type_str = switch (info.constraint_type) {
+                        .unique => "UNIQUE",
+                        .node_key => "NODE KEY",
+                        .not_null => "NOT NULL",
+                        .exists => "EXISTS",
+                    };
+                    row[1] = Value{ .Str = try allocator.dupe(u8, type_str) };
+                    row[2] = Value{ .Str = try allocator.dupe(u8, info.label) };
+
+                    // Join properties with comma
+                    var props_str = std.ArrayList(u8).empty;
+                    for (info.properties, 0..) |prop, i| {
+                        if (i > 0) try props_str.appendSlice(allocator, ", ");
+                        try props_str.appendSlice(allocator, prop);
+                    }
+                    row[3] = Value{ .Str = try props_str.toOwnedSlice(allocator) };
+
+                    try rows_list.append(allocator, row);
+                }
             }
         },
         .tables => {
@@ -267,6 +331,10 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .columns = columns,
         .rows = try rows_list.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
+        // All Str values in the rows are freshly dupe()'d above; set this flag
+        // so that ExecutionResult.deinit() calls freeValue() on each value and
+        // does not leak under the debug allocator or in test harnesses.
+        .owns_value_memory = true,
     };
 }
 
