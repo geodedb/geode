@@ -354,30 +354,20 @@ pub const QueryCoordinator = struct {
                 .ordered = false,
             };
         };
-        // CANARY: REQ=REQ-GPS-PRINCIPAL-006; FEATURE="GPS Canonical Principal"; ASPECT=DistributedCoordinatorWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
-        // Phase 1: the coordinator runs synthetic queries on behalf of internal
-        // shard-coordination logic. Tag the principal as internal_service so
-        // GPS Phase 6 (distributed envelope) can distinguish coordinator-originated
-        // work from user-originated work even when both reach the same shard worker.
-        const principal_mod = @import("../security/principal.zig");
-        const coordinator_principal = principal_mod.Principal{
-            .user_id = null,
+        // CANARY: REQ=REQ-GPS-DERIVE-002; FEATURE="GPS Principal Derivation"; ASPECT=DistributedCoordinatorWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
+        // Phase 2: delegate to derivePrincipal() so all transport sites share
+        // the same field-population logic. source=.internal_service lets GPS Phase 6
+        // distinguish coordinator-originated work from user-originated work even
+        // when both reach the same shard worker.
+        const coordinator_principal = @import("../security/principal_derive.zig").derivePrincipal(.{
             .username = "geode-coordinator",
-            .session_id = null,
+            .role_names = &.{},
             .tenant_id = null,
             .active_graph = null,
-            .roles = &.{},
-            .custom_roles = &.{},
-            .auth_method = .anonymous,
             .auth_version = 0,
-            .mfa_state = .none,
-            .elevation_until = null,
-            .api_key_id = null,
-            .certificate_subject = null,
-            .risk_context = principal_mod.RiskContext.unknown,
-            .attributes = principal_mod.AttributeMap.emptySentinel(),
+            .auth_method = .anonymous,
             .source = .internal_service,
-        };
+        });
         const context = execution.ExecutionContext{
             .catalog = catalog,
             .principal = &coordinator_principal,

@@ -1956,45 +1956,25 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 }
             }
 
-            // CANARY: REQ=REQ-GPS-PRINCIPAL-005; FEATURE="GPS Canonical Principal"; ASPECT=GrpcHandlerWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
-            // Phase 1: build the canonical Principal once per request. Source=.grpc_handler
-            // so GPS Phase 6 can distinguish transport origin even when both QUIC and gRPC
-            // share the same execution path.
+            // CANARY: REQ=REQ-GPS-DERIVE-002; FEATURE="GPS Principal Derivation"; ASPECT=GrpcHandlerWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
+            // Phase 2: delegate to derivePrincipal() so all transport sites share
+            // the same field-population logic. source=.grpc_handler lets GPS Phase 6
+            // distinguish transport origin even when QUIC and gRPC share the same
+            // execution path.
             const principal_for_request = blk: {
-                const principal_mod = geode.security.principal;
-                if (state.authenticated_user) |uname| {
-                    const role_names: []const []const u8 = if (role) |r|
-                        &[_][]const u8{@tagName(r)}
-                    else
-                        &[_][]const u8{};
-                    break :blk principal_mod.Principal{
-                        .user_id = null,
-                        .username = uname,
-                        .session_id = null,
-                        .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
-                        .active_graph = if (state.exec_session) |s| s.graph else null,
-                        .roles = role_names,
-                        .custom_roles = &.{},
-                        .auth_method = .password,
-                        // CANARY: REQ=REQ-GPS-PRINCIPAL-004; FEATURE="GPS Canonical Principal"; ASPECT=AuthVersionFromState; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
-                        // Use the auth_version captured from AuthResult at authentication
-                        // time so cache invalidation works correctly when role/active/password
-                        // change. Phase 2's principal-derivation helper will centralize this.
-                        .auth_version = state.authenticated_auth_version,
-                        .mfa_state = .none,
-                        .elevation_until = null,
-                        .api_key_id = null,
-                        .certificate_subject = null,
-                        .risk_context = .{
-                            .score = 0,
-                            .ip_address = null,
-                            .user_agent = null,
-                        },
-                        .attributes = principal_mod.AttributeMap.emptySentinel(),
-                        .source = .grpc_handler,
-                    };
-                }
-                break :blk principal_mod.Principal.empty();
+                const role_names: []const []const u8 = if (role) |r|
+                    &[_][]const u8{@tagName(r)}
+                else
+                    &.{};
+                break :blk geode.security.principal_derive.derivePrincipal(.{
+                    .username = state.authenticated_user,
+                    .role_names = role_names,
+                    .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                    .active_graph = if (state.exec_session) |s| s.graph else null,
+                    .auth_version = state.authenticated_auth_version,
+                    .auth_method = .password,
+                    .source = .grpc_handler,
+                });
             };
 
             var exec_context = execution.ExecutionContext{
