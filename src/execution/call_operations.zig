@@ -142,6 +142,9 @@ test "executeCallStatement routes read-only procedures through QueryReadSession"
         testing.allocator.destroy(catalog);
     }
 
+    // Test-only ExecutionContext: no principal needed — production paths
+    // construct their principal at the transport boundary. See
+    // docs/security/gps-principal.md for the audit conclusion.
     const context = ExecutionContext{ .catalog = catalog };
 
     const call_stmt, var arena = try parseCallStatement("CALL degree()");

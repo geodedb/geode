@@ -68,3 +68,13 @@ single compatibility-mode exception (auth disabled in development).
 - `REQ-GPS-PRINCIPAL-005` — gRPC handler wiring.
 - `REQ-GPS-PRINCIPAL-006` — distributed coordinator wiring AND propagation
   test. (Two `ASPECT=` variants share this REQ.)
+
+## Phase 2 audit: src/execution/call_operations.zig:145
+
+Audit outcome (2026-05-20): the `ExecutionContext{ .catalog = catalog }` literal
+at this line is **test-only**. It lives entirely inside the Zig test block
+`test "executeCallStatement routes read-only procedures through QueryReadSession"`
+(line 111–154). Production paths construct their `ExecutionContext` — and the
+`principal` it carries — at the transport boundary (QUIC, gRPC, distributed
+coordinator). No principal threading is required here; the comment added at the
+call site documents this for future readers.
