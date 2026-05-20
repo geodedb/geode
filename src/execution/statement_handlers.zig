@@ -56,6 +56,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .permissions => return admin_ddl.executeShowPermissions(allocator, s.target, context),
         .version => return admin_ddl.executeShowVersion(allocator),
         .capabilities => return admin_ddl.executeShowCapabilities(allocator),
+        // GPS policy DDL (Phase 4): SHOW POLICIES returns empty result set until
+        // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
+        .policies => &[_][]const u8{ "name", "graph", "actions", "enabled" },
     };
 
     // Allocate and copy column names
@@ -235,6 +238,9 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         // The first switch returns early for these; this arm is unreachable in practice (defensive)
         .users, .roles, .permissions, .version, .capabilities => unreachable,
+        // GPS policy DDL (Phase 4): SHOW POLICIES — empty result until Phase 5 catalog.
+        // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ShowPoliciesStub; STATUS=IMPL; OWNER=security; UPDATED=2026-05-20
+        .policies => {},
         .functions => {
             // GAP-0139: SHOW FUNCTIONS implementation
             // CANARY: REQ=REQ-SHOW-FUNCTIONS-001; FEATURE="SHOW FUNCTIONS"; ASPECT=StatementHandler; STATUS=TESTED; TEST=geodetestlab/specs/gap_139_show_statements.yml; OWNER=execution; UPDATED=2026-01-13

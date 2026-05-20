@@ -1901,6 +1901,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         .DropRole => |s| return admin_ddl.executeDropRole(allocator, s, context),
         .Grant => |s| return admin_ddl.executeGrant(allocator, s, context),
         .Revoke => |s| return admin_ddl.executeRevoke(allocator, s, context),
+        // GPS policy DDL (Phase 4 stubs) — full execution wired in Phase 5 (Task 4-4).
+        // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ExecutionStub; STATUS=IMPL; OWNER=security; UPDATED=2026-05-20
+        .CreatePolicy => return error.NotImplemented,
+        .DropPolicy => return error.NotImplemented,
         else => return error.NotImplemented,
     }
 }

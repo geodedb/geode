@@ -4265,6 +4265,11 @@ pub const Parser = struct {
             self.advance();
             return self.parseCreateRole();
         }
+        // GPS policy DDL: CREATE POLICY <name> ON GRAPH ...
+        if (self.softKw("POLICY")) {
+            self.advance();
+            return self.parseCreatePolicy();
+        }
 
         // Check if this is CREATE INDEX
         if (self.cur.kind == .INDEX or
@@ -5381,6 +5386,8 @@ pub const Parser = struct {
                 break :blk .version;
             } else if (std.ascii.eqlIgnoreCase(type_str, "CAPABILITIES") or std.ascii.eqlIgnoreCase(type_str, "CAPABILITY")) {
                 break :blk .capabilities;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "POLICIES") or std.ascii.eqlIgnoreCase(type_str, "POLICY")) {
+                break :blk .policies;
             } else {
                 return error.UnexpectedToken;
             }
@@ -5638,6 +5645,11 @@ pub const Parser = struct {
         if (self.softKw("ROLE")) {
             self.advance();
             return self.parseDropUserOrRole(false);
+        }
+        // GPS policy DDL: DROP POLICY [IF EXISTS] <name>
+        if (self.softKw("POLICY")) {
+            self.advance();
+            return self.parseDropPolicy();
         }
 
         // Future: handle DROP DATABASE, etc.
@@ -6457,6 +6469,105 @@ pub const Parser = struct {
         _ = try self.expect(.FROM);
         const grantee = try self.parseName();
         return .{ .Revoke = .{ .privilege = priv, .on_graph = on_graph, .grantee = grantee } };
+    }
+
+    // ---------------------------------------------------------------------------
+    // GPS policy DDL parse functions (Phase 4 — soft-keyword based).
+    // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_parser.zig; OWNER=security; UPDATED=2026-05-20
+    // ---------------------------------------------------------------------------
+
+    // Parse a single PolicyAction from the current token.
+    // Actions that are reserved keywords (MATCH, READ, WRITE, SCHEMA, DELETE, CREATE)
+    // are matched by kind; UPDATE is a soft keyword (identifier).
+    fn parsePolicyAction(self: *Parser) ParserError!ast.PolicyAction {
+        switch (self.cur.kind) {
+            .READ => {
+                self.advance();
+                return .read;
+            },
+            .WRITE => {
+                self.advance();
+                return .write;
+            },
+            .MATCH => {
+                self.advance();
+                return .match_;
+            },
+            .CREATE => {
+                self.advance();
+                return .create;
+            },
+            .DELETE => {
+                self.advance();
+                return .delete;
+            },
+            .SCHEMA => {
+                self.advance();
+                return .schema;
+            },
+            else => {
+                if (self.softKw("UPDATE")) {
+                    self.advance();
+                    return .update;
+                }
+                return self.unexpected("expected one of READ, WRITE, MATCH, CREATE, UPDATE, DELETE, SCHEMA");
+            },
+        }
+    }
+
+    // Parse a non-empty comma-separated ActionList.
+    fn parsePolicyActionList(self: *Parser) ParserError![]ast.PolicyAction {
+        var list = std.ArrayList(ast.PolicyAction).empty;
+        const first = try self.parsePolicyAction();
+        try list.append(self.arena.allocator(), first);
+        while (self.cur.kind == .comma) {
+            self.advance(); // consume comma
+            const action = try self.parsePolicyAction();
+            try list.append(self.arena.allocator(), action);
+        }
+        return list.toOwnedSlice(self.arena.allocator());
+    }
+
+    // Skip tokens until semicolon or EOF — used to discard Phase 5+ clauses
+    // (TO ROLE, USING <expr>, WITH CHECK) that appear after the FOR <ActionList>.
+    fn skipTrailingPolicyClauses(self: *Parser) void {
+        while (self.cur.kind != .semicolon and self.cur.kind != .eof) {
+            self.advance();
+        }
+    }
+
+    // Parse CREATE POLICY <name> ON GRAPH (<graph_name> | "*") FOR <ActionList>
+    // Trailing Phase 5+ clauses are consumed and discarded.
+    fn parseCreatePolicy(self: *Parser) ParserError!ast.Statement {
+        const name = try self.parseName();
+        if (self.cur.kind != .ON) return self.unexpected("expected ON after CREATE POLICY <name>");
+        self.advance(); // ON
+        if (self.cur.kind != .GRAPH) return self.unexpected("expected GRAPH after ON in CREATE POLICY");
+        self.advance(); // GRAPH
+        // Accept either a bare "*" (star / multiply token) or an identifier.
+        const scope_graph: []const u8 = if (self.cur.kind == .star) blk: {
+            self.advance();
+            break :blk "*";
+        } else try self.parseName();
+        if (self.cur.kind != .FOR) return self.unexpected("expected FOR after graph scope in CREATE POLICY");
+        self.advance(); // FOR
+        const actions = try self.parsePolicyActionList();
+        // Discard any trailing clauses (TO ROLE, USING, WITH CHECK) — Phase 5.
+        self.skipTrailingPolicyClauses();
+        return .{ .CreatePolicy = .{ .name = name, .scope_graph = scope_graph, .actions = actions } };
+    }
+
+    // Parse DROP POLICY [IF EXISTS] <name>
+    fn parseDropPolicy(self: *Parser) ParserError!ast.Statement {
+        var if_exists = false;
+        if (self.cur.kind == .IF) {
+            self.advance();
+            if (self.cur.kind != .EXISTS) return self.unexpected("expected EXISTS after IF in DROP POLICY");
+            self.advance();
+            if_exists = true;
+        }
+        const name = try self.parseName();
+        return .{ .DropPolicy = .{ .name = name, .if_exists = if_exists } };
     }
 
     // Parse SESSION SET statement with full ISO GQL syntax

@@ -4765,4 +4765,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_catalog_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_catalog_step = b.step("test-gps-policy-catalog", "Run GPS in-memory policy catalog unit tests (add/list/remove/deinit)");
     gps_policy_catalog_step.dependOn(&run_gps_policy_catalog_tests.step);
+
+    // GPS Phase 4 (Task 4-3): parser unit tests for CREATE POLICY, DROP POLICY, SHOW POLICIES.
+    const gps_policy_ddl_parser_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_ddl_parser.zig"), .target = target, .optimize = optimize });
+    gps_policy_ddl_parser_test_mod.addImport("geode", root_mod);
+    const gps_policy_ddl_parser_tests = b.addTest(.{ .root_module = gps_policy_ddl_parser_test_mod });
+    const run_gps_policy_ddl_parser_tests = b.addRunArtifact(gps_policy_ddl_parser_tests);
+    shardDep(test_step, &run_gps_policy_ddl_parser_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_policy_ddl_parser_step = b.step("test-gps-policy-ddl-parser", "Run GPS policy DDL parser unit tests (CREATE/DROP/SHOW POLICY)");
+    gps_policy_ddl_parser_step.dependOn(&run_gps_policy_ddl_parser_tests.step);
 }

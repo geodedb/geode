@@ -53,6 +53,9 @@ pub const Statement = union(enum) {
     DropRole: DropRoleStatement,
     Grant: GrantStatement,
     Revoke: RevokeStatement,
+    // Geode extension: GPS policy DDL
+    CreatePolicy: CreatePolicyStatement,
+    DropPolicy: DropPolicyStatement,
     // Query introspection
     Explain: ExplainStatement,
     Profile: ProfileStatement,
@@ -561,6 +564,7 @@ pub const ShowType = enum {
     permissions,
     version,
     capabilities,
+    policies,
 };
 
 pub const IndexType = enum {
@@ -723,6 +727,42 @@ pub fn grantPrivilegeName(p: GrantPrivilege) []const u8 {
         .all => "ALL",
     };
 }
+
+// ---------------------------------------------------------------------------
+// Geode extension: GPS policy DDL (Phase 4+).
+// CREATE POLICY, DROP POLICY, SHOW POLICIES.
+// Parsed via soft keywords; executed by src/execution/admin_ddl.zig (Phase 5).
+// ---------------------------------------------------------------------------
+
+/// Actions that can appear in a CREATE POLICY ... FOR <ActionList>.
+/// Mirrors policy_catalog.Action — kept in sync manually.
+// CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=ASTAction; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_parser.zig; OWNER=security; UPDATED=2026-05-20
+pub const PolicyAction = enum {
+    read,
+    write,
+    match_,
+    create,
+    update,
+    delete,
+    schema,
+};
+
+/// AST node for: CREATE POLICY <name> ON GRAPH (<graph> | "*") FOR <ActionList>
+/// Phase 4 only — TO ROLE, USING, WITH CHECK clauses are parsed-and-discarded.
+// CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=CreatePolicyAST; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_parser.zig; OWNER=security; UPDATED=2026-05-20
+pub const CreatePolicyStatement = struct {
+    name: []const u8,
+    /// "*" means all graphs (global scope).
+    scope_graph: []const u8,
+    actions: []const PolicyAction,
+};
+
+/// AST node for: DROP POLICY [IF EXISTS] <name>
+// CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=DropPolicyAST; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_parser.zig; OWNER=security; UPDATED=2026-05-20
+pub const DropPolicyStatement = struct {
+    name: []const u8,
+    if_exists: bool = false,
+};
 
 // Query introspection statements
 pub const ExplainStatement = struct {
