@@ -329,3 +329,22 @@ snapshot:
 | "Enhanced RLS" | **No** -- only label-based filtering works |
 
 **Recommendation:** Change status to "DEVELOPMENT READY (single-tenant)" or explicitly document that multi-tenancy, expression RLS, and distributed mode require additional hardening.
+
+---
+
+## 2026-05-20 — GPS Phase 0 Closure Footer
+
+The audit findings in this file have been re-evaluated against the current
+`main` branch. Outcomes:
+
+- **Tenant isolation:** closed by GAP-0509 (2026-04-11). See
+  `tests/test_gap0509_tenant_isolation.zig`.
+- **RLS expression engine wiring:** closed by GAP-0511 (2026-04-11). See
+  `tests/test_rls_expr_engine_wiring.zig` and
+  `setGlobalExprRLSEngine` in `src/server/main.zig`.
+- **Distributed module gaps:** closed by GAP-0513 (2026-04-10), commit
+  `68ff42c4`.
+- **Auth DDL persistence:** closed by `docs/GQL_AUTH_DDL.md` (2026-05-11/12).
+
+Remaining audit items that this footer does NOT close are captured in
+`docs/security/gps-fail-open-sites.md` and addressed by GPS Phase 2+.

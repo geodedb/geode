@@ -502,3 +502,23 @@ Complete documentation available in `./docs/`:
 
 *Last Updated: January 21, 2026*
 *Status: PRODUCTION READY - 97.4% test coverage, 100% GQL compliance, all major features complete, GPU build system integrated*
+
+---
+
+## 2026-05-20 — GPS Phase 0 Reconciliation Footer
+
+GPS (Geode Policy System) Phase 0 has reconciled the meaning of all
+authority-bearing fields against the current `main` branch. See:
+
+- `docs/security/gps-invariants.md` — pinned current meaning of `Role`,
+  `Permission`, `auth_version`, `tenant_id`, `graph_name`, graph grants.
+- `docs/security/gps-fail-open-sites.md` — the 9 documented fail-open sites,
+  each tagged in source with `CANARY: REQ=REQ-GPS-INVARIANT-001`.
+- `docs/geode-policy-plan.md` — the full GPS design plan; this TODO is no
+  longer the source of truth for the meaning of authority fields.
+
+Prior entries in this file that describe "tenant isolation not implemented"
+or "RLS engine not wired" reflect pre-2026-04-11 state. The GAP-0509 (tenant
+isolation) and GAP-0511 (RLS expression wiring) closures are recorded in
+CLAUDE.md and `docs/GAP_ANALYSIS_RESOLVED.md`. GPS Phase 2+ replaces the
+remaining fail-open sites listed in `docs/security/gps-fail-open-sites.md`.
