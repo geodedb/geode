@@ -34,6 +34,13 @@ pub const ServerConfig = struct {
     // Authentication (enabled by default for security; use --no-auth to disable)
     enable_auth: bool = true,
 
+    // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+    // --insecure-allow-all: when true, gps.decide() returns allow for every
+    // request regardless of principal or resource. Default false (fail-closed).
+    // NOT FOR PRODUCTION — exists only to provide an explicit, observable
+    // bypass replacing the implicit auth-disabled short-circuit.
+    insecure_allow_all: bool = false,
+
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
@@ -160,6 +167,7 @@ pub fn printHelp() void {
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
+    std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
     std.debug.print("\nConfig File Locations (searched in order):\n", .{});
     std.debug.print("  1. .geode/config.{{yaml|toml|json}}    (project config)\n", .{});
@@ -305,6 +313,9 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             }
             config.enable_auth = false;
             std.log.warn("Authentication disabled via --no-auth. This is NOT recommended for production use.", .{});
+        } else if (std.mem.eql(u8, arg, "--insecure-allow-all")) {
+            // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+            config.insecure_allow_all = true;
         } else if (std.mem.eql(u8, arg, "--enable-fle") or std.mem.eql(u8, arg, "--enable-tde")) {
             // FLE/TDE are always available; flags accepted for compatibility
         } else if (std.mem.eql(u8, arg, "--tde-provider") and ai + 1 < args.len) {

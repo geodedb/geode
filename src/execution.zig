@@ -840,9 +840,12 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     const principal_mod = @import("security/principal.zig");
 
     // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-    // Phase 2 routes through decide() but still preserves the auth-disabled
-    // short-circuit for developer-mode compatibility. Task 2-9 will replace
-    // this with an explicit --insecure-allow-all flag and remove the branch.
+    // Phase 2 Task 2-9: explicit --insecure-allow-all flag is now the
+    // canonical bypass (see gps.setInsecureAllowAll). This legacy
+    // short-circuit is preserved as a Phase 1 compatibility path until
+    // Phase 3 removes auth-disabled defaults entirely. When the new flag is
+    // set, decide() will allow everything at the first check, so callers that
+    // reach this branch while auth is disabled continue to get identical behavior.
     if (!user_mgmt.isAuthEnabled()) {
         return;
     }

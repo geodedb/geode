@@ -650,6 +650,17 @@ pub fn main() !void {
     };
     defer user_mgmt.deinitUserStore();
     user_mgmt.setAuthEnabled(true);
+
+    // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+    // --insecure-allow-all: wire the parsed flag into the GPS decision engine.
+    // When set, gps.decide() short-circuits all authorization checks and returns
+    // allow for every request. Explicit WARN log makes the bypass observable.
+    const gps = geode.security.gps;
+    if (config.insecure_allow_all) {
+        gps.setInsecureAllowAll(true);
+        log.warn("SECURITY: Geode running with --insecure-allow-all: all authorization checks bypassed. NOT FOR PRODUCTION.", &.{});
+    }
+
     std.debug.print("[startup] user store initialized ({d}ms)\n", .{compat_milliTimestamp() - phase_start});
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a

@@ -213,6 +213,30 @@ test "decide() allows read for Admin on any graph (gRPC handshake parity)" {
     try std.testing.expectEqual(gps.PolicyDecisionKind.allow, decision.kind);
 }
 
+// CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAllDefault; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "insecure_allow_all defaults to false" {
+    // Don't toggle — just observe the default. The flag must be off so that
+    // fail-closed behavior is preserved on normal server startup.
+    try std.testing.expect(!gps.isInsecureAllowAll());
+}
+
+// CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "decide() returns allow when --insecure-allow-all is set, regardless of principal" {
+    const prev = gps.isInsecureAllowAll();
+    gps.setInsecureAllowAll(true);
+    defer gps.setInsecureAllowAll(prev);
+
+    const p = principal_mod.Principal.empty(); // unauthenticated — would normally deny
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .write, // would normally deny for unauthenticated
+        .resource = .{ .database = {} },
+    };
+    const decision = try gps.decide(std.testing.allocator, &req);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.allow, decision.kind);
+    try std.testing.expectEqualStrings("insecure_allow_all", decision.reason_code);
+}
+
 // CANARY: REQ=REQ-GPS-PDP-004; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionAdapter; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "checkPermission with no principal still works through legacy synthesis" {
     const user_mgmt = geode.user_management;

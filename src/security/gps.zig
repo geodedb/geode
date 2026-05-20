@@ -24,6 +24,20 @@
 const std = @import("std");
 const principal_mod = @import("principal.zig");
 
+// CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+// Process-wide flag enabling the --insecure-allow-all bypass. Written once at
+// startup by CLI parsing; read on every decide() call. Uses the same
+// std.atomic.Value(bool) pattern as user_management.auth_enabled.
+var g_insecure_allow_all: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
+pub fn setInsecureAllowAll(value: bool) void {
+    g_insecure_allow_all.store(value, .release);
+}
+
+pub fn isInsecureAllowAll() bool {
+    return g_insecure_allow_all.load(.acquire);
+}
+
 pub const Action = enum {
     read,
     write,
@@ -103,6 +117,19 @@ fn actionToPermission(action: Action) ?user_mgmt.Permission {
 
 pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !PolicyDecision {
     _ = allocator;
+
+    // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+    // --insecure-allow-all: process-wide kill-switch that short-circuits all
+    // authorization logic. Set only when the flag is present at CLI startup.
+    // This is the canonical bypass path; the legacy auth-disabled short-circuit
+    // in checkPermission() is preserved as a Phase 1 compat path (see Task 2-9).
+    if (g_insecure_allow_all.load(.acquire)) {
+        return PolicyDecision{
+            .kind = .allow,
+            .reason_code = "insecure_allow_all",
+        };
+    }
+
     if (req.principal.username == null) {
         return PolicyDecision{
             .kind = .unauthenticated,
