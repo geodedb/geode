@@ -1956,6 +1956,47 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 }
             }
 
+            // CANARY: REQ=REQ-GPS-PRINCIPAL-005; FEATURE="GPS Canonical Principal"; ASPECT=GrpcHandlerWiring; STATUS=TESTED; TEST=tests/test_gps_principal_propagation.zig; OWNER=security; UPDATED=2026-05-20
+            // Phase 1: build the canonical Principal once per request. Source=.grpc_handler
+            // so GPS Phase 6 can distinguish transport origin even when both QUIC and gRPC
+            // share the same execution path.
+            const principal_for_request = blk: {
+                const principal_mod = geode.security.principal;
+                if (state.authenticated_user) |uname| {
+                    const role_names: []const []const u8 = if (role) |r|
+                        &[_][]const u8{@tagName(r)}
+                    else
+                        &[_][]const u8{};
+                    break :blk principal_mod.Principal{
+                        .user_id = null,
+                        .username = uname,
+                        .session_id = null,
+                        .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                        .active_graph = if (state.exec_session) |s| s.graph else null,
+                        .roles = role_names,
+                        .custom_roles = &.{},
+                        .auth_method = .password,
+                        // Phase 1: auth_version=0 because no public accessor on
+                        // user_management.zig exposes the persistent version by
+                        // username. Phase 2 introduces a single principal-derivation
+                        // helper that consults the persistent resolver chain.
+                        .auth_version = 0,
+                        .mfa_state = .none,
+                        .elevation_until = null,
+                        .api_key_id = null,
+                        .certificate_subject = null,
+                        .risk_context = .{
+                            .score = 0,
+                            .ip_address = null,
+                            .user_agent = null,
+                        },
+                        .attributes = principal_mod.AttributeMap.emptySentinel(),
+                        .source = .grpc_handler,
+                    };
+                }
+                break :blk principal_mod.Principal.empty();
+            };
+
             var exec_context = execution.ExecutionContext{
                 .catalog = catalog,
                 .user = state.authenticated_user,
@@ -1970,6 +2011,7 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
                 .graph_bound = state.graph_bound,
                 // GAP-0281: Thread session tenant_id into execution context for FLE hooks
                 .tenant_id = if (state.session_config) |cfg| cfg.tenant_id else null,
+                .principal = &principal_for_request,
                 .pending_index_rebuilds = null,
             };
 
