@@ -477,6 +477,11 @@ pub const ExecutionContext = struct {
     // Set at server startup and shared across all connections (read-only during queries).
     // CANARY: REQ=REQ-TIMESERIES-WIRE-002; FEATURE="TimeseriesServerWiring"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/eval.zig; OWNER=engine; UPDATED=2026-04-01
     timeseries_store: ?*@import("timeseries/timeseries.zig").Store = null,
+    // CANARY: REQ=REQ-GPS-PRINCIPAL-003; FEATURE="GPS Canonical Principal"; ASPECT=ExecutionContextField; STATUS=TESTED; TEST=tests/test_gps_principal.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 1: canonical Principal constructed once at the request boundary.
+    // Null in legacy/test paths during migration. Phase 2 makes decide() the
+    // sole consumer; checkPermission() does NOT read this field yet.
+    principal: ?*const @import("security/principal.zig").Principal = null,
     // CANARY: REQ=REQ-MULTI-TENANT-FLE-001; FEATURE="FLE Multi-Tenancy"; ASPECT=ExecutionContext; STATUS=TESTED; TEST=src/fle_integration.zig; OWNER=security; UPDATED=2026-04-11
     // GAP-0281: Session tenant_id threaded through to FLE encryption hooks.
     // Covered by the GAP-0515 thread-reuse regression test in fle_integration.zig

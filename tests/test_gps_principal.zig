@@ -116,3 +116,22 @@ test "fromAuthState records mfa_state=required when AuthResult.requires_mfa is t
     });
     try std.testing.expectEqual(principal_mod.MfaState.required, p.mfa_state);
 }
+
+// CANARY: REQ=REQ-GPS-PRINCIPAL-003; FEATURE="GPS Canonical Principal"; ASPECT=ExecutionContextField; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "ExecutionContext.principal defaults to null and accepts a pointer" {
+    const execution = geode.execution;
+    execution.cleanupCatalogInstance();
+    defer execution.cleanupCatalogInstance();
+    const catalog = try execution.ensureCatalogInstance(std.testing.allocator);
+
+    const default_ctx = execution.ExecutionContext{ .catalog = catalog };
+    try std.testing.expect(default_ctx.principal == null);
+
+    const p = principal_mod.Principal.empty();
+    const ctx_with_principal = execution.ExecutionContext{
+        .catalog = catalog,
+        .principal = &p,
+    };
+    try std.testing.expect(ctx_with_principal.principal != null);
+    try std.testing.expectEqual(@as(u64, 0), ctx_with_principal.principal.?.auth_version);
+}
