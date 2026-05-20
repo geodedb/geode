@@ -4681,4 +4681,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_principal_propagation_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_principal_propagation_step = b.step("test-gps-principal-propagation", "Run GPS Principal propagation unit tests");
     gps_principal_propagation_step.dependOn(&run_gps_principal_propagation_tests.step);
+
+    // GPS Phase 2 (Task 2-1): decision types and skeleton decide() entry point.
+    const gps_decide_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decide.zig"), .target = target, .optimize = optimize });
+    gps_decide_test_mod.addImport("geode", root_mod);
+    const gps_decide_tests = b.addTest(.{ .root_module = gps_decide_test_mod });
+    const run_gps_decide_tests = b.addRunArtifact(gps_decide_tests);
+    shardDep(test_step, &run_gps_decide_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_decide_step = b.step("test-gps-decide", "Run GPS decision API unit tests");
+    gps_decide_step.dependOn(&run_gps_decide_tests.step);
 }

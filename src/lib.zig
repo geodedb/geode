@@ -443,6 +443,8 @@ pub const security = struct {
     // GPS Phase 1: canonical Principal type and authentication result type
     pub const principal = @import("security/principal.zig");
     pub const authn = @import("security/authn.zig");
+    // GPS Phase 2: decision types and central decide() entry point
+    pub const gps = @import("security/gps.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");
