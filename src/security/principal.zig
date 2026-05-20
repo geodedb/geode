@@ -90,6 +90,43 @@ pub const Principal = struct {
 
     source: PrincipalSource,
 
+    pub const FromAuthStateArgs = struct {
+        auth_result: authn.AuthResult,
+        auth_version: u64,
+        tenant_id: ?[]const u8,
+        active_graph: ?[]const u8,
+        api_key_id: ?u64,
+        certificate_subject: ?[]const u8,
+        ip_address: ?[]const u8,
+        user_agent: ?[]const u8,
+        source: PrincipalSource,
+    };
+
+    pub fn fromAuthState(args: FromAuthStateArgs) Principal {
+        return .{
+            .user_id = args.auth_result.user_id,
+            .username = args.auth_result.username,
+            .session_id = args.auth_result.session_token,
+            .tenant_id = args.tenant_id,
+            .active_graph = args.active_graph,
+            .roles = args.auth_result.roles,
+            .custom_roles = &.{},
+            .auth_method = args.auth_result.method,
+            .auth_version = args.auth_version,
+            .mfa_state = if (args.auth_result.requires_mfa) MfaState.required else MfaState.none,
+            .elevation_until = null,
+            .api_key_id = args.api_key_id,
+            .certificate_subject = args.certificate_subject,
+            .risk_context = .{
+                .score = 0,
+                .ip_address = args.ip_address,
+                .user_agent = args.user_agent,
+            },
+            .attributes = AttributeMap.emptySentinel(),
+            .source = args.source,
+        };
+    }
+
     pub fn empty() Principal {
         return .{
             .user_id = null,

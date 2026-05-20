@@ -50,3 +50,69 @@ test "Principal carries legacy builtin role names without mutation" {
     try std.testing.expectEqualStrings("tenant-a", p.tenant_id.?);
     try std.testing.expectEqual(@as(u64, 7), p.auth_version);
 }
+
+// CANARY: REQ=REQ-GPS-PRINCIPAL-002; FEATURE="GPS Canonical Principal"; ASPECT=FromAuthStateBuilder; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "fromAuthState assembles principal from AuthResult + tenant/graph/session" {
+    const authn = geode.security.authn;
+    const ar = authn.AuthResult{
+        .user_id = 100,
+        .username = "carol",
+        .method = .password,
+        .roles = &[_][]const u8{"User"},
+        .scopes = &.{},
+        .session_token = "sess-abc",
+        .requires_mfa = false,
+        .requires_password_reset = false,
+        .elevation_level = .standard,
+    };
+    const p = principal_mod.Principal.fromAuthState(.{
+        .auth_result = ar,
+        .auth_version = 9,
+        .tenant_id = "tenant-x",
+        .active_graph = "hr",
+        .api_key_id = null,
+        .certificate_subject = null,
+        .ip_address = "127.0.0.1",
+        .user_agent = null,
+        .source = .quic_handler,
+    });
+    try std.testing.expectEqual(@as(u64, 100), p.user_id.?);
+    try std.testing.expectEqualStrings("carol", p.username.?);
+    try std.testing.expectEqualStrings("sess-abc", p.session_id.?);
+    try std.testing.expectEqualStrings("tenant-x", p.tenant_id.?);
+    try std.testing.expectEqualStrings("hr", p.active_graph.?);
+    try std.testing.expectEqual(@as(usize, 1), p.roles.len);
+    try std.testing.expectEqual(authn.AuthMethod.password, p.auth_method);
+    try std.testing.expectEqual(@as(u64, 9), p.auth_version);
+    try std.testing.expectEqual(principal_mod.MfaState.none, p.mfa_state);
+    try std.testing.expectEqualStrings("127.0.0.1", p.risk_context.ip_address.?);
+    try std.testing.expectEqual(principal_mod.PrincipalSource.quic_handler, p.source);
+}
+
+// CANARY: REQ=REQ-GPS-PRINCIPAL-002; FEATURE="GPS Canonical Principal"; ASPECT=FromAuthStateBuilderMfa; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "fromAuthState records mfa_state=required when AuthResult.requires_mfa is true" {
+    const authn = geode.security.authn;
+    const ar = authn.AuthResult{
+        .user_id = 100,
+        .username = "carol",
+        .method = .password,
+        .roles = &.{},
+        .scopes = &.{},
+        .session_token = null,
+        .requires_mfa = true,
+        .requires_password_reset = false,
+        .elevation_level = .standard,
+    };
+    const p = principal_mod.Principal.fromAuthState(.{
+        .auth_result = ar,
+        .auth_version = 0,
+        .tenant_id = null,
+        .active_graph = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .ip_address = null,
+        .user_agent = null,
+        .source = .quic_handler,
+    });
+    try std.testing.expectEqual(principal_mod.MfaState.required, p.mfa_state);
+}

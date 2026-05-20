@@ -1091,6 +1091,8 @@ REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,20
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,ConstructionDefaults,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,LegacyRoleMapping,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-001,GPS Canonical Principal,TypeDefinition,TESTED,,,security,2026-05-20,src/security/principal.zig
+REQ-GPS-PRINCIPAL-002,GPS Canonical Principal,FromAuthStateBuilder,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
+REQ-GPS-PRINCIPAL-002,GPS Canonical Principal,FromAuthStateBuilderMfa,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPU-002,Vulkan Shader Compilation,Implementation,EXEMPT,,,core,2026-01-17,src/gpu/vulkan_shaders.zig
 REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
