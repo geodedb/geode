@@ -22,6 +22,9 @@ const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const ExecutionError = execution.ExecutionError;
 
+const procedure_access = @import("procedure_access.zig");
+const gps = @import("../security/gps.zig");
+
 // Import recursion handler for member path building
 const recursion_handler = @import("recursion_handler.zig");
 
@@ -99,12 +102,32 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     const proc_name = try extractNormalizedProcName(allocator, call_stmt);
     defer allocator.free(proc_name);
 
+    // CANARY: REQ=REQ-GPS-PROC-001; FEATURE="GPS Procedure Enforcement"; ASPECT=DispatchGate; STATUS=TESTED; TEST=tests/test_gps_procedure_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=ClassifierUnused; STATUS=COMPLETE; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 task 5-1: mandatory GPS decision before any procedure body executes.
+    // The procedure_access classifier maps proc_name to .read_only or .mutating;
+    // we remap to the corresponding GPS action (.read / .write) so that the
+    // builtin-role evaluation in decide() produces bit-identical results to the
+    // legacy hasPermission() gate. For procedures with no entry in the classifier
+    // table (unknown), we fall back to the raw .execute_procedure action, which
+    // requires an explicit Policy match (or Admin role) — preserving fail-closed.
+    if (context.principal) |princ| {
+        const access_class = procedure_access.classifyProcedureName(proc_name);
+        const action_for_gate: gps.Action = switch (access_class) {
+            .read_only => .read,
+            .mutating => .write,
+        };
+        const gate_req = gps.DecisionRequest{
+            .principal = princ,
+            .action = action_for_gate,
+            .resource = .{ .procedure = proc_name },
+        };
+        const decision = try gps.decide(allocator, &gate_req);
+        if (decision.kind != .allow) return error.Unauthorized;
+    }
+
     // Get the graph store
     const store = graph_store.getGlobalStore(allocator);
-
-    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=ClassifierUnused; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
-    // Phase 0: procedure dispatch does NOT consult procedure_access.zig. GPS Phase 5
-    // makes EXECUTE_PROCEDURE a mandatory decision before dispatch.
 
     // ---- db.* and dbms.* introspection procedures (GAP-0531) ----
     // db.labels(), db.relationshipTypes(), db.propertyKeys(), db.indexes(),

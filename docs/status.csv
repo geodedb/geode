@@ -1153,7 +1153,6 @@ REQ-GPS-DERIVE-001,GPS Principal Derivation,QuicArgs,TESTED,,,security,2026-05-2
 REQ-GPS-DERIVE-002,GPS Principal Derivation,DistributedCoordinatorWiring,TESTED,,,security,2026-05-20,src/distributed/query_coordinator.zig
 REQ-GPS-DERIVE-002,GPS Principal Derivation,GrpcHandlerWiring,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig
 REQ-GPS-DERIVE-002,GPS Principal Derivation,QuicHandlerWiring,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig
-REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,ClassifierUnused,EXEMPT,,,security,2026-05-20,src/execution/procedure_registry.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/execution.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/security/rls_core.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,ContextThreading,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
@@ -1222,6 +1221,15 @@ REQ-GPS-PRINCIPAL-003,GPS Canonical Principal,ExecutionContextField,TESTED,,,sec
 REQ-GPS-PRINCIPAL-003,GPS Canonical Principal,ExecutionContextField,TESTED,,,security,2026-05-20,tests/test_gps_principal.zig
 REQ-GPS-PRINCIPAL-006,GPS Canonical Principal,BackwardCompat,TESTED,,,security,2026-05-20,tests/test_gps_principal_propagation.zig
 REQ-GPS-PRINCIPAL-006,GPS Canonical Principal,ExecutionPropagation,TESTED,,,security,2026-05-20,tests/test_gps_principal_propagation.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,AdminAllowed,TESTED,,,security,2026-05-20,src/security/gps.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,DispatchGate,TESTED,,,security,2026-05-20,src/execution/procedure_registry.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyCanReadOnlyProcedures,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,security,2026-05-20,src/security/gps.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
 REQ-GPU-002,Vulkan Shader Compilation,Implementation,EXEMPT,,,core,2026-01-17,src/gpu/vulkan_shaders.zig
 REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig

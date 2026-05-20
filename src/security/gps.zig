@@ -149,6 +149,29 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         };
     }
 
+    // CANARY: REQ=REQ-GPS-PROC-001; FEATURE="GPS Procedure Enforcement"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_procedure_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-PROC-001; FEATURE="GPS Procedure Enforcement"; ASPECT=ReadOnlyForMutatingDenied; STATUS=TESTED; TEST=tests/test_gps_procedure_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 task 5-1: execute_procedure — Admin is always allowed. For other
+    // principals the registry remaps the action to .read (read_only procedures)
+    // or .write (mutating procedures) before calling decide(), so this branch
+    // handles only the unknown-classification fallback where the raw
+    // .execute_procedure action arrives. Without a builtin-role that maps to
+    // Read or Write (e.g., ReadOnly has Read, Admin has all), this falls through
+    // to the policy catalog. A bare .execute_procedure action with no policy
+    // match produces .unauthorized — preserving the fail-closed default.
+    if (req.action == .execute_procedure) {
+        for (req.principal.roles) |role_name| {
+            if (std.mem.eql(u8, role_name, "Admin")) {
+                return PolicyDecision{
+                    .kind = .allow,
+                    .reason_code = "execute_procedure_admin",
+                };
+            }
+        }
+        // Fall through: no builtin-role shortcut for the raw execute_procedure
+        // action — the policy catalog below is the last resort.
+    }
+
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=GrantWidening; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 3 task 3-1: bind_graph — Admin always allowed; non-admin requires a

@@ -4812,4 +4812,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_evaluation_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_evaluation_step = b.step("test-gps-policy-evaluation", "Run GPS policy-catalog evaluation tests (decide() consults PolicyCatalog for explicit allow)");
     gps_policy_evaluation_step.dependOn(&run_gps_policy_evaluation_tests.step);
+
+    // GPS Phase 5 (Task 5-1): mandatory decide(.execute_procedure) before procedure dispatch.
+    const gps_procedure_enforcement_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_procedure_enforcement.zig"), .target = target, .optimize = optimize });
+    gps_procedure_enforcement_test_mod.addImport("geode", root_mod);
+    const gps_procedure_enforcement_tests = b.addTest(.{ .root_module = gps_procedure_enforcement_test_mod });
+    const run_gps_procedure_enforcement_tests = b.addRunArtifact(gps_procedure_enforcement_tests);
+    shardDep(test_step, &run_gps_procedure_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_procedure_enforcement_step = b.step("test-gps-procedure-enforcement", "Run GPS procedure enforcement tests (mandatory decide() gate before procedure dispatch)");
+    gps_procedure_enforcement_step.dependOn(&run_gps_procedure_enforcement_tests.step);
 }
