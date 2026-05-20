@@ -18,6 +18,9 @@ test "Principal.empty produces a fully-null, zero-role principal" {
     try std.testing.expect(p.elevation_until == null);
     try std.testing.expect(p.api_key_id == null);
     try std.testing.expect(p.certificate_subject == null);
+    try std.testing.expectEqual(@as(u8, 0), p.risk_context.score);
+    try std.testing.expect(p.risk_context.ip_address == null);
+    try std.testing.expect(p.risk_context.user_agent == null);
     try std.testing.expectEqual(principal_mod.PrincipalSource.unattributed, p.source);
 }
 
