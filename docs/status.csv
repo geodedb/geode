@@ -1099,6 +1099,12 @@ REQ-GPS-DERIVE-002,GPS Principal Derivation,QuicHandlerWiring,TESTED,,,security,
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,ClassifierUnused,EXEMPT,,,security,2026-05-20,src/execution/procedure_registry.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/execution.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/security/rls_core.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,ContextThreading,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadata,TESTED,,,security,2026-05-20,src/security/gps.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadata,TESTED,,,security,2026-05-20,tests/test_gps_show_metadata.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadataAdmin,TESTED,,,security,2026-05-20,tests/test_gps_show_metadata.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,InsecureAllowAllBypass,TESTED,,,security,2026-05-20,tests/test_gps_show_metadata.zig
+REQ-GPS-METADATA-000,GPS Metadata Isolation,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_show_metadata.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DecisionTypes,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DefaultDeny,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,TypeDefinition,TESTED,,,security,2026-05-20,src/security/gps.zig

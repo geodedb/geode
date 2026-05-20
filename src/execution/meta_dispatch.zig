@@ -50,14 +50,15 @@ const dispatch_table = std.StaticStringMap(MetaHandler).initComptime(.{
 
 // ---- Uniform-signature wrappers ----
 
-fn handleDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
-    return executeDbLabels(allocator, store);
+// CANARY: REQ=REQ-GPS-METADATA-000; FEATURE="GPS Metadata Isolation"; ASPECT=ContextThreading; STATUS=TESTED; TEST=tests/test_gps_show_metadata.zig; OWNER=security; UPDATED=2026-05-20
+fn handleDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbLabels(allocator, store, ctx);
 }
-fn handleDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
-    return executeDbRelationshipTypes(allocator, store);
+fn handleDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbRelationshipTypes(allocator, store, ctx);
 }
-fn handleDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, _: ExecutionContext) anyerror!ExecutionResult {
-    return executeDbPropertyKeys(allocator, store);
+fn handleDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) anyerror!ExecutionResult {
+    return executeDbPropertyKeys(allocator, store, ctx);
 }
 fn handleDbIndexes(allocator: std.mem.Allocator, _: *graph_store.GraphStore, context: ExecutionContext) anyerror!ExecutionResult {
     return executeDbIndexes(allocator, context);
@@ -95,7 +96,8 @@ pub fn execute(
 // db.labels() — distinct node labels across all nodes in the store
 // ===========================================================================
 
-fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore) !ExecutionResult {
+fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    _ = ctx; // TODO(task 3-4): use ctx for tenant+graph filtering
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 
@@ -136,7 +138,8 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore)
 // db.relationshipTypes() — distinct edge labels across all edges
 // ===========================================================================
 
-fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore) !ExecutionResult {
+fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    _ = ctx; // TODO(task 3-5): use ctx for tenant+graph filtering
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 
@@ -176,7 +179,8 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
 // db.propertyKeys() — distinct property keys across all nodes and edges
 // ===========================================================================
 
-fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore) !ExecutionResult {
+fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    _ = ctx; // TODO(task 3-6): use ctx for tenant+graph filtering
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 

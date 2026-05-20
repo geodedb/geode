@@ -4717,4 +4717,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_bind_graph_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_bind_graph_step = b.step("test-gps-bind-graph", "Run GPS bind_graph action unit tests");
     gps_bind_graph_step.dependOn(&run_gps_bind_graph_tests.step);
+
+    // GPS show_metadata action tests (Task 3-3)
+    const gps_show_metadata_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_show_metadata.zig"), .target = target, .optimize = optimize });
+    gps_show_metadata_test_mod.addImport("geode", root_mod);
+    const gps_show_metadata_tests = b.addTest(.{ .root_module = gps_show_metadata_test_mod });
+    const run_gps_show_metadata_tests = b.addRunArtifact(gps_show_metadata_tests);
+    shardDep(test_step, &run_gps_show_metadata_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_show_metadata_step = b.step("test-gps-show-metadata", "Run GPS show_metadata action unit tests");
+    gps_show_metadata_step.dependOn(&run_gps_show_metadata_tests.step);
 }

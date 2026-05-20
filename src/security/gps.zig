@@ -137,6 +137,18 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         };
     }
 
+    // CANARY: REQ=REQ-GPS-METADATA-000; FEATURE="GPS Metadata Isolation"; ASPECT=DecideShowMetadata; STATUS=TESTED; TEST=tests/test_gps_show_metadata.zig; OWNER=security; UPDATED=2026-05-20
+    // show_metadata is always allowed at the decision layer for authenticated
+    // principals. The actual metadata handlers filter rows by tenant and
+    // accessible graphs (Phase 3 tasks 3-4 through 3-8). Evaluated after the
+    // unauthenticated check so anonymous callers still receive .unauthenticated.
+    if (req.action == .show_metadata) {
+        return PolicyDecision{
+            .kind = .allow,
+            .reason_code = "show_metadata_audit_only",
+        };
+    }
+
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=GrantWidening; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 3 task 3-1: bind_graph — Admin always allowed; non-admin requires a
