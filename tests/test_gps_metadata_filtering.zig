@@ -627,3 +627,85 @@ test "SHOW CONSTRAINTS: executeShow without principal returns all constraints (l
 
     try std.testing.expectEqual(@as(usize, 1), res.rows.len);
 }
+
+// ===========================================================================
+// Task 3-10 — Comprehensive cross-tenant E2E: all three db.* handlers
+// CANARY: REQ=REQ-GPS-METADATA-005; FEATURE="GPS Metadata Isolation"; ASPECT=CrossTenantE2E; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+// ===========================================================================
+
+// Exercises db.labels(), db.relationshipTypes(), and db.propertyKeys() in a
+// single test under one tenant context to guarantee that NO metadata from the
+// other tenant leaks across any of the three handlers simultaneously.
+//
+// Setup:
+//   tenant_a — Employee + Department nodes; EMPLOYED_BY edges; "salary" + "dept" properties
+//   tenant_b — Customer + Order nodes;      PLACED edges;      "credit_score" property
+//
+// Assertions (all under tenant_a context):
+//   db.labels()             → {Department, Employee}                   (no Customer, no Order)
+//   db.relationshipTypes()  → {EMPLOYED_BY}                            (no PLACED)
+//   db.propertyKeys()       → {dept, salary}                           (no credit_score)
+test "E2E: tenant-A user sees only tenant-A metadata across labels, edge types, and properties" {
+    const allocator = std.testing.allocator;
+    var h = try Harness.init(allocator);
+    defer h.deinit();
+
+    const store = graph_store.getGlobalStore(allocator);
+
+    // ── tenant_a data ──────────────────────────────────────────────────────
+    const emp_labels = [_][]const u8{"Employee"};
+    const dep_labels = [_][]const u8{"Department"};
+    const emp_a = try store.createNodeWithGraphAndTenant(&emp_labels, "default", "tenant_a");
+    const dep_a = try store.createNodeWithGraphAndTenant(&dep_labels, "default", "tenant_a");
+    _ = try store.createEdgeWithGraphAndTenant(emp_a, dep_a, "EMPLOYED_BY", "default", "tenant_a");
+    try store.setNodeProperty(emp_a, "salary", .{ .Int = 80000 });
+    try store.setNodeProperty(dep_a, "dept", .{ .String = "Engineering" });
+
+    // ── tenant_b data (must not appear for tenant_a context) ───────────────
+    const cust_labels = [_][]const u8{"Customer"};
+    const order_labels = [_][]const u8{"Order"};
+    const cust_b = try store.createNodeWithGraphAndTenant(&cust_labels, "default", "tenant_b");
+    const order_b = try store.createNodeWithGraphAndTenant(&order_labels, "default", "tenant_b");
+    _ = try store.createEdgeWithGraphAndTenant(cust_b, order_b, "PLACED", "default", "tenant_b");
+    try store.setNodeProperty(cust_b, "credit_score", .{ .Int = 720 });
+
+    const ctx_a = h.ctxForTenant("tenant_a");
+
+    // ── db.labels() ────────────────────────────────────────────────────────
+    var labels_res = try geode.meta_dispatch.executeDbLabelsForTest(allocator, store, ctx_a);
+    defer labels_res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), labels_res.rows.len);
+    // Rows sorted ascending: Department, Employee
+    try std.testing.expectEqualStrings("Department", labels_res.rows[0][0].Str);
+    try std.testing.expectEqualStrings("Employee", labels_res.rows[1][0].Str);
+    // Explicit negatives: tenant_b labels must be absent
+    for (labels_res.rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, row[0].Str, "Customer"));
+        try std.testing.expect(!std.mem.eql(u8, row[0].Str, "Order"));
+    }
+
+    // ── db.relationshipTypes() ─────────────────────────────────────────────
+    var rel_res = try geode.meta_dispatch.executeDbRelationshipTypesForTest(allocator, store, ctx_a);
+    defer rel_res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 1), rel_res.rows.len);
+    try std.testing.expectEqualStrings("EMPLOYED_BY", rel_res.rows[0][0].Str);
+    // Explicit negative: PLACED must not appear
+    for (rel_res.rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, row[0].Str, "PLACED"));
+    }
+
+    // ── db.propertyKeys() ─────────────────────────────────────────────────
+    var prop_res = try geode.meta_dispatch.executeDbPropertyKeysForTest(allocator, store, ctx_a);
+    defer prop_res.deinit(allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), prop_res.rows.len);
+    // Rows sorted ascending: dept, salary
+    try std.testing.expectEqualStrings("dept", prop_res.rows[0][0].Str);
+    try std.testing.expectEqualStrings("salary", prop_res.rows[1][0].Str);
+    // Explicit negative: credit_score must not appear
+    for (prop_res.rows) |row| {
+        try std.testing.expect(!std.mem.eql(u8, row[0].Str, "credit_score"));
+    }
+}
