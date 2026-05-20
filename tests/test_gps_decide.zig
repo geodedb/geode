@@ -2,6 +2,7 @@ const std = @import("std");
 const geode = @import("geode");
 const gps = geode.security.gps;
 const principal_mod = geode.security.principal;
+const execution = geode.execution;
 
 // CANARY: REQ=REQ-GPS-PDP-001; FEATURE="GPS Decision Engine"; ASPECT=DecisionTypes; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "PolicyDecision kinds are distinct" {
@@ -81,4 +82,73 @@ test "decide() honors builtin role -> action mapping (table-driven)" {
             return error.UnexpectedDecision;
         }
     }
+}
+
+// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "decide() widens via graph grant on active_graph only" {
+    // Stub the grant callback: write granted on graph "hr" only, for user "bob".
+    const Stub = struct {
+        fn check(username: []const u8, graph_name: []const u8, action: u8) bool {
+            return std.mem.eql(u8, username, "bob") and
+                std.mem.eql(u8, graph_name, "hr") and
+                action == 1; // Write
+        }
+    };
+    const prev = execution.graph_grant_check_fn;
+    execution.graph_grant_check_fn = &Stub.check;
+    defer execution.graph_grant_check_fn = prev;
+
+    const make_principal = struct {
+        fn make(graph: ?[]const u8) principal_mod.Principal {
+            const role_names = [_][]const u8{"ReadOnly"};
+            return .{
+                .user_id = 100,
+                .username = "bob",
+                .session_id = null,
+                .tenant_id = null,
+                .active_graph = graph,
+                .roles = &role_names,
+                .custom_roles = &.{},
+                .auth_method = .password,
+                .auth_version = 1,
+                .mfa_state = .none,
+                .elevation_until = null,
+                .api_key_id = null,
+                .certificate_subject = null,
+                .risk_context = principal_mod.RiskContext.unknown,
+                .attributes = principal_mod.AttributeMap.emptySentinel(),
+                .source = .test_harness,
+            };
+        }
+    }.make;
+
+    // 1) On graph "hr" with write -> allow via grant widening.
+    const p_hr = make_principal("hr");
+    const req_hr = gps.DecisionRequest{
+        .principal = &p_hr,
+        .action = .write,
+        .resource = .{ .graph = "hr" },
+    };
+    const d_hr = try gps.decide(std.testing.allocator, &req_hr);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.allow, d_hr.kind);
+
+    // 2) On graph "sales" with write -> still deny (no grant there).
+    const p_sales = make_principal("sales");
+    const req_sales = gps.DecisionRequest{
+        .principal = &p_sales,
+        .action = .write,
+        .resource = .{ .graph = "sales" },
+    };
+    const d_sales = try gps.decide(std.testing.allocator, &req_sales);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_sales.kind);
+
+    // 3) No active_graph -> still deny (the grant check requires active_graph).
+    const p_no_graph = make_principal(null);
+    const req_ng = gps.DecisionRequest{
+        .principal = &p_no_graph,
+        .action = .write,
+        .resource = .{ .database = {} },
+    };
+    const d_ng = try gps.decide(std.testing.allocator, &req_ng);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_ng.kind);
 }

@@ -75,7 +75,9 @@ pub const DecisionRequest = struct {
 };
 
 // CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
 const user_mgmt = @import("user_management.zig");
+const execution = @import("../execution.zig");
 
 /// Map a GPS Action to the user_management.Permission it requires.
 /// Returns null for actions that have no legacy permission analogue (admin-only
@@ -110,6 +112,29 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                         .kind = .allow,
                         .reason_code = "builtin_role",
                     };
+                }
+            }
+        }
+
+        // Phase 2 task 2-5: additive graph-grant widening.
+        // When builtin-role evaluation produces no allow and the principal has
+        // an active_graph, consult graph_grant_check_fn — the same callback that
+        // execution.checkPermission() uses. Bit-identical to the legacy fallback.
+        // Phase 4 replaces this with first-class Policy rows.
+        if (execution.graph_grant_check_fn) |grant_fn| {
+            if (req.principal.username) |uname| {
+                if (req.principal.active_graph) |graph| {
+                    const action_code: u8 = switch (perm) {
+                        .Read => 0,
+                        .Write => 1,
+                        .Schema => 2,
+                    };
+                    if (grant_fn(uname, graph, action_code)) {
+                        return PolicyDecision{
+                            .kind = .allow,
+                            .reason_code = "graph_grant",
+                        };
+                    }
                 }
             }
         }
