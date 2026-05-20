@@ -451,6 +451,8 @@ pub const security = struct {
     // Exposed as a named build module ("role_resolver") because role_resolver.zig imports
     // user_storage, which itself imports geode — making a direct relative import circular.
     pub const role_resolver = @import("role_resolver");
+    // GPS Phase 4 (Task 4-2): in-memory policy catalog (Policy type + CRUD).
+    pub const policy_catalog = @import("security/policy_catalog.zig");
 };
 pub const fts_advanced_stub = @import("fts/advanced.zig");
 pub const parallel_exec_stub = @import("execution/parallel.zig");

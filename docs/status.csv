@@ -1090,6 +1090,17 @@ REQ-GPS-BIND-001,GPS BindGraph Action,GrantWidening,TESTED,,,security,2026-05-20
 REQ-GPS-BIND-001,GPS BindGraph Action,NoGrantDeny,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
 REQ-GPS-BIND-002,GPS BindGraph Action,UseGraphAuthorization,TESTED,,,security,2026-05-20,src/execution.zig
 REQ-GPS-BIND-002,GPS BindGraph Action,UseGraphAuthorization,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
+REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogAdd,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogAddList,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogGlobalAccessor,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogModule,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DDL-001,GPS Policy DDL,PolicyCatalogMultiple,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-002,GPS Policy DDL,PolicyCatalogRemove,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DDL-002,GPS Policy DDL,PolicyCatalogRemove,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-002,GPS Policy DDL,PolicyCatalogRemoveNotFound,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-002,GPS Policy DDL,PolicyCatalogRemoveOrder,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-003,GPS Policy DDL,PolicyCatalogDeinit,TESTED,,,security,2026-05-20,tests/test_gps_policy_catalog.zig
+REQ-GPS-DDL-003,GPS Policy DDL,PolicyCatalogList,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
 REQ-GPS-DERIVE-001,GPS Principal Derivation,Builder,TESTED,,,security,2026-05-20,src/security/principal_derive.zig
 REQ-GPS-DERIVE-001,GPS Principal Derivation,EmptyArgs,TESTED,,,security,2026-05-20,tests/test_gps_principal_derive.zig
 REQ-GPS-DERIVE-001,GPS Principal Derivation,QuicArgs,TESTED,,,security,2026-05-20,tests/test_gps_principal_derive.zig

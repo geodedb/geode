@@ -4756,4 +4756,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_role_resolver_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_role_resolver_step = b.step("test-gps-role-resolver", "Run GPS role_resolver isolated unit tests (HAS_ROLE graph traversal)");
     gps_role_resolver_step.dependOn(&run_gps_role_resolver_tests.step);
+
+    // GPS Phase 4 (Task 4-2): in-memory policy catalog unit tests
+    const gps_policy_catalog_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_catalog.zig"), .target = target, .optimize = optimize });
+    gps_policy_catalog_test_mod.addImport("geode", root_mod);
+    const gps_policy_catalog_tests = b.addTest(.{ .root_module = gps_policy_catalog_test_mod });
+    const run_gps_policy_catalog_tests = b.addRunArtifact(gps_policy_catalog_tests);
+    shardDep(test_step, &run_gps_policy_catalog_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_policy_catalog_step = b.step("test-gps-policy-catalog", "Run GPS in-memory policy catalog unit tests (add/list/remove/deinit)");
+    gps_policy_catalog_step.dependOn(&run_gps_policy_catalog_tests.step);
 }
