@@ -4821,4 +4821,12 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_procedure_enforcement_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_procedure_enforcement_step = b.step("test-gps-procedure-enforcement", "Run GPS procedure enforcement tests (mandatory decide() gate before procedure dispatch)");
     gps_procedure_enforcement_step.dependOn(&run_gps_procedure_enforcement_tests.step);
+
+    const gps_mcp_principal_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_mcp_principal.zig"), .target = target, .optimize = optimize });
+    gps_mcp_principal_test_mod.addImport("geode", root_mod);
+    const gps_mcp_principal_tests = b.addTest(.{ .root_module = gps_mcp_principal_test_mod });
+    const run_gps_mcp_principal_tests = b.addRunArtifact(gps_mcp_principal_tests);
+    shardDep(test_step, &run_gps_mcp_principal_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_mcp_principal_step = b.step("test-gps-mcp-principal", "Run GPS MCP per-caller Principal derivation tests (decision-layer, source=.mcp_handler)");
+    gps_mcp_principal_step.dependOn(&run_gps_mcp_principal_tests.step);
 }

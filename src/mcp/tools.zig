@@ -10,6 +10,21 @@ const json_lib = @import("json");
 const GeodeClient = @import("client.zig").GeodeClient;
 const lsp = @import("lsp.zig");
 
+// CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=ToolsThreading; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+// GPS Phase 5: callTool now receives the per-server MCP Principal so each tool
+// dispatch can forward it to any downstream execution context.  The Principal is
+// available to every tool function through the `caller` parameter.
+// Phase 5 limitation: the downstream GeodeClient path sends queries over QUIC
+// using credentials from the DSN — there is no in-band mechanism in the current
+// zig_client protocol to carry an explicit Principal across the wire.  The
+// Principal is stored in the call stack and is available for local decide()
+// calls (e.g. pre-flight authorization checks) but does NOT yet propagate to
+// the remote executor.  This structural gap is documented as Site #8
+// DONE_WITH_CONCERNS in gps-fail-open-sites.md; Phase 6 will wire it fully once
+// the zig_client protocol gains a principal-forwarding header.
+const geode_security = @import("geode").security;
+pub const Principal = geode_security.principal.Principal;
+
 // MCP Tool Response Types for JSON Library encoding
 // CANARY: REQ=REQ-LIB-MIGRATION-JSON-039; FEATURE="JSON Library Migration"; ASPECT=MCPResponseTypes; STATUS=TESTED; OWNER=mcp; UPDATED=2026-01-24
 const McpToolContent = struct {
@@ -38,14 +53,23 @@ pub fn listTools(cursor: ?[]const u8) []const u8 {
 /// SEC-08: All tool calls are gated by the MCP server's auth layer (bearer token
 /// by default). The server refuses to start without a configured token unless
 /// auth_mode is explicitly set to .none. See server.zig GeodeMcpServer.init.
+///
+/// GPS Phase 5: `caller` is the per-server MCP Principal derived at init time.
+/// It carries `.source = .mcp_handler` and is available for local decide() calls.
+/// Phase 5 limitation: the Principal is not forwarded over the QUIC wire to the
+/// remote executor (see the block comment in tools.zig header).
 pub fn callTool(
     allocator: std.mem.Allocator,
     geode_endpoint: ?[]const u8,
+    caller: *const Principal,
     name: []const u8,
     args_json: []const u8,
     cancel: *const mcp.CancelToken,
 ) ![]const u8 {
     _ = cancel; // TODO: Implement cancellation support // #473
+    // caller is available for local authorization decisions; Phase 6 will thread
+    // it through the zig_client transport to the remote executor.
+    _ = caller;
 
     if (std.mem.eql(u8, name, "query")) {
         return executeQuery(allocator, geode_endpoint, args_json);

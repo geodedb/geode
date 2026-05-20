@@ -1155,6 +1155,17 @@ REQ-GPS-DERIVE-002,GPS Principal Derivation,GrpcHandlerWiring,TESTED,,,security,
 REQ-GPS-DERIVE-002,GPS Principal Derivation,QuicHandlerWiring,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/execution.zig
 REQ-GPS-INVARIANT-001,GPS Fail-Open Catalog,FailOpenInterim,EXEMPT,,,security,2026-05-20,src/security/rls_core.zig
+REQ-GPS-MCP-001,GPS MCP Principal,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
+REQ-GPS-MCP-001,GPS MCP Principal,DecisionLayer,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
+REQ-GPS-MCP-001,GPS MCP Principal,NoRolesUnauthorized,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
+REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig
+REQ-GPS-MCP-001,GPS MCP Principal,PrincipalDerivation,TESTED,,,security,2026-05-20,src/mcp/server.zig
+REQ-GPS-MCP-001,GPS MCP Principal,PrincipalStorage,TESTED,,,security,2026-05-20,src/mcp/server.zig
+REQ-GPS-MCP-001,GPS MCP Principal,ReadWriteRole,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
+REQ-GPS-MCP-001,GPS MCP Principal,SourcePreserved,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
+REQ-GPS-MCP-001,GPS MCP Principal,ToolDispatch,TESTED,,,security,2026-05-20,src/mcp/server.zig
+REQ-GPS-MCP-001,GPS MCP Principal,ToolsThreading,TESTED,,,security,2026-05-20,src/mcp/tools.zig
+REQ-GPS-MCP-001,GPS MCP Principal,WriteBlocked,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,ContextThreading,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadata,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadata,TESTED,,,security,2026-05-20,tests/test_gps_show_metadata.zig

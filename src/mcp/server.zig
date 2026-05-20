@@ -10,11 +10,36 @@ const tools = @import("tools.zig");
 const resources = @import("resources.zig");
 const prompts = @import("prompts.zig");
 
+// CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=PrincipalDerivation; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+// GPS Phase 5: derive a per-server Principal from the bearer token at init time.
+// The MCP library validates the bearer token at the transport layer but does not
+// surface per-connection caller identity to handler callbacks — the callTool /
+// readResource / etc. signatures only carry ctx (our GeodeMcpServer pointer) and
+// no caller token.  Phase 5 keeps it simple: one MCP user (mapped from the
+// bearer token to the configured username, default "mcp") for the lifetime of
+// the server.  Multi-user MCP is deferred to Phase 6+.
+//
+// The Principal is derived once in init() and stored on GeodeMcpServer.  Every
+// tool dispatch reads it from self.mcp_principal and can forward it to
+// ExecutionContext (Phase 5 threading: pass to tools.callTool so it is
+// available at the tool boundary; the downstream GeodeClient path over QUIC
+// does not yet carry an in-band principal — that is Phase 6 work tracked in
+// the gps-fail-open-sites #8 DONE_WITH_CONCERNS note).
+const geode_security = @import("geode").security;
+const principal_mod = geode_security.principal;
+const principal_derive = geode_security.principal_derive;
+
 /// Geode MCP Server - provides AI/LLM access to graph database operations
 pub const GeodeMcpServer = struct {
     allocator: std.mem.Allocator,
     server: mcp.Server,
     geode_endpoint: ?[]const u8,
+    // CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=PrincipalStorage; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+    // Per-server Principal derived from the bearer token (or anonymous when
+    // auth_mode = .none). Stored by value; lifetime tied to this server.
+    mcp_principal: principal_mod.Principal,
+    // Storage for the mcp_username string that the Principal references.
+    mcp_username_storage: []u8,
 
     pub const McpAuthError = error{
         /// SEC-08: MCP server requires bearer token authentication by default.
@@ -22,6 +47,22 @@ pub const GeodeMcpServer = struct {
         /// set auth_mode to .none if running in a trusted environment.
         MissingBearerToken,
     };
+
+    /// Derive the MCP Principal for a given username.  Called once at init.
+    /// The returned Principal borrows `username_slice` — the caller owns the
+    /// storage and must ensure it outlives the Principal.
+    fn deriveMcpPrincipal(username_slice: []const u8, auth_mode: mcp.AuthMode) principal_mod.Principal {
+        const user_roles: []const []const u8 = if (auth_mode == .none) &.{} else &.{"User"};
+        return principal_derive.derivePrincipal(.{
+            .username = username_slice,
+            .role_names = user_roles,
+            .tenant_id = null,
+            .active_graph = null,
+            .auth_version = 0,
+            .auth_method = .api_key,
+            .source = .mcp_handler,
+        });
+    }
 
     pub fn init(allocator: std.mem.Allocator, options: Options) !*GeodeMcpServer {
         // SEC-08: Refuse to start MCP server without bearer token when auth is required
@@ -35,6 +76,14 @@ pub const GeodeMcpServer = struct {
         const self = try allocator.create(GeodeMcpServer);
         errdefer allocator.destroy(self);
 
+        // Derive the MCP Principal.  Phase 5: username is the configured mcp_username
+        // option (default "mcp").  We dupe the string so the Principal's lifetime is
+        // fully owned by this server struct.
+        const username_storage = try allocator.dupe(u8, options.mcp_username);
+        errdefer allocator.free(username_storage);
+
+        const mcp_principal = deriveMcpPrincipal(username_storage, options.auth_mode);
+
         self.* = GeodeMcpServer{
             .allocator = allocator,
             .server = undefined,
@@ -42,6 +91,8 @@ pub const GeodeMcpServer = struct {
                 try allocator.dupe(u8, ep)
             else
                 null,
+            .mcp_principal = mcp_principal,
+            .mcp_username_storage = username_storage,
         };
 
         const handler = mcp.Handler{
@@ -78,6 +129,7 @@ pub const GeodeMcpServer = struct {
         if (self.geode_endpoint) |ep| {
             self.allocator.free(ep);
         }
+        self.allocator.free(self.mcp_username_storage);
         self.allocator.destroy(self);
     }
 
@@ -108,6 +160,9 @@ pub const GeodeMcpServer = struct {
         // SEC-08: Default to bearer token auth; refuse to start without a token configured
         auth_mode: mcp.AuthMode = .bearer,
         bearer_token: ?[]const u8 = null,
+        // GPS Phase 5: the username mapped from the bearer token.  Default "mcp".
+        // Multi-user MCP (per-token user lookup) is deferred to Phase 6+.
+        mcp_username: []const u8 = "mcp",
     };
 };
 
@@ -122,7 +177,11 @@ fn listToolsHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
 
 fn callToolHandler(ctx: ?*anyopaque, name: []const u8, args_json: []const u8, cancel: *const mcp.CancelToken) anyerror![]const u8 {
     const self: *GeodeMcpServer = @ptrCast(@alignCast(ctx.?));
-    return tools.callTool(self.allocator, self.geode_endpoint, name, args_json, cancel);
+    // CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=ToolDispatch; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+    // Pass the per-server Principal to tool dispatch so each tool can forward it
+    // to any downstream execution context.  Phase 5: single MCP user per server;
+    // multi-user per-connection threading is Phase 6+.
+    return tools.callTool(self.allocator, self.geode_endpoint, &self.mcp_principal, name, args_json, cancel);
 }
 
 fn listResourcesHandler(ctx: ?*anyopaque, cursor: ?[]const u8) anyerror![]const u8 {
@@ -230,6 +289,49 @@ test "GeodeMcpServer initialization with bearer token" {
     defer server.deinit();
 
     try std.testing.expect(server.geode_endpoint != null);
+}
+
+// CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=PrincipalDerivation; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+test "GeodeMcpServer derives Principal with source=.mcp_handler on init" {
+    const allocator = std.testing.allocator;
+
+    const server = try GeodeMcpServer.init(allocator, .{
+        .geode_endpoint = "localhost:3141",
+        .bearer_token = "test-token",
+    });
+    defer server.deinit();
+
+    try std.testing.expectEqual(principal_mod.PrincipalSource.mcp_handler, server.mcp_principal.source);
+    try std.testing.expect(server.mcp_principal.username != null);
+    try std.testing.expectEqualStrings("mcp", server.mcp_principal.username.?);
+}
+
+test "GeodeMcpServer derives Principal with configured mcp_username" {
+    const allocator = std.testing.allocator;
+
+    const server = try GeodeMcpServer.init(allocator, .{
+        .geode_endpoint = "localhost:3141",
+        .bearer_token = "test-token",
+        .mcp_username = "mcp-service-account",
+    });
+    defer server.deinit();
+
+    try std.testing.expectEqual(principal_mod.PrincipalSource.mcp_handler, server.mcp_principal.source);
+    try std.testing.expectEqualStrings("mcp-service-account", server.mcp_principal.username.?);
+}
+
+test "GeodeMcpServer derives Principal with auth_mode=.none (anonymous roles)" {
+    const allocator = std.testing.allocator;
+
+    const server = try GeodeMcpServer.init(allocator, .{
+        .geode_endpoint = "localhost:3141",
+        .auth_mode = .none,
+    });
+    defer server.deinit();
+
+    try std.testing.expectEqual(principal_mod.PrincipalSource.mcp_handler, server.mcp_principal.source);
+    // No roles for anonymous / no-auth mode
+    try std.testing.expectEqual(@as(usize, 0), server.mcp_principal.roles.len);
 }
 
 test "GeodeMcpServer rejects init without bearer token" {
