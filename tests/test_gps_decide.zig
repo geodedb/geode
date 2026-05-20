@@ -153,6 +153,66 @@ test "decide() widens via graph grant on active_graph only" {
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_ng.kind);
 }
 
+// CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcEnforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "decide() denies write for ReadOnly principal (gRPC enforcement parity)" {
+    const role_names = [_][]const u8{"ReadOnly"};
+    const p = principal_mod.Principal{
+        .user_id = 1,
+        .username = "grpc-user",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = null,
+        .roles = &role_names,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 1,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .grpc_handler,
+    };
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .write,
+        .resource = .{ .database = {} },
+    };
+    const decision = try gps.decide(std.testing.allocator, &req);
+    try std.testing.expect(decision.kind != .allow);
+}
+
+// CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "decide() allows read for Admin on any graph (gRPC handshake parity)" {
+    const role_names = [_][]const u8{"Admin"};
+    const p = principal_mod.Principal{
+        .user_id = 2,
+        .username = "admin-user",
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = "some_graph",
+        .roles = &role_names,
+        .custom_roles = &.{},
+        .auth_method = .password,
+        .auth_version = 1,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = principal_mod.RiskContext.unknown,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+        .source = .grpc_handler,
+    };
+    const req = gps.DecisionRequest{
+        .principal = &p,
+        .action = .read,
+        .resource = .{ .graph = "some_graph" },
+    };
+    const decision = try gps.decide(std.testing.allocator, &req);
+    try std.testing.expectEqual(gps.PolicyDecisionKind.allow, decision.kind);
+}
+
 // CANARY: REQ=REQ-GPS-PDP-004; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionAdapter; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "checkPermission with no principal still works through legacy synthesis" {
     const user_mgmt = geode.user_management;

@@ -1496,20 +1496,32 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
 
                 if (in_store or in_catalog) {
                     // GAP-0283: Graph-scoped RBAC authorization check before binding (parity with QUIC handler).
-                    // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=IMPL; OWNER=security; UPDATED=2026-04-01
+                    // CANARY: REQ=REQ-MULTI-GRAPH-RBAC-WIRE-003; FEATURE="GraphRBACEnforcement"; ASPECT=GrpcGraphAuth; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+                    // Phase 2 transition: principal_for_request is not available in handleHandshake
+                    // (it lives in the per-query execute loop). Construct a transitional principal
+                    // from auth_result so this site routes through gps.decide() for PDP uniformity.
+                    // Phase 3 will rewire enforcement so principal threading is uniform across handlers.
+                    // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcHandshakeEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
                     const rbac_allowed = rbac_blk: {
-                        if (auth_result.role == .Admin) {
-                            break :rbac_blk true;
-                        }
-                        if (multi_graph_security.getGlobalPolicy()) |rbac| {
-                            const uid = std.hash.Wyhash.hash(0, req.username);
-                            if (rbac.hasPermission(uid, requested_graph, "graph", .read)) break :rbac_blk true;
-                            const key = multi_graph_security.GraphRoleKey.init(uid, requested_graph);
-                            if (rbac.graph_user_roles.get(key)) |_| {
-                                break :rbac_blk false; // Explicit assignment but no read -> deny
-                            }
-                        }
-                        break :rbac_blk true; // No explicit denial -> allow
+                        const gps = geode.security.gps;
+                        const role_names_hello = [_][]const u8{@tagName(auth_result.role)};
+                        const hello_principal = geode.security.principal_derive.derivePrincipal(.{
+                            .username = req.username,
+                            .role_names = &role_names_hello,
+                            .tenant_id = req.tenant_id,
+                            // active_graph = requested_graph so graph_grant_check_fn can widen access.
+                            .active_graph = requested_graph,
+                            .auth_version = auth_result.auth_version,
+                            .auth_method = .password,
+                            .source = .grpc_handler,
+                        });
+                        const gps_req = gps.DecisionRequest{
+                            .principal = &hello_principal,
+                            .action = .read,
+                            .resource = .{ .graph = requested_graph },
+                        };
+                        const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
+                        break :rbac_blk (decision.kind == .allow);
                     };
                     if (!rbac_allowed) {
                         const resp = schema.HelloResponse{
@@ -2051,14 +2063,21 @@ fn handleExecute(request_bytes: []const u8, allocator: std.mem.Allocator) ![]u8 
 
             // GAP-0526: Enforce write-permission check before mutation execution.
             // ReadOnly and User roles lack Write permission and must be denied.
+            // CANARY: REQ=REQ-GPS-PDP-005; FEATURE="GPS Decision Engine"; ASPECT=GrpcEnforcement; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+            // Phase 2: delegated to gps.decide() so the PDP is uniform across all transports.
+            // principal_for_request is derived above (line ~1964) and is in scope here.
             if (is_mutation) {
-                if (state.authenticated_role) |role_u8| {
-                    const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
-                    if (!user_mgmt.hasPermission(auth_role, .Write)) {
-                        var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
-                        defer resp.deinit(allocator);
-                        return encodeMessage(allocator, resp);
-                    }
+                const gps = geode.security.gps;
+                const gps_req = gps.DecisionRequest{
+                    .principal = &principal_for_request,
+                    .action = .write,
+                    .resource = .{ .database = {} },
+                };
+                const decision = try gps.decide(std.heap.smp_allocator, &gps_req);
+                if (decision.kind != .allow) {
+                    var resp = try buildErrorResponse(allocator, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                    defer resp.deinit(allocator);
+                    return encodeMessage(allocator, resp);
                 }
             }
 
