@@ -21,6 +21,12 @@ pub const Action = enum {
     update,
     delete,
     schema,
+    // CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=PolicyCatalogActions; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 task 5-3: explicit FLE actions expressible in policy catalog.
+    // Allows operators to grant decrypt_field or unwrap_key to specific principals
+    // via CREATE POLICY … ACTIONS (decrypt_field) … .
+    decrypt_field,
+    unwrap_key,
 };
 
 pub const Effect = enum { allow, deny };

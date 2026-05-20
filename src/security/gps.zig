@@ -172,6 +172,28 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         // action — the policy catalog below is the last resort.
     }
 
+    // CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=DecryptFieldGate; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=UnwrapKeyGate; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 task 5-3: explicit GPS gates for FLE decrypt_field and unwrap_key.
+    // Admin is always allowed. Other principals must have an explicit Policy in
+    // the catalog with action = .decrypt_field or .unwrap_key respectively.
+    // If no matching policy exists, decide() returns .unauthorized (fail-closed).
+    // The fallthrough to the policy catalog below handles the explicit-allow case.
+    if (req.action == .decrypt_field or req.action == .unwrap_key) {
+        for (req.principal.roles) |role_name| {
+            if (std.mem.eql(u8, role_name, "Admin")) {
+                return PolicyDecision{
+                    .kind = .allow,
+                    .reason_code = "fle_admin",
+                };
+            }
+        }
+        // Non-admin: fall through to policy catalog. If a Policy row with
+        // action = .decrypt_field (or .unwrap_key) and expression_source = "true"
+        // exists, the catalog loop below grants access. Without such a policy,
+        // decide() returns .unauthorized after the catalog loop.
+    }
+
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // CANARY: REQ=REQ-GPS-BIND-001; FEATURE="GPS BindGraph Action"; ASPECT=GrantWidening; STATUS=TESTED; TEST=tests/test_gps_bind_graph.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 3 task 3-1: bind_graph — Admin always allowed; non-admin requires a
@@ -284,8 +306,14 @@ fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Act
             .update => a == .write or a == .update,
             .delete => a == .write or a == .delete,
             .schema => a == .schema,
-            // Actions without a policy_catalog.Action analogue are never matched
-            // by a catalog policy; they rely on builtin-role or special-case paths.
+            // CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=PolicyMatchAction; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+            // Phase 5 task 5-3: FLE-specific actions are expressible in the policy catalog.
+            // A Policy with action = .decrypt_field grants non-admin principals the ability
+            // to decrypt FLE-protected fields. Similarly for .unwrap_key.
+            .decrypt_field => a == .decrypt_field,
+            .unwrap_key => a == .unwrap_key,
+            // Remaining actions have no policy_catalog.Action analogue; they rely on
+            // builtin-role or special-case paths in decide().
             else => false,
         };
         _ = pc;

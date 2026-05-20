@@ -41,12 +41,22 @@ const AuthGraphManager = auth_graph_manager.AuthGraphManager;
 //   bit 4 = update
 //   bit 5 = delete
 //   bit 6 = schema
+//   bit 7 = decrypt_field  (Phase 5 task 5-3)
+//
+// CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=PolicyPersistenceBitMapping; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
+//
+// Note: unwrap_key does not have a bit slot in the current u8 encoding.
+// It is functional in-memory (gps.decide honours it via policyMatchesAction)
+// but is silently excluded from durable persistence until a Phase 6 schema
+// upgrade widens the operation field.  An in-memory-only unwrap_key policy
+// therefore does not survive a server restart.  Operators who need durable
+// unwrap_key grants should use Admin role assignment (which is always allowed).
 // ---------------------------------------------------------------------------
 
 fn actionsToOperationByte(actions: []const policy_catalog.Action) u8 {
     var op: u8 = 0;
     for (actions) |a| {
-        const bit: u8 = switch (a) {
+        const bit: ?u8 = switch (a) {
             .read => 0,
             .write => 1,
             .match_ => 2,
@@ -54,8 +64,12 @@ fn actionsToOperationByte(actions: []const policy_catalog.Action) u8 {
             .update => 4,
             .delete => 5,
             .schema => 6,
+            .decrypt_field => 7,
+            // unwrap_key has no bit slot in the current u8 encoding.
+            // It is silently excluded from persistence (see module comment).
+            .unwrap_key => null,
         };
-        op |= @as(u8, 1) << @truncate(bit);
+        if (bit) |b| op |= @as(u8, 1) << @truncate(b);
     }
     return op;
 }
@@ -65,7 +79,8 @@ fn operationByteToActions(allocator: std.mem.Allocator, op: u8) ![]policy_catalo
     var list: std.ArrayList(policy_catalog.Action) = .{ .items = &.{}, .capacity = 0 };
     errdefer list.deinit(allocator);
 
-    const all_actions = [_]policy_catalog.Action{ .read, .write, .match_, .create, .update, .delete, .schema };
+    // All actions that have a bit slot in the u8 operation byte.
+    const all_actions = [_]policy_catalog.Action{ .read, .write, .match_, .create, .update, .delete, .schema, .decrypt_field };
     for (all_actions, 0..) |a, i| {
         const bit: u3 = @truncate(i);
         if ((op >> bit) & 1 == 1) try list.append(allocator, a);

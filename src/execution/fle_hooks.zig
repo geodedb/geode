@@ -123,6 +123,7 @@ pub fn encryptEdgePropertyIfNeeded(
 
 /// Helper function to decrypt field value if needed when reading
 /// Returns decrypted value for authorized users, "[REDACTED]" for others
+/// CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=DecryptFieldGate; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
 pub fn decryptPropertyIfNeeded(
     allocator: std.mem.Allocator,
     node_labels: [][]const u8,
@@ -135,6 +136,41 @@ pub fn decryptPropertyIfNeeded(
         return stored_value; // No type, cannot check encryption
     }
     const node_type = node_labels[0];
+
+    // CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=DecryptFieldGate; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 task 5-3: GPS mandatory gate before any FLE decrypt-on-read.
+    // When an active ExecutionContext is present and carries a principal, we
+    // consult gps.decide(.decrypt_field) before allowing the field to be
+    // decrypted.  Admin is allowed unconditionally; other principals require
+    // an explicit Policy row with action = .decrypt_field.
+    // If no active context / no principal (legacy paths, internal callers) we
+    // skip the GPS check so that existing callers (graph_store, value_utilities)
+    // that don't set a context continue to work. This preserves backward
+    // compatibility while adding the gate for all request-scoped paths.
+    // Lazy imports avoid a circular dependency: execution.zig imports fle_hooks.zig
+    // at the top level; importing it back at the top of this file would cycle.
+    {
+        const exec_mod = @import("../execution.zig");
+        const gps_mod = @import("../security/gps.zig");
+        if (exec_mod.getActiveContext()) |ctx_ptr| {
+            if (ctx_ptr.principal) |princ| {
+                const gps_req = gps_mod.DecisionRequest{
+                    .principal = princ,
+                    .action = .decrypt_field,
+                    .resource = .{ .metadata = .{ .kind = "fle_field" } },
+                };
+                const decision = try gps_mod.decide(allocator, &gps_req);
+                if (decision.kind != .allow) {
+                    fle_log.warn("GPS denied decrypt_field", &.{
+                        Attr.string("node_type", node_type),
+                        Attr.string("field", field_name),
+                        Attr.string("reason", decision.reason_code),
+                    });
+                    return try allocator.dupe(u8, "[REDACTED]");
+                }
+            }
+        }
+    }
 
     // Create encryption context
     // GAP-0281: Use per-thread tenant_id from fle_integration instead of hardcoded "default"
