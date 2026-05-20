@@ -102,7 +102,7 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // Get the graph store
     const store = graph_store.getGlobalStore(allocator);
 
-    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=ClassifierUnused; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=ClassifierUnused; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
     // Phase 0: procedure dispatch does NOT consult procedure_access.zig. GPS Phase 5
     // makes EXECUTE_PROCEDURE a mandatory decision before dispatch.
 

@@ -827,7 +827,7 @@ fn permissionToActionCode(p: @import("security/user_management.zig").Permission)
 pub fn checkPermission(context: ExecutionContext, permission: @import("security/user_management.zig").Permission) !void {
     const user_mgmt = @import("security/user_management.zig");
 
-    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
     // Phase 0: developer-mode "auth disabled means allow all". GPS Phase 2 replaces
     // this with an explicit --insecure-allow-all flag and removes the implicit branch.
     // If auth is not enabled, allow all operations
@@ -843,7 +843,7 @@ pub fn checkPermission(context: ExecutionContext, permission: @import("security/
     // Check if user has required permission
     if (!user_mgmt.hasPermission(context.role.?, permission)) {
         // CANARY: REQ=REQ-AUTH-GRANT-PERSIST-003; FEATURE="GQL Auth DDL Persistence"; ASPECT=Enforcement; STATUS=TESTED; TEST=geodetestlab/specs/geode_auth_ddl_persistence.yml; OWNER=security; UPDATED=2026-05-12
-        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
         // Phase 0: additive (widening-only) grant fallback. GPS Phase 4 promotes grants
         // to first-class Policy rows with explicit allow/deny scopes.
         // Per-graph grant fallback: a GRANT on the currently-bound graph widens access beyond the

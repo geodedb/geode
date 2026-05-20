@@ -1080,7 +1080,7 @@ pub const RLSEngine = struct {
             if (!allowed) return false;
         }
 
-        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
         // Phase 0: no-policy default-allow for pre-RLS data. GPS Phase 4 makes "allow by
         // absence" an explicit policy choice in the catalog.
         const policies = self.policies.get(key) orelse return true; // No policies
@@ -1363,7 +1363,7 @@ pub const RLSEngine = struct {
             return self.valueToBool(stack[sp - 1]);
         }
 
-        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+        // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
         // Phase 0: VM no-result default-allow. GPS Phase 2 will surface this as
         // error.IndeterminatePolicy and map it to a deny decision.
         return true; // Default allow if no expression result
