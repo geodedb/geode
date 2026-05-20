@@ -268,3 +268,75 @@ test "checkPermission with no principal still works through legacy synthesis" {
     const err = execution.checkPermission(ctx_readonly, .Write);
     try std.testing.expectError(error.Unauthorized, err);
 }
+
+// CANARY: REQ=REQ-GPS-PDP-008; FEATURE="GPS Decision Engine"; ASPECT=CheckPermissionDecideParity; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
+test "checkPermission and decide agree for every (role, permission) combination" {
+    const user_mgmt = geode.user_management;
+
+    execution.cleanupCatalogInstance();
+    defer execution.cleanupCatalogInstance();
+    const catalog = try execution.ensureCatalogInstance(std.testing.allocator);
+
+    const was_enabled = user_mgmt.isAuthEnabled();
+    user_mgmt.setAuthEnabled(true);
+    defer user_mgmt.setAuthEnabled(was_enabled);
+
+    const roles = [_]user_mgmt.Role{ .Admin, .User, .ReadWrite, .ReadOnly };
+    const perms = [_]user_mgmt.Permission{ .Read, .Write, .Schema };
+
+    for (roles) |role| {
+        for (perms) |perm| {
+            // Legacy path: checkPermission with role-only context
+            const ctx = execution.ExecutionContext{
+                .catalog = catalog,
+                .user = "parity-user",
+                .role = role,
+            };
+            var cp_allows = true;
+            execution.checkPermission(ctx, perm) catch {
+                cp_allows = false;
+            };
+
+            // GPS path: decide() with a freshly-built principal
+            const role_names = [_][]const u8{@tagName(role)};
+            const p = principal_mod.Principal{
+                .user_id = null,
+                .username = "parity-user",
+                .session_id = null,
+                .tenant_id = null,
+                .active_graph = null,
+                .roles = &role_names,
+                .custom_roles = &.{},
+                .auth_method = .password,
+                .auth_version = 0,
+                .mfa_state = .none,
+                .elevation_until = null,
+                .api_key_id = null,
+                .certificate_subject = null,
+                .risk_context = principal_mod.RiskContext.unknown,
+                .attributes = principal_mod.AttributeMap.emptySentinel(),
+                .source = .test_harness,
+            };
+            const action: gps.Action = switch (perm) {
+                .Read => .read,
+                .Write => .write,
+                .Schema => .schema,
+            };
+            const req = gps.DecisionRequest{
+                .principal = &p,
+                .action = action,
+                .resource = .{ .database = {} },
+            };
+            const decision = try gps.decide(std.testing.allocator, &req);
+            const gps_allows = decision.kind == .allow;
+
+            if (cp_allows != gps_allows) {
+                std.debug.print(
+                    "PARITY FAIL: role={s} perm={s} checkPermission={any} decide={any}\n",
+                    .{ @tagName(role), @tagName(perm), cp_allows, gps_allows },
+                );
+                return error.ParityViolation;
+            }
+        }
+    }
+}
