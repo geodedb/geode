@@ -181,45 +181,75 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
 }
 
 // ===========================================================================
-// db.propertyKeys() — distinct property keys across all nodes and edges
+// db.propertyKeys() — distinct property keys scoped to the active tenant
 // ===========================================================================
 
-// TODO(task 3-6): replace raw node/edge walks with tenant-filtered helpers.
+// CANARY: REQ=REQ-GPS-METADATA-003; FEATURE="GPS Metadata Isolation"; ASPECT=DbPropertyKeysFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+// Phase 3 (Task 3-6): collect node property keys via the tenant-indexed
+// label_properties_by_tenant index (listNodeLabels → listPropertiesForLabel
+// per label), then sweep only the tenant's edges for edge-level property keys.
+// The label_properties_by_tenant index covers nodes only, so edges require a
+// filtered scan — but this is O(edges_for_tenant) rather than O(all_edges).
 pub fn executeDbPropertyKeysForTest(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     return executeDbPropertyKeys(allocator, store, ctx);
 }
 
 fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    _ = ctx; // TODO(task 3-6): replace raw walks with tenant-filtered helpers
+    // Use a StringHashMap to deduplicate. The map OWNS each key string so that
+    // freeing the intermediate label/prop-key slices returned by the store
+    // helpers doesn't leave dangling pointers in the accumulator.
     var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
+    defer {
+        var k_it = seen.keyIterator();
+        while (k_it.next()) |k| allocator.free(k.*);
+        seen.deinit();
+    }
 
     var ordered = std.ArrayList([]const u8).empty;
     defer ordered.deinit(allocator);
 
-    // Collect from nodes
-    var node_iter = store.nodes.iterator();
-    while (node_iter.next()) |entry| {
-        var prop_iter = entry.value_ptr.properties.iterator();
-        while (prop_iter.next()) |p| {
-            const key = p.key_ptr.*;
-            const gop = try seen.getOrPut(key);
-            if (!gop.found_existing) {
-                try ordered.append(allocator, key);
-            }
+    // --- Node property keys via the tenant-indexed PERF-C structures ---
+    // 1. Get the labels visible to this tenant (or all if admin).
+    const labels = try store.listNodeLabels(allocator, ctx.tenant_id);
+    defer {
+        for (labels) |lbl| allocator.free(lbl);
+        allocator.free(labels);
+    }
+
+    // 2. For each label, collect the property keys indexed under that label+tenant.
+    for (labels) |label| {
+        const keys = try store.listPropertiesForLabel(allocator, ctx.tenant_id, label);
+        defer {
+            for (keys) |k| allocator.free(k);
+            allocator.free(keys);
+        }
+        for (keys) |key| {
+            // Check before duping to avoid an allocation on duplicates.
+            if (seen.contains(key)) continue;
+            const owned = try allocator.dupe(u8, key);
+            errdefer allocator.free(owned);
+            try seen.put(owned, {});
+            try ordered.append(allocator, owned);
         }
     }
 
-    // Collect from edges
+    // --- Edge property keys: label_properties_by_tenant covers nodes only.
+    // Filter store.edges by tenant_id to avoid cross-tenant leakage.
     var edge_iter = store.edges.iterator();
     while (edge_iter.next()) |entry| {
-        var prop_iter = entry.value_ptr.properties.iterator();
+        const edge = entry.value_ptr;
+        // Honour tenant filter; null means admin sees everything.
+        if (ctx.tenant_id) |tid| {
+            if (!std.mem.eql(u8, edge.tenant_id, tid)) continue;
+        }
+        var prop_iter = edge.properties.iterator();
         while (prop_iter.next()) |p| {
             const key = p.key_ptr.*;
-            const gop = try seen.getOrPut(key);
-            if (!gop.found_existing) {
-                try ordered.append(allocator, key);
-            }
+            if (seen.contains(key)) continue;
+            const owned = try allocator.dupe(u8, key);
+            errdefer allocator.free(owned);
+            try seen.put(owned, {});
+            try ordered.append(allocator, owned);
         }
     }
 
@@ -228,6 +258,8 @@ fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.Graph
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "propertyKey");
 
+    // The rows dupe each key independently of the seen map so the result's
+    // owns_value_memory = true path frees the row strings correctly.
     const rows = try allocator.alloc([]Value, ordered.items.len);
     for (ordered.items, 0..) |key, i| {
         const row = try allocator.alloc(Value, 1);
