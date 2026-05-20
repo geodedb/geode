@@ -150,3 +150,43 @@ and anonymous inputs.
 Black-box spec: `../geode-test-harness/geodetestlab-cli/specs/gps_decide_smoke.yml`
 — proves the wire-level deny outcome (SQLSTATE 42501) for a ReadOnly user
 attempting CREATE is identical to the pre-Phase-2 behavior.
+
+## Known coverage gap: `resolveRoleFromGraph` (REQ-GPS-PDP-008)
+
+`resolveRoleFromGraph` in `src/server/main.zig` (added in Phase 2, commit
+`6a307cf0`) traverses HAS_ROLE edges in the `__geode_security` graph to map
+a `UserRecord` to the correct `Role` enum, correcting the pre-GPS fallback
+that always returned `.ReadWrite` for non-superusers.
+
+**Why an isolated unit test is blocked:**
+
+`src/server/main.zig` is a binary entry file (`geode_exe` in `build.zig`),
+not a library module. The file carries heavy binary-only dependencies:
+QUIC transport, gRPC server, LSP server, cert generator, metrics server,
+thread pool, and multiple named modules that are only wired for `geode_exe`
+(e.g. `index_selectivity`, `text_formatter`, `otel_metrics`, `txn`). There
+is no named module wrapper for `src/server/main.zig` accessible to a
+standalone test executable.
+
+Moving the function to a library module (e.g. `src/security/role_resolver.zig`
+re-exported through `src/lib.zig`) would make it testable in isolation, but
+that refactor is a Phase 4+ concern because it touches the auth startup path.
+
+**Existing indirect coverage:**
+
+- `tests/test_user_management.zig` — exercises `createUser` / `assignRole` /
+  `lookupUser` round-trips through the in-memory user store, verifying that
+  role assignment survives a reload.
+- `tests/test_gps_principal_derive.zig` — verifies that `derivePrincipal()`
+  correctly populates `Principal.roles` from the resolved `User.role`.
+- The integration suite in `../geode-test-harness/` covers the full
+  QUIC auth path: a user created with `CREATE USER … ROLE ReadOnly` is denied
+  `CREATE GRAPH` at the wire level, exercising `resolveRoleFromGraph` →
+  `duplicatePersistentUser` → `lookupPersistentAuthUser` → `derivePrincipal`
+  → `decide()` end-to-end.
+
+**Remediation plan:** In Phase 4, extract `resolveRoleFromGraph` (and
+`authRoleFromRecord`) into `src/security/role_resolver.zig`, add a named
+module entry in `build.zig`, and add `tests/test_gps_resolve_role_from_graph.zig`
+with an in-memory `GraphStore` fixture (User node + HAS_ROLE edge + Role node).
+Tag the new test with `CANARY: REQ=REQ-GPS-PDP-008; ASPECT=AuthRoleGraphLookupIsolated`.
