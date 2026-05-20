@@ -138,38 +138,35 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
 }
 
 // ===========================================================================
-// db.relationshipTypes() — distinct edge labels across all edges
+// db.relationshipTypes() — distinct edge types scoped to the active tenant
 // ===========================================================================
 
-// TODO(task 3-5): replace raw edge walk with store.listEdgeTypes(ctx.tenant_id).
+// CANARY: REQ=REQ-GPS-METADATA-002; FEATURE="GPS Metadata Isolation"; ASPECT=DbRelationshipTypesFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+// Phase 3 (Task 3-5): delegate to store.listEdgeTypes which honours the
+// tenant_id index (edge_types_by_tenant). Passing null is the admin path.
 pub fn executeDbRelationshipTypesForTest(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
     return executeDbRelationshipTypes(allocator, store, ctx);
 }
 
 fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    _ = ctx;
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-
-    var ordered = std.ArrayList([]const u8).empty;
-    defer ordered.deinit(allocator);
-
-    var iter = store.edges.iterator();
-    while (iter.next()) |entry| {
-        const ty = entry.value_ptr.label;
-        const gop = try seen.getOrPut(ty);
-        if (!gop.found_existing) {
-            try ordered.append(allocator, ty);
-        }
+    // Use the tenant-indexed helper; ctx.tenant_id == null → admin all-tenant view.
+    const types = try store.listEdgeTypes(allocator, ctx.tenant_id);
+    defer {
+        for (types) |t| allocator.free(t);
+        allocator.free(types);
     }
 
-    std.mem.sort([]const u8, ordered.items, {}, lessThanString);
+    // listEdgeTypes returns types in hash-iteration order; sort for stability.
+    var sorted = try std.ArrayList([]const u8).initCapacity(allocator, types.len);
+    defer sorted.deinit(allocator);
+    for (types) |t| try sorted.append(allocator, t);
+    std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "relationshipType");
 
-    const rows = try allocator.alloc([]Value, ordered.items.len);
-    for (ordered.items, 0..) |ty, i| {
+    const rows = try allocator.alloc([]Value, sorted.items.len);
+    for (sorted.items, 0..) |ty, i| {
         const row = try allocator.alloc(Value, 1);
         row[0] = .{ .Str = try allocator.dupe(u8, ty) };
         rows[i] = row;
