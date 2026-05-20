@@ -4726,4 +4726,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_show_metadata_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_show_metadata_step = b.step("test-gps-show-metadata", "Run GPS show_metadata action unit tests");
     gps_show_metadata_step.dependOn(&run_gps_show_metadata_tests.step);
+
+    // GPS metadata filtering tests (Tasks 3-4, 3-5, 3-6)
+    const gps_metadata_filtering_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_metadata_filtering.zig"), .target = target, .optimize = optimize });
+    gps_metadata_filtering_test_mod.addImport("geode", root_mod);
+    const gps_metadata_filtering_tests = b.addTest(.{ .root_module = gps_metadata_filtering_test_mod });
+    const run_gps_metadata_filtering_tests = b.addRunArtifact(gps_metadata_filtering_tests);
+    shardDep(test_step, &run_gps_metadata_filtering_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_metadata_filtering_step = b.step("test-gps-metadata-filtering", "Run GPS metadata filtering (db.labels/relationshipTypes/propertyKeys) tenant isolation tests");
+    gps_metadata_filtering_step.dependOn(&run_gps_metadata_filtering_tests.step);
 }

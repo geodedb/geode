@@ -717,6 +717,10 @@ pub const graph_store = @import("graph_store.zig");
 // Re-export auth_dispatch so server_init can install callbacks without needing a
 // separate module import (auth_dispatch is part of root_mod, not a standalone module).
 pub const auth_dispatch = @import("execution/auth_dispatch.zig");
+// CANARY: REQ=REQ-GPS-METADATA-001; FEATURE="GPS Metadata Isolation"; ASPECT=LibExportMetaDispatch; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+// Re-export meta_dispatch so tests can call the executeDb*ForTest helpers without a
+// relative cross-module @import (which Zig 0.16 rejects for files outside the module path).
+pub const meta_dispatch = @import("execution/meta_dispatch.zig");
 // CANARY: REQ=REQ-LSP-SCHEMA-PROVIDER-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=LibExportSchemaChangeNotifier; STATUS=TESTED; TEST=src/cli/lsp/schema_provider_test.zig; OWNER=lsp; UPDATED=2026-05-14
 // Re-export schema_change_notifier so the LSP SchemaProvider can reach it via
 // the `geode` named module. Registering it as a separate build module would

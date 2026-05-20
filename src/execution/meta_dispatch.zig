@@ -93,34 +93,37 @@ pub fn execute(
 }
 
 // ===========================================================================
-// db.labels() — distinct node labels across all nodes in the store
+// db.labels() — distinct node labels scoped to the active tenant
 // ===========================================================================
 
+// CANARY: REQ=REQ-GPS-METADATA-001; FEATURE="GPS Metadata Isolation"; ASPECT=DbLabelsFilter; STATUS=TESTED; TEST=tests/test_gps_metadata_filtering.zig; OWNER=security; UPDATED=2026-05-20
+// Phase 3 (Task 3-4): delegate to store.listNodeLabels which honours the
+// tenant_id index. Passing ctx.tenant_id == null is the admin/cross-tenant
+// path that returns all labels; passing a non-null value restricts the
+// result set to that tenant only — no cross-tenant label leakage.
+pub fn executeDbLabelsForTest(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    return executeDbLabels(allocator, store, ctx);
+}
+
 fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    _ = ctx; // TODO(task 3-4): use ctx for tenant+graph filtering
-    var seen = std.StringHashMap(void).init(allocator);
-    defer seen.deinit();
-
-    var ordered = std.ArrayList([]const u8).empty;
-    defer ordered.deinit(allocator);
-
-    var iter = store.nodes.iterator();
-    while (iter.next()) |entry| {
-        for (entry.value_ptr.labels) |lbl| {
-            const gop = try seen.getOrPut(lbl);
-            if (!gop.found_existing) {
-                try ordered.append(allocator, lbl);
-            }
-        }
+    // Use the tenant-indexed helper; ctx.tenant_id == null → admin all-tenant view.
+    const labels = try store.listNodeLabels(allocator, ctx.tenant_id);
+    defer {
+        for (labels) |lbl| allocator.free(lbl);
+        allocator.free(labels);
     }
 
-    std.mem.sort([]const u8, ordered.items, {}, lessThanString);
+    // listNodeLabels returns labels in hash-iteration order; sort for stability.
+    var sorted = try std.ArrayList([]const u8).initCapacity(allocator, labels.len);
+    defer sorted.deinit(allocator);
+    for (labels) |lbl| try sorted.append(allocator, lbl);
+    std.mem.sort([]const u8, sorted.items, {}, lessThanString);
 
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "label");
 
-    const rows = try allocator.alloc([]Value, ordered.items.len);
-    for (ordered.items, 0..) |lbl, i| {
+    const rows = try allocator.alloc([]Value, sorted.items.len);
+    for (sorted.items, 0..) |lbl, i| {
         const row = try allocator.alloc(Value, 1);
         row[0] = .{ .Str = try allocator.dupe(u8, lbl) };
         rows[i] = row;
@@ -138,8 +141,13 @@ fn executeDbLabels(allocator: std.mem.Allocator, store: *graph_store.GraphStore,
 // db.relationshipTypes() — distinct edge labels across all edges
 // ===========================================================================
 
+// TODO(task 3-5): replace raw edge walk with store.listEdgeTypes(ctx.tenant_id).
+pub fn executeDbRelationshipTypesForTest(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    return executeDbRelationshipTypes(allocator, store, ctx);
+}
+
 fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    _ = ctx; // TODO(task 3-5): use ctx for tenant+graph filtering
+    _ = ctx;
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 
@@ -179,8 +187,13 @@ fn executeDbRelationshipTypes(allocator: std.mem.Allocator, store: *graph_store.
 // db.propertyKeys() — distinct property keys across all nodes and edges
 // ===========================================================================
 
+// TODO(task 3-6): replace raw node/edge walks with tenant-filtered helpers.
+pub fn executeDbPropertyKeysForTest(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
+    return executeDbPropertyKeys(allocator, store, ctx);
+}
+
 fn executeDbPropertyKeys(allocator: std.mem.Allocator, store: *graph_store.GraphStore, ctx: ExecutionContext) !ExecutionResult {
-    _ = ctx; // TODO(task 3-6): use ctx for tenant+graph filtering
+    _ = ctx; // TODO(task 3-6): replace raw walks with tenant-filtered helpers
     var seen = std.StringHashMap(void).init(allocator);
     defer seen.deinit();
 
