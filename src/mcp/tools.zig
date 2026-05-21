@@ -14,14 +14,23 @@ const lsp = @import("lsp.zig");
 // GPS Phase 5: callTool now receives the per-server MCP Principal so each tool
 // dispatch can forward it to any downstream execution context.  The Principal is
 // available to every tool function through the `caller` parameter.
-// Phase 5 limitation: the downstream GeodeClient path sends queries over QUIC
-// using credentials from the DSN — there is no in-band mechanism in the current
-// zig_client protocol to carry an explicit Principal across the wire.  The
-// Principal is stored in the call stack and is available for local decide()
-// calls (e.g. pre-flight authorization checks) but does NOT yet propagate to
-// the remote executor.  This structural gap is documented as Site #8
-// DONE_WITH_CONCERNS in gps-fail-open-sites.md; Phase 6 will wire it fully once
-// the zig_client protocol gains a principal-forwarding header.
+//
+// GPS Phase 6 — local-closure assessment (Task 6-5):
+// The MCP tools route ALL queries through GeodeClient → QUIC → remote executor.
+// There is no safe in-process local-executor path: executeProgramWithContext()
+// requires the full server globals (catalog singleton, WAL, store handles, etc.)
+// that are only initialised in the QUIC server binary; calling it from the MCP
+// context without those globals would panic or corrupt state.
+//
+// "Option A" (thread Principal into a local ExecutionContext) is therefore not
+// feasible in Phase 6.  The authoritative fix ("Option B" / Phase 7) is to add
+// a `X-Geode-Principal` header to the zig_client QUIC frame so the remote
+// executor can reconstruct an ExecutionContext.principal from the wire-forwarded
+// identity.  Until that wire extension lands, the Principal is available only
+// for *local* pre-flight decide() calls at the MCP boundary (already wired in
+// server.zig) and is NOT forwarded to the executor.  Site #8 remains PARTIAL;
+// Phase 7 will promote it to CLOSED once the principal-forwarding header is in
+// the zig_client protocol.
 const geode_security = @import("geode").security;
 pub const Principal = geode_security.principal.Principal;
 
@@ -67,8 +76,12 @@ pub fn callTool(
     cancel: *const mcp.CancelToken,
 ) ![]const u8 {
     _ = cancel; // TODO: Implement cancellation support // #473
-    // caller is available for local authorization decisions; Phase 6 will thread
-    // it through the zig_client transport to the remote executor.
+    // Phase 6 (Task 6-5): caller is available for local pre-flight decide()
+    // calls at the MCP boundary (already wired in server.zig).  Wire-level
+    // forwarding to the remote executor requires a principal-forwarding header
+    // in the zig_client protocol — that is Phase 7 work.  Suppress unused-var
+    // warning here; the field stays on the signature so Phase 7 can plumb it
+    // without a signature change.
     _ = caller;
 
     if (std.mem.eql(u8, name, "query")) {
