@@ -4914,4 +4914,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_alter_policy_tests.step, 1, test_shard_loads, test_shard_index);
     const gps_alter_policy_step = b.step("test-gps-alter-policy", "Run GPS ALTER POLICY DDL tests (Phase 7 Task 7-2)");
     gps_alter_policy_step.dependOn(&run_gps_alter_policy_tests.step);
+
+    // GPS Phase 7 Task 7-3: SHOW GRANTS FOR <user> — parser + executor integration tests.
+    const gps_show_grants_for_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_show_grants_for.zig"), .target = target, .optimize = optimize });
+    gps_show_grants_for_test_mod.addImport("geode", root_mod);
+    const gps_show_grants_for_tests = b.addTest(.{ .root_module = gps_show_grants_for_test_mod });
+    const run_gps_show_grants_for_tests = b.addRunArtifact(gps_show_grants_for_tests);
+    shardDep(test_step, &run_gps_show_grants_for_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_show_grants_for_step = b.step("test-gps-show-grants-for", "Run GPS SHOW GRANTS FOR <user> tests (Phase 7 Task 7-3)");
+    gps_show_grants_for_step.dependOn(&run_gps_show_grants_for_tests.step);
 }

@@ -566,6 +566,9 @@ pub const ShowType = enum {
     version,
     capabilities,
     policies,
+    // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowTypeGrantsFor; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+    /// SHOW GRANTS FOR <username>: ShowStatement.target holds the username.
+    grants_for,
 };
 
 pub const IndexType = enum {

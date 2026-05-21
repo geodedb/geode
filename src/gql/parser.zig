@@ -5388,6 +5388,9 @@ pub const Parser = struct {
                 break :blk .capabilities;
             } else if (std.ascii.eqlIgnoreCase(type_str, "POLICIES") or std.ascii.eqlIgnoreCase(type_str, "POLICY")) {
                 break :blk .policies;
+            } else if (std.ascii.eqlIgnoreCase(type_str, "GRANTS") or std.ascii.eqlIgnoreCase(type_str, "GRANT")) {
+                // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ParserDispatch; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+                break :blk .grants_for;
             } else {
                 return error.UnexpectedToken;
             }
@@ -5397,6 +5400,10 @@ pub const Parser = struct {
 
         var target: ?[]const u8 = null;
         if (show_type == .permissions and self.cur.kind == .FOR) {
+            self.advance(); // FOR
+            target = try self.parseName();
+        } else if (show_type == .grants_for) {
+            if (self.cur.kind != .FOR) return self.unexpected("expected FOR after SHOW GRANTS");
             self.advance(); // FOR
             target = try self.parseName();
         }

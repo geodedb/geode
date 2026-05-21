@@ -198,6 +198,8 @@ fn tagName(st: ast.Statement) []const u8 {
         .CreatePolicy => "CreatePolicy",
         .DropPolicy => "DropPolicy",
         .AlterPolicy => "AlterPolicy",
+        // Note: SHOW GRANTS FOR is a ShowStatement variant, not a top-level Statement.
+        // ShowType is not switched here.
     };
 }
 

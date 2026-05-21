@@ -59,6 +59,8 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         // GPS policy DDL (Phase 4): SHOW POLICIES returns empty result set until
         // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
         .policies => &[_][]const u8{ "name", "graph", "actions", "enabled" },
+        // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsColumns; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+        .grants_for => &[_][]const u8{ "policy_name", "graph", "actions", "effect", "enabled" },
     };
 
     // Allocate and copy column names
@@ -238,6 +240,45 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         },
         // The first switch returns early for these; this arm is unreachable in practice (defensive)
         .users, .roles, .permissions, .version, .capabilities => unreachable,
+        // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsRows; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
+        .grants_for => {
+            // Enumerate policies applicable to the requested username.
+            // Phase 7 filter: include a policy if
+            //   (a) its expression_source == "true" (universally applicable), OR
+            //   (b) its expression_source contains the literal substring
+            //       "current_user() = '<username>'" (text match; Phase 8 will
+            //       evaluate compiled expressions properly).
+            const policy_catalog_mod = @import("../security/policy_catalog.zig");
+            const user_name = s.target orelse "";
+            if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
+                for (pol_cat.listPolicies()) |pol| {
+                    const is_universal = std.mem.eql(u8, pol.expression_source, "true");
+                    // Build the per-user substring we look for: current_user() = '<name>'
+                    const user_expr = try std.fmt.allocPrint(allocator, "current_user() = '{s}'", .{user_name});
+                    defer allocator.free(user_expr);
+                    const is_user_specific = std.mem.indexOf(u8, pol.expression_source, user_expr) != null;
+
+                    if (!is_universal and !is_user_specific) continue;
+
+                    // Build "actions" column: comma-separated action names.
+                    var actions_buf = std.ArrayList(u8).empty;
+                    for (pol.actions, 0..) |a, ai| {
+                        if (ai > 0) try actions_buf.appendSlice(allocator, ", ");
+                        try actions_buf.appendSlice(allocator, @tagName(a));
+                    }
+                    const actions_str = try actions_buf.toOwnedSlice(allocator);
+
+                    var row = try allocator.alloc(Value, 5);
+                    row[0] = Value{ .Str = try allocator.dupe(u8, pol.name) };
+                    row[1] = Value{ .Str = try allocator.dupe(u8, pol.scope_graph) };
+                    row[2] = Value{ .Str = actions_str };
+                    row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(pol.effect)) };
+                    row[4] = Value{ .Bool = pol.enabled };
+                    try rows_list.append(allocator, row);
+                }
+            }
+            // If catalog not yet initialized, return empty rows.
+        },
         // GPS policy DDL (Phase 4, Task 4-4): enumerate in-memory PolicyCatalog.
         // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS Policy DDL"; ASPECT=ShowPoliciesExecution; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
         .policies => {
