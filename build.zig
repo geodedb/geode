@@ -4905,4 +4905,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_decision_cache_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_decision_cache_step = b.step("test-gps-decision-cache", "Run GPS decision cache tests (Phase 7 Task 7-1)");
     gps_decision_cache_step.dependOn(&run_gps_decision_cache_tests.step);
+
+    // GPS Phase 7 Task 7-2: ALTER POLICY DDL — parser + executor integration tests.
+    const gps_alter_policy_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_alter_policy.zig"), .target = target, .optimize = optimize });
+    gps_alter_policy_test_mod.addImport("geode", root_mod);
+    const gps_alter_policy_tests = b.addTest(.{ .root_module = gps_alter_policy_test_mod });
+    const run_gps_alter_policy_tests = b.addRunArtifact(gps_alter_policy_tests);
+    shardDep(test_step, &run_gps_alter_policy_tests.step, 1, test_shard_loads, test_shard_index);
+    const gps_alter_policy_step = b.step("test-gps-alter-policy", "Run GPS ALTER POLICY DDL tests (Phase 7 Task 7-2)");
+    gps_alter_policy_step.dependOn(&run_gps_alter_policy_tests.step);
 }

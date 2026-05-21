@@ -405,7 +405,7 @@ pub const SemanticAnalyzer = struct {
             .CreateSchema, .DropSchema, .CreateGraph, .DropGraph => {},
             .CreateGraphType, .DropGraphType, .Explain, .Profile => {},
             .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke => {},
-            .CreatePolicy, .DropPolicy => {},
+            .CreatePolicy, .DropPolicy, .AlterPolicy => {},
         }
     }
 

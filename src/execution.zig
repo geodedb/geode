@@ -2004,6 +2004,31 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 .owns_value_memory = true,
             };
         },
+        // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyExecution; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+        .AlterPolicy => |ap_stmt| {
+            const policy_catalog_mod = @import("security/policy_catalog.zig");
+            const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
+
+            try pol_cat.alterPolicy(ap_stmt.name, ap_stmt.set_enabled);
+
+            // Write-through for ALTER POLICY is Phase 8 — no persistence hook defined yet.
+            // In-memory update is authoritative for the running server; restart will
+            // re-hydrate from __geode_security (which still reflects the original CREATE).
+            // Operators needing durable enable/disable should DROP + CREATE the policy.
+
+            const columns = try allocator.alloc([]const u8, 1);
+            columns[0] = try allocator.dupe(u8, "status");
+            const row = try allocator.alloc(Value, 1);
+            row[0] = Value{ .Str = try allocator.dupe(u8, "Policy altered") };
+            const rows = try allocator.alloc([]Value, 1);
+            rows[0] = row;
+            return ExecutionResult{
+                .columns = columns,
+                .rows = rows,
+                .flags = std.ArrayList([]const u8).empty,
+                .owns_value_memory = true,
+            };
+        },
         else => return error.NotImplemented,
     }
 }

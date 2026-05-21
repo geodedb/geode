@@ -6387,7 +6387,11 @@ pub const Parser = struct {
     // Parse ALTER USER <name> ENABLE|DISABLE|SET PASSWORD '<pw>'|SET ROLE <role>
     fn parseAlterStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.identifier); // ALTER
-        if (!self.softKw("USER")) return self.unexpected("only ALTER USER is supported");
+        if (self.softKw("POLICY")) {
+            self.advance(); // POLICY
+            return self.parseAlterPolicy();
+        }
+        if (!self.softKw("USER")) return self.unexpected("expected USER or POLICY after ALTER");
         self.advance(); // USER
         const name = try self.parseName();
         if (self.softKw("ENABLE")) {
@@ -6568,6 +6572,27 @@ pub const Parser = struct {
         }
         const name = try self.parseName();
         return .{ .DropPolicy = .{ .name = name, .if_exists = if_exists } };
+    }
+
+    // Parse ALTER POLICY <name> SET ENABLED true|false
+    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=Parser; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+    fn parseAlterPolicy(self: *Parser) ParserError!ast.Statement {
+        const name = try self.parseName();
+        _ = try self.expect(.SET);
+        if (!self.softKw("ENABLED")) return self.unexpected("expected ENABLED after ALTER POLICY <name> SET");
+        self.advance(); // ENABLED
+        const enabled: bool = switch (self.cur.kind) {
+            .TRUE => blk: {
+                self.advance();
+                break :blk true;
+            },
+            .FALSE => blk: {
+                self.advance();
+                break :blk false;
+            },
+            else => return self.unexpected("expected true or false after ALTER POLICY ... SET ENABLED"),
+        };
+        return .{ .AlterPolicy = .{ .name = name, .set_enabled = enabled } };
     }
 
     // Parse SESSION SET statement with full ISO GQL syntax

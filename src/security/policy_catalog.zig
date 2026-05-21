@@ -157,6 +157,22 @@ pub const PolicyCatalog = struct {
     pub fn listPolicies(self: *const PolicyCatalog) []const Policy {
         return self.policies.items;
     }
+
+    // CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=PolicyCatalogAlter; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+    /// Update mutable fields of an existing policy in-place.
+    /// Returns error.PolicyNotFound when no matching entry exists.
+    /// Bumps the policy version and invalidates the decision cache after any mutation.
+    pub fn alterPolicy(self: *PolicyCatalog, name: []const u8, set_enabled: ?bool) !void {
+        for (self.policies.items) |*p| {
+            if (std.mem.eql(u8, p.name, name)) {
+                if (set_enabled) |e| p.enabled = e;
+                _ = policy_version.incrementPolicyVersion();
+                if (decision_cache.getGlobalCache()) |c| c.invalidateAll();
+                return;
+            }
+        }
+        return error.PolicyNotFound;
+    }
 };
 
 // ---------------------------------------------------------------------------

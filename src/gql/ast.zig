@@ -56,6 +56,7 @@ pub const Statement = union(enum) {
     // Geode extension: GPS policy DDL
     CreatePolicy: CreatePolicyStatement,
     DropPolicy: DropPolicyStatement,
+    AlterPolicy: AlterPolicyStatement,
     // Query introspection
     Explain: ExplainStatement,
     Profile: ProfileStatement,
@@ -762,6 +763,14 @@ pub const CreatePolicyStatement = struct {
 pub const DropPolicyStatement = struct {
     name: []const u8,
     if_exists: bool = false,
+};
+
+/// AST node for: ALTER POLICY <name> SET ENABLED true|false
+/// Phase 7 supports only enable/disable; expression-source update is done via DROP + CREATE.
+// CANARY: REQ=REQ-GPS-DDL-003; FEATURE="GPS ALTER POLICY DDL"; ASPECT=AlterPolicyAST; STATUS=TESTED; TEST=tests/test_gps_alter_policy.zig; OWNER=security; UPDATED=2026-05-21
+pub const AlterPolicyStatement = struct {
+    name: []const u8,
+    set_enabled: ?bool = null,
 };
 
 // Query introspection statements

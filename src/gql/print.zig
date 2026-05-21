@@ -197,6 +197,7 @@ fn tagName(st: ast.Statement) []const u8 {
         .Revoke => "Revoke",
         .CreatePolicy => "CreatePolicy",
         .DropPolicy => "DropPolicy",
+        .AlterPolicy => "AlterPolicy",
     };
 }
 
