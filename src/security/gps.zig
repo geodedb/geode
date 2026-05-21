@@ -99,7 +99,12 @@ pub const DecisionRequest = struct {
 };
 
 // CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=EXEMPT; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+// Phase 6 (Task 6-6): Site #2 CLOSED via grant_migration.zig (commit 64ce3940).
+// All existing (:GraphGrant) records are migrated to (:Policy) rows at startup;
+// the graph_grant_check_fn path below is now a deprecated shim that will be
+// removed in Phase 7 once no grants remain in the legacy format.
+// REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
 
@@ -245,11 +250,15 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             }
         }
 
-        // Phase 2 task 2-5: additive graph-grant widening.
+        // Phase 2 task 2-5: additive graph-grant widening (DEPRECATED — Phase 7 removal).
         // When builtin-role evaluation produces no allow and the principal has
         // an active_graph, consult graph_grant_check_fn — the same callback that
         // execution.checkPermission() uses. Bit-identical to the legacy fallback.
-        // Phase 4 replaces this with first-class Policy rows.
+        // Phase 6 (commit 64ce3940): grant_migration.zig converts all existing
+        // (:GraphGrant) records to (:Policy) rows at startup; the Policy-eval path
+        // below already handles them.  This shim is kept so that any grant not yet
+        // migrated (e.g. written after the migration ran) still evaluates correctly;
+        // it will be removed in Phase 7 once the legacy grant format is retired.
         if (execution.graph_grant_check_fn) |grant_fn| {
             if (req.principal.username) |uname| {
                 if (req.principal.active_graph) |graph| {
