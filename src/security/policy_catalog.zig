@@ -12,6 +12,8 @@
 // RwLock in the global accessor).
 
 const std = @import("std");
+// CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogIntegration; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
+const policy_expression = @import("policy_expression.zig");
 
 pub const Action = enum {
     read,
@@ -38,6 +40,11 @@ pub const Policy = struct {
     effect: Effect,
     expression_source: []const u8,
     enabled: bool,
+    // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCompiledField; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
+    // Phase 5 Task 5-4: compiled expression for attribute-based predicates.
+    // null when expression_source == "true" (trivial predicate, no compilation needed).
+    // Non-null when a non-trivial expression was successfully compiled.
+    compiled: ?policy_expression.CompiledExpression = null,
 };
 
 /// Arguments for adding a new policy.  Separate from Policy so that callers
@@ -65,17 +72,24 @@ pub const PolicyCatalog = struct {
     }
 
     pub fn deinit(self: *PolicyCatalog) void {
-        for (self.policies.items) |p| {
+        for (self.policies.items) |*p| {
             self.allocator.free(p.name);
             self.allocator.free(p.scope_graph);
             self.allocator.free(p.expression_source);
             self.allocator.free(p.actions);
+            // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogDeinit; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
+            if (p.compiled) |*c| c.deinit();
         }
         self.policies.deinit(self.allocator);
     }
 
     // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogAdd; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogAddCompile; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
     /// Duplicate all string and slice fields and append a new Policy entry.
+    /// If expression_source is not "true", attempt to compile it into a
+    /// CompiledExpression for fast evaluation in decide().  Compilation errors
+    /// for non-trivial expressions are silently treated as "fail-closed":
+    /// the policy is stored with compiled=null and decide() will skip it.
     pub fn addPolicy(self: *PolicyCatalog, args: PolicySpec) !void {
         const name_dupe = try self.allocator.dupe(u8, args.name);
         errdefer self.allocator.free(name_dupe);
@@ -86,6 +100,14 @@ pub const PolicyCatalog = struct {
         const actions_dupe = try self.allocator.dupe(Action, args.actions);
         errdefer self.allocator.free(actions_dupe);
 
+        // Compile the predicate expression if it is non-trivial.
+        // The trivial "true" predicate is handled without a CompiledExpression.
+        var compiled: ?policy_expression.CompiledExpression = null;
+        if (!std.mem.eql(u8, args.expression_source, "true")) {
+            compiled = policy_expression.compileExpression(self.allocator, args.expression_source) catch null;
+        }
+        errdefer if (compiled) |*c| c.deinit();
+
         try self.policies.append(self.allocator, .{
             .name = name_dupe,
             .scope_graph = scope_dupe,
@@ -93,6 +115,7 @@ pub const PolicyCatalog = struct {
             .effect = args.effect,
             .expression_source = src_dupe,
             .enabled = args.enabled,
+            .compiled = compiled,
         });
     }
 
@@ -103,11 +126,13 @@ pub const PolicyCatalog = struct {
         var i: usize = 0;
         while (i < self.policies.items.len) : (i += 1) {
             if (std.mem.eql(u8, self.policies.items[i].name, name)) {
-                const removed = self.policies.orderedRemove(i);
+                var removed = self.policies.orderedRemove(i);
                 self.allocator.free(removed.name);
                 self.allocator.free(removed.scope_graph);
                 self.allocator.free(removed.expression_source);
                 self.allocator.free(removed.actions);
+                // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogRemoveDeinit; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
+                if (removed.compiled) |*c| c.deinit();
                 return;
             }
         }

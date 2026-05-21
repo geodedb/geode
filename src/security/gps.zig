@@ -270,22 +270,44 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     }
 
     // CANARY: REQ=REQ-GPS-POLICY-EVAL-001; FEATURE="GPS Policy Evaluation"; ASPECT=ExplicitAllow; STATUS=TESTED; TEST=tests/test_gps_policy_evaluation.zig; OWNER=security; UPDATED=2026-05-20
+    // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=DecideEvalExpression; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
     // Phase 4: explicit policy match via the global PolicyCatalog.
-    // Only the trivial predicate expression_source="true" is evaluated here;
-    // full expression compilation and attribute-based predicates land in Phase 5.
+    // Phase 5 (Task 5-4): attribute-based expression predicates are now
+    // evaluated via the compiled CompiledExpression stored on each Policy.
     const pc = @import("policy_catalog.zig");
+    const policy_expression = @import("policy_expression.zig");
     if (pc.getGlobalCatalog()) |cat| {
-        for (cat.listPolicies()) |policy| {
+        for (cat.listPolicies()) |*policy| {
             if (!policy.enabled) continue;
-            if (!policyMatchesAction(policy, req.action)) continue;
-            if (!policyMatchesResource(policy, req.resource)) continue;
-            if (std.mem.eql(u8, policy.expression_source, "true") and policy.effect == .allow) {
+            if (!policyMatchesAction(policy.*, req.action)) continue;
+            if (!policyMatchesResource(policy.*, req.resource)) continue;
+
+            // Build an evaluation context from the current request.
+            const ctx = policy_expression.PolicyEvalContext{
+                .current_user = req.principal.username,
+                .current_tenant = req.principal.tenant_id,
+                .current_graph = req.principal.active_graph,
+                .resource_label = switch (req.resource) {
+                    // For node resources, use the first label as resource_label.
+                    // Phase 5: a richer label-set predicate can land in Phase 6.
+                    else => null,
+                },
+            };
+
+            // Evaluate the expression: compiled expression takes priority;
+            // the trivial "true" string is the fast-path fallback.
+            const expr_result = if (policy.compiled) |*cexpr|
+                policy_expression.evaluate(cexpr, ctx)
+            else
+                std.mem.eql(u8, policy.expression_source, "true");
+
+            if (expr_result and policy.effect == .allow) {
                 return PolicyDecision{
                     .kind = .allow,
                     .reason_code = "policy_match",
                 };
             }
-            // deny-effect or non-"true" expression: skip in Phase 4.
+            // deny-effect or expression evaluated to false: continue scan.
         }
     }
 

@@ -453,6 +453,8 @@ pub const security = struct {
     pub const role_resolver = @import("role_resolver");
     // GPS Phase 4 (Task 4-2): in-memory policy catalog (Policy type + CRUD).
     pub const policy_catalog = @import("security/policy_catalog.zig");
+    // GPS Phase 5 (Task 5-4): minimal expression compiler for GPS policy predicates.
+    pub const policy_expression = @import("security/policy_expression.zig");
     // NOTE: policy_persistence.zig is NOT exported from lib.zig because it imports
     // auth_graph_manager, which imports geode (circular).  Consumers that need it
     // (server_init.zig, tests) import it as a named build module ("policy_persistence").
