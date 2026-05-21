@@ -1083,6 +1083,10 @@ REQ-GEODETESTLAB-001,GeodeTestlab,TestExecution,TESTED,,,test,2026-01-15,tests/t
 REQ-GEODETESTLAB-ASSERT-001,GeodeTestlab,Assertions,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GEODETESTLAB-SPEC-001,GeodeTestlab,SpecExecution,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GITLAB-LABELS-001,GitLab Label Taxonomy,Tooling,EXEMPT,,,tooling,2026-01-14,scripts/gitlab/create_type_labels.sh
+REQ-GPS-ABAC-001,GPS ABAC Predicates,AndWithAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,AdminAllowed,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,GrantWidening,TESTED,,,security,2026-05-20,src/security/gps.zig
@@ -1153,6 +1157,13 @@ REQ-GPS-DERIVE-001,GPS Principal Derivation,QuicArgs,TESTED,,,security,2026-05-2
 REQ-GPS-DERIVE-002,GPS Principal Derivation,DistributedCoordinatorWiring,TESTED,,,security,2026-05-20,src/distributed/query_coordinator.zig
 REQ-GPS-DERIVE-002,GPS Principal Derivation,GrpcHandlerWiring,TESTED,,,security,2026-05-20,src/transport/grpc_server.zig
 REQ-GPS-DERIVE-002,GPS Principal Derivation,QuicHandlerWiring,TESTED,,,security,2026-05-20,src/server/quic_connection_handler.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,AtomicCounter,TESTED,,,security,2026-05-20,src/security/policy_version.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,AtomicCounter,TESTED,,,security,2026-05-20,tests/test_gps_policy_version.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogAddBump,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogAddBump,TESTED,,,security,2026-05-20,tests/test_gps_policy_version.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogRemoveBump,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogRemoveBump,TESTED,,,security,2026-05-20,tests/test_gps_policy_version.zig
+REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogVersionBump,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,AndPredicate,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,Compile,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentGraphEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig

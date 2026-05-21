@@ -4846,4 +4846,22 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_policy_expression_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_policy_expression_step = b.step("test-gps-policy-expression", "Run GPS policy expression compiler tests (compile/evaluate predicate subset)");
     gps_policy_expression_step.dependOn(&run_gps_policy_expression_tests.step);
+
+    // GPS Phase 6 Task 6-1: policy_version atomic counter tests
+    const gps_policy_version_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_policy_version.zig"), .target = target, .optimize = optimize });
+    gps_policy_version_test_mod.addImport("geode", root_mod);
+    const gps_policy_version_tests = b.addTest(.{ .root_module = gps_policy_version_test_mod });
+    const run_gps_policy_version_tests = b.addRunArtifact(gps_policy_version_tests);
+    shardDep(test_step, &run_gps_policy_version_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_policy_version_step = b.step("test-gps-policy-version", "Run GPS policy_version atomic counter tests (Phase 6 Task 6-1)");
+    gps_policy_version_step.dependOn(&run_gps_policy_version_tests.step);
+
+    // GPS Phase 6 Task 6-2: ABAC attribute predicate tests (placeholder — populated below)
+    const gps_abac_predicates_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_abac_predicates.zig"), .target = target, .optimize = optimize });
+    gps_abac_predicates_test_mod.addImport("geode", root_mod);
+    const gps_abac_predicates_tests = b.addTest(.{ .root_module = gps_abac_predicates_test_mod });
+    const run_gps_abac_predicates_tests = b.addRunArtifact(gps_abac_predicates_tests);
+    shardDep(test_step, &run_gps_abac_predicates_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_abac_predicates_step = b.step("test-gps-abac-predicates", "Run GPS ABAC attribute predicate tests (Phase 6 Task 6-2)");
+    gps_abac_predicates_step.dependOn(&run_gps_abac_predicates_tests.step);
 }

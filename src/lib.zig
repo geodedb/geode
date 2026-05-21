@@ -455,6 +455,8 @@ pub const security = struct {
     pub const policy_catalog = @import("security/policy_catalog.zig");
     // GPS Phase 5 (Task 5-4): minimal expression compiler for GPS policy predicates.
     pub const policy_expression = @import("security/policy_expression.zig");
+    // GPS Phase 6 (Task 6-1): global monotonic policy version counter for cache invalidation.
+    pub const policy_version = @import("security/policy_version.zig");
     // NOTE: policy_persistence.zig is NOT exported from lib.zig because it imports
     // auth_graph_manager, which imports geode (circular).  Consumers that need it
     // (server_init.zig, tests) import it as a named build module ("policy_persistence").

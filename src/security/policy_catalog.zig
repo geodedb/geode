@@ -14,6 +14,8 @@
 const std = @import("std");
 // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogIntegration; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
 const policy_expression = @import("policy_expression.zig");
+// CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogVersionBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
+const policy_version = @import("policy_version.zig");
 
 pub const Action = enum {
     read,
@@ -117,6 +119,8 @@ pub const PolicyCatalog = struct {
             .enabled = args.enabled,
             .compiled = compiled,
         });
+        // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogAddBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
+        _ = policy_version.incrementPolicyVersion();
     }
 
     // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogRemove; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
@@ -133,6 +137,8 @@ pub const PolicyCatalog = struct {
                 self.allocator.free(removed.actions);
                 // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyCatalogRemoveDeinit; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
                 if (removed.compiled) |*c| c.deinit();
+                // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogRemoveBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
+                _ = policy_version.incrementPolicyVersion();
                 return;
             }
         }
