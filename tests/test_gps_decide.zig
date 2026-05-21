@@ -3,6 +3,7 @@ const geode = @import("geode");
 const gps = geode.security.gps;
 const principal_mod = geode.security.principal;
 const execution = geode.execution;
+const policy_catalog = geode.security.policy_catalog;
 
 // CANARY: REQ=REQ-GPS-PDP-001; FEATURE="GPS Decision Engine"; ASPECT=DecisionTypes; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
 test "PolicyDecision kinds are distinct" {
@@ -84,23 +85,29 @@ test "decide() honors builtin role -> action mapping (table-driven)" {
     }
 }
 
-// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=TESTED; OWNER=security; UPDATED=2026-05-20
-test "decide() widens via graph grant on active_graph only" {
-    // Stub the grant callback: write granted on graph "hr" only, for user "bob".
-    const Stub = struct {
-        fn check(username: []const u8, graph_name: []const u8, action: u8) bool {
-            return std.mem.eql(u8, username, "bob") and
-                std.mem.eql(u8, graph_name, "hr") and
-                action == 1; // Write
-        }
-    };
-    const prev = execution.graph_grant_check_fn;
-    execution.graph_grant_check_fn = &Stub.check;
-    defer execution.graph_grant_check_fn = prev;
+// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=TESTED; OWNER=security; UPDATED=2026-05-21
+// Phase 7 (Task 7-7): Converted from graph_grant_check_fn stub to Policy-catalog
+// equivalent.  The legacy shim was removed from decide(); Policy rows (migrated
+// from (:GraphGrant) records by grant_migration.zig) are the sole source of
+// graph-scoped write grants for non-admin principals.
+test "decide() widens via Policy row for scoped graph grant" {
+    // Install a Policy: bob may write to graph "hr".
+    var cat = policy_catalog.PolicyCatalog.init(std.testing.allocator);
+    defer cat.deinit();
+    try cat.addPolicy(.{
+        .name = "hr_write_bob",
+        .scope_graph = "hr",
+        .actions = &[_]policy_catalog.Action{.write},
+        .effect = .allow,
+        .expression_source = "current_user() = 'bob'",
+        .enabled = true,
+    });
+    policy_catalog.setGlobalCatalog(&cat);
+    defer policy_catalog.clearGlobalCatalog();
 
-    const make_principal = struct {
+    const S = struct {
+        const role_names = [_][]const u8{"ReadOnly"};
         fn make(graph: ?[]const u8) principal_mod.Principal {
-            const role_names = [_][]const u8{"ReadOnly"};
             return .{
                 .user_id = 100,
                 .username = "bob",
@@ -120,9 +127,10 @@ test "decide() widens via graph grant on active_graph only" {
                 .source = .test_harness,
             };
         }
-    }.make;
+    };
+    const make_principal = S.make;
 
-    // 1) On graph "hr" with write -> allow via grant widening.
+    // 1) Resource graph "hr" with write -> allow via policy match.
     const p_hr = make_principal("hr");
     const req_hr = gps.DecisionRequest{
         .principal = &p_hr,
@@ -131,9 +139,10 @@ test "decide() widens via graph grant on active_graph only" {
     };
     const d_hr = try gps.decide(std.testing.allocator, &req_hr);
     try std.testing.expectEqual(gps.PolicyDecisionKind.allow, d_hr.kind);
+    try std.testing.expectEqualStrings("policy_match", d_hr.reason_code);
 
-    // 2) On graph "sales" with write -> still deny (no grant there).
-    const p_sales = make_principal("sales");
+    // 2) Resource graph "sales" with write -> deny (policy scoped to "hr" only).
+    const p_sales = make_principal(null);
     const req_sales = gps.DecisionRequest{
         .principal = &p_sales,
         .action = .write,
@@ -142,12 +151,12 @@ test "decide() widens via graph grant on active_graph only" {
     const d_sales = try gps.decide(std.testing.allocator, &req_sales);
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_sales.kind);
 
-    // 3) No active_graph -> still deny (the grant check requires active_graph).
+    // 3) Another graph not covered by the policy -> deny (policy scoped to "hr" only).
     const p_no_graph = make_principal(null);
     const req_ng = gps.DecisionRequest{
         .principal = &p_no_graph,
         .action = .write,
-        .resource = .{ .database = {} },
+        .resource = .{ .graph = "analytics" },
     };
     const d_ng = try gps.decide(std.testing.allocator, &req_ng);
     try std.testing.expectEqual(gps.PolicyDecisionKind.unauthorized, d_ng.kind);

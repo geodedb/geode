@@ -100,12 +100,13 @@ pub const DecisionRequest = struct {
     resource: ResourceRef,
 };
 
-// CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
-// CANARY: REQ=REQ-GPS-PDP-003; FEATURE="GPS Decision Engine"; ASPECT=GraphGrantWidening; STATUS=EXEMPT; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-PDP-002; FEATURE="GPS Decision Engine"; ASPECT=BuiltinRoleGrants; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-21
 // Phase 6 (Task 6-6): Site #2 CLOSED via grant_migration.zig (commit 64ce3940).
-// All existing (:GraphGrant) records are migrated to (:Policy) rows at startup;
-// the graph_grant_check_fn path below is now a deprecated shim that will be
-// removed in Phase 7 once no grants remain in the legacy format.
+// All existing (:GraphGrant) records are migrated to (:Policy) rows at startup.
+// Phase 7 (Task 7-7): The generic graph_grant_check_fn widening shim has been
+// removed from decide(). The policy_catalog evaluation path below handles all
+// grant cases via migrated Policy rows. graph_grant_check_fn is still declared
+// in execution.zig for the bind_graph-specific path (Phase 3 Task 3-1).
 // REQ-GPS-INVARIANT-001 ASPECT=FailOpenInterim STATUS=COMPLETE for site #2.
 const user_mgmt = @import("user_management.zig");
 const execution = @import("../execution.zig");
@@ -311,7 +312,9 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // Phase 2 task 2-4: builtin-role evaluation.
     // Walk the principal's roles slice, resolve each to a user_management.Role,
     // and ask hasPermission() — preserving legacy semantics bit-identically.
-    // Task 2-5 layers graph grants; task 2-9 layers the insecure-allow-all flag.
+    // Task 2-9 layers the insecure-allow-all flag (handled above).
+    // Phase 7 task 7-7: graph-grant widening shim removed; policy_catalog below
+    // is the sole path for grant-based widening after builtin-role evaluation.
     if (actionToPermission(req.action)) |perm| {
         for (req.principal.roles) |role_name| {
             if (user_mgmt.Role.fromString(role_name)) |role| {
@@ -320,33 +323,6 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                         .kind = .allow,
                         .reason_code = "builtin_role",
                     });
-                }
-            }
-        }
-
-        // Phase 2 task 2-5: additive graph-grant widening (DEPRECATED — Phase 7 removal).
-        // When builtin-role evaluation produces no allow and the principal has
-        // an active_graph, consult graph_grant_check_fn — the same callback that
-        // execution.checkPermission() uses. Bit-identical to the legacy fallback.
-        // Phase 6 (commit 64ce3940): grant_migration.zig converts all existing
-        // (:GraphGrant) records to (:Policy) rows at startup; the Policy-eval path
-        // below already handles them.  This shim is kept so that any grant not yet
-        // migrated (e.g. written after the migration ran) still evaluates correctly;
-        // it will be removed in Phase 7 once the legacy grant format is retired.
-        if (execution.graph_grant_check_fn) |grant_fn| {
-            if (req.principal.username) |uname| {
-                if (req.principal.active_graph) |graph| {
-                    const action_code: u8 = switch (perm) {
-                        .Read => 0,
-                        .Write => 1,
-                        .Schema => 2,
-                    };
-                    if (grant_fn(uname, graph, action_code)) {
-                        return cacheAndReturn(cache_key, PolicyDecision{
-                            .kind = .allow,
-                            .reason_code = "graph_grant",
-                        });
-                    }
                 }
             }
         }
