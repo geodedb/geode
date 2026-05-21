@@ -3533,6 +3533,16 @@ pub fn build(b: *std.Build) void {
     const run_audit_tenant_tests = b.addRunArtifact(audit_tenant_tests);
     shardDep(test_step, &run_audit_tenant_tests.step, 1, test_shard_loads, test_shard_index);
 
+    // REQ-AUDIT-ACTOR-001 regression: canonical `actor` key in writeCanonicalJson
+    const audit_actor_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_actor_key.zig"), .target = target, .optimize = optimize });
+    audit_actor_test_mod.link_libc = true;
+    audit_actor_test_mod.addImport("rls", rls_mod);
+    const audit_actor_tests = b.addTest(.{ .root_module = audit_actor_test_mod });
+    const run_audit_actor_tests = b.addRunArtifact(audit_actor_tests);
+    const audit_actor_step = b.step("test-audit-actor-key", "Pin canonical `actor` key in writeCanonicalJson (docs/audit-actor-key.md)");
+    audit_actor_step.dependOn(&run_audit_actor_tests.step);
+    shardDep(test_step, &run_audit_actor_tests.step, 1, test_shard_loads, test_shard_index);
+
     // GAP-0510 regression: RLS expression engine wiring + compiled policy enforcement
     const rls_expr_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_rls_expr_engine_wiring.zig"), .target = target, .optimize = optimize });
     rls_expr_test_mod.addImport("rls", rls_mod);
