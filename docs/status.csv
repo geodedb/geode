@@ -1252,6 +1252,14 @@ REQ-GPS-METADATA-003,GPS Metadata Isolation,ShowIndexesFilter,TESTED,,,security,
 REQ-GPS-METADATA-004,GPS Metadata Isolation,ShowConstraintsFilter,TESTED,,,security,2026-05-20,src/execution/statement_handlers.zig
 REQ-GPS-METADATA-004,GPS Metadata Isolation,ShowConstraintsFilter,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
 REQ-GPS-METADATA-005,GPS Metadata Isolation,CrossTenantE2E,TESTED,,,security,2026-05-20,tests/test_gps_metadata_filtering.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,HmacChainIntact,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,Idempotent,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,MigrateGraphGrantsToPolicies,TESTED,,,security,2026-05-20,src/security/grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,Module,TESTED,,,security,2026-05-20,src/security/grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,MultipleGrantsUnique,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,PolicyPersisted,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,SingleGrantMigrated,TESTED,,,security,2026-05-20,tests/test_gps_grant_migration.zig
+REQ-GPS-MIGRATE-001,GPS Grant Migration,StartupWiring,TESTED,,,security,2026-05-20,src/server/server_init.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DecisionTypes,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,DefaultDeny,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
 REQ-GPS-PDP-001,GPS Decision Engine,TypeDefinition,TESTED,,,security,2026-05-20,src/security/gps.zig

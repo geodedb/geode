@@ -2948,6 +2948,16 @@ pub fn build(b: *std.Build) void {
     policy_persistence_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
     geode_exe.root_module.addImport("policy_persistence", policy_persistence_mod);
 
+    // GPS Phase 6 (Task 6-4): grant_migration — one-shot startup task that
+    // converts legacy (:GraphGrant) nodes into first-class (:Policy) rows.
+    // Same circular-dependency constraint: imports both auth_graph_manager and
+    // policy_persistence, so cannot be a relative import in root_mod.
+    const grant_migration_mod = b.createModule(.{ .root_source_file = b.path("src/security/grant_migration.zig"), .target = target, .optimize = optimize });
+    grant_migration_mod.addImport("geode", root_mod);
+    grant_migration_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    grant_migration_mod.addImport("policy_persistence", policy_persistence_mod);
+    geode_exe.root_module.addImport("grant_migration", grant_migration_mod);
+
     // Auth graph manager unit tests
     const auth_graph_manager_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -4873,4 +4883,17 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_distributed_envelope_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_distributed_envelope_step = b.step("test-gps-distributed-envelope", "Run GPS distributed Principal envelope tests (Phase 6 Task 6-3)");
     gps_distributed_envelope_step.dependOn(&run_gps_distributed_envelope_tests.step);
+
+    // GPS Phase 6 Task 6-4: Grant migration tests — one-shot conversion of
+    // legacy (:GraphGrant) nodes to first-class (:Policy) rows.
+    const gps_grant_migration_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_grant_migration.zig"), .target = target, .optimize = optimize });
+    gps_grant_migration_test_mod.addImport("geode", root_mod);
+    gps_grant_migration_test_mod.addImport("auth_graph_manager", auth_graph_manager_mod);
+    gps_grant_migration_test_mod.addImport("policy_persistence", policy_persistence_mod);
+    gps_grant_migration_test_mod.addImport("grant_migration", grant_migration_mod);
+    const gps_grant_migration_tests = b.addTest(.{ .root_module = gps_grant_migration_test_mod });
+    const run_gps_grant_migration_tests = b.addRunArtifact(gps_grant_migration_tests);
+    shardDep(test_step, &run_gps_grant_migration_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_grant_migration_step = b.step("test-gps-grant-migration", "Run GPS grant migration tests (Phase 6 Task 6-4)");
+    gps_grant_migration_step.dependOn(&run_gps_grant_migration_tests.step);
 }

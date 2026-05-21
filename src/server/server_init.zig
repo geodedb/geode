@@ -951,4 +951,20 @@ pub fn wireGpsPolicyHooks(
     });
 
     log.info("GPS policy persistence hooks installed", &.{});
+
+    // CANARY: REQ=REQ-GPS-MIGRATE-001; FEATURE="GPS Grant Migration"; ASPECT=StartupWiring; STATUS=TESTED; TEST=tests/test_gps_grant_migration.zig; OWNER=security; UPDATED=2026-05-20
+    // GPS Phase 6 (Task 6-4): migrate legacy (:GraphGrant) nodes to (:Policy) rows.
+    // This runs after hydrateCatalog so idempotency works correctly.
+    const grant_migration = @import("grant_migration");
+    const migrated = grant_migration.migrateGraphGrantsToPolicies(allocator, agm, &agm.hmac_key, catalog) catch |err| blk: {
+        log.warn("GPS grant migration failed — legacy graph grants may not have Policy rows", &.{
+            Attr.string("error", @errorName(err)),
+        });
+        break :blk 0;
+    };
+    if (migrated > 0) {
+        log.info("GPS grant migration: migrated legacy graph grants to Policy rows", &.{
+            Attr.int("count", @intCast(migrated)),
+        });
+    }
 }
