@@ -4864,4 +4864,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_abac_predicates_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_abac_predicates_step = b.step("test-gps-abac-predicates", "Run GPS ABAC attribute predicate tests (Phase 6 Task 6-2)");
     gps_abac_predicates_step.dependOn(&run_gps_abac_predicates_tests.step);
+
+    // GPS Phase 6 Task 6-3: Distributed Principal envelope serialization tests
+    const gps_distributed_envelope_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_distributed_envelope.zig"), .target = target, .optimize = optimize });
+    gps_distributed_envelope_test_mod.addImport("geode", root_mod);
+    const gps_distributed_envelope_tests = b.addTest(.{ .root_module = gps_distributed_envelope_test_mod });
+    const run_gps_distributed_envelope_tests = b.addRunArtifact(gps_distributed_envelope_tests);
+    shardDep(test_step, &run_gps_distributed_envelope_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_distributed_envelope_step = b.step("test-gps-distributed-envelope", "Run GPS distributed Principal envelope tests (Phase 6 Task 6-3)");
+    gps_distributed_envelope_step.dependOn(&run_gps_distributed_envelope_tests.step);
 }

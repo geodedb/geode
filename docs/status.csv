@@ -1170,6 +1170,16 @@ REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogAddBump,TESTED,,,security,2026-0
 REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogRemoveBump,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
 REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogRemoveBump,TESTED,,,security,2026-05-20,tests/test_gps_policy_version.zig
 REQ-GPS-DIST-001,GPS PolicyVersion,PolicyCatalogVersionBump,TESTED,,,security,2026-05-20,src/security/policy_catalog.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,FromPrincipal,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,InvalidMagic,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,InvalidSource,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,MultipleRoles,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,NullFields,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,RoundTrip,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,Serialization,TESTED,,,security,2026-05-20,src/distributed/principal_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,ToPrincipal,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,TruncatedBuffer,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
+REQ-GPS-DIST-002,GPS Distributed Envelope,UnsupportedVersion,TESTED,,,security,2026-05-20,tests/test_gps_distributed_envelope.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,AndPredicate,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,Compile,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,CurrentGraphEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig

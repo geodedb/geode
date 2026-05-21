@@ -319,6 +319,8 @@ pub const distributed = struct {
     pub const query_planner = @import("distributed/query_planner.zig");
     pub const twophase = @import("distributed/twophase.zig");
     pub const value_convert = @import("distributed/value_convert.zig");
+    /// GPS Phase 6 Task 6-3: Principal identity envelope for cluster RPCs.
+    pub const principal_envelope = @import("distributed/principal_envelope.zig");
 };
 
 // REPL modules
