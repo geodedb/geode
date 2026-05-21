@@ -197,6 +197,8 @@ pub const executeForWithBindings = statement_handlers.executeForWithBindings;
 pub const executeValues = statement_handlers.executeValues;
 pub const executeExplain = statement_handlers.executeExplain;
 pub const executeProfile = statement_handlers.executeProfile;
+// CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ReExport; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+pub const executeExplainPolicy = statement_handlers.executeExplainPolicy;
 
 // Re-export aggregation and evaluation functions for backward compatibility (M1 Phase 8 extraction)
 pub const getExpressionNameFromAst = aggregation_evaluation.getExpressionNameFromAst;
@@ -1331,6 +1333,10 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
         },
         .Explain => |exp| {
             return executeExplain(allocator, exp, context);
+        },
+        // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=DispatchArm; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+        .ExplainPolicy => |ep| {
+            return executeExplainPolicy(allocator, ep, context);
         },
         .Profile => |prof| {
             return executeProfile(allocator, prof, context);

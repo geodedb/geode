@@ -5597,6 +5597,20 @@ pub const Parser = struct {
     fn parseExplainStatement(self: *Parser) ParserError!ast.Statement {
         _ = try self.expect(.EXPLAIN);
 
+        // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ParserDispatch; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+        // Check for EXPLAIN POLICY FOR <inner_query> syntax.
+        // "POLICY" is a soft keyword (identifier), so we use softKw().
+        if (self.softKw("POLICY")) {
+            self.advance(); // consume "POLICY"
+            // Expect FOR keyword (hard keyword)
+            if (self.cur.kind != .FOR) return self.unexpected("expected FOR after EXPLAIN POLICY");
+            self.advance(); // consume FOR
+            // Parse the inner statement.
+            const inner_ptr = try self.arena.allocator().create(ast.Statement);
+            inner_ptr.* = try self.parseStatement();
+            return .{ .ExplainPolicy = .{ .inner = inner_ptr } };
+        }
+
         // Parse the query to explain
         const query_stmt_ptr = try self.arena.allocator().create(ast.Statement);
         query_stmt_ptr.* = try self.parseStatement();

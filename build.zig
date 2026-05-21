@@ -4923,4 +4923,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_show_grants_for_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_show_grants_for_step = b.step("test-gps-show-grants-for", "Run GPS SHOW GRANTS FOR <user> tests (Phase 7 Task 7-3)");
     gps_show_grants_for_step.dependOn(&run_gps_show_grants_for_tests.step);
+
+    // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=BuildStep; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+    const gps_explain_policy_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_explain_policy.zig"), .target = target, .optimize = optimize });
+    gps_explain_policy_test_mod.addImport("geode", root_mod);
+    const gps_explain_policy_tests = b.addTest(.{ .root_module = gps_explain_policy_test_mod });
+    const run_gps_explain_policy_tests = b.addRunArtifact(gps_explain_policy_tests);
+    shardDep(test_step, &run_gps_explain_policy_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_explain_policy_step = b.step("test-gps-explain-policy", "Run GPS EXPLAIN POLICY FOR <query> tests (Phase 7 Task 7-4)");
+    gps_explain_policy_step.dependOn(&run_gps_explain_policy_tests.step);
 }

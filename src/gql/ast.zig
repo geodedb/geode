@@ -57,6 +57,8 @@ pub const Statement = union(enum) {
     CreatePolicy: CreatePolicyStatement,
     DropPolicy: DropPolicyStatement,
     AlterPolicy: AlterPolicyStatement,
+    // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ASTVariant; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+    ExplainPolicy: ExplainPolicyStatement,
     // Query introspection
     Explain: ExplainStatement,
     Profile: ProfileStatement,
@@ -779,6 +781,14 @@ pub const AlterPolicyStatement = struct {
 // Query introspection statements
 pub const ExplainStatement = struct {
     query: *Statement, // The query to explain (wrapped in a heap-allocated Statement)
+};
+
+// CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ASTType; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+// EXPLAIN POLICY FOR <inner_query>
+// Classifies the top-level action of the inner query and calls gps.decide() once,
+// returning the GPS decision the current principal would receive.
+pub const ExplainPolicyStatement = struct {
+    inner: *Statement, // the parsed inner statement (reuses existing parse tree)
 };
 
 pub const ProfileStatement = struct {

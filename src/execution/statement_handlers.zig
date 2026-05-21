@@ -1129,6 +1129,107 @@ pub fn executeProfile(allocator: std.mem.Allocator, prof: ast.ProfileStatement, 
     };
 }
 
+// CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=ExecutorFunction; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+// EXPLAIN POLICY FOR <inner_query>
+//
+// Classifies the top-level action of the inner parsed statement, builds a
+// DecisionRequest with the current principal, calls gps.decide() once, and
+// returns a single result row with columns:
+//
+//   step | action | resource | decision | reason_code
+//
+// For Phase 7 only the top-level classification is performed (one row).
+// Multi-step decomposition (e.g. MATCH + CREATE in a single query) is Phase 8+.
+//
+// When the execution context carries no Principal, an unauthenticated decision
+// is returned (reason_code = "no_principal") — GPS's standard behaviour.
+pub fn executeExplainPolicy(allocator: std.mem.Allocator, ep: ast.ExplainPolicyStatement, context: ExecutionContext) anyerror!ExecutionResult {
+    const gps = @import("../security/gps.zig");
+    const principal_mod = @import("../security/principal.zig");
+
+    // --- Step 1: classify the inner statement's top-level action ---------------
+    const action: gps.Action = classifyAction(ep.inner.*);
+
+    // --- Step 2: build a DecisionRequest --------------------------------------
+    // Use the context's canonical Principal when available; otherwise fall back
+    // to an anonymous stub so the call always reaches gps.decide().
+    const anon_principal = principal_mod.Principal{
+        .user_id = null,
+        .username = null,
+        .session_id = null,
+        .tenant_id = null,
+        .active_graph = null,
+        .roles = &.{},
+        .custom_roles = &.{},
+        .auth_method = .anonymous,
+        .auth_version = 0,
+        .mfa_state = .none,
+        .elevation_until = null,
+        .api_key_id = null,
+        .certificate_subject = null,
+        .risk_context = .unknown,
+        .source = .internal_service,
+        .attributes = principal_mod.AttributeMap.emptySentinel(),
+    };
+    const principal: *const principal_mod.Principal = if (context.principal) |p| p else &anon_principal;
+
+    const resource = gps.ResourceRef{ .database = {} };
+    const req = gps.DecisionRequest{
+        .principal = principal,
+        .action = action,
+        .resource = resource,
+    };
+
+    // --- Step 3: call gps.decide() -------------------------------------------
+    const decision = try gps.decide(allocator, &req);
+
+    // --- Step 4: emit result row ----------------------------------------------
+    // Columns: step, action, resource, decision, reason_code
+    const columns = try allocator.alloc([]const u8, 5);
+    columns[0] = try allocator.dupe(u8, "step");
+    columns[1] = try allocator.dupe(u8, "action");
+    columns[2] = try allocator.dupe(u8, "resource");
+    columns[3] = try allocator.dupe(u8, "decision");
+    columns[4] = try allocator.dupe(u8, "reason_code");
+
+    const row = try allocator.alloc(Value, 5);
+    row[0] = Value{ .Int = 1 }; // step 1 (top-level classification only in Phase 7)
+    row[1] = Value{ .Str = try allocator.dupe(u8, @tagName(action)) };
+    row[2] = Value{ .Str = try allocator.dupe(u8, "database") };
+    row[3] = Value{ .Str = try allocator.dupe(u8, @tagName(decision.kind)) };
+    row[4] = Value{ .Str = try allocator.dupe(u8, decision.reason_code) };
+
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+        .owns_value_memory = true,
+    };
+}
+
+/// Map an AST Statement to the GPS Action it primarily requires.
+/// Phase 7: top-level classification only.  Phase 8+ can decompose sub-statements.
+fn classifyAction(stmt: ast.Statement) @import("../security/gps.zig").Action {
+    const gps = @import("../security/gps.zig");
+    _ = gps; // Action enum values referenced via return type
+    return switch (stmt) {
+        // Read operations
+        .Query, .Union, .Intersect, .Except, .ScanValues, .InsertValue => .match_,
+        // Write / graph mutation
+        .Create, .Insert, .Merge => .create,
+        .Delete => .delete,
+        // Schema / DDL
+        .CreateIndex, .DropIndex, .CreateConstraint, .DropConstraint, .CreateSchema, .DropSchema, .CreateGraph, .DropGraph, .CreateGraphType, .DropGraphType, .CreatePolicy, .DropPolicy, .AlterPolicy => .schema,
+        // Auth admin
+        .CreateUser, .AlterUser, .DropUser, .CreateRole, .DropRole, .Grant, .Revoke => .admin_user,
+        // Metadata / introspection
+        .Show, .For, .Values, .Explain, .ExplainPolicy, .Profile, .Call, .Backup, .Restore, .SessionSet, .SessionReset, .SessionClose, .UseGraph, .StartTransaction, .Commit, .Rollback => .show_metadata,
+    };
+}
+
 fn buildPlannedExplainResult(allocator: std.mem.Allocator, plan: planned_read_runtime.Plan) !ExecutionResult {
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "plan");

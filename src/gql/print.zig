@@ -198,6 +198,8 @@ fn tagName(st: ast.Statement) []const u8 {
         .CreatePolicy => "CreatePolicy",
         .DropPolicy => "DropPolicy",
         .AlterPolicy => "AlterPolicy",
+        // CANARY: REQ=REQ-GPS-EXPLAIN-001; FEATURE="GPS EXPLAIN POLICY"; ASPECT=PrintTagName; STATUS=TESTED; TEST=tests/test_gps_explain_policy.zig; OWNER=security; UPDATED=2026-05-21
+        .ExplainPolicy => "ExplainPolicy",
         // Note: SHOW GRANTS FOR is a ShowStatement variant, not a top-level Statement.
         // ShowType is not switched here.
     };
