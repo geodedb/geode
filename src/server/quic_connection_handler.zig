@@ -3373,14 +3373,31 @@ fn handleClientMessage(
             const needs_store_lock = analysis.kind != .explain;
             const is_mutation = needs_store_lock and isMutatingProgram(&parse_result.program);
 
-            // GAP-0526: Enforce write-permission check before mutation execution.
-            // ReadOnly and User roles lack Write permission and must be denied.
+            // CANARY: REQ=REQ-GPS-PDP-010; FEATURE="GPS Phase 2/4 Enforcement"; ASPECT=MutationGateViaDecide; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
+            // GAP-0526 was originally enforced by a direct `user_mgmt.hasPermission` call
+            // that bypassed the GPS policy catalog: a `(:Policy)` row granting WRITE via
+            // `current_user() = '...'` or `true` could not override the role-based deny.
+            // Phase 2's `decide()` already implements role + policy evaluation; route the
+            // mutation gate through it so policies actually take effect at the wire layer.
             if (is_mutation) {
                 if (state.authenticated_role) |role_u8| {
                     const auth_role = @as(user_mgmt.Role, @enumFromInt(role_u8));
                     if (!user_mgmt.hasPermission(auth_role, .Write)) {
-                        try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
-                        return;
+                        // Builtin role lacks WRITE — consult the policy catalog before denying.
+                        const gps_mod = geode.security.gps;
+                        const req_local = gps_mod.DecisionRequest{
+                            .principal = &principal_for_request,
+                            .action = .write,
+                            .resource = .{ .database = {} },
+                        };
+                        const decision_kind = blk: {
+                            const decision = gps_mod.decide(gpa, &req_local) catch break :blk gps_mod.PolicyDecisionKind.unauthorized;
+                            break :blk decision.kind;
+                        };
+                        if (decision_kind != .allow) {
+                            try sendExecuteError(gpa, stream, "42501", "Permission denied: insufficient privileges for data modification", &.{}, &.{});
+                            return;
+                        }
                     }
                 }
             }

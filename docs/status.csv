@@ -1126,6 +1126,8 @@ REQ-GPS-CACHE-001,GPS Decision Cache,PolicyCatalogRemoveInvalidate,TESTED,,,secu
 REQ-GPS-CACHE-001,GPS Decision Cache,PolicyCatalogRemoveInvalidate,TESTED,,,security,2026-05-20,tests/test_gps_decision_cache.zig
 REQ-GPS-CACHE-001,GPS Decision Cache,ResourceHash,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-CACHE-001,GPS Decision Cache,ServerStartupCache,TESTED,,,security,2026-05-20,src/server/main.zig
+REQ-GPS-CACHE-002,GPS Decision Cache,PrincipalIdentityKey,TESTED,,,security,2026-05-21,src/security/decision_cache.zig
+REQ-GPS-CACHE-002,GPS Decision Cache,PrincipalIdentityKey,TESTED,,,security,2026-05-21,src/security/gps.zig
 REQ-GPS-CATALOG-002,GPS Policy Persistence,CreatePolicy,TESTED,,,security,2026-05-20,src/security/auth_graph_manager.zig
 REQ-GPS-CATALOG-002,GPS Policy Persistence,CreatePolicyWriteThrough,TESTED,,,security,2026-05-20,src/execution.zig
 REQ-GPS-CATALOG-002,GPS Policy Persistence,DropNotFound,TESTED,,,security,2026-05-20,tests/test_gps_policy_persistence.zig
@@ -1271,6 +1273,9 @@ REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyCompiledField,TESTED,,,securit
 REQ-GPS-EXPR-001,GPS Expression Compilation,PolicyExpressionModule,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,PredicateIR,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-EXPR-001,GPS Expression Compilation,ResourceLabelEquality,TESTED,,,security,2026-05-20,tests/test_gps_policy_expression.zig
+REQ-GPS-EXPR-002,GPS Policy Expression,CreatePolicyExpressionSource,TESTED,,,security,2026-05-21,src/execution.zig
+REQ-GPS-EXPR-002,GPS Policy Expression,CreatePolicyExpressionSource,TESTED,,,security,2026-05-21,src/gql/ast.zig
+REQ-GPS-EXPR-002,GPS Policy Expression,ParseCaptureUsing,TESTED,,,security,2026-05-21,src/gql/parser.zig
 REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptAdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig
 REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptExplicitPolicyGrants,TESTED,,,security,2026-05-20,tests/test_gps_fle_enforcement.zig
 REQ-GPS-FLE-001,GPS FLE Enforcement,DecryptFieldGate,TESTED,,,security,2026-05-20,src/execution/fle_hooks.zig
@@ -1359,6 +1364,7 @@ REQ-GPS-PDP-008,GPS Canonical Principal,AuthRoleGraphLookupIsolated,TESTED,,,sec
 REQ-GPS-PDP-008,GPS Canonical Principal,RoleResolverModule,TESTED,,,security,2026-05-20,src/security/role_resolver.zig
 REQ-GPS-PDP-008,GPS Decision Engine,AuthRoleGraphLookup,TESTED,,,security,2026-05-20,src/server/main.zig
 REQ-GPS-PDP-008,GPS Decision Engine,CheckPermissionDecideParity,TESTED,,,security,2026-05-20,tests/test_gps_decide.zig
+REQ-GPS-PDP-010,GPS Phase 2/4 Enforcement,MutationGateViaDecide,TESTED,,,security,2026-05-21,src/server/quic_connection_handler.zig
 REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,ActionMismatch,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
 REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,DisabledPolicy,TESTED,,,security,2026-05-20,tests/test_gps_policy_evaluation.zig
 REQ-GPS-POLICY-EVAL-001,GPS Policy Evaluation,ExplicitAllow,TESTED,,,security,2026-05-20,src/security/gps.zig
@@ -1385,6 +1391,7 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,se
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ExecuteRequestSchema,IMPL,,,security,2026-05-21,src/proto/schema.zig

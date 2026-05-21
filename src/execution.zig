@@ -1929,12 +1929,16 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 };
             }
 
+            // CANARY: REQ=REQ-GPS-EXPR-002; FEATURE="GPS Policy Expression"; ASPECT=CreatePolicyExpressionSource; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
+            // Use the parsed USING expression (Phase 6) if present; fall back to
+            // the unconditional "true" predicate for policies created without USING.
+            const expr_src: []const u8 = cp_stmt.expression_source orelse "true";
             const new_policy_spec = policy_catalog_mod.PolicySpec{
                 .name = cp_stmt.name,
                 .scope_graph = cp_stmt.scope_graph,
                 .actions = cat_actions,
                 .effect = .allow, // Phase 4: only allow effect
-                .expression_source = "true", // Phase 4: only unconditional
+                .expression_source = expr_src,
                 .enabled = true,
             };
 

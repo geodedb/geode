@@ -180,11 +180,23 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     var cache_key: ?decision_cache.Key = null;
     if (should_cache) {
         if (decision_cache.getGlobalCache()) |cache| {
+            // CANARY: REQ=REQ-GPS-CACHE-002; FEATURE="GPS Decision Cache"; ASPECT=PrincipalIdentityKey; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase7_alter_show_explain.yml; OWNER=security; UPDATED=2026-05-21
+            // Mix the principal's username (or user_id) into the cache key so a
+            // decision for one principal is never served to another. Without this
+            // mix bob's "unauthorized" decision could be returned to alice when
+            // both share the same (auth_version, policy_version) tuple.
+            const principal_hash: u64 = blk: {
+                var h = std.hash.Wyhash.init(0);
+                if (req.principal.username) |u| h.update(u);
+                if (req.principal.user_id) |uid| h.update(std.mem.asBytes(&uid));
+                break :blk h.final();
+            };
             const key = decision_cache.Key{
                 .auth_version = req.principal.auth_version,
                 .policy_version = policy_version.getPolicyVersion(),
                 .action_tag = @intFromEnum(req.action),
                 .resource_hash = hashResource(req.resource),
+                .principal_hash = principal_hash,
             };
             cache_key = key;
             if (cache.lookup(key)) |cached| {

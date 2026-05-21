@@ -761,6 +761,10 @@ pub const CreatePolicyStatement = struct {
     /// "*" means all graphs (global scope).
     scope_graph: []const u8,
     actions: []const PolicyAction,
+    /// Raw text of the `USING <expr>` clause captured from the source.
+    /// Null = no USING clause → unconditional ("true") policy.
+    /// CANARY: REQ=REQ-GPS-EXPR-002; FEATURE="GPS Policy Expression"; ASPECT=CreatePolicyExpressionSource; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
+    expression_source: ?[]const u8 = null,
 };
 
 /// AST node for: DROP POLICY [IF EXISTS] <name>

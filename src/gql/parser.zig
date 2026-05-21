@@ -6577,9 +6577,58 @@ pub const Parser = struct {
         if (self.cur.kind != .FOR) return self.unexpected("expected FOR after graph scope in CREATE POLICY");
         self.advance(); // FOR
         const actions = try self.parsePolicyActionList();
-        // Discard any trailing clauses (TO ROLE, USING, WITH CHECK) — Phase 5.
+        // CANARY: REQ=REQ-GPS-EXPR-002; FEATURE="GPS Policy Expression"; ASPECT=ParseCaptureUsing; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase6_abac_migration.yml; OWNER=security; UPDATED=2026-05-21
+        // Capture the USING <expr> clause source text. Phase 4 discarded it;
+        // Phase 5+ needs the raw source so policy_expression can compile it.
+        // TO ROLE and WITH CHECK clauses are still discarded.
+        var expression_source: ?[]const u8 = null;
+        while (self.cur.kind != .semicolon and self.cur.kind != .eof) {
+            if (self.cur.kind == .USING) {
+                self.advance(); // consume USING
+                // Capture the byte offset of the current token inside the lexer's
+                // source buffer. Walk to the clause terminator (semicolon/eof).
+                // For each token, set end_offset to the lexer's idx *after*
+                // consuming it — this includes any closing quotes or other
+                // trailing characters that aren't part of the lexeme itself
+                // (string literals strip their quotes).
+                const src = self.lx.src;
+                const start_offset: usize = @intFromPtr(self.cur.lexeme.ptr) - @intFromPtr(src.ptr);
+                var end_offset: usize = start_offset;
+                while (self.cur.kind != .semicolon and self.cur.kind != .eof) {
+                    self.advance();
+                    // self.lx.idx is the lexer's read cursor — for the previous
+                    // token it points just past the last consumed byte (including
+                    // closing quote for string literals).  For the new cur token
+                    // it points past *that* token's start, so back off to the
+                    // beginning of the new cur token for the actual end.
+                    if (self.cur.kind == .semicolon or self.cur.kind == .eof) {
+                        end_offset = self.lx.idx;
+                    } else {
+                        end_offset = @intFromPtr(self.cur.lexeme.ptr) - @intFromPtr(src.ptr);
+                    }
+                }
+                // Trim trailing whitespace/EOF padding.
+                while (end_offset > start_offset and end_offset <= src.len) {
+                    const c = src[end_offset - 1];
+                    if (c == ' ' or c == '\t' or c == '\n' or c == '\r') {
+                        end_offset -= 1;
+                    } else break;
+                }
+                if (end_offset > start_offset and end_offset <= src.len) {
+                    expression_source = src[start_offset..end_offset];
+                }
+                break;
+            }
+            self.advance();
+        }
+        // Consume any remaining tokens to the semicolon/eof.
         self.skipTrailingPolicyClauses();
-        return .{ .CreatePolicy = .{ .name = name, .scope_graph = scope_graph, .actions = actions } };
+        return .{ .CreatePolicy = .{
+            .name = name,
+            .scope_graph = scope_graph,
+            .actions = actions,
+            .expression_source = expression_source,
+        } };
     }
 
     // Parse DROP POLICY [IF EXISTS] <name>

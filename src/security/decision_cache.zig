@@ -24,6 +24,13 @@ pub const Key = struct {
     policy_version: u64,
     action_tag: u8, // matches @intFromEnum(gps.Action)
     resource_hash: u64,
+    /// CANARY: REQ=REQ-GPS-CACHE-002; FEATURE="GPS Decision Cache"; ASPECT=PrincipalIdentityKey; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_phase7_alter_show_explain.yml; OWNER=security; UPDATED=2026-05-21
+    /// Hash of the principal's username. Without this field, two principals
+    /// sharing the same (auth_version, policy_version, action, resource) key
+    /// would collide and the decision for one principal could be served to
+    /// another — surfaced by the Phase 7 black-box specs as a critical
+    /// correctness bug.
+    principal_hash: u64 = 0,
 };
 
 // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=EntryType; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
