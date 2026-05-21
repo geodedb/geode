@@ -1298,7 +1298,7 @@ REQ-GPS-MCP-001,GPS MCP Principal,PrincipalStorage,TESTED,,,security,2026-05-20,
 REQ-GPS-MCP-001,GPS MCP Principal,ReadWriteRole,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
 REQ-GPS-MCP-001,GPS MCP Principal,SourcePreserved,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
 REQ-GPS-MCP-001,GPS MCP Principal,ToolDispatch,TESTED,,,security,2026-05-20,src/mcp/server.zig
-REQ-GPS-MCP-001,GPS MCP Principal,ToolsThreading,TESTED,,,security,2026-05-20,src/mcp/tools.zig
+REQ-GPS-MCP-001,GPS MCP Principal,ToolsThreading,TESTED,,,security,2026-05-21,src/mcp/tools.zig
 REQ-GPS-MCP-001,GPS MCP Principal,WriteBlocked,TESTED,,,security,2026-05-20,tests/test_gps_mcp_principal.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,ContextThreading,TESTED,,,security,2026-05-20,src/execution/meta_dispatch.zig
 REQ-GPS-METADATA-000,GPS Metadata Isolation,DecideShowMetadata,TESTED,,,security,2026-05-20,src/security/gps.zig
@@ -1383,6 +1383,25 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,se
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadOnlyForMutatingDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
 REQ-GPS-PROC-001,GPS Procedure Enforcement,ReadWriteAllowsMutating,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
 REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,security,2026-05-20,tests/test_gps_procedure_enforcement.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ExecuteRequestSchema,IMPL,,,security,2026-05-21,src/proto/schema.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,MalformedEnvelope,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,McpEnvelopeRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ServerUnpack,IMPL,,,security,2026-05-21,src/server/quic_connection_handler.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,BackwardCompat,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,BatchQueries,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,BuildStep,TESTED,,,security,2026-05-21,build.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,ConnectionExecuteQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,ExecutePlan,IMPL,,,security,2026-05-21,src/distributed/enhanced_query_coordinator.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,ExecuteRemoteQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,NodeQuery,IMPL,,,security,2026-05-21,src/distributed/query_transport.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,PolicyVersionMismatch,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptions,IMPL,,,security,2026-05-21,src/distributed/merge_strategies.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,QueryOptionsField,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
+REQ-GPS-WIRE-002,GPS Distributed Wire,WorkerRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_distributed_wire.zig
 REQ-GPU-002,Vulkan Shader Compilation,Implementation,EXEMPT,,,core,2026-01-17,src/gpu/vulkan_shaders.zig
 REQ-GPU-PAGERANK-001,GPUPageRank,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig
 REQ-GPU-SORT-001,GPUSort,PTXKernel,EXEMPT,,,gpu,2026-01-10,src/gpu/kernel_sources.zig

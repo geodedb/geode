@@ -10,7 +10,7 @@ const json_lib = @import("json");
 const GeodeClient = @import("client.zig").GeodeClient;
 const lsp = @import("lsp.zig");
 
-// CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=ToolsThreading; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-MCP-001; FEATURE="GPS MCP Principal"; ASPECT=ToolsThreading; STATUS=TESTED; TEST=tests/test_gps_mcp_principal.zig; OWNER=security; UPDATED=2026-05-21
 // GPS Phase 5: callTool now receives the per-server MCP Principal so each tool
 // dispatch can forward it to any downstream execution context.  The Principal is
 // available to every tool function through the `caller` parameter.
@@ -24,13 +24,19 @@ const lsp = @import("lsp.zig");
 //
 // "Option A" (thread Principal into a local ExecutionContext) is therefore not
 // feasible in Phase 6.  The authoritative fix ("Option B" / Phase 7) is to add
-// a `X-Geode-Principal` header to the zig_client QUIC frame so the remote
-// executor can reconstruct an ExecutionContext.principal from the wire-forwarded
-// identity.  Until that wire extension lands, the Principal is available only
-// for *local* pre-flight decide() calls at the MCP boundary (already wired in
-// server.zig) and is NOT forwarded to the executor.  Site #8 remains PARTIAL;
-// Phase 7 will promote it to CLOSED once the principal-forwarding header is in
-// the zig_client protocol.
+// a `principal_envelope_bytes` field to the QUIC ExecuteRequest frame so the
+// remote executor can reconstruct an ExecutionContext.principal from the
+// wire-forwarded identity.
+//
+// GPS Phase 7 (Task 7-5) — schema extension done, send-side blocked:
+// The server-side schema (src/proto/schema.zig ExecuteRequest field 4) and
+// the server-side unpack (quic_connection_handler.zig) are now in place.
+// The SEND side is blocked on the external geode-client-zig package (used by
+// GeodeClient.query in src/mcp/client.zig) not yet emitting field 4.  Until
+// a new geode-client-zig release tags the field, the Principal is available
+// only for local pre-flight decide() calls at the MCP boundary (server.zig)
+// and is NOT forwarded to the executor.  Site #8 remains PARTIAL (schema
+// extended, receive wired; send-side requires geode-client-zig update).
 const geode_security = @import("geode").security;
 pub const Principal = geode_security.principal.Principal;
 
@@ -65,8 +71,10 @@ pub fn listTools(cursor: ?[]const u8) []const u8 {
 ///
 /// GPS Phase 5: `caller` is the per-server MCP Principal derived at init time.
 /// It carries `.source = .mcp_handler` and is available for local decide() calls.
-/// Phase 5 limitation: the Principal is not forwarded over the QUIC wire to the
-/// remote executor (see the block comment in tools.zig header).
+/// GPS Phase 7 Task 7-5 status: schema + server unpack are wired; the send-side
+/// in GeodeClient is blocked on the external geode-client-zig package not yet
+/// emitting ExecuteRequest field 4.  The `caller` argument is retained so the
+/// call site (server.zig) need not change when the external package is updated.
 pub fn callTool(
     allocator: std.mem.Allocator,
     geode_endpoint: ?[]const u8,
@@ -76,12 +84,12 @@ pub fn callTool(
     cancel: *const mcp.CancelToken,
 ) ![]const u8 {
     _ = cancel; // TODO: Implement cancellation support // #473
-    // Phase 6 (Task 6-5): caller is available for local pre-flight decide()
-    // calls at the MCP boundary (already wired in server.zig).  Wire-level
-    // forwarding to the remote executor requires a principal-forwarding header
-    // in the zig_client protocol — that is Phase 7 work.  Suppress unused-var
-    // warning here; the field stays on the signature so Phase 7 can plumb it
-    // without a signature change.
+    // GPS Phase 7 Task 7-5: caller Principal is available for local pre-flight
+    // decide() calls at the MCP boundary (wired in server.zig).  Wire-level
+    // forwarding to the remote executor requires the external geode-client-zig
+    // package to emit ExecuteRequest field 4 — see header block comment.
+    // Suppress unused-var warning; the field stays on the signature so the
+    // Phase 7 send-side closure only needs a library update, not a signature change.
     _ = caller;
 
     if (std.mem.eql(u8, name, "query")) {

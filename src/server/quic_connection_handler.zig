@@ -3243,7 +3243,42 @@ fn handleClientMessage(
             // Phase 2: delegate to derivePrincipal() so all transport sites share
             // the same field-population logic. auth_version threads through for
             // cache-invalidation correctness (role/active/password changes).
+            //
+            // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=ServerUnpack; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+            // GPS Phase 7 Tasks 7-5/7-6: if the incoming ExecuteRequest carries
+            // a principal_envelope_bytes blob (field 4), deserialize it and use
+            // the forwarded identity instead of the connection-level Principal.
+            // This handles the distributed-coordinator → shard-worker path (Task
+            // 7-6). The MCP send-side gap (Task 7-5) is documented below.
+            //
+            // Security invariant: the envelope is ONLY trusted when the sender is
+            // already authenticated on this connection (validateSessionAuth has
+            // already passed above).  An unauthenticated caller cannot reach this
+            // point.  The envelope therefore only *refines* the authenticated
+            // identity; it cannot escalate past the session-authenticated user.
+            //
+            // MCP note (Task 7-5 partial): the MCP → QUIC path uses the external
+            // geode-client-zig package whose ExecuteRequest encoder does not yet
+            // emit field 4.  Until a new geode-client-zig release is tagged with
+            // the field, envelope_bytes will always be null on MCP-originated
+            // requests and the server falls back to the connection-level Principal.
             const principal_for_request = blk: {
+                const envelope_bytes = exec_req.principal_envelope_bytes;
+                if (envelope_bytes) |env_bytes| {
+                    if (env_bytes.len > 0) {
+                        if (geode.distributed.principal_envelope.deserialize(env_bytes)) |env| {
+                            var forwarded = geode.distributed.principal_envelope.toPrincipal(&env);
+                            // Stamp the source as distributed_worker so GPS rules
+                            // can distinguish forwarded requests from direct ones.
+                            forwarded.source = .distributed_worker;
+                            break :blk forwarded;
+                        } else |_| {
+                            // Malformed envelope — fall back to connection identity.
+                            // We do not reject the request: the authenticated user
+                            // still gets their connection-level principal.
+                        }
+                    }
+                }
                 const role_names: []const []const u8 = if (role) |r|
                     &[_][]const u8{@tagName(r)}
                 else

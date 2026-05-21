@@ -219,6 +219,11 @@ pub const EnhancedQueryCoordinator = struct {
         defer self.allocator.free(node_queries);
 
         for (plan.fragments, 0..) |fragment, i| {
+            // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ExecutePlan; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+            // GPS Phase 7 Task 7-6: attach principal_envelope_bytes from the
+            // coordinator's QueryOptions to each shard NodeQuery so the worker
+            // can reconstruct the caller's Principal.  Null → no forwarding →
+            // worker falls back to connection-level identity (previous behaviour).
             node_queries[i] = query_transport.NodeQuery{
                 .node_id = fragment.node_id,
                 .query = federation.FederatedQuery{
@@ -227,6 +232,7 @@ pub const EnhancedQueryCoordinator = struct {
                     .target_nodes = &.{fragment.node_id},
                     .consistency_level = options.consistency_level,
                 },
+                .principal_envelope_bytes = options.principal_envelope_bytes,
             };
         }
 

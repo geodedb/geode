@@ -91,11 +91,22 @@ pub const ExecuteRequest = struct {
     session_id: []const u8 = "",
     query: []const u8 = "",
     params: std.ArrayList(Param),
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=ExecuteRequestSchema; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 (Tasks 7-5/7-6): optional serialised principal_envelope blob.
+    // Field 4 is reserved for this purpose in both the server-side schema (this
+    // file) and the geode-client-zig external library (separate release).
+    // When non-null the receiving quic_connection_handler unpacks it via
+    // distributed.principal_envelope.deserialize() and overrides the
+    // connection-level Principal for that request only.
+    // Senders that do not support envelopes simply leave the field null;
+    // existing wire frames without field 4 are unchanged (backward-compatible).
+    principal_envelope_bytes: ?[]const u8 = null,
 
     pub const _desc_table = .{
         .session_id = fd(1, .{ .scalar = .string }),
         .query = fd(2, .{ .scalar = .string }),
         .params = fd(3, .{ .repeated = .{ .submessage = {} } }),
+        .principal_envelope_bytes = fd(4, .{ .scalar = .bytes }),
     };
 
     pub fn deinit(self: *ExecuteRequest, allocator: std.mem.Allocator) void {

@@ -122,6 +122,18 @@ pub const QueryTransport = struct {
         node_id: u32,
         query: federation.FederatedQuery,
     ) !federation.QueryResults {
+        return self.executeRemoteQueryWithEnvelope(node_id, query, null);
+    }
+
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ExecuteRemoteQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: envelope-aware variant used by executeBatchQueries
+    // when the NodeQuery carries a principal_envelope_bytes blob.
+    pub fn executeRemoteQueryWithEnvelope(
+        self: *QueryTransport,
+        node_id: u32,
+        query: federation.FederatedQuery,
+        principal_envelope_bytes: ?[]const u8,
+    ) !federation.QueryResults {
         const start_time = compat_milliTimestamp();
 
         // Get or create connection to node
@@ -139,7 +151,7 @@ pub const QueryTransport = struct {
         defer otel_metrics.decDbClientConnection(server_addr, .used);
 
         try connection.ensureSession(self.timeout_ms);
-        var result = connection.executeQuery(self.allocator, query, self.timeout_ms, self.page_size) catch |err| {
+        var result = connection.executeQueryWithEnvelope(self.allocator, query, self.timeout_ms, self.page_size, principal_envelope_bytes) catch |err| {
             const elapsed_s: f64 = @as(f64, @floatFromInt(compat_milliTimestamp() - start_time)) / 1000.0;
             otel_metrics.recordDbClientOperation("REMOTE", server_addr, elapsed_s, .error_, @errorName(err));
             return err;
@@ -151,6 +163,7 @@ pub const QueryTransport = struct {
     }
 
     /// Send batch of queries to multiple nodes in parallel
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=BatchQueries; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
     pub fn executeBatchQueries(
         self: *QueryTransport,
         queries: []const NodeQuery,
@@ -164,7 +177,8 @@ pub const QueryTransport = struct {
 
         if (!parallel_wrapper.shouldUseParallelism(queries.len, parallel_wrapper.Thresholds.forEach)) {
             for (queries, 0..) |query, i| {
-                results[i] = self.executeRemoteQuery(query.node_id, query.query) catch |err| {
+                // GPS Phase 7 Task 7-6: forward per-query principal envelope bytes.
+                results[i] = self.executeRemoteQueryWithEnvelope(query.node_id, query.query, query.principal_envelope_bytes) catch |err| {
                     for (results[0..i]) |*res| res.deinit(self.allocator);
                     return err;
                 };
@@ -198,9 +212,11 @@ pub const QueryTransport = struct {
             ctx,
             struct {
                 fn work(_: *parallel_wrapper.Task, idx: usize, c: Context) void {
-                    c.results[idx] = c.transport.executeRemoteQuery(
+                    // GPS Phase 7 Task 7-6: forward per-query principal envelope bytes.
+                    c.results[idx] = c.transport.executeRemoteQueryWithEnvelope(
                         c.queries[idx].node_id,
                         c.queries[idx].query,
+                        c.queries[idx].principal_envelope_bytes,
                     ) catch |err| {
                         c.errors[idx] = err;
                         return;
@@ -360,6 +376,21 @@ const Connection = struct {
         timeout_ms: u32,
         page_size: u32,
     ) !federation.QueryResults {
+        return self.executeQueryWithEnvelope(allocator, query, timeout_ms, page_size, null);
+    }
+
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=ConnectionExecuteQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: envelope-aware variant. When principal_envelope_bytes
+    // is non-null it is forwarded to the QueryOptions so the server receives it
+    // in ExecuteRequest field 4 and can reconstruct the caller's Principal.
+    pub fn executeQueryWithEnvelope(
+        self: *Connection,
+        allocator: std.mem.Allocator,
+        query: federation.FederatedQuery,
+        timeout_ms: u32,
+        page_size: u32,
+        principal_envelope_bytes: ?[]const u8,
+    ) !federation.QueryResults {
         if (self.stream == null or self.quic_client == null or self.session_id == null) {
             return error.NotConnected;
         }
@@ -460,6 +491,7 @@ const Connection = struct {
             .timeout_secs = @max(@as(u32, @intCast((@as(u64, timeout_ms) + 999) / 1000)), 1),
             .page_size = page_size,
             .params = params,
+            .principal_envelope_bytes = principal_envelope_bytes,
         }, &consumer);
 
         const rows_slice = try rows.toOwnedSlice(allocator);
@@ -691,6 +723,13 @@ const ResultChunk = struct {
 pub const NodeQuery = struct {
     node_id: u32,
     query: federation.FederatedQuery,
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=NodeQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: optional serialised principal_envelope blob produced
+    // by the coordinator calling distributed.principal_envelope.serialize().
+    // When present, the shard worker unpacks it and uses the forwarded identity
+    // instead of the generic "geode-coordinator" internal principal.
+    // Null preserves the previous behaviour (identity = internal_service).
+    principal_envelope_bytes: ?[]const u8 = null,
 };
 
 /// Result handler for streaming queries

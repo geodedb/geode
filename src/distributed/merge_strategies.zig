@@ -81,6 +81,12 @@ pub const QueryOptions = struct {
     /// columns are treated as aggregate values and accumulated numerically.
     /// When empty, all columns are hashed (backward-compatible default).
     group_key_columns: []const usize = &.{},
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=QueryOptions; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: optional serialised principal_envelope blob.
+    // When non-null the coordinator attaches it to every NodeQuery so each
+    // shard worker can reconstruct the caller's Principal rather than using
+    // the generic "geode-coordinator" internal identity.
+    principal_envelope_bytes: ?[]const u8 = null,
 };
 
 pub const QueryAnalysis = struct {

@@ -4932,4 +4932,27 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_explain_policy_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_explain_policy_step = b.step("test-gps-explain-policy", "Run GPS EXPLAIN POLICY FOR <query> tests (Phase 7 Task 7-4)");
     gps_explain_policy_step.dependOn(&run_gps_explain_policy_tests.step);
+
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=BuildStep; STATUS=TESTED; TEST=tests/test_gps_mcp_wire.zig; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-5: MCP wire-level Principal forwarding tests.
+    // Schema field + server unpack wired; MCP send-side blocked on geode-client-zig update.
+    const gps_mcp_wire_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_mcp_wire.zig"), .target = target, .optimize = optimize });
+    gps_mcp_wire_test_mod.addImport("geode", root_mod);
+    gps_mcp_wire_test_mod.addImport("schema", schema_mod);
+    const gps_mcp_wire_tests = b.addTest(.{ .root_module = gps_mcp_wire_test_mod });
+    const run_gps_mcp_wire_tests = b.addRunArtifact(gps_mcp_wire_tests);
+    shardDep(test_step, &run_gps_mcp_wire_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_mcp_wire_step = b.step("test-gps-mcp-wire", "Run GPS MCP wire-level Principal forwarding tests (Phase 7 Task 7-5)");
+    gps_mcp_wire_step.dependOn(&run_gps_mcp_wire_tests.step);
+
+    // CANARY: REQ=REQ-GPS-WIRE-002; FEATURE="GPS Distributed Wire"; ASPECT=BuildStep; STATUS=TESTED; TEST=tests/test_gps_distributed_wire.zig; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: Distributed Principal envelope wire integration tests.
+    const gps_distributed_wire_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_distributed_wire.zig"), .target = target, .optimize = optimize });
+    gps_distributed_wire_test_mod.addImport("geode", root_mod);
+    gps_distributed_wire_test_mod.addImport("schema", schema_mod);
+    const gps_distributed_wire_tests = b.addTest(.{ .root_module = gps_distributed_wire_test_mod });
+    const run_gps_distributed_wire_tests = b.addRunArtifact(gps_distributed_wire_tests);
+    shardDep(test_step, &run_gps_distributed_wire_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_distributed_wire_step = b.step("test-gps-distributed-wire", "Run GPS distributed Principal envelope wire integration tests (Phase 7 Task 7-6)");
+    gps_distributed_wire_step.dependOn(&run_gps_distributed_wire_tests.step);
 }

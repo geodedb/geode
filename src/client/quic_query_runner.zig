@@ -75,6 +75,13 @@ pub const QueryOptions = struct {
     timeout_secs: u32 = 30,
     page_size: u32 = default_page_size,
     params: std.ArrayList(schema.Param),
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=QueryOptions; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+    // GPS Phase 7 Task 7-6: optional serialised principal_envelope blob.
+    // When non-null, ProtocolTransportAdapter.beginQuery attaches it to the
+    // outbound ExecuteRequest so the receiving server can reconstruct the
+    // caller's Principal for that request rather than using the connection-level
+    // identity.  Null (the default) preserves existing behaviour.
+    principal_envelope_bytes: ?[]const u8 = null,
 };
 
 const ProtocolTransportAdapter = struct {
@@ -91,10 +98,15 @@ const ProtocolTransportAdapter = struct {
 
     fn beginQuery(transport: *QueryTransport, allocator_: std.mem.Allocator, transport_opts: QueryOptions) !void {
         const self: *@This() = @ptrCast(@alignCast(transport.context));
+        // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=BeginQuery; STATUS=IMPL; OWNER=security; UPDATED=2026-05-21
+        // GPS Phase 7 Task 7-6: attach the principal_envelope_bytes blob when
+        // the caller (e.g. distributed coordinator) has serialised a Principal.
+        // Field is null by default — existing call sites are unaffected.
         const execute_req = schema.ExecuteRequest{
             .session_id = transport_opts.session_id,
             .query = transport_opts.query_text,
             .params = transport_opts.params,
+            .principal_envelope_bytes = transport_opts.principal_envelope_bytes,
         };
         try self.protocol_client.sendClientMessage(allocator_, .{ .execute = execute_req });
     }
