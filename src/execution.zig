@@ -1958,6 +1958,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                 };
             }
 
+            // CANARY: REQ=REQ-GPS-AUDIT-001; FEATURE="GPS Policy DDL Audit"; ASPECT=CreatePolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
+            {
+                const audit_mod = @import("security/audit.zig");
+                const detail_str = std.fmt.allocPrint(allocator, "name={s} scope_graph={s} expression={s}", .{ cp_stmt.name, cp_stmt.scope_graph, expr_src }) catch null;
+                defer if (detail_str) |s| allocator.free(s);
+                const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
+                const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";
+                audit_mod.logSecurityGraphEvent(allocator, .{
+                    .event_type = .configuration_change,
+                    .action = "GPS_CREATE_POLICY",
+                    .user_id = actor_user_id,
+                    .username = actor_username,
+                    .details = detail_str,
+                });
+            }
+
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
             const row = try allocator.alloc(Value, 1);
@@ -1976,9 +1992,13 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             const policy_catalog_mod = @import("security/policy_catalog.zig");
             const pol_cat = policy_catalog_mod.getGlobalCatalog() orelse return error.PolicyCatalogNotInitialized;
 
-            pol_cat.removePolicy(dp_stmt.name) catch |err| {
-                if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
-                // IF EXISTS: swallow error.PolicyNotFound.
+            const remove_outcome: enum { removed, not_found } = blk: {
+                pol_cat.removePolicy(dp_stmt.name) catch |err| {
+                    if (err != error.PolicyNotFound or !dp_stmt.if_exists) return err;
+                    // IF EXISTS: swallow error.PolicyNotFound but record it.
+                    break :blk .not_found;
+                };
+                break :blk .removed;
             };
 
             // CANARY: REQ=REQ-GPS-CATALOG-002; FEATURE="GPS Policy Persistence"; ASPECT=DropPolicyWriteThrough; STATUS=TESTED; TEST=tests/test_gps_policy_persistence.zig; OWNER=security; UPDATED=2026-05-20
@@ -1999,6 +2019,24 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
                         }
                     };
                 }
+            }
+
+            // CANARY: REQ=REQ-GPS-AUDIT-002; FEATURE="GPS Policy DDL Audit"; ASPECT=DropPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
+            // Only emit audit when a policy was actually removed.  IF EXISTS no-ops
+            // (policy never existed) do not deserve a record.
+            if (remove_outcome == .removed) {
+                const audit_mod = @import("security/audit.zig");
+                const detail_str = std.fmt.allocPrint(allocator, "name={s} if_exists={}", .{ dp_stmt.name, dp_stmt.if_exists }) catch null;
+                defer if (detail_str) |s| allocator.free(s);
+                const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
+                const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";
+                audit_mod.logSecurityGraphEvent(allocator, .{
+                    .event_type = .configuration_change,
+                    .action = "GPS_DROP_POLICY",
+                    .user_id = actor_user_id,
+                    .username = actor_username,
+                    .details = detail_str,
+                });
             }
 
             const columns = try allocator.alloc([]const u8, 1);
@@ -2025,6 +2063,22 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             // In-memory update is authoritative for the running server; restart will
             // re-hydrate from __geode_security (which still reflects the original CREATE).
             // Operators needing durable enable/disable should DROP + CREATE the policy.
+
+            // CANARY: REQ=REQ-GPS-AUDIT-003; FEATURE="GPS Policy DDL Audit"; ASPECT=AlterPolicyAuditEmission; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gps_persistence_policy_audit.yml; OWNER=security; UPDATED=2026-05-21
+            {
+                const audit_mod = @import("security/audit.zig");
+                const detail_str = std.fmt.allocPrint(allocator, "name={s} set_enabled={?}", .{ ap_stmt.name, ap_stmt.set_enabled }) catch null;
+                defer if (detail_str) |s| allocator.free(s);
+                const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
+                const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";
+                audit_mod.logSecurityGraphEvent(allocator, .{
+                    .event_type = .configuration_change,
+                    .action = "GPS_ALTER_POLICY",
+                    .user_id = actor_user_id,
+                    .username = actor_username,
+                    .details = detail_str,
+                });
+            }
 
             const columns = try allocator.alloc([]const u8, 1);
             columns[0] = try allocator.dupe(u8, "status");
