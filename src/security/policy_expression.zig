@@ -1,4 +1,5 @@
 // CANARY: REQ=REQ-GPS-EXPR-001; FEATURE="GPS Expression Compilation"; ASPECT=PolicyExpressionModule; STATUS=TESTED; TEST=tests/test_gps_policy_expression.zig; OWNER=security; UPDATED=2026-05-20
+// CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=PolicyExpressionModule; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
 //
 // policy_expression.zig — minimal expression compiler and evaluator for GPS
 // policy predicates.
@@ -16,6 +17,7 @@
 //            | "current_tenant()" "=" string_lit
 //            | "current_graph()"  "=" string_lit
 //            | "resource.label"   "=" string_lit
+//            | "principal.attributes." identifier "=" string_lit   (Phase 6 Task 6-2)
 //
 //   string_lit ::= "'" [^']* "'"
 //
@@ -25,7 +27,7 @@
 // The RLS VM (`rls_core.zig`) is NOT used here because its `compileExpression`
 // is a private method on an internal struct type and operates over an
 // incompatible bytecode format (row-field loads, username builtins).  A
-// hand-rolled IR is more correct and smaller for this 4-builtin subset.
+// hand-rolled IR is more correct and smaller for this subset.
 
 const std = @import("std");
 
@@ -33,14 +35,29 @@ const std = @import("std");
 // Public types
 // ---------------------------------------------------------------------------
 
+/// A single key=value attribute entry from a principal's AttributeMap.
+/// Mirrors principal.AttributeMap.Entry without creating an import cycle.
+pub const AttributeEntry = struct {
+    key: []const u8,
+    value: []const u8,
+};
+
 /// Execution context supplied by the GPS decision engine when evaluating a
 /// compiled expression.  All fields are optional; a null means "unknown" and
 /// an equality check against it fails rather than erroring.
+///
+/// Phase 6 (Task 6-2): `principal_attributes` carries the caller's
+/// AttributeMap entries so that `eq_principal_attr` predicates can look up
+/// arbitrary ABAC key/value pairs without importing principal.zig directly.
 pub const PolicyEvalContext = struct {
     current_user: ?[]const u8,
     current_tenant: ?[]const u8,
     current_graph: ?[]const u8,
     resource_label: ?[]const u8,
+    // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=EvalContextAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
+    /// Slice of principal attribute entries.  May be empty (never null) so
+    /// that attribute predicates simply fail-closed when no attributes are set.
+    principal_attributes: []const AttributeEntry = &.{},
 };
 
 // ---------------------------------------------------------------------------
@@ -57,6 +74,9 @@ pub const Predicate = union(enum) {
     eq_current_tenant: []const u8,
     eq_current_graph: []const u8,
     eq_resource_label: []const u8,
+    // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=PredicateIRAttr; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
+    /// principal.attributes.<key> = '<value>'
+    eq_principal_attr: struct { key: []const u8, value: []const u8 },
     and_: struct { left: *const Predicate, right: *const Predicate },
     or_: struct { left: *const Predicate, right: *const Predicate },
 };
@@ -115,6 +135,16 @@ fn evalPredicate(p: *const Predicate, ctx: PolicyEvalContext) bool {
         .eq_current_tenant => |v| ctx.current_tenant != null and std.mem.eql(u8, ctx.current_tenant.?, v),
         .eq_current_graph => |v| ctx.current_graph != null and std.mem.eql(u8, ctx.current_graph.?, v),
         .eq_resource_label => |v| ctx.resource_label != null and std.mem.eql(u8, ctx.resource_label.?, v),
+        // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=EvalAttrPredicate; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
+        .eq_principal_attr => |kv| blk: {
+            for (ctx.principal_attributes) |e| {
+                if (std.mem.eql(u8, e.key, kv.key)) {
+                    break :blk std.mem.eql(u8, e.value, kv.value);
+                }
+            }
+            // Key not present in the attribute set → fail-closed.
+            break :blk false;
+        },
         .and_ => |a| evalPredicate(a.left, ctx) and evalPredicate(a.right, ctx),
         .or_ => |o| evalPredicate(o.left, ctx) or evalPredicate(o.right, ctx),
     };
@@ -216,7 +246,35 @@ const ExprParser = struct {
             return node;
         }
 
+        // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=ParseAttrPredicate; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
+        // "principal.attributes.<key> = '<lit>'"
+        // The prefix "principal.attributes." is consumed first; then we scan a
+        // bare identifier (alphanumeric + underscore + hyphen) as the key name.
+        if (self.consumeExact("principal.attributes.")) {
+            const key = try self.parseAttributeKey();
+            const lit = try self.parseEqLiteral();
+            const node = try self.allocator.create(Predicate);
+            node.* = .{ .eq_principal_attr = .{ .key = key, .value = lit } };
+            return node;
+        }
+
         return error.InvalidExpression;
+    }
+
+    /// Scan a bare attribute key: one or more alphanumeric, underscore, or
+    /// hyphen characters.  Returns a copy owned by the arena.
+    fn parseAttributeKey(self: *ExprParser) ![]const u8 {
+        const start = self.pos;
+        while (self.pos < self.src.len) {
+            const ch = self.src[self.pos];
+            if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '-') {
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if (self.pos == start) return error.InvalidExpression; // empty key
+        return self.allocator.dupe(u8, self.src[start..self.pos]);
     }
 
     // --- helpers ---

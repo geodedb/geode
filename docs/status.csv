@@ -1084,9 +1084,15 @@ REQ-GEODETESTLAB-ASSERT-001,GeodeTestlab,Assertions,TESTED,,,test,2026-01-16,tes
 REQ-GEODETESTLAB-SPEC-001,GeodeTestlab,SpecExecution,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GITLAB-LABELS-001,GitLab Label Taxonomy,Tooling,EXEMPT,,,tooling,2026-01-14,scripts/gitlab/create_type_labels.sh
 REQ-GPS-ABAC-001,GPS ABAC Predicates,AndWithAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalContextAttributes,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,ParseAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,PolicyExpressionModule,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,PredicateIRAttr,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,AdminAllowed,TESTED,,,security,2026-05-20,src/security/gps.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,AdminAllowed,TESTED,,,security,2026-05-20,tests/test_gps_bind_graph.zig
 REQ-GPS-BIND-001,GPS BindGraph Action,GrantWidening,TESTED,,,security,2026-05-20,src/security/gps.zig

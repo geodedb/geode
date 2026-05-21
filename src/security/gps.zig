@@ -282,7 +282,22 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             if (!policyMatchesAction(policy.*, req.action)) continue;
             if (!policyMatchesResource(policy.*, req.resource)) continue;
 
+            // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=DecidePopulateAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
             // Build an evaluation context from the current request.
+            // Phase 6 (Task 6-2): principal_attributes is populated from the
+            // caller's AttributeMap so that eq_principal_attr predicates can
+            // match ABAC key/value pairs without any additional allocation.
+            // Both principal.AttributeMap.Entry and policy_expression.AttributeEntry
+            // are { key: []const u8, value: []const u8 } — same layout.
+            // We map through the entries to build the attribute slice.
+            const raw_entries = req.principal.attributes.entries;
+            // Comptime layout assert: both types are identical structs.
+            comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(policy_expression.AttributeEntry));
+            // Safe slice reinterpret: same element size and layout.
+            const attr_entries: []const policy_expression.AttributeEntry = @as(
+                [*]const policy_expression.AttributeEntry,
+                @ptrCast(raw_entries.ptr),
+            )[0..raw_entries.len];
             const ctx = policy_expression.PolicyEvalContext{
                 .current_user = req.principal.username,
                 .current_tenant = req.principal.tenant_id,
@@ -292,6 +307,7 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                     // Phase 5: a richer label-set predicate can land in Phase 6.
                     else => null,
                 },
+                .principal_attributes = attr_entries,
             };
 
             // Evaluate the expression: compiled expression takes priority;
