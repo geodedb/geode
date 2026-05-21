@@ -16,6 +16,8 @@ const std = @import("std");
 const policy_expression = @import("policy_expression.zig");
 // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogVersionBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
 const policy_version = @import("policy_version.zig");
+// CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=PolicyCatalogInvalidate; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+const decision_cache = @import("decision_cache.zig");
 
 pub const Action = enum {
     read,
@@ -121,6 +123,8 @@ pub const PolicyCatalog = struct {
         });
         // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogAddBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
         _ = policy_version.incrementPolicyVersion();
+        // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=PolicyCatalogAddInvalidate; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+        if (decision_cache.getGlobalCache()) |c| c.invalidateAll();
     }
 
     // CANARY: REQ=REQ-GPS-DDL-002; FEATURE="GPS Policy DDL"; ASPECT=PolicyCatalogRemove; STATUS=TESTED; TEST=tests/test_gps_policy_catalog.zig; OWNER=security; UPDATED=2026-05-20
@@ -139,6 +143,8 @@ pub const PolicyCatalog = struct {
                 if (removed.compiled) |*c| c.deinit();
                 // CANARY: REQ=REQ-GPS-DIST-001; FEATURE="GPS PolicyVersion"; ASPECT=PolicyCatalogRemoveBump; STATUS=TESTED; TEST=tests/test_gps_policy_version.zig; OWNER=security; UPDATED=2026-05-20
                 _ = policy_version.incrementPolicyVersion();
+                // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=PolicyCatalogRemoveInvalidate; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+                if (decision_cache.getGlobalCache()) |c| c.invalidateAll();
                 return;
             }
         }

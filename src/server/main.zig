@@ -685,6 +685,16 @@ pub fn main() !void {
     policy_catalog_mod.setGlobalCatalog(&global_policy_catalog);
     defer policy_catalog_mod.setGlobalCatalog(undefined);
 
+    // GPS Phase 7 (Task 7-1): bootstrap bounded LRU decision cache.
+    // Capacity 1024 covers typical single-tenant workloads; invalidated
+    // automatically on every addPolicy / removePolicy call.
+    // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=ServerStartupCache; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+    const decision_cache_mod = @import("geode").security.decision_cache;
+    var global_decision_cache = decision_cache_mod.DecisionCache.init(gpa, decision_cache_mod.DEFAULT_CAPACITY);
+    defer global_decision_cache.deinit();
+    decision_cache_mod.setGlobalCache(&global_decision_cache);
+    defer decision_cache_mod.clearGlobalCache();
+
     // NOTE: ensureDefaultUser() is called AFTER server_init.initialize() below
     // so that users from the auth graph store are synced first (avoiding a
     // second admin with a different password).

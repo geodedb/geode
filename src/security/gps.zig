@@ -23,6 +23,8 @@
 
 const std = @import("std");
 const principal_mod = @import("principal.zig");
+const decision_cache = @import("decision_cache.zig");
+const policy_version = @import("policy_version.zig");
 
 // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
 // Process-wide flag enabling the --insecure-allow-all bypass. Written once at
@@ -120,6 +122,40 @@ fn actionToPermission(action: Action) ?user_mgmt.Permission {
     };
 }
 
+// CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=ResourceHash; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+/// Hash a ResourceRef into a u64 for use as a decision-cache key component.
+fn hashResource(r: ResourceRef) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    switch (r) {
+        .database => hasher.update("db"),
+        .graph => |g| {
+            hasher.update("graph:");
+            hasher.update(g);
+        },
+        .tenant => |t| {
+            hasher.update("tenant:");
+            hasher.update(t);
+        },
+        .node => |n| {
+            hasher.update("node:");
+            hasher.update(n.graph);
+        },
+        .edge => |e| {
+            hasher.update("edge:");
+            hasher.update(e.graph);
+        },
+        .procedure => |p| {
+            hasher.update("proc:");
+            hasher.update(p);
+        },
+        .metadata => |m| {
+            hasher.update("meta:");
+            hasher.update(m.kind);
+        },
+    }
+    return hasher.final();
+}
+
 pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !PolicyDecision {
     _ = allocator;
 
@@ -135,11 +171,49 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         };
     }
 
+    // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=DecideLookup; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+    // Cache lookup: only cache authenticated principals (auth_version != 0).
+    // Anonymous / legacy paths use auth_version = 0 and are never cached so that
+    // unauthenticated decisions can never be served from stale cache entries.
+    const should_cache = req.principal.auth_version != 0;
+    var cache_key: ?decision_cache.Key = null;
+    if (should_cache) {
+        if (decision_cache.getGlobalCache()) |cache| {
+            const key = decision_cache.Key{
+                .auth_version = req.principal.auth_version,
+                .policy_version = policy_version.getPolicyVersion(),
+                .action_tag = @intFromEnum(req.action),
+                .resource_hash = hashResource(req.resource),
+            };
+            cache_key = key;
+            if (cache.lookup(key)) |cached| {
+                return cached;
+            }
+        }
+    }
+
+    // CANARY: REQ=REQ-GPS-CACHE-001; FEATURE="GPS Decision Cache"; ASPECT=DecideInsert; STATUS=TESTED; TEST=tests/test_gps_decision_cache.zig; OWNER=security; UPDATED=2026-05-20
+    // Helper: insert a decision into the cache (if cache_key was set) then return it.
+    // Allocation errors from cache.insert are swallowed — a cache failure must never
+    // block an authorization decision.
+    const cacheAndReturn = struct {
+        fn f(key: ?decision_cache.Key, d: PolicyDecision) PolicyDecision {
+            if (key) |k| {
+                if (decision_cache.getGlobalCache()) |cache| {
+                    cache.insert(k, d) catch {};
+                }
+            }
+            return d;
+        }
+    }.f;
+
     if (req.principal.username == null) {
-        return PolicyDecision{
+        // Do not cache unauthenticated decisions — auth_version is 0 for these
+        // paths, so cache_key is already null and cacheAndReturn is a no-op.
+        return cacheAndReturn(cache_key, PolicyDecision{
             .kind = .unauthenticated,
             .reason_code = "no_principal",
-        };
+        });
     }
 
     // CANARY: REQ=REQ-GPS-METADATA-000; FEATURE="GPS Metadata Isolation"; ASPECT=DecideShowMetadata; STATUS=TESTED; TEST=tests/test_gps_show_metadata.zig; OWNER=security; UPDATED=2026-05-20
@@ -148,10 +222,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     // accessible graphs (Phase 3 tasks 3-4 through 3-8). Evaluated after the
     // unauthenticated check so anonymous callers still receive .unauthenticated.
     if (req.action == .show_metadata) {
-        return PolicyDecision{
+        return cacheAndReturn(cache_key, PolicyDecision{
             .kind = .allow,
             .reason_code = "show_metadata_audit_only",
-        };
+        });
     }
 
     // CANARY: REQ=REQ-GPS-PROC-001; FEATURE="GPS Procedure Enforcement"; ASPECT=AdminAllowed; STATUS=TESTED; TEST=tests/test_gps_procedure_enforcement.zig; OWNER=security; UPDATED=2026-05-20
@@ -167,10 +241,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     if (req.action == .execute_procedure) {
         for (req.principal.roles) |role_name| {
             if (std.mem.eql(u8, role_name, "Admin")) {
-                return PolicyDecision{
+                return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
                     .reason_code = "execute_procedure_admin",
-                };
+                });
             }
         }
         // Fall through: no builtin-role shortcut for the raw execute_procedure
@@ -187,10 +261,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     if (req.action == .decrypt_field or req.action == .unwrap_key) {
         for (req.principal.roles) |role_name| {
             if (std.mem.eql(u8, role_name, "Admin")) {
-                return PolicyDecision{
+                return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
                     .reason_code = "fle_admin",
-                };
+                });
             }
         }
         // Non-admin: fall through to policy catalog. If a Policy row with
@@ -209,10 +283,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
     if (req.action == .bind_graph) {
         for (req.principal.roles) |role_name| {
             if (std.mem.eql(u8, role_name, "Admin")) {
-                return PolicyDecision{
+                return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
                     .reason_code = "bind_graph_admin",
-                };
+                });
             }
         }
         if (req.resource == .graph) {
@@ -220,18 +294,18 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             if (execution.graph_grant_check_fn) |grant_fn| {
                 if (req.principal.username) |uname| {
                     if (grant_fn(uname, target_graph, 0)) {
-                        return PolicyDecision{
+                        return cacheAndReturn(cache_key, PolicyDecision{
                             .kind = .allow,
                             .reason_code = "bind_graph_grant",
-                        };
+                        });
                     }
                 }
             }
         }
-        return PolicyDecision{
+        return cacheAndReturn(cache_key, PolicyDecision{
             .kind = .unauthorized,
             .reason_code = "bind_graph_no_evidence",
-        };
+        });
     }
 
     // Phase 2 task 2-4: builtin-role evaluation.
@@ -242,10 +316,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
         for (req.principal.roles) |role_name| {
             if (user_mgmt.Role.fromString(role_name)) |role| {
                 if (user_mgmt.hasPermission(role, perm)) {
-                    return PolicyDecision{
+                    return cacheAndReturn(cache_key, PolicyDecision{
                         .kind = .allow,
                         .reason_code = "builtin_role",
-                    };
+                    });
                 }
             }
         }
@@ -268,10 +342,10 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                         .Schema => 2,
                     };
                     if (grant_fn(uname, graph, action_code)) {
-                        return PolicyDecision{
+                        return cacheAndReturn(cache_key, PolicyDecision{
                             .kind = .allow,
                             .reason_code = "graph_grant",
-                        };
+                        });
                     }
                 }
             }
@@ -327,19 +401,19 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                 std.mem.eql(u8, policy.expression_source, "true");
 
             if (expr_result and policy.effect == .allow) {
-                return PolicyDecision{
+                return cacheAndReturn(cache_key, PolicyDecision{
                     .kind = .allow,
                     .reason_code = "policy_match",
-                };
+                });
             }
             // deny-effect or expression evaluated to false: continue scan.
         }
     }
 
-    return PolicyDecision{
+    return cacheAndReturn(cache_key, PolicyDecision{
         .kind = .unauthorized,
         .reason_code = "no_evidence",
-    };
+    });
 }
 
 fn policyMatchesAction(policy: @import("policy_catalog.zig").Policy, action: Action) bool {

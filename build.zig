@@ -4896,4 +4896,13 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_gps_grant_migration_tests.step, 0, test_shard_loads, test_shard_index);
     const gps_grant_migration_step = b.step("test-gps-grant-migration", "Run GPS grant migration tests (Phase 6 Task 6-4)");
     gps_grant_migration_step.dependOn(&run_gps_grant_migration_tests.step);
+
+    // GPS Phase 7 Task 7-1: bounded LRU decision cache tests.
+    const gps_decision_cache_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_gps_decision_cache.zig"), .target = target, .optimize = optimize });
+    gps_decision_cache_test_mod.addImport("geode", root_mod);
+    const gps_decision_cache_tests = b.addTest(.{ .root_module = gps_decision_cache_test_mod });
+    const run_gps_decision_cache_tests = b.addRunArtifact(gps_decision_cache_tests);
+    shardDep(test_step, &run_gps_decision_cache_tests.step, 0, test_shard_loads, test_shard_index);
+    const gps_decision_cache_step = b.step("test-gps-decision-cache", "Run GPS decision cache tests (Phase 7 Task 7-1)");
+    gps_decision_cache_step.dependOn(&run_gps_decision_cache_tests.step);
 }
