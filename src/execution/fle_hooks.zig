@@ -124,6 +124,7 @@ pub fn encryptEdgePropertyIfNeeded(
 /// Helper function to decrypt field value if needed when reading
 /// Returns decrypted value for authorized users, "[REDACTED]" for others
 /// CANARY: REQ=REQ-GPS-FLE-001; FEATURE="GPS FLE Enforcement"; ASPECT=DecryptFieldGate; STATUS=TESTED; TEST=tests/test_gps_fle_enforcement.zig; OWNER=security; UPDATED=2026-05-20
+/// CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FLEDecryptHookLocalRoleCheck; STATUS=COMPLETE; OWNER=security; UPDATED=2026-05-20
 pub fn decryptPropertyIfNeeded(
     allocator: std.mem.Allocator,
     node_labels: [][]const u8,
