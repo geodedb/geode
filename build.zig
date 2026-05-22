@@ -3575,6 +3575,20 @@ pub fn build(b: *std.Build) void {
     // Heaviest single binary observed in the pre-push hook (~46s wall, 2 sub-tests).
     shardDep(test_step, &run_audit_verify_seq_tests.step, 50, test_shard_loads, test_shard_index);
 
+    // GAP-0305 / #828 regression: writer/verifier round-trip on prev_hash.
+    // Writes 3 events via the production AuditLogger and asserts the
+    // verifier accepts the chain.  Fails before the verifier fix because
+    // writer stores prev_hash = SHA256(last_hash) but verifier compares
+    // against bare last_hash.
+    const audit_verify_roundtrip_test_mod = b.createModule(.{ .root_source_file = b.path("tests/test_audit_verify_chain_roundtrip.zig"), .target = target, .optimize = optimize });
+    audit_verify_roundtrip_test_mod.link_libc = true;
+    audit_verify_roundtrip_test_mod.addImport("audit", audit_security_mod);
+    audit_verify_roundtrip_test_mod.addImport("rls", rls_mod);
+    audit_verify_roundtrip_test_mod.addImport("audit_verify", audit_mod);
+    const audit_verify_roundtrip_tests = b.addTest(.{ .root_module = audit_verify_roundtrip_test_mod });
+    const run_audit_verify_roundtrip_tests = b.addRunArtifact(audit_verify_roundtrip_tests);
+    shardDep(test_step, &run_audit_verify_roundtrip_tests.step, 5, test_shard_loads, test_shard_index);
+
     // GAP-0737 / SEC-INFRA-01 regression: GEODE_CLUSTER_INSECURE is
     // refused in release builds and a metrics counter is exposed.
     // cluster_auth uses std.c.getenv so the test module needs libc.
