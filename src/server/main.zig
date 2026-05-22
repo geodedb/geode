@@ -1097,7 +1097,9 @@ pub fn main() !void {
         // S6: Initialize per-IP authentication rate limiter for brute-force protection.
         // CANARY: REQ=REQ-SEC-RATE-LIMIT-007; FEATURE="AuthRateLimiting"; ASPECT=ServerInit; STATUS=IMPL; OWNER=security; UPDATED=2026-03-26
         const auth_rate_limiter_mod = @import("auth_rate_limiter.zig");
-        var ip_rate_limiter = auth_rate_limiter_mod.AuthRateLimiter.init(gpa);
+        // initFromEnv honors GEODE_AUTH_RATE_LOCKOUT_SECS / _MAX_ATTEMPTS so
+        // the harness can exercise the lockout-expiry path with a short window.
+        var ip_rate_limiter = auth_rate_limiter_mod.AuthRateLimiter.initFromEnv(gpa);
         defer ip_rate_limiter.deinit();
         quic_connection_handler.setAuthRateLimiter(&ip_rate_limiter);
         defer quic_connection_handler.setAuthRateLimiter(null);

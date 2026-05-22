@@ -56,6 +56,42 @@ pub const AuthRateLimiter = struct {
         return initWithConfig(allocator, default_max_attempts, default_lockout_duration_ns);
     }
 
+    /// Create a rate limiter, honoring two optional env overrides:
+    ///   GEODE_AUTH_RATE_LOCKOUT_SECS  — lockout window in whole seconds
+    ///   GEODE_AUTH_RATE_MAX_ATTEMPTS  — failures before lockout
+    /// Both fall back to the defaults when unset or unparseable. The lockout
+    /// override exists so the harness can exercise the expiry path with a
+    /// 1-second window instead of waiting the production 60 s.
+    /// CANARY: REQ=REQ-AUTH-RATE-ENV-001; FEATURE="AuthRateLimiterEnvConfig"; ASPECT=LockoutOverride; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/authn_rate_limiter.yml; OWNER=security; UPDATED=2026-05-22
+    pub fn initFromEnv(allocator: std.mem.Allocator) Self {
+        var max_attempts = default_max_attempts;
+        var lockout_ns = default_lockout_duration_ns;
+
+        if (readEnvU64("GEODE_AUTH_RATE_MAX_ATTEMPTS")) |v| {
+            if (v > 0 and v <= std.math.maxInt(u32)) max_attempts = @intCast(v);
+        }
+        if (readEnvU64("GEODE_AUTH_RATE_LOCKOUT_SECS")) |secs| {
+            if (secs > 0 and secs <= 86_400) lockout_ns = secs * std.time.ns_per_s;
+        }
+        return initWithConfig(allocator, max_attempts, lockout_ns);
+    }
+
+    /// Parse a positive integer from a process env var. Returns null when the
+    /// var is unset or not a clean decimal integer. Uses the libc getenv
+    /// (Zig 0.16 removed std.process.getEnvVarOwned / std.posix.getenv) with a
+    /// NUL-terminated name — the var names here are comptime string literals.
+    fn readEnvU64(name: []const u8) ?u64 {
+        var name_buf: [64]u8 = undefined;
+        if (name.len >= name_buf.len) return null;
+        @memcpy(name_buf[0..name.len], name);
+        name_buf[name.len] = 0;
+        const ptr = std.c.getenv(name_buf[0..name.len :0]) orelse return null;
+        const raw = std.mem.span(ptr);
+        const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+        if (trimmed.len == 0) return null;
+        return std.fmt.parseInt(u64, trimmed, 10) catch null;
+    }
+
     /// Create a rate limiter with custom thresholds (useful for testing).
     pub fn initWithConfig(allocator: std.mem.Allocator, max_attempts: u32, lockout_duration_ns: u64) Self {
         return .{

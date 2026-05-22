@@ -357,6 +357,7 @@ REQ-AUTH-POLICY-008,AuthPolicy,PreHashValidation2,TESTED,,,security,2026-01-16,t
 REQ-AUTH-POLICY-008,Pre-Hash Password Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
 REQ-AUTH-POLICY-009,AuthPolicy,UpdateValidation,TESTED,,,security,2026-01-16,tests/test_gap_0193_batch2_security.zig
 REQ-AUTH-POLICY-009,Password Update Policy Validation,Security,TESTED,,,security,2025-09-30,src/security/geode_auth_lib.zig
+REQ-AUTH-RATE-ENV-001,AuthRateLimiterEnvConfig,LockoutOverride,TESTED,,,security,2026-05-22,src/server/auth_rate_limiter.zig
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,SECURITY,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
 REQ-AUTH-RISKSCORE-001,FailSecureRiskScore,TEST,TESTED,,,security,2026-01-13,src/security/geode_auth_lib.zig
 REQ-AUTH-ROLE-001,RoleAssignment,ErrorHandling,TESTED,,,security,2026-05-11,src/security/user_management.zig
