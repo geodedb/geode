@@ -3977,6 +3977,17 @@ pub fn build(b: *std.Build) void {
     const write_lock_cancel_step = b.step("test-graph-write-lock-cancelable", "Parallel-ingest R2: graph write lock honors a caller-supplied deadline");
     write_lock_cancel_step.dependOn(&run_write_lock_cancel_tests.step);
 
+    // 2026-05-22 hang fix — graph write lock must never park unboundedly
+    //     on the per-graph RwLock semaphore (lost-wakeup wedge captured via
+    //     gdb on gap_0257_orderby_large_resultset.yml).
+    const write_lock_no_hang_mod = b.createModule(.{ .root_source_file = b.path("tests/test_graph_write_lock_no_hang.zig"), .target = target, .optimize = optimize });
+    write_lock_no_hang_mod.addImport("geode", root_mod);
+    const write_lock_no_hang_tests = b.addTest(.{ .root_module = write_lock_no_hang_mod });
+    const run_write_lock_no_hang_tests = b.addRunArtifact(write_lock_no_hang_tests);
+    shardDep(test_step, &run_write_lock_no_hang_tests.step, 1, test_shard_loads, test_shard_index);
+    const write_lock_no_hang_step = b.step("test-graph-write-lock-no-hang", "Regression: graph write lock never hangs against a churning shared reader");
+    write_lock_no_hang_step.dependOn(&run_write_lock_no_hang_tests.step);
+
     // R3 (src/server/server_state.zig:250-384;
     //     src/server/quic_connection_handler.zig:1696-1722, 2960-3036)
     //     — ServerState has no teardown; stream close with in-flight

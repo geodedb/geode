@@ -4025,10 +4025,35 @@ pub const StorageAdapter = struct {
             return error.GraphNotFound;
         };
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+        // HANG FIX (2026-05-22): re-probe via `tryLock` instead of parking
+        // unboundedly on `mg.rwlock.lockUncancelable`.  See the detailed
+        // rationale in `acquireGraphWriteLockCancelable` below — the
+        // uncancelable path can wedge forever on the RwLock's internal
+        // counting semaphore after a lost wakeup.  This non-cancelable
+        // variant has no caller-supplied deadline, so it spins without a
+        // hard cap, but every iteration re-reads `rl.state` directly and so
+        // is immune to a lost semaphore `post()`.
+        const io = std.Io.Threaded.global_single_threaded.io();
         const _t_start = monoNanosNow();
-        mg.rwlock.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-        _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
-        return mg;
+        if (mg.rwlock.tryLock(io)) {
+            _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+            return mg;
+        }
+        var sleep_ns: u64 = 100 * std.time.ns_per_us;
+        const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+        while (true) {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(sleep_ns / std.time.ns_per_s),
+                .nsec = @intCast(sleep_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            if (mg.rwlock.tryLock(io)) {
+                _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                return mg;
+            }
+            sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+        }
     }
 
     /// Deadline-aware variant of `acquireGraphWriteLock`.
@@ -4086,45 +4111,47 @@ pub const StorageAdapter = struct {
         self.mutex.unlock(std.Io.Threaded.global_single_threaded.io());
 
         const io = std.Io.Threaded.global_single_threaded.io();
+        const _t_start = monoNanosNow();
         // Fast path: uncontended acquire in one call.
-        if (mg.rwlock.tryLock(io)) return mg;
-
-        // Decide on deadline policy.  Tight deadlines (< 1 s) use the
-        // legacy `tryLock` spin so fail-fast semantics are preserved.
-        // Generous deadlines (>= 1 s) route through the
-        // writer-preferred `lockUncancelable` path — which marks
-        // writer pending in state and blocks new readers from
-        // starving us.
-        const long_deadline_threshold_ns: u64 = 1 * std.time.ns_per_s;
-        const now_before = monoNanosNow();
-        const budget_ns: u64 = if (deadline_mono_ns > now_before) deadline_mono_ns - now_before else 0;
-
-        if (budget_ns >= long_deadline_threshold_ns) {
-            // Writer-preferred slow path.  `lockUncancelable` does
-            // Add(writer) FIRST → new readers defer → guaranteed
-            // progress.  No deadline enforcement here — the lock is
-            // guaranteed to be released by bounded critical
-            // sections (coordinator batch apply, fast-path mutations
-            // are all tens of ms worst case), so waiting without a
-            // deadline is safe in practice.
-            const _t_start = monoNanosNow();
-            mg.rwlock.lockUncancelable(io);
+        if (mg.rwlock.tryLock(io)) {
             _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
             return mg;
         }
 
-        // Legacy tight-deadline path: exponential-backoff tryLock
-        // spin.  Preserves fail-fast semantics for callers that
-        // actually want a short budget (e.g. test harnesses
-        // specifying 100 ms deadlines).  STILL starvation-prone
-        // under sustained reader pressure; the 1 s threshold above
-        // reflects a judgment that real production callers always
-        // want writer-preferred behaviour.
-        var sleep_ns: u64 = 200 * std.time.ns_per_us;
-        const max_sleep_ns: u64 = 4 * std.time.ns_per_ms;
+        // Contended slow path: bounded, re-probing `tryLock` spin.
+        //
+        // HANG FIX (2026-05-22): the previous long-deadline branch parked
+        // unconditionally on `mg.rwlock.lockUncancelable(io)`.  That call's
+        // internal protocol (std/Io/RwLock.zig `lockUncancelable`) registers
+        // the writer, then — if it observed any reader at the moment it set
+        // `is_writing` — parks FOREVER on the RwLock's internal counting
+        // semaphore waiting for the last reader's `unlockShared` to `post()`.
+        // Under the periodic checkpoint loop (`checkpointAll` takes the same
+        // `mg.rwlock` SHARED every few seconds) that wait could be entered
+        // and never woken: a single missed `post()` wedges the writer
+        // permanently, the writer keeps the RwLock's internal mutex, and
+        // every subsequent reader/writer (including the next checkpoint and
+        // every queued connection handler) blocks behind it.  Captured live
+        // twice via `gdb` on the GAP-0257 spec: one connection thread stuck
+        // in `Io.Semaphore.waitUncancelable` with zero readers active.
+        //
+        // The fix: never park unboundedly.  `tryLock` reads `rl.state`
+        // directly and touches no semaphore, so it is immune to a lost
+        // wakeup — each retry re-observes the true reader count and acquires
+        // the instant readers drain.  `tryLock` also takes the RwLock's
+        // internal mutex for the duration of its probe, which blocks any
+        // NEW slow-path reader from registering while we retry, giving the
+        // writer forward progress.  The deadline is honoured: on exhaustion
+        // we return `error.Deadline`, surfaced to the client as a clean,
+        // retryable `40001` instead of an unbounded server-side hang.
+        var sleep_ns: u64 = 100 * std.time.ns_per_us;
+        const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
         while (true) {
             const now = monoNanosNow();
-            if (now >= deadline_mono_ns) return error.Deadline;
+            if (now >= deadline_mono_ns) {
+                _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(now -| _t_start, .monotonic);
+                return error.Deadline;
+            }
             const remaining = deadline_mono_ns - now;
             const nap_ns = @min(sleep_ns, remaining);
             {
@@ -4135,7 +4162,10 @@ pub const StorageAdapter = struct {
                 var rem: std.os.linux.timespec = undefined;
                 _ = std.os.linux.nanosleep(&req, &rem);
             }
-            if (mg.rwlock.tryLock(io)) return mg;
+            if (mg.rwlock.tryLock(io)) {
+                _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
+                return mg;
+            }
             sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
         }
     }
@@ -4673,7 +4703,25 @@ pub fn acquireShardWriteLockCancelable(
 pub fn acquireWholeGraphExclusive(mg: *ManagedGraph) void {
     const io = std.Io.Threaded.global_single_threaded.io();
     const _t_start = monoNanosNow();
-    mg.rwlock.lockUncancelable(io);
+    // HANG FIX (2026-05-22): re-probe via `tryLock` rather than parking
+    // unboundedly on the RwLock's internal counting semaphore (which can be
+    // wedged forever by a lost wakeup — see the rationale in
+    // `StorageAdapter.acquireGraphWriteLockCancelable`).  `tryLock` reads
+    // `rl.state` directly so it always re-observes the true reader count.
+    if (!mg.rwlock.tryLock(io)) {
+        var sleep_ns: u64 = 100 * std.time.ns_per_us;
+        const max_sleep_ns: u64 = 2 * std.time.ns_per_ms;
+        while (true) {
+            const req = std.os.linux.timespec{
+                .sec = @intCast(sleep_ns / std.time.ns_per_s),
+                .nsec = @intCast(sleep_ns % std.time.ns_per_s),
+            };
+            var rem: std.os.linux.timespec = undefined;
+            _ = std.os.linux.nanosleep(&req, &rem);
+            if (mg.rwlock.tryLock(io)) break;
+            sleep_ns = @min(sleep_ns * 2, max_sleep_ns);
+        }
+    }
     _ = mg.rwlock_exclusive_wait_ns_total.fetchAdd(monoNanosNow() -| _t_start, .monotonic);
     for (&mg.shard_locks) |*sl| sl.lockUncancelable(io);
 }
