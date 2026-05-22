@@ -10,7 +10,7 @@ fn compat_fillRandom(buf: []u8) void {
 }
 const Ed25519 = std.crypto.sign.Ed25519;
 
-// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml; OWNER=security; UPDATED=2026-01-15
+// CANARY: REQ=REQ-AUDIT-VERIFY-001; FEATURE="Audit Verification"; ASPECT=ChainVerification; STATUS=TESTED; TEST=tests/geodetestlab/specs/geode_auth.yml,tests/test_audit_verify_chain_roundtrip.zig; OWNER=security; UPDATED=2026-05-21
 // GAP-0151 RESOLVED: Now implements Ed25519 signature verification and digest interval validation
 
 pub const HashAlgo = enum { sha256, blake3 };
@@ -118,11 +118,16 @@ pub fn verifyFile(allocator: std.mem.Allocator, path: []const u8, algo: HashAlgo
             return error.Invalid;
         };
 
-        // Verify chain integrity (prev_hash must match last event_hash)
+        // Verify chain integrity. Bug #828 / GAP-0305: the writer at
+        // src/security/audit.zig:467-469 stores prev_hash = SHA256(last_hash);
+        // it is NOT the bare previous event_hash. Reproduce the same SHA256
+        // step here so the comparison matches the on-disk format.
         const prev_buf = try hex32(prev_hex);
-        if (!std.mem.eql(u8, &prev_buf, &last_hash)) {
+        var expected_prev: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(&last_hash, &expected_prev, .{});
+        if (!std.mem.eql(u8, &prev_buf, &expected_prev)) {
             std.debug.print("TAMPER chain ❌  at_seq={} reason=PREV_HASH_MISMATCH expected=", .{seq + 1});
-            for (last_hash) |b| std.debug.print("{x:0>2}", .{b});
+            for (expected_prev) |b| std.debug.print("{x:0>2}", .{b});
             std.debug.print(" got=", .{});
             for (prev_buf) |b| std.debug.print("{x:0>2}", .{b});
             std.debug.print("\n", .{});

@@ -1,4 +1,4 @@
-// CANARY: REQ=REQ-GAP-0727-AUDIT-SEQ-NO; FEATURE="AuditVerifySeqNo"; ASPECT=TamperDetection; STATUS=TESTED; TEST=tests/test_audit_verify_seq_no.zig; OWNER=security; UPDATED=2026-04-16
+// CANARY: REQ=REQ-GAP-0727-AUDIT-SEQ-NO; FEATURE="AuditVerifySeqNo"; ASPECT=TamperDetection; STATUS=TESTED; TEST=tests/test_audit_verify_seq_no.zig; OWNER=security; UPDATED=2026-05-21
 //
 // Regression test for GAP-0727 / SEC-AUD-01.
 //
@@ -57,10 +57,18 @@ fn appendRecord(
 }
 
 /// Build a synthetic 3-record audit log that passes the verifier's chain
-/// check (prev_hash must equal previous record's event_hash; first
-/// record's prev_hash is [0]*32 because the verifier initialises
-/// last_hash to zeros).  Tests here exercise the seq_no contract only —
-/// they don't need to match the audit.zig producer's full hashing scheme.
+/// check.  Bug #828 / GAP-0305: the writer at src/security/audit.zig stores
+/// prev_hash = SHA256(previous event_hash), so the verifier compares the
+/// on-disk prev_hash against SHA256(last_hash) — not bare last_hash.  The
+/// first record's prev_hash is therefore SHA256([0]*32).  Tests here
+/// exercise the seq_no contract only — they don't need to match the
+/// audit.zig producer's full hashing scheme, just its chain format.
+fn sha256(input: [32]u8) [32]u8 {
+    var out: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(&input, &out, .{});
+    return out;
+}
+
 fn buildValidLog(allocator: std.mem.Allocator) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -71,16 +79,16 @@ fn buildValidLog(allocator: std.mem.Allocator) ![]u8 {
     const ev2: [32]u8 = [_]u8{0x22} ** 32;
     const ev3: [32]u8 = [_]u8{0x33} ** 32;
 
-    try appendRecord(allocator, &out, 1, zero, ev1, "ACCESS");
-    try appendRecord(allocator, &out, 2, ev1, ev2, "MUTATE");
-    try appendRecord(allocator, &out, 3, ev2, ev3, "ACCESS");
+    try appendRecord(allocator, &out, 1, sha256(zero), ev1, "ACCESS");
+    try appendRecord(allocator, &out, 2, sha256(ev1), ev2, "MUTATE");
+    try appendRecord(allocator, &out, 3, sha256(ev2), ev3, "ACCESS");
 
     return out.toOwnedSlice(allocator);
 }
 
 /// Build a tampered log: drop seq=2 but splice seq=3's prev_hash back to
-/// seq=1's event_hash so the chain still matches.  seq_no stays at 3,
-/// which is the tell the new verifier catches.
+/// SHA256(seq=1's event_hash) so the chain still matches.  seq_no stays at
+/// 3, which is the tell the new verifier catches.
 fn buildTamperedLog(allocator: std.mem.Allocator) ![]u8 {
     var out = std.ArrayList(u8).empty;
     errdefer out.deinit(allocator);
@@ -89,11 +97,11 @@ fn buildTamperedLog(allocator: std.mem.Allocator) ![]u8 {
     const ev1: [32]u8 = [_]u8{0x11} ** 32;
     const ev3: [32]u8 = [_]u8{0x33} ** 32;
 
-    try appendRecord(allocator, &out, 1, zero, ev1, "ACCESS");
+    try appendRecord(allocator, &out, 1, sha256(zero), ev1, "ACCESS");
     // Attacker deletes seq=2 and rewrites seq=3 so the hash chain still
-    // verifies (prev_hash = seq=1's event_hash), leaving only seq_no as
-    // evidence of the tampering.
-    try appendRecord(allocator, &out, 3, ev1, ev3, "ACCESS");
+    // verifies (prev_hash = SHA256(seq=1's event_hash) per the writer's
+    // format), leaving only seq_no as evidence of the tampering.
+    try appendRecord(allocator, &out, 3, sha256(ev1), ev3, "ACCESS");
 
     return out.toOwnedSlice(allocator);
 }
