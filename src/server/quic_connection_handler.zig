@@ -3163,6 +3163,49 @@ fn handleClientMessage(
                 return;
             }
 
+            // #830: a multi-statement program containing BEGIN/START TRANSACTION
+            // followed by mutations followed by ROLLBACK was silently committing
+            // the mutations.  The execute path doesn't honor BEGIN/COMMIT/ROLLBACK
+            // as inline statements -- those flow only through the dedicated
+            // .begin/.commit/.rollback QUIC message types.  Detect the pattern
+            // and reject it loudly so the user sees the problem instead of
+            // discovering committed-then-rolled-back data later.
+            blk_txn_rollback_check: {
+                var saw_begin = false;
+                var saw_mutation_after_begin = false;
+                var saw_rollback = false;
+                for (parse_result.program.statements) |stmt| {
+                    switch (stmt) {
+                        .StartTransaction => saw_begin = true,
+                        .Rollback => {
+                            if (saw_begin and saw_mutation_after_begin) {
+                                saw_rollback = true;
+                                break;
+                            }
+                        },
+                        .Commit => {
+                            // Commit resets the window; further BEGIN starts a new one.
+                            saw_begin = false;
+                            saw_mutation_after_begin = false;
+                        },
+                        .Create, .Insert, .Merge, .Delete => {
+                            if (saw_begin) saw_mutation_after_begin = true;
+                        },
+                        else => {},
+                    }
+                }
+                if (!saw_rollback) break :blk_txn_rollback_check;
+                try sendExecuteError(
+                    gpa,
+                    stream,
+                    "25001",
+                    "multi-statement program contains BEGIN ... ROLLBACK with mutations; this batch cannot honor ROLLBACK semantics. Send BEGIN, the mutations, and ROLLBACK as separate query messages (the CLI does this automatically for single-statement-per-message workflows), or restructure the script to avoid the BEGIN...ROLLBACK pattern in one batch.",
+                    &.{},
+                    &.{},
+                );
+                return;
+            }
+
             const analysis = query_traits.analyzeProgram(&parse_result.program);
             var traits = analysis.traits;
             const ordered = traits.ordered;

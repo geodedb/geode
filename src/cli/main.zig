@@ -2090,13 +2090,36 @@ fn executeChunkedQueries(allocator: std.mem.Allocator, opts: ChunkedQueryOptions
                 }
                 const txn_end = if (j < statements.len) j + 1 else j;
                 if (txn_bytes > max_chunk_size) {
-                    // Transaction is too large for one chunk — mark BEGIN and
-                    // COMMIT/ROLLBACK for stripping so statements auto-commit.
+                    // #830: refuse to silently auto-commit a transaction that
+                    // ends with ROLLBACK.  Stripping BEGIN/ROLLBACK and
+                    // running the inner statements auto-commit silently
+                    // commits writes the user intended to roll back — that's
+                    // silent data corruption.  Detect ROLLBACK as the
+                    // terminator and fail fast so the operator sees the
+                    // problem and can split the work manually.
+                    const ends_with_rollback = blk: {
+                        if (txn_end == 0 or txn_end - 1 >= statements.len) break :blk false;
+                        const last = std.mem.trim(u8, statements[txn_end - 1], " \t\r\n");
+                        break :blk std.ascii.eqlIgnoreCase(last, "ROLLBACK");
+                    };
+                    if (ends_with_rollback) {
+                        std.debug.print(
+                            \\Error: transaction is too large for a single connection ({d} bytes; chunk limit {d} bytes) and ends with ROLLBACK.
+                            \\Silently auto-committing the inner statements would discard the ROLLBACK semantics and corrupt data.
+                            \\Reduce the transaction size to fit within {d} bytes per chunk, or split it into smaller transactions.
+                            \\
+                        , .{ txn_bytes, max_chunk_size, max_chunk_size });
+                        return error.TransactionTooLargeForChunkedRollback;
+                    }
+                    // Transaction is too large for one chunk and ends with
+                    // COMMIT — mark BEGIN and COMMIT for stripping so the
+                    // inner statements auto-commit (semantically equivalent
+                    // to an explicit COMMIT, modulo isolation guarantees).
                     while (txn_strip.items.len < txn_end)
                         txn_strip.append(allocator, false) catch unreachable;
                     txn_strip.items[txn_start] = true; // strip BEGIN
                     if (txn_end > 0 and txn_end - 1 < txn_strip.items.len) {
-                        txn_strip.items[txn_end - 1] = true; // strip COMMIT/ROLLBACK
+                        txn_strip.items[txn_end - 1] = true; // strip COMMIT
                     }
                     i = txn_end;
                 } else {
