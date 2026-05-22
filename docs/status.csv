@@ -1,4 +1,5 @@
 REQ,Feature,Aspect,Status,Test,Bench,Owner,Updated,File
+GAP-0284,ABAC user attribute store,GlobalStore,TESTED,,,security,2026-05-22,src/security/user_attribute_store.zig
 GAP-0436,JsonbDepthGuard,SECURITY,TESTED,,,security,2026-02-18,src/types/jsonb.zig
 GAP-0514-PHASE1A,GraphStoreRegressionCoverage,Scaffold,TESTED,,,engine,2026-04-11,tests/test_gap0514_graph_store_regression.zig
 GAP-0531,DB/DBMS Introspection Procedures,Dispatch,TESTED,,,execution,2026-04-10,src/execution/meta_dispatch.zig
@@ -1088,7 +1089,7 @@ REQ-GEODETESTLAB-ASSERT-001,GeodeTestlab,Assertions,TESTED,,,test,2026-01-16,tes
 REQ-GEODETESTLAB-SPEC-001,GeodeTestlab,SpecExecution,TESTED,,,test,2026-01-16,tests/test_gap_0193_batch5_comprehensive.zig
 REQ-GITLAB-LABELS-001,GitLab Label Taxonomy,Tooling,EXEMPT,,,tooling,2026-01-14,scripts/gitlab/create_type_labels.sh
 REQ-GPS-ABAC-001,GPS ABAC Predicates,AndWithAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
-REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,src/security/gps.zig
+REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-22,src/security/gps.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,DecidePopulateAttributes,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,src/security/policy_expression.zig
 REQ-GPS-ABAC-001,GPS ABAC Predicates,EvalAttrPredicate,TESTED,,,security,2026-05-20,tests/test_gps_abac_predicates.zig

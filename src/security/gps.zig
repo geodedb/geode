@@ -158,7 +158,6 @@ fn hashResource(r: ResourceRef) u64 {
 }
 
 pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !PolicyDecision {
-    _ = allocator;
 
     // CANARY: REQ=REQ-GPS-PDP-007; FEATURE="GPS Decision Engine"; ASPECT=InsecureAllowAll; STATUS=TESTED; TEST=tests/test_gps_decide.zig; OWNER=security; UPDATED=2026-05-20
     // --insecure-allow-all: process-wide kill-switch that short-circuits all
@@ -353,22 +352,43 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
             if (!policyMatchesAction(policy.*, req.action)) continue;
             if (!policyMatchesResource(policy.*, req.resource)) continue;
 
-            // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=DecidePopulateAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-20
+            // CANARY: REQ=REQ-GPS-ABAC-001; FEATURE="GPS ABAC Predicates"; ASPECT=DecidePopulateAttributes; STATUS=TESTED; TEST=tests/test_gps_abac_predicates.zig; OWNER=security; UPDATED=2026-05-22
             // Build an evaluation context from the current request.
             // Phase 6 (Task 6-2): principal_attributes is populated from the
             // caller's AttributeMap so that eq_principal_attr predicates can
             // match ABAC key/value pairs without any additional allocation.
-            // Both principal.AttributeMap.Entry and policy_expression.AttributeEntry
-            // are { key: []const u8, value: []const u8 } — same layout.
-            // We map through the entries to build the attribute slice.
-            const raw_entries = req.principal.attributes.entries;
-            // Comptime layout assert: both types are identical structs.
+            //
+            // GAP-0284 (2026-05-22): the principal carried by every transport
+            // (QUIC, gRPC, MCP, distributed) is currently constructed with
+            // attributes=emptySentinel() because derivePrincipal() runs without
+            // an allocator. To make ABAC predicates actually fire, fall back
+            // to the security/user_attribute_store snapshot keyed by the
+            // authenticated username when the principal's own attribute slice
+            // is empty.
             comptime std.debug.assert(@sizeOf(principal_mod.AttributeMap.Entry) == @sizeOf(policy_expression.AttributeEntry));
-            // Safe slice reinterpret: same element size and layout.
-            const attr_entries: []const policy_expression.AttributeEntry = @as(
-                [*]const policy_expression.AttributeEntry,
-                @ptrCast(raw_entries.ptr),
-            )[0..raw_entries.len];
+            const raw_entries = req.principal.attributes.entries;
+            var owned_snapshot: ?[]policy_expression.AttributeEntry = null;
+            defer if (owned_snapshot) |s| {
+                for (s) |e| {
+                    allocator.free(e.key);
+                    allocator.free(e.value);
+                }
+                allocator.free(s);
+            };
+            const attr_entries: []const policy_expression.AttributeEntry = if (raw_entries.len > 0) blk: {
+                break :blk @as(
+                    [*]const policy_expression.AttributeEntry,
+                    @ptrCast(raw_entries.ptr),
+                )[0..raw_entries.len];
+            } else if (req.principal.username) |uname| blk: {
+                const snap = @import("user_attribute_store.zig").snapshotEntries(
+                    allocator,
+                    uname,
+                    policy_expression.AttributeEntry,
+                ) catch try allocator.alloc(policy_expression.AttributeEntry, 0);
+                if (snap.len > 0) owned_snapshot = snap;
+                break :blk snap;
+            } else &[_]policy_expression.AttributeEntry{};
             const ctx = policy_expression.PolicyEvalContext{
                 .current_user = req.principal.username,
                 .current_tenant = req.principal.tenant_id,

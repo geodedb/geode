@@ -659,33 +659,17 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
     return error.UnknownRole;
 }
 
-// #832: ABAC user-attribute store -- populated by handleUserSetAttribute /
-// handleUserRemoveAttribute; read by ABAC policy evaluation.
-//
-// The user_management.User struct does not carry attributes (those live in
-// the separate user_manager.User), so this side-table keeps the assignment
-// reachable from the auth_dispatch surface. Persistence to __geode_security
-// is a follow-up.
-pub var g_user_attributes: std.StringHashMap(std.StringHashMap([]const u8)) = undefined;
-pub var g_user_attributes_init: bool = false;
-pub var g_user_attributes_mu: std.Io.Mutex = std.Io.Mutex.init;
-
-fn ensureUserAttributesInit(allocator: std.mem.Allocator) void {
-    if (!g_user_attributes_init) {
-        g_user_attributes = std.StringHashMap(std.StringHashMap([]const u8)).init(allocator);
-        g_user_attributes_init = true;
-    }
-}
+// #832 / GAP-0284: ABAC user-attribute store. Storage lives in
+// src/security/user_attribute_store.zig so that the security layer
+// (principal_derive, gps.decide) can read the same side-table without
+// importing execution/.
+const user_attr_store = @import("../security/user_attribute_store.zig");
 
 /// Public accessor for ABAC policy evaluation. Returns the attribute map
 /// for `username`, or null if no attributes are set. The map is owned by
 /// the side-table; callers must not free.
 pub fn getUserAttributes(username: []const u8) ?*const std.StringHashMap([]const u8) {
-    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (!g_user_attributes_init) return null;
-    const entry = g_user_attributes.getPtr(username) orelse return null;
-    return entry;
+    return user_attr_store.get(username);
 }
 
 fn handleUserSetAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -711,20 +695,7 @@ fn handleUserSetAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt
         row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: user '{s}' does not exist", .{username}) };
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
     }
-    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    ensureUserAttributesInit(allocator);
-    const user_entry = try g_user_attributes.getOrPut(username);
-    if (!user_entry.found_existing) {
-        user_entry.key_ptr.* = try allocator.dupe(u8, username);
-        user_entry.value_ptr.* = std.StringHashMap([]const u8).init(allocator);
-    }
-    // Replace existing value if any (free the old).
-    if (user_entry.value_ptr.fetchRemove(key)) |old| {
-        allocator.free(old.key);
-        allocator.free(old.value);
-    }
-    try user_entry.value_ptr.put(try allocator.dupe(u8, key), try allocator.dupe(u8, value));
+    try user_attr_store.setAttribute(allocator, username, key, value);
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "set attribute {s}={s} for {s}", .{ key, value, username }) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
@@ -742,19 +713,9 @@ fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_s
     const row = try allocator.alloc(Value, 1);
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
-    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
-    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
-    if (!g_user_attributes_init) {
-        row[0] = Value{ .Str = try allocator.dupe(u8, "no attributes to remove") };
+    if (user_attr_store.removeAttribute(username, key, allocator)) {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "removed attribute {s} from {s}", .{ key, username }) };
         return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-    }
-    if (g_user_attributes.getPtr(username)) |attrs| {
-        if (attrs.fetchRemove(key)) |old| {
-            allocator.free(old.key);
-            allocator.free(old.value);
-            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "removed attribute {s} from {s}", .{ key, username }) };
-            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
-        }
     }
     row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "attribute {s} not set on {s}", .{ key, username }) };
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
