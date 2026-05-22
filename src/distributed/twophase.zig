@@ -1060,10 +1060,23 @@ pub const Coordinator = struct {
             .node_id = node_id,
             .transactions = std.StringHashMap(Transaction).init(allocator),
             .log_writer = null,
-            .default_timeout_ms = 30_000,
+            // #843: allow env override for harness-driven failure-mode tests.
+            // GEODE_2PC_TIMEOUT_MS is parsed once at init; invalid values
+            // fall back to the 30_000 ms default.
+            .default_timeout_ms = readTimeoutEnv(),
             .send_fn = defaultSendMessage,
             .send_ctx = null,
         };
+    }
+
+    fn readTimeoutEnv() u64 {
+        if (@import("builtin").os.tag == .windows) return 30_000;
+        const name_z: [*:0]const u8 = "GEODE_2PC_TIMEOUT_MS";
+        const ptr = std.c.getenv(name_z) orelse return 30_000;
+        var len: usize = 0;
+        while (ptr[len] != 0) : (len += 1) {}
+        const s = ptr[0..len];
+        return std.fmt.parseUnsigned(u64, s, 10) catch 30_000;
     }
 
     pub fn deinit(self: *Coordinator) void {
