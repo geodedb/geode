@@ -285,13 +285,28 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
     const indexes = try catalog.listAllIndexes(allocator);
     defer allocator.free(indexes);
 
+    // #844: FULLTEXT indexes live in IndexManager.fulltext_indexes and were
+    // never registered with the Catalog -- so SHOW INDEXES couldn't see them
+    // even though BM25 search functions correctly against them. Iterate the
+    // FTS map and surface each one alongside the catalog-registered indexes.
+    const index_manager = @import("../index/index_manager.zig");
+    var fts_names = std.ArrayList([]const u8).empty;
+    defer fts_names.deinit(allocator);
+    if (index_manager.getGlobalIndexManager()) |mgr| {
+        var it = mgr.fulltext_indexes.keyIterator();
+        while (it.next()) |key_ptr| {
+            try fts_names.append(allocator, key_ptr.*);
+        }
+    }
+
+    const total = indexes.len + fts_names.items.len;
     const columns = try allocator.alloc([]const u8, 4);
     columns[0] = try allocator.dupe(u8, "name");
     columns[1] = try allocator.dupe(u8, "type");
     columns[2] = try allocator.dupe(u8, "label");
     columns[3] = try allocator.dupe(u8, "properties");
 
-    const rows = try allocator.alloc([]Value, indexes.len);
+    const rows = try allocator.alloc([]Value, total);
     for (indexes, 0..) |idx, i| {
         const row = try allocator.alloc(Value, 4);
         row[0] = .{ .Str = try allocator.dupe(u8, idx.name) };
@@ -299,6 +314,14 @@ fn executeDbIndexes(allocator: std.mem.Allocator, context: ExecutionContext) !Ex
         row[2] = .{ .Str = try allocator.dupe(u8, idx.table_name) };
         row[3] = .{ .Str = try joinStrings(allocator, idx.columns, ", ") };
         rows[i] = row;
+    }
+    for (fts_names.items, 0..) |name, j| {
+        const row = try allocator.alloc(Value, 4);
+        row[0] = .{ .Str = try allocator.dupe(u8, name) };
+        row[1] = .{ .Str = try allocator.dupe(u8, "FULLTEXT") };
+        row[2] = .{ .Str = try allocator.dupe(u8, "") };
+        row[3] = .{ .Str = try allocator.dupe(u8, "") };
+        rows[indexes.len + j] = row;
     }
 
     return ExecutionResult{
