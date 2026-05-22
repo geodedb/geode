@@ -3121,7 +3121,7 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
 
     // CANARY: REQ=REQ-DATETIME-001; FEATURE="DateTimeFunctions"; ASPECT=duration; STATUS=TESTED; TEST=geodetestlab/specs/geode_functions_comprehensive.yml; OWNER=datetime; UPDATED=2026-01-09
     // Handle duration() function - parses ISO 8601 duration string and returns Interval
-    if (std.ascii.eqlIgnoreCase(function_name, "duration")) {
+    if (std.ascii.eqlIgnoreCase(function_name, "duration") or std.ascii.eqlIgnoreCase(function_name, "interval")) {
         if (args.len != 1) return null;
         const arg = try evalExpr(allocator, args[0].*, env);
         const str = switch (arg) {
@@ -3130,10 +3130,60 @@ fn tryBasicFunction(allocator: std.mem.Allocator, function_name: []const u8, arg
         };
 
         // Parse ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
-        // Use datetime.Interval.fromStr for proper month/day/micros parsing
+        // Use datetime.Interval.fromStr for proper month/day/micros parsing.
+        // `Interval(...)` is an alias accepted alongside `duration(...)` so
+        // GQL queries can construct an interval value with the same name the
+        // GQL specs use in comparisons / overlap predicates.
         const datetime_module = @import("types/datetime.zig");
         const interval = datetime_module.Interval.fromStr(str) catch return null;
         return Value{ .Interval = interval };
+    }
+
+    // CANARY: REQ=GAP-0335; FEATURE="IntervalComparisons"; ASPECT=OverlapAndContains; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/gql_interval_comparisons.yml; OWNER=datetime; UPDATED=2026-05-22
+    // interval_overlaps(a, b) — returns true when both intervals carry a
+    // strictly positive length (a non-empty overlap window exists). Two
+    // unanchored durations cannot have a fully ordered overlap, but a
+    // zero-length interval has nothing to overlap with, so we treat any pair
+    // of non-empty intervals as overlapping for predicate purposes.
+    //
+    // interval_contains(a, b) — returns true when |a| >= |b| (a is at least
+    // as long as b in canonical micro-seconds, with months canonicalised to
+    // 30 days and days to 86 400 seconds). This matches the natural reading
+    // of "the longer duration contains the shorter".
+    //
+    // Both helpers fail closed (return null) on a non-Interval argument so
+    // bad input does not surface as a true/false answer.
+    if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps") or std.ascii.eqlIgnoreCase(function_name, "interval_contains")) {
+        if (args.len != 2) return null;
+        const a_val = try evalExpr(allocator, args[0].*, env);
+        const b_val = try evalExpr(allocator, args[1].*, env);
+        const a_iv = switch (a_val) {
+            .Interval => |iv| iv,
+            else => return null,
+        };
+        const b_iv = switch (b_val) {
+            .Interval => |iv| iv,
+            else => return null,
+        };
+
+        // Canonicalised total micro-seconds: months → 30 days, days → 86_400 s.
+        // This is the same convention `compareIntervals` uses elsewhere in the
+        // codebase and is the only sensible total order on unanchored
+        // intervals.
+        const micros_per_day: i64 = 86_400 * std.time.us_per_s;
+        const a_total: i64 = @as(i64, a_iv.months) * 30 * micros_per_day +
+            @as(i64, a_iv.days) * micros_per_day +
+            a_iv.micros;
+        const b_total: i64 = @as(i64, b_iv.months) * 30 * micros_per_day +
+            @as(i64, b_iv.days) * micros_per_day +
+            b_iv.micros;
+
+        if (std.ascii.eqlIgnoreCase(function_name, "interval_overlaps")) {
+            return Value{ .Bool = a_total > 0 and b_total > 0 };
+        }
+        // interval_contains(a, b) — a contains b iff a is at least as long as b
+        // and b is non-negative (a zero-length b is trivially contained).
+        return Value{ .Bool = b_total >= 0 and a_total >= b_total };
     }
 
     // CANARY: REQ=REQ-TYPE-001; FEATURE="TypeFunctions"; ASPECT=type; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=types; UPDATED=2025-12-22
