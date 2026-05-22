@@ -320,6 +320,87 @@ pub fn cmdUser(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !
         return;
     }
 
+    // `user import <username> --hash <hash> [--email <e>] [--algorithm <a>] [--role <r>]`
+    // Imports a user with a PRE-COMPUTED password hash rather than a
+    // plaintext password. Intended for migrating users from another system
+    // (e.g. a legacy store carrying BLAKE2b hashes). The hash is stored
+    // verbatim in the __geode_security graph's password_hash column; no
+    // re-hashing occurs. This is the offline counterpart to `user create`.
+    // CANARY: REQ=REQ-AUTH-USER-IMPORT-001; FEATURE="AdminUserImport"; ASPECT=PrecomputedHashImport; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/authn_blake2b_migration.yml; OWNER=security; UPDATED=2026-05-22
+    if (std.mem.eql(u8, subcommand, "import")) {
+        if (subcmd_idx + 1 >= argv.len) {
+            std.debug.print("Error: user import requires <username> and --hash <hash>\n", .{});
+            printUserUsage();
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        const username = argv[subcmd_idx + 1];
+        var hash_value: ?[]const u8 = null;
+        var email: []const u8 = "";
+        var role: []const u8 = "user";
+        var algorithm: []const u8 = "argon2id";
+
+        var i = subcmd_idx + 2;
+        while (i < argv.len) : (i += 1) {
+            if (std.mem.eql(u8, argv[i], "--hash")) {
+                if (i + 1 >= argv.len) {
+                    std.debug.print("Error: --hash requires a value\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                hash_value = argv[i + 1];
+                i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--email")) {
+                if (i + 1 >= argv.len) {
+                    std.debug.print("Error: --email requires a value\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                email = argv[i + 1];
+                i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--role")) {
+                if (i + 1 >= argv.len) {
+                    std.debug.print("Error: --role requires a value\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                role = argv[i + 1];
+                i += 1;
+            } else if (std.mem.eql(u8, argv[i], "--algorithm")) {
+                if (i + 1 >= argv.len) {
+                    std.debug.print("Error: --algorithm requires a value\n", .{});
+                    std.process.exit(@intFromEnum(ExitCode.usage_error));
+                }
+                algorithm = argv[i + 1];
+                i += 1;
+            }
+        }
+
+        if (hash_value == null or hash_value.?.len == 0) {
+            std.debug.print("Error: user import requires a non-empty --hash <hash>\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        if (!std.mem.eql(u8, algorithm, "argon2id") and !std.mem.eql(u8, algorithm, "blake2b")) {
+            std.debug.print("Error: --algorithm must be 'argon2id' or 'blake2b'\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+
+        if (mgr.storage.getUserByUsername(username) != null) {
+            std.debug.print("Error: user '{s}' already exists; import refuses to overwrite\n", .{username});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        }
+
+        const user_id = mgr.next_user_id;
+        mgr.next_user_id += 1;
+        mgr.storage.persistUser(user_id, username, email, hash_value.?, "") catch |err| {
+            std.debug.print("Error: failed to import user '{s}': {s}\n", .{ username, @errorName(err) });
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        if (mgr.storage.getRoleByName(role) == null) {
+            const role_id = mgr.next_user_id;
+            mgr.next_user_id += 1;
+            mgr.storage.persistRole(role_id, role, "assigned at user import", 0, 0, false) catch {};
+        }
+        printOut("User '{s}' imported successfully ({s} hash)\n", .{ username, algorithm });
+        return;
+    }
+
     if (std.mem.eql(u8, subcommand, "list")) {
         if (hasHelpFlag(argv, subcmd_idx + 1)) {
             printOut("Usage: geode user list\nLists all users\n", .{});
