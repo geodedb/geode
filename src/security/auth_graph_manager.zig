@@ -119,6 +119,13 @@ pub const AuthGraphManager = struct {
     /// (the struct is moved by value during server initialization).
     hmac_key: [32]u8 = [_]u8{0} ** 32,
     verify_interval_minutes: u32 = 0,
+    /// #834: serialize sealChain across concurrent auth mutations. Without
+    /// this lock two concurrent ALTER USER calls could each (a) compute their
+    /// HMAC list, (b) race to persist the chain root, leaving the chain_root
+    /// inconsistent with the per-record hmac on disk -- subsequent restart's
+    /// verifyChain then fails with AuthChainTampered even though no real
+    /// tamper occurred.
+    seal_mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     const Self = @This();
 
@@ -497,6 +504,12 @@ pub const AuthGraphManager = struct {
     /// Recompute all per-record HMACs and chain hash.
     /// Used after mutations or by `geode auth reseal`.
     pub fn sealChain(self: *Self, hmac_key: *const [32]u8) !void {
+        // #834: hold seal_mutex across the entire compute-and-persist window
+        // so concurrent ALTER USER calls don't interleave their hmac_list
+        // construction with another writer's persistChainRoot.
+        self.seal_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.seal_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
         var hmac_list: std.ArrayList([32]u8) = .empty;
         defer hmac_list.deinit(self.allocator);
 
