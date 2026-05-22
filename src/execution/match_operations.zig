@@ -7880,10 +7880,18 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                                 fastpath_hit = out_id;
                                 fastpath_authoritative = true;
                             },
-                            .not_found => {
-                                fastpath_authoritative = true;
-                            },
-                            .not_indexable => {},
+                            // GAP-0334: a miss in the merge_prop_index is
+                            // NOT authoritative for a generic MATCH inline
+                            // filter — the merge index only carries nodes
+                            // created via MERGE, not via CREATE. Treating
+                            // .not_found as authoritative made
+                            // `MATCH (n:Lbl {k: 'v'}) WHERE ...` return 0
+                            // rows whenever the seed used CREATE (the index
+                            // is empty, lookup misses, fast path short-
+                            // circuits, label scan never runs). Fall through
+                            // to the label scan instead so CREATE-only graphs
+                            // get the correct candidate set.
+                            .not_found, .not_indexable => {},
                         }
                     }
                 } else |_| {}
