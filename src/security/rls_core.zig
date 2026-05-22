@@ -36,6 +36,7 @@ fn compat_microTimestamp() i64 {
 }
 const Allocator = std.mem.Allocator;
 const auth = @import("geode_auth");
+const user_attr_store = @import("user_attr_store");
 const logging = @import("logging");
 const build_options = @import("build_options"); // GAP-0732: allow_rls_raw_interp gate
 const log = logging.scoped("security");
@@ -183,6 +184,7 @@ pub const RLSEngine = struct {
             load_row = 0x10, // Load row[constants[arg]] onto stack
             load_user = 0x11, // Load current user ID onto stack
             load_session = 0x12, // Load session[constants[arg]] onto stack
+            load_attr = 0x13, // Load principal.attribute[constants[arg]] onto stack (ABAC)
             // Comparisons (pop 2, push bool)
             eq = 0x20, // ==
             neq = 0x21, // <>
@@ -216,6 +218,7 @@ pub const RLSEngine = struct {
                     0x10 => .load_row,
                     0x11 => .load_user,
                     0x12 => .load_session,
+                    0x13 => .load_attr,
                     0x20 => .eq,
                     0x21 => .neq,
                     0x22 => .lt,
@@ -514,136 +517,180 @@ pub const RLSEngine = struct {
         var constants = std.ArrayList(Value).empty;
         var jump_table = std.ArrayList(usize).empty;
 
-        // Simple expression parser supporting:
-        // - row.field_name = 'value'
-        // - row.field_name = current_user
-        // - expr1 AND expr2, expr1 OR expr2
-        // - TRUE, FALSE
-        var i: usize = 0;
-        while (i < expr.len) {
-            // Skip whitespace
-            while (i < expr.len and (expr[i] == ' ' or expr[i] == '\t' or expr[i] == '\n')) : (i += 1) {}
-            if (i >= expr.len) break;
+        // GAP-0284: recursive-descent compiler emitting POSTFIX (RPN)
+        // bytecode for the stack VM. The previous implementation was a flat
+        // tokenizer that emitted operators in infix source order — `row.x =
+        // 'v'` produced [load_row, eq, push_const], so `eq` ran with one
+        // operand and the VM underflowed (every row denied). Postfix emit is
+        // the fix.
+        //
+        // Grammar (OR loosest, then AND, then comparison; NOT is prefix):
+        //   or_     := and_ ( "OR"  and_ )*
+        //   and_    := cmp  ( "AND" cmp  )*
+        //   cmp     := unary ( ("=" | "<>" | "!=" | "<=" | ">=" | "<" | ">") unary )?
+        //   unary   := "NOT" unary | primary
+        //   primary := "(" or_ ")" | "TRUE" | "FALSE" | "NULL"
+        //            | "row." ident | "principal.attribute." ident
+        //            | "current_user" | "'" string "'" | integer
+        const C = struct {
+            self: *Self,
+            src: []const u8,
+            pos: usize = 0,
+            bc: *std.ArrayList(u8),
+            ks: *std.ArrayList(Value),
 
-            // Check for TRUE/FALSE literals
-            if (i + 4 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 4], "true")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_true));
-                i += 4;
-                continue;
+            fn skipWs(c: *@This()) void {
+                while (c.pos < c.src.len and (c.src[c.pos] == ' ' or c.src[c.pos] == '\t' or c.src[c.pos] == '\n' or c.src[c.pos] == '\r')) : (c.pos += 1) {}
             }
-            if (i + 5 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 5], "false")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_false));
-                i += 5;
-                continue;
+            fn emit(c: *@This(), op: Opcode) !void {
+                try c.bc.append(c.self.allocator, @intFromEnum(op));
             }
-
-            // Check for AND/OR
-            if (i + 3 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 3], "and")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_and));
-                i += 3;
-                continue;
+            fn emitArg(c: *@This(), a: u8) !void {
+                try c.bc.append(c.self.allocator, a);
             }
-            if (i + 2 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 2], "or")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_or));
-                i += 2;
-                continue;
+            fn pushConst(c: *@This(), v: Value) !void {
+                try c.ks.append(c.self.allocator, v);
+                try c.emit(.push_const);
+                try c.emitArg(@intCast(c.ks.items.len - 1));
             }
-
-            // Check for NOT
-            if (i + 3 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 3], "not")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.op_not));
-                i += 3;
-                continue;
+            /// Case-insensitive keyword match at pos, requiring the next char
+            /// (if any) is not an identifier char. Consumes + returns true.
+            fn matchKw(c: *@This(), kw: []const u8) bool {
+                if (c.pos + kw.len > c.src.len) return false;
+                if (!std.ascii.eqlIgnoreCase(c.src[c.pos .. c.pos + kw.len], kw)) return false;
+                const after = c.pos + kw.len;
+                if (after < c.src.len) {
+                    const ch = c.src[after];
+                    if (std.ascii.isAlphanumeric(ch) or ch == '_' or ch == '.') return false;
+                }
+                c.pos = after;
+                return true;
             }
-
-            // Check for row.field_name pattern
-            if (i + 4 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 4], "row.")) {
-                i += 4;
-                const field_start = i;
-                while (i < expr.len and (std.ascii.isAlphanumeric(expr[i]) or expr[i] == '_')) : (i += 1) {}
-                const field_name = expr[field_start..i];
-                // Add field name to constants and emit load_row
-                try constants.append(self.allocator, .{ .string = field_name });
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.load_row));
-                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
-                continue;
+            /// Plain case-insensitive prefix match (no boundary check).
+            fn matchLit(c: *@This(), lit: []const u8) bool {
+                if (c.pos + lit.len > c.src.len) return false;
+                if (!std.ascii.eqlIgnoreCase(c.src[c.pos .. c.pos + lit.len], lit)) return false;
+                c.pos += lit.len;
+                return true;
             }
-
-            // Check for current_user
-            if (i + 12 <= expr.len and std.ascii.eqlIgnoreCase(expr[i .. i + 12], "current_user")) {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.load_user));
-                i += 12;
-                continue;
-            }
-
-            // Check for comparison operators
-            if (i + 2 <= expr.len and expr[i] == '<' and expr[i + 1] == '>') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.neq));
-                i += 2;
-                continue;
-            }
-            if (i + 2 <= expr.len and expr[i] == '<' and expr[i + 1] == '=') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.lte));
-                i += 2;
-                continue;
-            }
-            if (i + 2 <= expr.len and expr[i] == '>' and expr[i + 1] == '=') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.gte));
-                i += 2;
-                continue;
-            }
-            if (expr[i] == '=') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.eq));
-                i += 1;
-                continue;
-            }
-            if (expr[i] == '<') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.lt));
-                i += 1;
-                continue;
-            }
-            if (expr[i] == '>') {
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.gt));
-                i += 1;
-                continue;
+            fn ident(c: *@This()) []const u8 {
+                const start = c.pos;
+                while (c.pos < c.src.len and (std.ascii.isAlphanumeric(c.src[c.pos]) or c.src[c.pos] == '_')) : (c.pos += 1) {}
+                return c.src[start..c.pos];
             }
 
-            // Check for string literal 'value'
-            if (expr[i] == '\'') {
-                i += 1;
-                const str_start = i;
-                while (i < expr.len and expr[i] != '\'') : (i += 1) {}
-                const str_value = expr[str_start..i];
-                if (i < expr.len) i += 1; // Skip closing quote
-                try constants.append(self.allocator, .{ .string = str_value });
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_const));
-                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
-                continue;
+            fn parseOr(c: *@This()) anyerror!void {
+                try c.parseAnd();
+                while (true) {
+                    c.skipWs();
+                    if (!c.matchKw("or")) break;
+                    try c.parseAnd();
+                    try c.emit(.op_or);
+                }
             }
-
-            // GAP-0141: Safe integer parsing with error logging
-            // CANARY: REQ=REQ-INT-PARSE-RLS-001; FEATURE="Safe Integer Parsing"; ASPECT=Security; STATUS=TESTED; TEST=geodetestlab/specs/gql_type_system_comprehensive.yml; OWNER=security; UPDATED=2026-01-13
-            // Check for integer literal
-            if (std.ascii.isDigit(expr[i]) or (expr[i] == '-' and i + 1 < expr.len and std.ascii.isDigit(expr[i + 1]))) {
-                const num_start = i;
-                if (expr[i] == '-') i += 1;
-                while (i < expr.len and std.ascii.isDigit(expr[i])) : (i += 1) {}
-                const num_str = expr[num_start..i];
-                const num_value = std.fmt.parseInt(i64, num_str, 10) catch {
-                    log.warn("Invalid integer literal in RLS expression", &.{
-                        Attr.string("literal", num_str),
-                    });
-                    return error.InvalidRlsExpression;
-                };
-                try constants.append(self.allocator, .{ .integer = num_value });
-                try bytecode.append(self.allocator, @intFromEnum(Opcode.push_const));
-                try bytecode.append(self.allocator, @intCast(constants.items.len - 1));
-                continue;
+            fn parseAnd(c: *@This()) anyerror!void {
+                try c.parseCmp();
+                while (true) {
+                    c.skipWs();
+                    if (!c.matchKw("and")) break;
+                    try c.parseCmp();
+                    try c.emit(.op_and);
+                }
             }
+            fn parseCmp(c: *@This()) anyerror!void {
+                try c.parseUnary();
+                c.skipWs();
+                const op: ?Opcode =
+                    if (c.matchLit("<>")) Opcode.neq else if (c.matchLit("!=")) Opcode.neq else if (c.matchLit("<=")) Opcode.lte else if (c.matchLit(">=")) Opcode.gte else if (c.matchLit("=")) Opcode.eq else if (c.matchLit("<")) Opcode.lt else if (c.matchLit(">")) Opcode.gt else null;
+                if (op) |o| {
+                    try c.parseUnary();
+                    try c.emit(o);
+                }
+            }
+            fn parseUnary(c: *@This()) anyerror!void {
+                c.skipWs();
+                if (c.matchKw("not")) {
+                    try c.parseUnary();
+                    try c.emit(.op_not);
+                    return;
+                }
+                try c.parsePrimary();
+            }
+            fn parsePrimary(c: *@This()) anyerror!void {
+                c.skipWs();
+                if (c.pos >= c.src.len) return error.InvalidRlsExpression;
+                if (c.src[c.pos] == '(') {
+                    c.pos += 1;
+                    try c.parseOr();
+                    c.skipWs();
+                    if (c.pos < c.src.len and c.src[c.pos] == ')') c.pos += 1;
+                    return;
+                }
+                if (c.matchKw("true")) {
+                    try c.emit(.push_true);
+                    return;
+                }
+                if (c.matchKw("false")) {
+                    try c.emit(.push_false);
+                    return;
+                }
+                if (c.matchKw("null")) {
+                    try c.emit(.push_null);
+                    return;
+                }
+                // ABAC: principal.attribute.<key> — resolved per-row at eval
+                // time against the global user attribute store.
+                if (c.matchLit("principal.attribute.")) {
+                    const key = c.ident();
+                    try c.ks.append(c.self.allocator, .{ .string = key });
+                    try c.emit(.load_attr);
+                    try c.emitArg(@intCast(c.ks.items.len - 1));
+                    return;
+                }
+                if (c.matchLit("row.")) {
+                    const field = c.ident();
+                    try c.ks.append(c.self.allocator, .{ .string = field });
+                    try c.emit(.load_row);
+                    try c.emitArg(@intCast(c.ks.items.len - 1));
+                    return;
+                }
+                if (c.matchKw("current_user")) {
+                    try c.emit(.load_user);
+                    return;
+                }
+                if (c.src[c.pos] == '\'') {
+                    c.pos += 1;
+                    const start = c.pos;
+                    while (c.pos < c.src.len and c.src[c.pos] != '\'') : (c.pos += 1) {}
+                    const sv = c.src[start..c.pos];
+                    if (c.pos < c.src.len) c.pos += 1; // closing quote
+                    try c.pushConst(.{ .string = sv });
+                    return;
+                }
+                if (std.ascii.isDigit(c.src[c.pos]) or (c.src[c.pos] == '-' and c.pos + 1 < c.src.len and std.ascii.isDigit(c.src[c.pos + 1]))) {
+                    const start = c.pos;
+                    if (c.src[c.pos] == '-') c.pos += 1;
+                    while (c.pos < c.src.len and std.ascii.isDigit(c.src[c.pos])) : (c.pos += 1) {}
+                    const num = std.fmt.parseInt(i64, c.src[start..c.pos], 10) catch {
+                        log.warn("Invalid integer literal in RLS expression", &.{
+                            Attr.string("literal", c.src[start..c.pos]),
+                        });
+                        return error.InvalidRlsExpression;
+                    };
+                    try c.pushConst(.{ .integer = num });
+                    return;
+                }
+                return error.InvalidRlsExpression;
+            }
+        };
 
-            // Skip unknown characters
-            i += 1;
-        }
+        var comp = C{ .self = self, .src = expr, .bc = &bytecode, .ks = &constants };
+        comp.parseOr() catch {
+            // Malformed / empty expression: fail closed — emit a lone
+            // push_false so the VM denies every row rather than crashing.
+            bytecode.clearRetainingCapacity();
+            try bytecode.append(self.allocator, @intFromEnum(Opcode.push_false));
+        };
 
         // Add return instruction
         try bytecode.append(self.allocator, @intFromEnum(Opcode.ret));
@@ -811,6 +858,17 @@ pub const RLSEngine = struct {
                     }
                     sp += 1;
                 },
+                .load_attr => {
+                    // CANARY: REQ=GAP-0284; FEATURE="ABAC user attribute store"; ASPECT=RLSExprAttrLoad; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/abac_attribute_policies.yml; OWNER=security; UPDATED=2026-05-22
+                    // Resolve principal.attribute.<key> against the global ABAC
+                    // attribute side-table for the SecurityContext user.
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    stack[sp] = self.resolvePrincipalAttribute(context.user.username, expr.constants, idx);
+                    sp += 1;
+                },
                 .eq => {
                     if (sp < 2) return error.StackUnderflow;
                     const b = stack[sp - 1];
@@ -975,6 +1033,30 @@ pub const RLSEngine = struct {
         };
     }
 
+    // CANARY: REQ=GAP-0284; FEATURE="ABAC user attribute store"; ASPECT=RLSExprAttrResolve; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/abac_attribute_policies.yml; OWNER=security; UPDATED=2026-05-22
+    /// Resolve `principal.attribute.<key>` for `username` against the global
+    /// ABAC attribute side-table. Returns the attribute value as a string
+    /// Value, or `.null` when the user has no such attribute. The borrowed
+    /// string lives in the process-global store; it is only consumed for the
+    /// duration of this per-row VM evaluation (compared immediately, never
+    /// retained), matching the lifetime contract used by `load_session`.
+    fn resolvePrincipalAttribute(
+        self: *Self,
+        username: []const u8,
+        constants: []const Value,
+        idx: u8,
+    ) Value {
+        _ = self;
+        if (idx >= constants.len) return .null;
+        const key = switch (constants[idx]) {
+            .string => |s| s,
+            else => return .null,
+        };
+        const attrs = user_attr_store.get(username) orelse return .null;
+        const val = attrs.get(key) orelse return .null;
+        return .{ .string = val };
+    }
+
     fn valueToBool(self: *Self, v: Value) bool {
         _ = self;
         return switch (v) {
@@ -1072,13 +1154,15 @@ pub const RLSEngine = struct {
     ) !bool {
         const key = PolicyKey{ .graph = graph, .table = table };
 
-        // Hash username to produce a cache-compatible user ID.
-        const user_id: auth.UserId = std.hash.Wyhash.hash(0, username);
-
-        // Check cache first
-        if (self.policy_cache.get(key, user_id, operation)) |allowed| {
-            if (!allowed) return false;
-        }
+        // GAP-0284: the policy_cache is keyed on (graph, table, user_id,
+        // operation) — it has NO row identity. It is only sound for coarse
+        // "can this user touch this table at all" decisions. Expression
+        // policies (ABAC `row.<prop> = principal.attribute.<key>`) produce a
+        // PER-ROW verdict, so caching one row's result under a per-table key
+        // and replaying it for sibling rows is a correctness bug (it denied
+        // every row once any one row evaluated false). This per-row entry
+        // point therefore never consults or populates policy_cache; the
+        // bytecode VM eval below is cheap enough to run per row.
 
         // CANARY: REQ=REQ-GPS-INVARIANT-001; FEATURE="GPS Fail-Open Catalog"; ASPECT=FailOpenInterim; STATUS=EXEMPT; OWNER=security; UPDATED=2026-05-20
         // Phase 0: no-policy default-allow for pre-RLS data. GPS Phase 4 makes "allow by
@@ -1128,9 +1212,8 @@ pub const RLSEngine = struct {
 
         const allowed = any_permissive_allows or all_restrictive_allow;
 
-        // Cache the result
-        try self.policy_cache.put(key, user_id, operation, allowed);
-
+        // GAP-0284: deliberately NOT cached — see the note at the top of this
+        // function. The verdict is per-row; policy_cache has no row identity.
         return allowed;
     }
 
@@ -1244,6 +1327,17 @@ pub const RLSEngine = struct {
                     _ = idx;
                     if (sp >= stack.len) return error.StackOverflow;
                     stack[sp] = .null;
+                    sp += 1;
+                },
+                .load_attr => {
+                    // CANARY: REQ=GAP-0284; FEATURE="ABAC user attribute store"; ASPECT=RLSExprAttrLoad; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/abac_attribute_policies.yml; OWNER=security; UPDATED=2026-05-22
+                    // Resolve principal.attribute.<key> against the global ABAC
+                    // attribute side-table for the querying username.
+                    if (pc >= expr.bytecode.len) return error.BytecodeUnderrun;
+                    const idx = expr.bytecode[pc];
+                    pc += 1;
+                    if (sp >= stack.len) return error.StackOverflow;
+                    stack[sp] = self.resolvePrincipalAttribute(username, expr.constants, idx);
                     sp += 1;
                 },
                 .eq => {

@@ -663,7 +663,7 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
 // src/security/user_attribute_store.zig so that the security layer
 // (principal_derive, gps.decide) can read the same side-table without
 // importing execution/.
-const user_attr_store = @import("../security/user_attribute_store.zig");
+const user_attr_store = @import("user_attr_store");
 
 /// Public accessor for ABAC policy evaluation. Returns the attribute map
 /// for `username`, or null if no attributes are set. The map is owned by

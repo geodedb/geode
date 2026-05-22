@@ -38,6 +38,14 @@ const Value = value_types.Value;
 const user_mgmt = @import("../security/user_management.zig");
 const audit_mod = @import("../security/audit.zig");
 
+// REQ=GAP-0284: the expression RLS engine and its global publisher. The
+// `geode.rls.add_attribute_policy` handler installs a compiled property-vs-
+// principal-attribute policy directly on the process-global expr engine that
+// the match loop already consults via `passesRLSExprFilter`.
+const rls_core = @import("rls");
+const rls_types = @import("rls_types");
+const RLSEngine = rls_core.RLSEngine;
+
 // ---------------------------------------------------------------------------
 // Callback / hooks pattern. The server wires these at startup; CLI / test
 // contexts leave them null.
@@ -83,6 +91,8 @@ const dispatch_table = std.StaticStringMap(RlsHandler).initComptime(.{
     .{ "geode.rls.remove_deny_policy", handleRemoveDenyPolicy },
     .{ "geode.rls.list_deny_policies", handleListDenyPolicies },
     .{ "geode.rls.policy_count", handlePolicyCount },
+    .{ "geode.rls.add_attribute_policy", handleAddAttributePolicy },
+    .{ "geode.rls.remove_attribute_policy", handleRemoveAttributePolicy },
 });
 
 const read_only_set = std.StaticStringMap(void).initComptime(.{
@@ -285,6 +295,187 @@ fn handleListDenyPolicies(
         .rows = try rows_list.toOwnedSlice(allocator),
         .flags = std.ArrayList([]const u8).empty,
     };
+}
+
+// ===========================================================================
+// REQ=GAP-0284: ABAC attribute-based row-level policies.
+// ===========================================================================
+
+/// Deterministic policy id derived from (graph, label, row_property,
+/// attribute_key) so `remove_attribute_policy` can locate the same policy
+/// `add_attribute_policy` installed.
+fn attributePolicyId(graph: []const u8, label: []const u8, row_property: []const u8, attribute_key: []const u8) u64 {
+    var hasher = std.hash.Wyhash.init(0xABACABAC);
+    hasher.update(graph);
+    hasher.update("\x00");
+    hasher.update(label);
+    hasher.update("\x00");
+    hasher.update(row_property);
+    hasher.update("\x00");
+    hasher.update(attribute_key);
+    return hasher.final();
+}
+
+/// CALL geode.rls.add_attribute_policy(graph, label, row_property, attribute_key)
+///
+/// Installs a restrictive expression RLS policy on (graph, label) that, per
+/// row, allows the row only when `row.<row_property>` equals the querying
+/// principal's ABAC attribute `<attribute_key>`. This is real per-row ABAC
+/// filtering: the bytecode VM resolves `principal.attribute.<key>` against the
+/// global user attribute store at evaluation time.
+fn handleAddAttributePolicy(
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
+) anyerror!ExecutionResult {
+    const graph = argStr(call_stmt, 0);
+    const label = argStr(call_stmt, 1);
+    const row_property = argStr(call_stmt, 2);
+    const attribute_key = argStr(call_stmt, 3);
+
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
+        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
+    }
+
+    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
+        log.warn("RLS attribute-policy: expr engine not initialized — server started without RLS support", &.{});
+        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
+    };
+    const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
+    const eng_alloc = engine.allocator;
+
+    // Build the policy expression: row.<prop> = principal.attribute.<key>.
+    // Strings persisted with the engine's allocator so the compiled policy
+    // outlives this request.
+    const raw_expr = try std.fmt.allocPrint(
+        eng_alloc,
+        "row.{s} = principal.attribute.{s}",
+        .{ row_property, attribute_key },
+    );
+
+    const policy_id = attributePolicyId(graph, label, row_property, attribute_key);
+
+    const now: i64 = 0; // metadata only; not load-bearing for enforcement
+    const policy = RLSEngine.Policy{
+        .id = policy_id,
+        .name = try eng_alloc.dupe(u8, "abac_attribute_policy"),
+        .description = try eng_alloc.dupe(u8, "ABAC: row property must equal principal attribute"),
+        .graph = try eng_alloc.dupe(u8, graph),
+        .table = try eng_alloc.dupe(u8, label),
+        .operation = .select,
+        .permissive = false, // restrictive: row must satisfy the expression
+        .roles = &[_]u64{},
+        .using_expr = RLSEngine.Expression{
+            .raw = raw_expr,
+            .parsed = null,
+            .compiled = null, // createPolicy compiles it
+            .parameters = &[_]RLSEngine.Expression.Parameter{},
+        },
+        .check_expr = null,
+        .enabled = true,
+        .created_at = now,
+        .updated_at = now,
+        .created_by = 0,
+        .temporal = null,
+        .data_classification = null,
+        .audit_level = .denials,
+    };
+
+    try engine.createPolicy(policy);
+
+    log.info("RLS attribute policy added", &.{
+        Attr.string("graph", graph),
+        Attr.string("label", label),
+        Attr.string("row_property", row_property),
+        Attr.string("attribute_key", attribute_key),
+    });
+
+    {
+        const detail_str = std.fmt.allocPrint(
+            allocator,
+            "graph={s} label={s} row_property={s} attribute_key={s}",
+            .{ graph, label, row_property, attribute_key },
+        ) catch null;
+        defer if (detail_str) |s| allocator.free(s);
+        const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
+        const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";
+        audit_mod.logSecurityGraphEvent(allocator, .{
+            .event_type = .configuration_change,
+            .action = "RLS_ADD_ATTRIBUTE_POLICY",
+            .user_id = actor_user_id,
+            .username = actor_username,
+            .details = detail_str,
+        });
+    }
+
+    const msg = try std.fmt.allocPrint(
+        allocator,
+        "attribute policy added: graph={s} label={s} row.{s}=principal.attribute.{s}",
+        .{ graph, label, row_property, attribute_key },
+    );
+    defer allocator.free(msg);
+    return try singleStatusRow(allocator, msg);
+}
+
+/// CALL geode.rls.remove_attribute_policy(graph, label, row_property, attribute_key)
+fn handleRemoveAttributePolicy(
+    allocator: std.mem.Allocator,
+    _: []const u8,
+    call_stmt: ast.CallProcedure,
+    context: ExecutionContext,
+) anyerror!ExecutionResult {
+    const graph = argStr(call_stmt, 0);
+    const label = argStr(call_stmt, 1);
+    const row_property = argStr(call_stmt, 2);
+    const attribute_key = argStr(call_stmt, 3);
+
+    if (graph.len == 0 or label.len == 0 or row_property.len == 0 or attribute_key.len == 0) {
+        return try singleStatusRow(allocator, "error: graph, label, row_property and attribute_key are required");
+    }
+
+    const engine_ptr = rls_types.getGlobalExprRLSEngine() orelse {
+        return try singleStatusRow(allocator, "error: RLS expression engine not initialized");
+    };
+    const engine: *RLSEngine = @ptrCast(@alignCast(engine_ptr));
+
+    const policy_id = attributePolicyId(graph, label, row_property, attribute_key);
+    var removed = true;
+    engine.deletePolicy(policy_id) catch {
+        removed = false;
+    };
+
+    if (removed) {
+        log.info("RLS attribute policy removed", &.{
+            Attr.string("graph", graph),
+            Attr.string("label", label),
+            Attr.string("row_property", row_property),
+            Attr.string("attribute_key", attribute_key),
+        });
+        const detail_str = std.fmt.allocPrint(
+            allocator,
+            "graph={s} label={s} row_property={s} attribute_key={s}",
+            .{ graph, label, row_property, attribute_key },
+        ) catch null;
+        defer if (detail_str) |s| allocator.free(s);
+        const actor_user_id: u64 = if (context.principal) |p| (p.user_id orelse 0) else 0;
+        const actor_username: []const u8 = if (context.principal) |p| (p.username orelse "") else "";
+        audit_mod.logSecurityGraphEvent(allocator, .{
+            .event_type = .configuration_change,
+            .action = "RLS_REMOVE_ATTRIBUTE_POLICY",
+            .user_id = actor_user_id,
+            .username = actor_username,
+            .details = detail_str,
+        });
+    }
+
+    const msg = try std.fmt.allocPrint(
+        allocator,
+        "attribute policy removed: graph={s} label={s} removed={s}",
+        .{ graph, label, if (removed) "true" else "false" },
+    );
+    defer allocator.free(msg);
+    return try singleStatusRow(allocator, msg);
 }
 
 /// CALL geode.rls.policy_count() -> single-row int.

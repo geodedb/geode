@@ -2845,12 +2845,20 @@ pub fn build(b: *std.Build) void {
     // Must be a standalone module to avoid circular dependencies between server/ and execution/.
     const rls_types_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_types.zig"), .target = target, .optimize = optimize });
 
+    // GAP-0284: shared ABAC attribute side-table. Exposed as its own named
+    // module so that both the `rls` module (rls_core.zig) and the `geode`
+    // root module (gps.zig, auth_dispatch.zig) can import it without the file
+    // ending up owned by two modules at once.
+    const user_attr_store_mod = b.createModule(.{ .root_source_file = b.path("src/security/user_attribute_store.zig"), .target = target, .optimize = optimize });
+
     const rls_mod = b.createModule(.{ .root_source_file = b.path("src/security/rls_core.zig"), .target = target, .optimize = optimize });
     rls_mod.addImport("geode_auth", auth_mod);
     rls_mod.addImport("logging", logging_mod);
     rls_mod.addImport("build_options", build_options_mod); // GAP-0732: for allow_rls_raw_interp
+    rls_mod.addImport("user_attr_store", user_attr_store_mod); // GAP-0284: ABAC attribute lookup
     root_mod.addImport("rls", rls_mod);
     root_mod.addImport("rls_types", rls_types_mod);
+    root_mod.addImport("user_attr_store", user_attr_store_mod); // GAP-0284: ABAC attribute store
     // GAP-0510: Make rls_types available to the server binary so quic_connection_handler
     // and main.zig can wire the RLS filter engine global at startup.
     geode_exe.root_module.addImport("rls_types", rls_types_mod);

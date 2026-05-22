@@ -381,7 +381,7 @@ pub fn decide(allocator: std.mem.Allocator, req: *const DecisionRequest) !Policy
                     @ptrCast(raw_entries.ptr),
                 )[0..raw_entries.len];
             } else if (req.principal.username) |uname| blk: {
-                const snap = @import("user_attribute_store.zig").snapshotEntries(
+                const snap = @import("user_attr_store").snapshotEntries(
                     allocator,
                     uname,
                     policy_expression.AttributeEntry,
