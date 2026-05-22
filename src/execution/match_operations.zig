@@ -4895,6 +4895,7 @@ fn executeSingleHopEdgeTraversal(
     left_node_var: ?[]const u8,
     rel_var: ?[]const u8,
     right_node_var: ?[]const u8,
+    chain_path_var: ?[]const u8,
     param_names: []const []const u8,
     param_values: []const Value,
     filter_tenant: ?[]const u8,
@@ -4983,10 +4984,16 @@ fn executeSingleHopEdgeTraversal(
 
             // Create environment with all matched elements using stack buffers
             // CANARY: REQ=REQ-GQL-WITH-REL-VARS-002; FEATURE="WithClauseRelationshipVars"; ASPECT=ValueOrder; STATUS=TESTED; OWNER=execution; UPDATED=2026-01-29
-            // Order must match column order: left, rel, right
-            // Stack-based: env size is always <=3 (left_node_var, rel_var, right_node_var)
-            var stack_env_names: [3][]const u8 = undefined;
-            var stack_env_values: [3]Value = undefined;
+            // Order must match column order: left, rel, right, [path]
+            // Stack-based: env size is always <=4 (left_node_var, rel_var, right_node_var, chain_path_var)
+            var stack_env_names: [4][]const u8 = undefined;
+            var stack_env_values: [4]Value = undefined;
+            // GAP-0334-PATH-002: heap-allocated path arrays for fixed-length single-hop
+            // path-variable binding. Kept alive for the row; freed below if WHERE/FILTER
+            // skips the row, otherwise transferred via row[i] = val copy below.
+            var path_alive: bool = false;
+            var path_nodes_buf: []*const graph_store.Node = &.{};
+            var path_edges_buf: []*const graph_store.Edge = &.{};
             var env_idx: usize = 0;
             if (left_node_var) |var_name| {
                 stack_env_names[env_idx] = var_name;
@@ -5001,6 +5008,23 @@ fn executeSingleHopEdgeTraversal(
             if (right_node_var) |var_name| {
                 stack_env_names[env_idx] = var_name;
                 stack_env_values[env_idx] = Value{ .Node = right_node_ptr };
+                env_idx += 1;
+            }
+            // GAP-0334-PATH-002: bind path variable for fixed-length single-hop patterns.
+            // `MATCH p = (a)-[:T]->(b) RETURN length(p)` requires p to be a Path value
+            // with 2 nodes and 1 edge so length(p) returns 1, not 0.
+            if (chain_path_var) |var_name| {
+                path_nodes_buf = try allocator.alloc(*const graph_store.Node, 2);
+                path_edges_buf = try allocator.alloc(*const graph_store.Edge, 1);
+                path_nodes_buf[0] = left_node;
+                path_nodes_buf[1] = right_node_ptr;
+                path_edges_buf[0] = edge;
+                path_alive = true;
+                stack_env_names[env_idx] = var_name;
+                stack_env_values[env_idx] = Value{ .Path = .{
+                    .nodes = path_nodes_buf,
+                    .edges = path_edges_buf,
+                } };
                 env_idx += 1;
             }
 
@@ -5024,6 +5048,10 @@ fn executeSingleHopEdgeTraversal(
                 };
 
                 if (!passes_where) {
+                    if (path_alive) {
+                        allocator.free(path_nodes_buf);
+                        allocator.free(path_edges_buf);
+                    }
                     continue;
                 }
             }
@@ -5039,6 +5067,10 @@ fn executeSingleHopEdgeTraversal(
                 };
 
                 if (!passes_filter) {
+                    if (path_alive) {
+                        allocator.free(path_nodes_buf);
+                        allocator.free(path_edges_buf);
+                    }
                     continue;
                 }
             }
@@ -7581,7 +7613,7 @@ pub fn executeMatchQueryImpl(allocator: std.mem.Allocator, q: ast.Query, param_n
                     try executeVariableLengthPathTraversal(allocator, store, left_node, &rows, var_len_min, var_len_max, rel_type, rel_direction, right_labels, right_props, left_node_var, right_node_var, rel_var, chain_path_var, param_names, param_values, q.where_clause, q.filter_clause, has_with, items, limit_hint);
                 } else {
                     // Standard single-hop edge traversal — delegated to helper
-                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
+                    try executeSingleHopEdgeTraversal(allocator, store, left_node, &rows, rel_direction, rel_type, rel_props_filter, right_labels, right_props, left_node_var, rel_var, right_node_var, chain_path_var, param_names, param_values, filter_tenant, q.where_clause, q.filter_clause, q.set_clauses, has_with, items);
                 }
             }
         } else {

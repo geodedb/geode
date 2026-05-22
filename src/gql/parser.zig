@@ -39,9 +39,13 @@ pub const Parser = struct {
     // Track expression recursion depth to prevent stack overflow from deeply nested input
     recursion_depth: u16 = 0,
 
+    // GAP-0333: The hard limit is 128 user-visible nested parens.  The internal
+    // counter includes the outer parseOrExpr frame invoked by RETURN/MATCH, so
+    // 128 parens drives recursion_depth to 129. Allow a small headroom so the
+    // user-visible 128-deep input parses successfully; 129+ still errors out.
     fn enterRecursion(self: *Parser) ParserError!void {
         self.recursion_depth += 1;
-        if (self.recursion_depth > 128) {
+        if (self.recursion_depth > 129) {
             return self.unexpected("expression nesting depth exceeds maximum (128)");
         }
     }

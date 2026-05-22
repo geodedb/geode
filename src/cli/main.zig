@@ -809,8 +809,8 @@ fn printLspUsage() void {
     std.debug.print("  Starts a Language Server Protocol (LSP) server for GQL files.\n", .{});
     std.debug.print("  The server communicates via JSON-RPC over stdin/stdout and provides:\n", .{});
     std.debug.print("    - Syntax error diagnostics\n", .{});
-    std.debug.print("    - Hover documentation for GQL keywords, functions, and types\n", .{});
-    std.debug.print("    - Code completion for GQL syntax\n", .{});
+    std.debug.print("    - hover documentation for GQL keywords, functions, and types\n", .{});
+    std.debug.print("    - code completion for GQL syntax\n", .{});
     std.debug.print("    - Go-to-definition support\n", .{});
     std.debug.print("    - Document formatting\n\n", .{});
     std.debug.print("Options:\n", .{});

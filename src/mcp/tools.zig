@@ -331,152 +331,24 @@ const QueryArgs = struct {
     graph: ?[]const u8 = null,
 };
 
-/// Static JSON definition of available tools
-const tools_json =
-    \\[
-    \\  {
-    \\    "name": "query",
-    \\    "description": "Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query to execute (ISO/IEC 39075:2024 compliant)"
-    \\        },
-    \\        "parameters": {
-    \\          "type": "object",
-    \\          "description": "Optional query parameters as key-value pairs"
-    \\        },
-    \\        "catalog": {
-    \\          "type": "string",
-    \\          "description": "Target catalog name (default: 'default')"
-    \\        },
-    \\        "graph": {
-    \\          "type": "string",
-    \\          "description": "Target graph name (default: 'default')"
-    \\        }
-    \\      },
-    \\      "required": ["query"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "schema",
-    \\    "description": "Get the database schema including node labels, relationship types, and property definitions.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {}
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "explain",
-    \\    "description": "Get the execution plan for a GQL query without running it. Useful for query optimization.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query to explain"
-    \\        }
-    \\      },
-    \\      "required": ["query"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "catalogs",
-    \\    "description": "List all available catalogs in the database.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {}
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "graphs",
-    \\    "description": "List all available graphs in the current or specified catalog.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "catalog": {
-    \\          "type": "string",
-    \\          "description": "Catalog name (default: 'default')"
-    \\        }
-    \\      }
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "validate",
-    \\    "description": "Validate GQL syntax and return diagnostics including Geode extensions (FLE, BACKUP/RESTORE, SESSION, double-dash comments). Does not require a running Geode server.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query to validate"
-    \\        }
-    \\      },
-    \\      "required": ["query"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "complete",
-    \\    "description": "Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures including Geode extensions (BACKUP, RESTORE, SESSION, FLE annotations).",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query text"
-    \\        },
-    \\        "line": {
-    \\          "type": "integer",
-    \\          "description": "Cursor line number (1-indexed)"
-    \\        },
-    \\        "column": {
-    \\          "type": "integer",
-    \\          "description": "Cursor column number (1-indexed)"
-    \\        }
-    \\      },
-    \\      "required": ["query", "line", "column"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "hover",
-    \\    "description": "Get hover information (documentation) for the GQL element at a position.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query text"
-    \\        },
-    \\        "line": {
-    \\          "type": "integer",
-    \\          "description": "Cursor line number (1-indexed)"
-    \\        },
-    \\        "column": {
-    \\          "type": "integer",
-    \\          "description": "Cursor column number (1-indexed)"
-    \\        }
-    \\      },
-    \\      "required": ["query", "line", "column"]
-    \\    }
-    \\  },
-    \\  {
-    \\    "name": "diagnostics",
-    \\    "description": "Get all diagnostics (errors, warnings, information) for a GQL document including Geode extension notices. Alias for validate.",
-    \\    "inputSchema": {
-    \\      "type": "object",
-    \\      "properties": {
-    \\        "query": {
-    \\          "type": "string",
-    \\          "description": "The GQL query to analyze"
-    \\        }
-    \\      },
-    \\      "required": ["query"]
-    \\    }
-    \\  }
-    \\]
-;
+/// Static JSON definition of available tools.
+/// MCP spec / framework contract (vendor/devnw/zig/mcp src/mcp.zig:1186-1188):
+///   "result": {"tools": [ { name, description, inputSchema }, ... ]}
+/// The framework treats this string as the literal result payload and
+/// embeds it directly into the JSONRPC response on a single line. The
+/// outer "tools" wrapper and single-line framing live here. Newlines are
+/// avoided so newline-delimited stdio MCP transports work.
+const tools_json = "{\"tools\":[" ++
+    "{\"name\":\"query\",\"description\":\"Execute a GQL (Graph Query Language) query against the Geode database. Returns query results as JSON.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to execute (ISO/IEC 39075:2024 compliant)\"},\"parameters\":{\"type\":\"object\",\"description\":\"Optional query parameters as key-value pairs\"},\"catalog\":{\"type\":\"string\",\"description\":\"Target catalog name (default: 'default')\"},\"graph\":{\"type\":\"string\",\"description\":\"Target graph name (default: 'default')\"}},\"required\":[\"query\"]}}," ++
+    "{\"name\":\"schema\",\"description\":\"Get the database schema including node labels, relationship types, and property definitions.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
+    "{\"name\":\"explain\",\"description\":\"Get the execution plan for a GQL query without running it. Useful for query optimization.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to explain\"}},\"required\":[\"query\"]}}," ++
+    "{\"name\":\"catalogs\",\"description\":\"List all available catalogs in the database.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{}}}," ++
+    "{\"name\":\"graphs\",\"description\":\"List all available graphs in the current or specified catalog.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"catalog\":{\"type\":\"string\",\"description\":\"Catalog name (default: 'default')\"}}}}," ++
+    "{\"name\":\"validate\",\"description\":\"Validate GQL syntax and return diagnostics including Geode extensions (FLE, BACKUP/RESTORE, SESSION, double-dash comments). Does not require a running Geode server.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to validate\"}},\"required\":[\"query\"]}}," ++
+    "{\"name\":\"complete\",\"description\":\"Get GQL completions at a cursor position. Returns keywords, functions, types, and procedures including Geode extensions (BACKUP, RESTORE, SESSION, FLE annotations).\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query text\"},\"line\":{\"type\":\"integer\",\"description\":\"Cursor line number (1-indexed)\"},\"column\":{\"type\":\"integer\",\"description\":\"Cursor column number (1-indexed)\"}},\"required\":[\"query\",\"line\",\"column\"]}}," ++
+    "{\"name\":\"hover\",\"description\":\"Get hover information (documentation) for the GQL element at a position.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query text\"},\"line\":{\"type\":\"integer\",\"description\":\"Cursor line number (1-indexed)\"},\"column\":{\"type\":\"integer\",\"description\":\"Cursor column number (1-indexed)\"}},\"required\":[\"query\",\"line\",\"column\"]}}," ++
+    "{\"name\":\"diagnostics\",\"description\":\"Get all diagnostics (errors, warnings, information) for a GQL document including Geode extension notices. Alias for validate.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"The GQL query to analyze\"}},\"required\":[\"query\"]}}" ++
+    "]}";
 
 // =============================================================================
 // Tests
@@ -485,7 +357,9 @@ const tools_json =
 test "listTools returns valid JSON" {
     const result = listTools(null);
     try std.testing.expect(result.len > 0);
-    try std.testing.expect(std.mem.startsWith(u8, result, "["));
+    // MCP framework contract: tools/list result must be an object
+    // {"tools":[...]}.  See vendor/devnw/zig/mcp/src/mcp.zig:1186-1188.
+    try std.testing.expect(std.mem.startsWith(u8, result, "{\"tools\":["));
 }
 
 test "formatToolResult escapes content correctly" {
@@ -513,16 +387,16 @@ test "listTools contains all required tools" {
     const result = listTools(null);
 
     // Verify all 9 tools are present (5 database + 4 LSP)
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"query\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"schema\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"explain\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"catalogs\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"graphs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"query\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"schema\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"explain\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"catalogs\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"graphs\"") != null);
     // LSP tools
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"validate\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"complete\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"hover\"") != null);
-    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\": \"diagnostics\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"validate\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"complete\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"hover\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "\"name\":\"diagnostics\"") != null);
 }
 
 test "listTools contains valid JSON structure" {
@@ -536,9 +410,14 @@ test "listTools contains valid JSON structure" {
     };
     defer parsed.deinit();
 
-    // Verify it's an array with 9 tools (5 database + 4 LSP)
-    try std.testing.expect(parsed.value == .array);
-    try std.testing.expectEqual(@as(usize, 9), parsed.value.array.items.len);
+    // Verify it's an object with `tools` array of length 9 (5 database + 4 LSP).
+    try std.testing.expect(parsed.value == .object);
+    const tools_field = parsed.value.object.get("tools") orelse {
+        try std.testing.expect(false);
+        return;
+    };
+    try std.testing.expect(tools_field == .array);
+    try std.testing.expectEqual(@as(usize, 9), tools_field.array.items.len);
 }
 
 test "listTools cursor is ignored" {
