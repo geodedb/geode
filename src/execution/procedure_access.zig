@@ -69,6 +69,9 @@ const read_only_procedure_names = [_][]const u8{
     "geode.auth.policy_list",
     "geode.auth.apikey_list",
     "geode.auth.apikey_check_scope",
+    // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ReadOnlyClassification; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
+    "geode.rls.list_deny_policies",
+    "geode.rls.policy_count",
     "cdc.status",
     "cdc.export_diagnostics",
     "cdc.get_events",

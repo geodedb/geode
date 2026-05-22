@@ -57,6 +57,11 @@ const statement_dispatcher = @import("execution/statement_dispatcher.zig");
 const query_execution = @import("execution/query_execution.zig");
 const value_utilities = @import("execution/value_utilities.zig");
 pub const procedure_registry = @import("execution/procedure_registry.zig");
+// REQ-RLS-DDL-001: rls_dispatch is exported so server/main.zig can install
+// runtime callbacks for the geode.rls.* procedure handlers without taking a
+// hard dependency on src/server/rls_filter.zig (which lives in the `root`
+// module and would otherwise create a diamond-dep with the `geode` module).
+pub const rls_dispatch = @import("execution/rls_dispatch.zig");
 // Task 9: fire schema-change notifications after CREATE/DROP GRAPH so LSP
 // SchemaProviders drop their per-session label/edge-type caches.
 const schema_change_notifier = @import("execution/schema_change_notifier.zig");

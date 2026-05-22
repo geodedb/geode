@@ -36,6 +36,7 @@ const audit_dispatch = @import("audit_dispatch.zig");
 const storage_dispatch = @import("storage_dispatch.zig");
 const auth_dispatch = @import("auth_dispatch.zig");
 const meta_dispatch = @import("meta_dispatch.zig");
+const rls_dispatch = @import("rls_dispatch.zig");
 
 // ==================== Re-exported Public Accessors ====================
 // These must remain on procedure_registry since external code imports them.
@@ -174,6 +175,13 @@ pub fn executeCallProcedure(allocator: std.mem.Allocator, call_stmt: ast.CallPro
     // ---- geode.auth.* procedures (user management, roles, MFA, API keys) ----
     if (std.mem.startsWith(u8, proc_name, "geode.auth.")) {
         if (try auth_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
+            return result;
+        }
+    }
+
+    // ---- geode.rls.* procedures (row-level-security deny policies) ----
+    if (std.mem.startsWith(u8, proc_name, "geode.rls.")) {
+        if (try rls_dispatch.execute(allocator, proc_name, call_stmt, context)) |result| {
             return result;
         }
     }

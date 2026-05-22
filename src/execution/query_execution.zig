@@ -1624,8 +1624,16 @@ pub fn executeQueryWithContext(allocator: std.mem.Allocator, q: ast.Query, conte
         return fast_result;
     }
 
-    if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
-        return planned_result;
+    // REQ-RLS-DDL-001 / GAP-0510: planned_read_runtime.executeIfSupported is
+    // an RLS-blind fast path — it bypasses passesRLSFilter entirely and reads
+    // labelled nodes straight from the storage adapter. When an RLS engine is
+    // active for the current session, route around it to the legacy executor
+    // (which calls passesRLSFilter for every candidate node). This mirrors the
+    // GAP-0805 RLS-aware reclassification at quic_connection_handler.zig:3565.
+    if (!match_operations.wouldEvaluateRLS()) {
+        if (try planned_read_runtime.executeIfSupported(allocator, &q, context, param_names.items, param_values.items)) |planned_result| {
+            return planned_result;
+        }
     }
 
     return executeLegacyQueryWithResolvedParams(allocator, q, context, param_names.items, param_values.items);

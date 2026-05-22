@@ -1140,6 +1140,100 @@ pub fn main() !void {
         rls_types_mod.setGlobalRLSFilterEngine(&rls_types_engine);
         defer rls_types_mod.setGlobalRLSFilterEngine(null);
 
+        // REQ-RLS-DDL-001: Wire the `geode.rls.add_deny_policy` /
+        // `remove_deny_policy` / `list_deny_policies` / `policy_count`
+        // procedures so the CLI surface can install per-user label denies in
+        // the rls_filter engine that the connection handler actually
+        // consults. Without this wiring those procedures return an explicit
+        // "RLS filter engine not initialized" error.
+        //
+        // Both engines (rls_filter + rls_types) receive every mutation so the
+        // legacy label-filter path and the newer expression engine stay in
+        // sync. Listing is sourced from rls_filter since that is the
+        // engine quic_connection_handler / federation read from.
+        // CANARY: REQ=REQ-RLS-DDL-001; FEATURE="RLS deny-policy procedure"; ASPECT=ServerCallbackWiring; STATUS=TESTED; TEST=geode-test-harness/geodetestlab-cli/specs/rls_cross_tenant_query_shapes.yml; OWNER=security; UPDATED=2026-05-22
+        const rls_dispatch_mod = geode.execution.rls_dispatch;
+        const RlsCbCtx = struct {
+            label_engine: *rls_filter_mod.RLSFilterEngine,
+            types_engine: *rls_types_mod.RLSFilterEngine,
+        };
+        var rls_cb_ctx: RlsCbCtx = .{
+            .label_engine = &rls_engine,
+            .types_engine = &rls_types_engine,
+        };
+        const RlsCbFns = struct {
+            fn addDeny(
+                ctx_anyopaque: ?*anyopaque,
+                graph: []const u8,
+                label: []const u8,
+                username: []const u8,
+            ) anyerror!void {
+                const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
+                try ctx.label_engine.addDenyPolicy(graph, label, username);
+                ctx.types_engine.addDenyPolicy(graph, label, username) catch |err| {
+                    // The types engine is best-effort — log and continue so a
+                    // partial failure doesn't leave the legacy engine empty.
+                    log.warn("rls_types addDenyPolicy failed", &.{
+                        logging.Attr.string("err", @errorName(err)),
+                        logging.Attr.string("graph", graph),
+                        logging.Attr.string("label", label),
+                    });
+                };
+            }
+            fn removeDeny(
+                ctx_anyopaque: ?*anyopaque,
+                graph: []const u8,
+                label: []const u8,
+                username: []const u8,
+            ) usize {
+                const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
+                const before = ctx.label_engine.policyCount();
+                ctx.label_engine.removeDenyPolicy(graph, label, username);
+                ctx.types_engine.removeDenyPolicy(graph, label, username);
+                const after = ctx.label_engine.policyCount();
+                return if (before >= after) before - after else 0;
+            }
+            fn listDeny(
+                ctx_anyopaque: ?*anyopaque,
+                allocator: std.mem.Allocator,
+            ) anyerror![]rls_dispatch_mod.ListedPolicy {
+                const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
+                ctx.label_engine.mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+                defer ctx.label_engine.mu.unlock(std.Io.Threaded.global_single_threaded.io());
+
+                var list = std.ArrayList(rls_dispatch_mod.ListedPolicy).empty;
+                errdefer {
+                    for (list.items) |item| {
+                        allocator.free(item.graph);
+                        allocator.free(item.label);
+                        allocator.free(item.username);
+                    }
+                    list.deinit(allocator);
+                }
+                for (ctx.label_engine.policies.items) |p| {
+                    if (!p.deny) continue;
+                    try list.append(allocator, .{
+                        .graph = try allocator.dupe(u8, p.graph),
+                        .label = try allocator.dupe(u8, p.label),
+                        .username = try allocator.dupe(u8, p.username),
+                    });
+                }
+                return try list.toOwnedSlice(allocator);
+            }
+            fn count(ctx_anyopaque: ?*anyopaque) usize {
+                const ctx: *RlsCbCtx = @ptrCast(@alignCast(ctx_anyopaque.?));
+                return ctx.label_engine.policyCount();
+            }
+        };
+        rls_dispatch_mod.setCallbacks(.{
+            .ctx = @ptrCast(&rls_cb_ctx),
+            .add_deny_fn = RlsCbFns.addDeny,
+            .remove_deny_fn = RlsCbFns.removeDeny,
+            .list_deny_fn = RlsCbFns.listDeny,
+            .policy_count_fn = RlsCbFns.count,
+        });
+        defer rls_dispatch_mod.resetCallbacks();
+
         // GAP-0510 Task D1: Initialize the global expression RLS engine so that
         // property-based and temporal RLS policies are evaluated during query
         // execution.  The engine lives on the main thread's stack; connection
