@@ -1055,13 +1055,18 @@ pub fn main() !void {
         }
 
         // Initialize QUIC transport
-        var transport = try quic_transport.QuicTransport.init(gpa, .{
+        // GAP-0327: honor --max-connections; 0 means "transport default".
+        var quic_init_cfg: quic_transport.QuicTransport.Config = .{
             .address = address_str,
             .port = port,
             .cert_path = cert_path,
             .key_path = key_path,
             .idle_timeout_ms = config.idle_timeout_ms,
-        });
+        };
+        if (config.max_connections > 0) {
+            quic_init_cfg.max_connections = config.max_connections;
+        }
+        var transport = try quic_transport.QuicTransport.init(gpa, quic_init_cfg);
         // In short-lived test runs we avoid tearing down the QUIC endpoint to sidestep
         // vendor teardown crashes; enable passive teardown when
         // GEODE_QUIC_PASSIVE_TEARDOWN=1 is present.

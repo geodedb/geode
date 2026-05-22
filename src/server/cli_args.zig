@@ -44,6 +44,11 @@ pub const ServerConfig = struct {
     // GAP-0259: Configurable QUIC idle timeout (default 300s / 5 minutes)
     idle_timeout_ms: u64 = 300000,
 
+    // GAP-0327: Configurable QUIC connection cap. 0 = use the transport
+    // default (1000). A small value makes connection-pool-exhaustion
+    // behaviour deterministically testable.
+    max_connections: usize = 0,
+
     // GAP-0260: Deferred persistence interval (default 30s)
     // Longer interval reduces persistence thread race window with query threads
     persist_interval_ms: u64 = 30000,
@@ -165,6 +170,7 @@ pub fn printHelp() void {
     std.debug.print("  --order-keys expr            Allow expressions in ORDER BY\n", .{});
     std.debug.print("  --log-level <lvl>            Set log level trace|debug|info|warn|error|critical (default info)\n", .{});
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
+    std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 1000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
@@ -300,6 +306,9 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--idle-timeout") and ai + 1 < args.len) {
             config.idle_timeout_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 300000;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--max-connections") and ai + 1 < args.len) {
+            config.max_connections = std.fmt.parseUnsigned(usize, args[ai + 1], 10) catch 0;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
             config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
