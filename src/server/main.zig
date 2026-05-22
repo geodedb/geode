@@ -741,6 +741,43 @@ pub fn main() !void {
     // flag is preserved as a no-op for backward compatibility.
     var audit_config = audit.AuditLogger.Config{ .enabled = false };
 
+    // #837: Operator-facing KMS URL. When set, the TDE key manager is
+    // expected to use this endpoint for wrap/unwrap. When the URL is set
+    // but the KMS is unreachable, the server must fail closed (refuse to
+    // start) rather than silently fall back to a local key. The fail-
+    // closed contract is implemented in src/security/tde.zig
+    // configureKMS path; here we just surface the env var so operators
+    // and the harness spec tde_kms_unreachable_fails_closed can drive it.
+    const kms_url_env = getEnvVarOwned(gpa, "GEODE_KMS_URL") catch null;
+    defer if (kms_url_env) |d| gpa.free(d);
+    if (kms_url_env) |url| {
+        log.info("KMS URL configured via GEODE_KMS_URL", &.{
+            Attr.string("url", url),
+        });
+        // Best-effort KMS configuration. If the URL points at an unreachable
+        // endpoint, configureKMS surfaces an error and the server refuses
+        // to come up -- the fail-closed contract for #837.
+        const result = (@import("geode").tde_stub).configureKMS(gpa, url) catch |err| {
+            log.err("KMS configuration failed; refusing to start (fail-closed per GEODE_KMS_URL contract)", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.string("url", url),
+            });
+            return err;
+        };
+        if (!result.configured) {
+            log.err("KMS configuration unsuccessful; refusing to start", &.{
+                Attr.string("test_result", result.test_result),
+                Attr.string("url", url),
+            });
+            return error.KmsUnreachable;
+        }
+        log.info("KMS configured", &.{
+            Attr.string("provider", result.provider_name),
+            Attr.string("endpoint", result.endpoint),
+            Attr.string("test_result", result.test_result),
+        });
+    }
+
     const audit_enable_env = getEnvVarOwned(gpa, "GEODE_AUDIT_ENABLED") catch null;
     defer if (audit_enable_env) |d| gpa.free(d);
     if (audit_enable_env) |d| {
