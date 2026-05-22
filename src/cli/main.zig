@@ -269,6 +269,9 @@ fn printQueryUsage() void {
         "  -U, --user <username>  Authenticate as user\n" ++
         "  -P, --password [pass]  Authentication password (prompted if not provided)\n" ++
         "  --no-saved-session     Don't auto-load saved session token\n" ++
+        "  --forward-principal <user[:tenant]>  Attach a GPS principal envelope so the\n" ++
+        "                         server evaluates GPS/RLS under the forwarded identity\n" ++
+        "  --forward-principal-envelope <hex>   Attach a pre-serialised GPSP envelope\n" ++
         "  -h, --help             Show this help\n" ++
         "\n" ++
         "DSN (Data Source Name):\n" ++
@@ -982,6 +985,15 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
     var source_file: ?[]const u8 = null;
     // GAP-0271: FLE role for field-level access control
     var role: ?[]const u8 = null;
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipalFlag; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // GPS Phase 7 Task 7-5: --forward-principal <username>[:<tenant>] builds a
+    // principal_envelope (GPSP wire blob) and emits it as ExecuteRequest field 4.
+    // This mirrors what a distributed coordinator attaches to a shard RPC: the
+    // receiving server reconstructs the forwarded Principal and evaluates GPS/RLS
+    // under that identity instead of this (already-authenticated) connection's.
+    // The envelope only REFINES identity — it cannot escalate past the session.
+    var forward_principal: ?[]const u8 = null;
+    var forward_principal_envelope_hex: ?[]const u8 = null;
     // PERF-P1-002: Batch mode — read semicolon-delimited queries from stdin,
     // execute all over a single QUIC connection to amortize handshake cost.
     var batch_mode = false;
@@ -1190,6 +1202,22 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             // rejects injection chars (semicolons, commas, wildcards).
             // CLI accepts any value so FLE security tests can verify server behavior.
             role = role_arg;
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--forward-principal")) {
+            // GPS Phase 7 Task 7-5: forwarded principal as <username>[:<tenant>]
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --forward-principal requires <username>[:<tenant>]\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            forward_principal = argv[i + 1];
+            i += 1;
+        } else if (std.mem.eql(u8, arg, "--forward-principal-envelope")) {
+            // GPS Phase 7 Task 7-5: pre-serialised GPSP envelope as hex.
+            if (i + 1 >= argv.len) {
+                std.debug.print("Error: --forward-principal-envelope requires a hex string\n", .{});
+                std.process.exit(@intFromEnum(ExitCode.usage_error));
+            }
+            forward_principal_envelope_hex = argv[i + 1];
             i += 1;
         } else if (!std.mem.startsWith(u8, arg, "-") or std.mem.eql(u8, arg, "-")) {
             // First non-option argument is the query text, or "-" for stdin
@@ -1545,6 +1573,55 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
         return;
     }
 
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliEnvelopeBuild; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // GPS Phase 7 Task 7-5: build the principal_envelope blob from
+    // --forward-principal / --forward-principal-envelope. The bytes are emitted
+    // as ExecuteRequest field 4; the server deserialises them and evaluates
+    // GPS/RLS under the forwarded identity (see quic_connection_handler.zig).
+    var forward_envelope_bytes: ?[]u8 = null;
+    defer if (forward_envelope_bytes) |b| allocator.free(b);
+    if (forward_principal_envelope_hex) |hex| {
+        const decoded = allocator.alloc(u8, hex.len / 2) catch {
+            std.debug.print("Error: out of memory decoding --forward-principal-envelope\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+        _ = std.fmt.hexToBytes(decoded, hex) catch {
+            allocator.free(decoded);
+            std.debug.print("Error: --forward-principal-envelope must be a valid hex string\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        };
+        forward_envelope_bytes = decoded;
+    } else if (forward_principal) |fp| {
+        // Parse <username>[:<tenant>]. Empty username is rejected.
+        const colon = std.mem.indexOfScalar(u8, fp, ':');
+        const fp_username = if (colon) |c| fp[0..c] else fp;
+        const fp_tenant: ?[]const u8 = if (colon) |c|
+            (if (c + 1 < fp.len) fp[c + 1 ..] else null)
+        else
+            null;
+        if (fp_username.len == 0) {
+            std.debug.print("Error: --forward-principal username must not be empty\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.usage_error));
+        }
+        const env = geode.distributed.principal_envelope.PrincipalEnvelope{
+            .user_id = null,
+            .username = fp_username,
+            .roles = &.{},
+            .custom_roles = &.{},
+            .tenant_id = fp_tenant,
+            .active_graph = graph,
+            .auth_version = 0,
+            .policy_version = 0,
+            // Coordinator marks the envelope as originating from itself; the
+            // server re-stamps source = .distributed_worker on unpack.
+            .source = .distributed_coordinator,
+        };
+        forward_envelope_bytes = geode.distributed.principal_envelope.serialize(allocator, env) catch {
+            std.debug.print("Error: failed to serialise principal envelope\n", .{});
+            std.process.exit(@intFromEnum(ExitCode.general_error));
+        };
+    }
+
     // Issue #424: Start a progress-based deadline watchdog for single queries.
     var query_deadline_state = QueryDeadlineState.init();
     query_deadline.active_query_deadline_state = &query_deadline_state;
@@ -1590,6 +1667,7 @@ fn cmdQuery(allocator: std.mem.Allocator, argv: [][:0]u8, start_idx: usize) !voi
             .page_size = page_size,
             .params = params,
             .role = role,
+            .principal_envelope_bytes = forward_envelope_bytes,
         }) catch |err| {
             if (err == error.AuthenticationFailed)
                 std.process.exit(@intFromEnum(ExitCode.auth_error));
@@ -1718,6 +1796,11 @@ const QuicQueryOptions = struct {
     page_size: u32 = default_stream_page_size,
     params: std.ArrayList(schema.Param),
     role: ?[]const u8 = null, // GAP-0271: FLE role for field-level access control
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=CliForwardPrincipal; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // GPS Phase 7 Task 7-5: serialised principal_envelope blob built from
+    // --forward-principal. When non-null the CLI emits ExecuteRequest field 4
+    // and the server reconstructs the forwarded Principal for GPS/RLS.
+    principal_envelope_bytes: ?[]const u8 = null,
 };
 
 const GrpcQueryOptions = struct {
@@ -2013,7 +2096,7 @@ fn executeBatchQueries(
     const empty_params = std.ArrayList(schema.Param).empty;
 
     for (queries.items) |query_line| {
-        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_line, format, username, password, graph, graph_for_hello, empty_params, page_size, timeout_secs, fle_role, null) catch |err| {
             std.debug.print("Error executing query: {}\n", .{err});
             error_count += 1;
         };
@@ -2313,6 +2396,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
     const graph_for_hello = opts.graph_for_hello;
     const page_size = opts.page_size;
     const fle_role = opts.role;
+    const principal_envelope_bytes = opts.principal_envelope_bytes;
     var params = opts.params;
     var params_transferred = false;
     defer if (!params_transferred) {
@@ -2376,7 +2460,7 @@ fn executeQuicQuery(allocator: std.mem.Allocator, opts: QuicQueryOptions) !void 
         };
 
         params_transferred = true;
-        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role) catch |err| {
+        executeQueryOnConnection(allocator, &raw_client, query_text, format, username, password, graph, graph_for_hello, params, page_size, timeout_secs, fle_role, principal_envelope_bytes) catch |err| {
             // GAP-0260/GAP-0263: Auto-retry on connection failure. QUIC
             // transport can drop messages under rapid sequential
             // connections; retries resolve most transient failures
@@ -2483,6 +2567,7 @@ fn executeQueryOnConnection(
     page_size: u32,
     timeout_secs: u32,
     fle_role: ?[]const u8,
+    principal_envelope_bytes: ?[]const u8,
 ) !void {
     // Get stdout and stderr handles for output
     const stdout = std.Io.File{ .handle = getStdoutHandle() catch return error.StdioUnavailable, .flags = .{ .nonblocking = false } };
@@ -2601,6 +2686,10 @@ fn executeQueryOnConnection(
         .timeout_secs = timeout_secs,
         .page_size = page_size,
         .params = params,
+        // GPS Phase 7 Task 7-5: forward the principal envelope (built from
+        // --forward-principal) so the server's GPS engine evaluates RLS under
+        // the forwarded identity instead of this connection's principal.
+        .principal_envelope_bytes = principal_envelope_bytes,
     });
     defer result.deinit();
     defer finishActiveQueryDeadlineWatchdog();

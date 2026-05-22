@@ -189,6 +189,10 @@ pub fn consumeQueryWithTransport(
         .timeout_secs = opts.timeout_secs,
         .page_size = opts.page_size,
         .params = params,
+        // GPS Phase 7 Task 7-6: thread the forwarded-principal envelope
+        // through to beginQuery so it reaches ExecuteRequest field 4.
+        // Without this it was silently dropped here.
+        .principal_envelope_bytes = opts.principal_envelope_bytes,
     };
     try transport.beginQuery(allocator, owned_opts);
 

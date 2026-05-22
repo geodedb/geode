@@ -122,7 +122,21 @@ fn passesRLSFilter(
     node: graph_store.Node,
 ) bool {
     const ctx = execution.getActiveContext() orelse return true;
-    const username = ctx.user orelse return true;
+    // CANARY: REQ=REQ-GPS-WIRE-001; FEATURE="GPS Wire Principal Forwarding"; ASPECT=MatchRLSPrincipalUsername; STATUS=IMPL; OWNER=security; UPDATED=2026-05-22
+    // GPS Phase 7 Task 7-6: row-level security must be evaluated under the
+    // GPS-resolved Principal, not the raw connection user. When an ExecuteRequest
+    // carries a principal_envelope (distributed coordinator → shard worker, or a
+    // --forward-principal CLI request), `ctx.principal` holds the forwarded
+    // identity while `ctx.user` still names the connection-authenticated user.
+    // Keying the deny filter on the principal username ensures the shard worker
+    // enforces the forwarded caller's scope. Falls back to ctx.user when no
+    // principal is attached (direct, non-forwarded requests).
+    const username = blk: {
+        if (ctx.principal) |p| {
+            if (p.username) |u| break :blk u;
+        }
+        break :blk ctx.user orelse return true;
+    };
 
     // Layer 1: Label-deny check
     const filter_engine = rls_types.getGlobalRLSFilterEngine() orelse {
@@ -148,6 +162,16 @@ fn passesRLSExprFilter(
 ) bool {
     const expr_engine_ptr = rls_types.getGlobalExprRLSEngine() orelse return true;
     const expr_engine: *rls.RLSEngine = @ptrCast(@alignCast(expr_engine_ptr));
+
+    // GAP-0284: Admin / superuser sessions bypass expression RLS policies,
+    // matching the standard RLS model (PostgreSQL BYPASSRLS / superusers are
+    // not subject to row-security policies). Non-admin sessions are always
+    // filtered per-row by the compiled policy VM below.
+    if (execution.getActiveContext()) |ctx| {
+        if (ctx.role) |r| {
+            if (r == .Admin) return true;
+        }
+    }
 
     // Reuse the caller's row buffer to avoid one HashMap init/deinit per
     // node. GAP-0524: Fail closed on conversion errors.

@@ -1402,8 +1402,12 @@ REQ-GPS-PROC-001,GPS Procedure Enforcement,UnauthenticatedDenied,TESTED,,,securi
 REQ-GPS-PROC-003,GPS Phase 5 Procedure,MetadataReadOnly,TESTED,,,security,2026-05-21,src/execution/procedure_access.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BeginQuery,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,BuildStep,TESTED,,,security,2026-05-21,build.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliEnvelopeBuild,IMPL,,,security,2026-05-22,src/cli/main.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipal,IMPL,,,security,2026-05-22,src/cli/main.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,CliForwardPrincipalFlag,IMPL,,,security,2026-05-22,src/cli/main.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,ExecuteRequestSchema,IMPL,,,security,2026-05-21,src/proto/schema.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,MalformedEnvelope,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
+REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,MatchRLSPrincipalUsername,IMPL,,,security,2026-05-22,src/execution/match_operations.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,McpEnvelopeRoundTrip,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,QueryOptions,IMPL,,,security,2026-05-21,src/client/quic_query_runner.zig
 REQ-GPS-WIRE-001,GPS Wire Principal Forwarding,SchemaField,TESTED,,,security,2026-05-21,tests/test_gps_mcp_wire.zig
