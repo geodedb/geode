@@ -460,11 +460,28 @@ pub fn createUserWithHash(allocator: std.mem.Allocator, username: []const u8, pa
 /// The Argon2id verification (10-50ms) runs OUTSIDE the mutex to avoid
 /// serializing all auth operations behind a single lock.
 pub fn authenticate(username: []const u8, password: []const u8) !AuthResult {
-    const user_data = try getAuthSnapshot(username) orelse return error.Unauthenticated;
+    const maybe_user_data = try getAuthSnapshot(username);
+    if (maybe_user_data == null) {
+        // #829: defeat username-enumeration timing oracle by performing
+        // equivalent Argon2id work on the provided password before returning
+        // auth failure. Without this, the user-miss path returns ~95ms while
+        // the wrong-password path takes ~275ms (full Argon2id), giving an
+        // unauthenticated attacker a deterministic oracle to classify which
+        // usernames exist.
+        const dummy_hash = hashPassword(std.heap.c_allocator, password) catch {
+            return error.Unauthenticated;
+        };
+        std.heap.c_allocator.free(dummy_hash);
+        return error.Unauthenticated;
+    }
+    const user_data = maybe_user_data.?;
     defer std.heap.c_allocator.free(user_data.password_hash);
 
     // Phase 2: Verify password OUTSIDE the lock (Argon2id, 10-50ms).
     if (!user_data.active) {
+        // Same timing-defense rationale: an inactive user should look the
+        // same as an active user with the wrong password.
+        _ = verifyPassword(password, user_data.password_hash);
         return error.Unauthenticated;
     }
     if (!verifyPassword(password, user_data.password_hash)) {

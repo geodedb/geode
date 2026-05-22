@@ -1278,9 +1278,69 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
         err_rows[0] = err_row;
         return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
     }
-    // Validate code format if provided
-    if (code.len > 0) {
-        // Must be exactly 6 numeric digits
+    const is_enable = std.mem.eql(u8, proc_name, "geode.auth.mfa_enable");
+
+    // #838: MFA enable used to accept any 6-digit code with no HMAC verification
+    // against the user's stored TOTP secret — admins could "enable" MFA without
+    // proving authenticator possession. Require a valid TOTP code on enable.
+    if (is_enable) {
+        if (code.len == 0) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = "missing code: mfa_enable requires a 6-digit TOTP code from the user's authenticator (run mfa_setup first)" };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        if (code.len != 6) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = "invalid code: must be exactly 6 digits" };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+        for (code) |c| {
+            if (c < '0' or c > '9') {
+                const err_columns = try allocator.alloc([]const u8, 1);
+                err_columns[0] = try allocator.dupe(u8, "error");
+                const err_row = try allocator.alloc(Value, 1);
+                err_row[0] = Value{ .Str = "invalid code: must be numeric" };
+                const err_rows = try allocator.alloc([]Value, 1);
+                err_rows[0] = err_row;
+                return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+            }
+        }
+
+        // Verify the code against the user's stored TOTP secret.
+        const stored_secret = getMfaSecret(username) orelse {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "no TOTP secret stored for '{s}'; run mfa_setup first", .{username}) };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        };
+
+        const code_u32 = std.fmt.parseInt(u32, code, 10) catch 0xFFFFFFFF;
+        const now_ms = @as(u64, @intCast(compat_milliTimestamp()));
+        const ok = mfa_mod.verifyCode(allocator, stored_secret, now_ms, code_u32, 30, 6, 1) catch false;
+        if (!ok) {
+            const err_columns = try allocator.alloc([]const u8, 1);
+            err_columns[0] = try allocator.dupe(u8, "error");
+            const err_row = try allocator.alloc(Value, 1);
+            err_row[0] = Value{ .Str = "invalid TOTP code: HMAC verification failed against stored secret" };
+            const err_rows = try allocator.alloc([]Value, 1);
+            err_rows[0] = err_row;
+            return .{ .columns = err_columns, .rows = err_rows, .flags = std.ArrayList([]const u8).empty };
+        }
+    } else if (code.len > 0) {
+        // Disable path still validates format if a code is provided, but
+        // does NOT require HMAC verification (separate concern — admins may
+        // need to disable MFA for recovery without a valid TOTP).
         if (code.len != 6) {
             const err_columns = try allocator.alloc([]const u8, 1);
             err_columns[0] = try allocator.dupe(u8, "error");
@@ -1302,7 +1362,6 @@ fn handleMfaEnableDisable(allocator: std.mem.Allocator, proc_name: []const u8, c
             }
         }
     }
-    const is_enable = std.mem.eql(u8, proc_name, "geode.auth.mfa_enable");
     const columns = try allocator.alloc([]const u8, 2);
     columns[0] = try allocator.dupe(u8, "status");
     columns[1] = try allocator.dupe(u8, "username");
