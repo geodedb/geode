@@ -65,6 +65,10 @@ pub fn executeAlterUser(allocator: std.mem.Allocator, s: ast.AlterUserStatement,
     return switch (s.action) {
         .set_password => |pw| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_reset_password", &.{ s.name, pw }),
         .set_role => |r| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_assign_role", &.{ s.name, r }),
+        // #832: ALTER USER ... SET ATTRIBUTE <k> = <v> routes to a new procedure
+        // that writes into the per-user attribute store consumed by ABAC.
+        .set_attribute => |kv| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_set_attribute", &.{ s.name, kv.key, kv.value }),
+        .remove_attribute => |k| auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_remove_attribute", &.{ s.name, k }),
         .enable => auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_enable", &.{s.name}),
         .disable => auth_dispatch.callAuthProcedure(allocator, ctx, "geode.auth.user_disable", &.{s.name}),
     };

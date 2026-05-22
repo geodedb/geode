@@ -6434,7 +6434,15 @@ pub const Parser = struct {
             const r = try self.parseName();
             return .{ .AlterUser = .{ .name = name, .action = .{ .set_role = r } } };
         }
-        return self.unexpected("expected PASSWORD or ROLE after ALTER USER ... SET");
+        // #832: ALTER USER <name> SET ATTRIBUTE <key> = <value>
+        if (self.softKw("ATTRIBUTE")) {
+            self.advance();
+            const key = try self.parseName();
+            _ = try self.expect(.eq);
+            const value = try self.parseStringLit();
+            return .{ .AlterUser = .{ .name = name, .action = .{ .set_attribute = .{ .key = key, .value = value } } } };
+        }
+        return self.unexpected("expected PASSWORD, ROLE, or ATTRIBUTE after ALTER USER ... SET");
     }
 
     // Parse READ | WRITE | SCHEMA | ALL into a GrantPrivilege

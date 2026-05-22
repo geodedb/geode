@@ -682,6 +682,11 @@ pub const CreateUserStatement = struct {
 pub const AlterUserAction = union(enum) {
     set_password: []const u8,
     set_role: []const u8,
+    // #832: ALTER USER <name> SET ATTRIBUTE <key> = <value>
+    // ABAC policy evaluation reads these attributes from the user record.
+    // Without this surface ABAC was unreachable from auth DDL.
+    set_attribute: struct { key: []const u8, value: []const u8 },
+    remove_attribute: []const u8,
     enable,
     disable,
 };

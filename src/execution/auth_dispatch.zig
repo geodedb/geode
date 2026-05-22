@@ -358,6 +358,9 @@ const dispatch_table = std.StaticStringMap(AuthHandler).initComptime(.{
     .{ "geode.auth.user_enable", handleUserEnableDisable },
     .{ "geode.auth.user_disable", handleUserEnableDisable },
     .{ "geode.auth.user_assign_role", handleUserAssignRole },
+    // #832: ABAC attribute mutators -- ALTER USER ... SET/REMOVE ATTRIBUTE.
+    .{ "geode.auth.user_set_attribute", handleUserSetAttribute },
+    .{ "geode.auth.user_remove_attribute", handleUserRemoveAttribute },
     .{ "geode.auth.user_permissions", handleUserPermissions },
     .{ "geode.auth.user_change_password", handleUserChangePassword },
     .{ "geode.auth.user_reset_password", handleUserResetPassword },
@@ -654,6 +657,107 @@ fn handleUserAssignRole(allocator: std.mem.Allocator, _: []const u8, call_stmt: 
     allocator.free(columns[0]);
     allocator.free(columns);
     return error.UnknownRole;
+}
+
+// #832: ABAC user-attribute store -- populated by handleUserSetAttribute /
+// handleUserRemoveAttribute; read by ABAC policy evaluation.
+//
+// The user_management.User struct does not carry attributes (those live in
+// the separate user_manager.User), so this side-table keeps the assignment
+// reachable from the auth_dispatch surface. Persistence to __geode_security
+// is a follow-up.
+pub var g_user_attributes: std.StringHashMap(std.StringHashMap([]const u8)) = undefined;
+pub var g_user_attributes_init: bool = false;
+pub var g_user_attributes_mu: std.Io.Mutex = std.Io.Mutex.init;
+
+fn ensureUserAttributesInit(allocator: std.mem.Allocator) void {
+    if (!g_user_attributes_init) {
+        g_user_attributes = std.StringHashMap(std.StringHashMap([]const u8)).init(allocator);
+        g_user_attributes_init = true;
+    }
+}
+
+/// Public accessor for ABAC policy evaluation. Returns the attribute map
+/// for `username`, or null if no attributes are set. The map is owned by
+/// the side-table; callers must not free.
+pub fn getUserAttributes(username: []const u8) ?*const std.StringHashMap([]const u8) {
+    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!g_user_attributes_init) return null;
+    const entry = g_user_attributes.getPtr(username) orelse return null;
+    return entry;
+}
+
+fn handleUserSetAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+    var username: []const u8 = "";
+    var key: []const u8 = "";
+    var value: []const u8 = "";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        if (args.len >= 2 and args[1].* == .String) key = args[1].String;
+        if (args.len >= 3 and args[2].* == .String) value = args[2].String;
+    }
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    if (username.len == 0 or key.len == 0) {
+        row[0] = Value{ .Str = try allocator.dupe(u8, "error: username and attribute key required") };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    if (user_mgmt.getUser(username) == null) {
+        row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "error: user '{s}' does not exist", .{username}) };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    ensureUserAttributesInit(allocator);
+    const user_entry = try g_user_attributes.getOrPut(username);
+    if (!user_entry.found_existing) {
+        user_entry.key_ptr.* = try allocator.dupe(u8, username);
+        user_entry.value_ptr.* = std.StringHashMap([]const u8).init(allocator);
+    }
+    // Replace existing value if any (free the old).
+    if (user_entry.value_ptr.fetchRemove(key)) |old| {
+        allocator.free(old.key);
+        allocator.free(old.value);
+    }
+    try user_entry.value_ptr.put(try allocator.dupe(u8, key), try allocator.dupe(u8, value));
+    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "set attribute {s}={s} for {s}", .{ key, value, username }) };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+}
+
+fn handleUserRemoveAttribute(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+    var username: []const u8 = "";
+    var key: []const u8 = "";
+    if (call_stmt.procedure == .Call) {
+        const args = call_stmt.procedure.Call.args;
+        if (args.len >= 1 and args[0].* == .String) username = args[0].String;
+        if (args.len >= 2 and args[1].* == .String) key = args[1].String;
+    }
+    const columns = try allocator.alloc([]const u8, 1);
+    columns[0] = try allocator.dupe(u8, "status");
+    const row = try allocator.alloc(Value, 1);
+    const rows = try allocator.alloc([]Value, 1);
+    rows[0] = row;
+    g_user_attributes_mu.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+    defer g_user_attributes_mu.unlock(std.Io.Threaded.global_single_threaded.io());
+    if (!g_user_attributes_init) {
+        row[0] = Value{ .Str = try allocator.dupe(u8, "no attributes to remove") };
+        return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+    }
+    if (g_user_attributes.getPtr(username)) |attrs| {
+        if (attrs.fetchRemove(key)) |old| {
+            allocator.free(old.key);
+            allocator.free(old.value);
+            row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "removed attribute {s} from {s}", .{ key, username }) };
+            return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
+        }
+    }
+    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "attribute {s} not set on {s}", .{ key, username }) };
+    return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
 }
 
 fn handleUserPermissions(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
@@ -998,28 +1102,61 @@ fn handleRoleList(allocator: std.mem.Allocator, _: []const u8, _: ast.CallProced
 // The old g_policies StringHashMap is removed.
 // CANARY: REQ=REQ-GPS-DDL-001; FEATURE="GPS Policy DDL"; ASPECT=AuthDispatchPolicyCreate; STATUS=TESTED; TEST=tests/test_gps_policy_ddl_integration.zig; OWNER=security; UPDATED=2026-05-20
 fn handlePolicyCreate(allocator: std.mem.Allocator, _: []const u8, call_stmt: ast.CallProcedure, _: ExecutionContext) anyerror!ExecutionResult {
+    // Positional: (name, table, condition).  table defaults to "*" (any
+    // graph/table) and condition defaults to "true" (allow everything).
+    // #831: the handler used to ignore args[1]/args[2] and always install
+    //       expression_source="true" with scope_graph="*".  Now both are
+    //       honored.
     var name: []const u8 = "";
+    var table: []const u8 = "*";
+    var condition: []const u8 = "true";
     if (call_stmt.procedure == .Call) {
         const args = call_stmt.procedure.Call.args;
         if (args.len >= 1 and args[0].* == .String) name = args[0].String;
+        if (args.len >= 2 and args[1].* == .String and args[1].String.len > 0) table = args[1].String;
+        if (args.len >= 3 and args[2].* == .String and args[2].String.len > 0) condition = args[2].String;
     }
+
+    // #833: reject pathological condition strings before they reach the
+    // expression compiler.  The crash was reproducible with a `;` (and
+    // likely other syntax-significant chars) embedded in the condition;
+    // root cause was unknown but the safe action is to refuse anything
+    // that doesn't look like an expression.  Allowed chars: alnum, space,
+    // and the operators that valid GPS expressions need.
+    for (condition) |c| {
+        const ok = std.ascii.isAlphanumeric(c) or
+            c == ' ' or c == '_' or c == '.' or
+            c == '=' or c == '!' or c == '<' or c == '>' or
+            c == '(' or c == ')' or c == ',' or
+            c == '+' or c == '-' or c == '*' or c == '/' or
+            c == '\'' or c == '"' or c == '?';
+        if (!ok) {
+            const ec = try allocator.alloc([]const u8, 1);
+            ec[0] = try allocator.dupe(u8, "error");
+            const er = try allocator.alloc(Value, 1);
+            er[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "invalid character {x:0>2} in condition; refusing to install (see #833)", .{c}) };
+            const ers = try allocator.alloc([]Value, 1);
+            ers[0] = er;
+            return .{ .columns = ec, .rows = ers, .flags = std.ArrayList([]const u8).empty };
+        }
+    }
+
     const policy_catalog_mod = @import("../security/policy_catalog.zig");
     if (policy_catalog_mod.getGlobalCatalog()) |pol_cat| {
-        // Procedure path: name-only, READ action, allow effect.
         const actions = [_]policy_catalog_mod.Action{.read};
         try pol_cat.addPolicy(.{
             .name = name,
-            .scope_graph = "*",
+            .scope_graph = table,
             .actions = &actions,
             .effect = .allow,
-            .expression_source = "true",
+            .expression_source = condition,
             .enabled = true,
         });
     }
     const columns = try allocator.alloc([]const u8, 1);
     columns[0] = try allocator.dupe(u8, "status");
     const row = try allocator.alloc(Value, 1);
-    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "policy created {s}", .{name}) };
+    row[0] = Value{ .Str = try std.fmt.allocPrint(allocator, "policy created {s} on {s}", .{ name, table }) };
     const rows = try allocator.alloc([]Value, 1);
     rows[0] = row;
     return .{ .columns = columns, .rows = rows, .flags = std.ArrayList([]const u8).empty };
