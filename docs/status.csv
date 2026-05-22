@@ -1050,6 +1050,7 @@ REQ-GAP-0284-FEDERATION-GRPC-WIRE,FederationAuth,GrpcHelloCheck,IMPL,,,security,
 REQ-GAP-0284-PWD-RESET-BLOCK-GRPC,PasswordResetEnforcement,GrpcExecuteBlock,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-GAP-0284-PWD-VALIDATE-GRPC,PasswordPolicyEnforcement,GrpcFallbackValidation,IMPL,,,security,2026-04-01,src/transport/grpc_server.zig
 REQ-GAP-0305-AUDIT-PREV-HASH,AuditVerifyChainRoundTrip,ChainVerification,TESTED,,,security,2026-05-21,tests/test_audit_verify_chain_roundtrip.zig
+REQ-GAP-0336-UMH-BINDING,MatchCreateBindingFix,PatternVarResolution,IMPL,,,engine,2026-05-22,src/execution/match_operations.zig
 REQ-GAP-0481-NO-PASSWORD-HINT-LOG,AuthSecurity,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_auth_security.zig
 REQ-GAP-0489-BLAKE2B-MIGRATION,Blake2bToArgon2idAutoMigration,SecurityAudit,TESTED,,,security,2026-02-18,src/security/test_blake2b_migration.zig
 REQ-GAP-0490-FEDERATION-CLIENT-AUTH,FederationAuth,ClientToken,TESTED,,,security,2026-02-18,src/distributed/federation.zig
@@ -2343,6 +2344,7 @@ REQ-GQL-GROUPBY-REL-002,GroupByRelationshipPattern,BindingAggregation,TESTED,,,e
 REQ-GQL-HARMONIC-001,Centrality,Harmonic,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_misc.zig
 REQ-GQL-HARMONIC-001,HarmonicCentrality,Centrality,TESTED,,,graph,2026-01-03,src/execution/centrality_algorithms.zig
 REQ-GQL-HASH-FUNC-001,HashFunctions,BuiltinFunctions,TESTED,,,types,2025-10-19,src/types/hash.zig
+REQ-GQL-HASLABEL-OR-001,HasLabelInBooleanExpr,NotParenDisambiguation,IMPL,,,parser,2026-05-22,src/gql/parser.zig
 REQ-GQL-HEAD-001,ListFunctions,HeadElement,TESTED,,,eval,2026-01-09,src/eval.zig
 REQ-GQL-HEAD-001,ListFunctions,HeadElement,TESTED,,,eval,2026-01-09,src/eval/call_handlers.zig
 REQ-GQL-HITS-001,Centrality,HITS,TESTED,,,graph,2026-01-16,tests/test_gap_0193_batch2_misc.zig

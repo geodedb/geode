@@ -2992,16 +2992,53 @@ pub const Parser = struct {
                 self.advance(); // consume (
 
                 // CANARY: REQ=REQ-GQL-NOT-PAREN-EXPR-001; FEATURE="NotParenExpr"; ASPECT=ParserFix; STATUS=TESTED; TEST=geodetestlab/specs/gql_expressions_comprehensive.yml; OWNER=parser; UPDATED=2025-12-28
+                // CANARY: REQ=REQ-GQL-HASLABEL-OR-001; FEATURE="HasLabelInBooleanExpr"; ASPECT=NotParenDisambiguation; STATUS=IMPL; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=parser; UPDATED=2026-05-22
                 // B10 Fix: Distinguish between NOT (n:Label...) graph pattern and NOT (n.value > 0) expression
                 // If we see an identifier followed by a dot, it's a property access expression, not a node pattern
                 // Node pattern indicators after identifier: :, ), {, -, <, [
                 // Expression indicators after identifier: . (property access)
-                const looks_like_pattern = if (self.cur.kind == .identifier)
+                //
+                // GAP-0336 extension: also distinguish NOT (n:Label OR ...) — a boolean
+                // expression mixing HasLabel predicates with OR/AND.  When the
+                // tokens after `(ident:Label` are `OR`, `AND`, comparison ops,
+                // or `:` continuing a multi-label test, treat as expression.
+                var looks_like_pattern = if (self.cur.kind == .identifier)
                     // Identifier followed by . is property access (expression), not node pattern
                     self.peekToken() != .dot
                 else
                     // :Label or () patterns
                     (self.cur.kind == .colon or self.cur.kind == .r_paren);
+
+                // GAP-0336: If the lookahead so far still says "pattern", do a
+                // deeper probe.  Specifically detect `(ident:Label <BOOL_OP>` —
+                // that is unambiguously a HasLabel boolean expression, not a
+                // node pattern.
+                if (looks_like_pattern and self.cur.kind == .identifier and self.peekToken() == .colon) {
+                    // Save the *probe* lexer state so we can rewind after the
+                    // deeper lookahead.
+                    const probe_lx = self.lx.*;
+                    const probe_cur = self.cur;
+                    self.advance(); // consume identifier
+                    self.advance(); // consume ':'
+                    // Skip the label identifier (or keyword used as label name).
+                    if (self.cur.kind == .identifier or self.isKeyword(self.cur.kind)) {
+                        self.advance();
+                        // Now check the token after the label.  Expression
+                        // indicators: OR / AND / comparison / arithmetic /
+                        // chained `:` (n:A:B is still HasLabel-style).
+                        const after_label = self.cur.kind;
+                        const is_expr_continuation = switch (after_label) {
+                            .OR, .AND, .eq, .ne, .lt, .le, .gt, .ge => true,
+                            else => false,
+                        };
+                        if (is_expr_continuation) {
+                            looks_like_pattern = false;
+                        }
+                    }
+                    // Rewind probe.
+                    self.lx.* = probe_lx;
+                    self.cur = probe_cur;
+                }
 
                 // Restore position
                 self.lx.* = saved_lx;

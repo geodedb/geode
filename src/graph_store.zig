@@ -5453,7 +5453,28 @@ pub const GraphStore = struct {
             for (scan_entries) |entry| {
                 const slot_id = entry.slot_id;
                 const node_uuid = blk: {
-                    if (try adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator)) |stored_prop| {
+                    // 2026-05-22: tolerate per-node property page corruption.
+                    // A torn/partially-flushed property page (e.g. WAL+TDE
+                    // hard-crash mid-write) used to bubble up through
+                    // `adapter.getNodeProperty` -> `PropStore.getProperty`
+                    // and either panic on unsigned underflow inside
+                    // `readDirEntry` or quarantine the entire graph. We now
+                    // catch DataCorruption / OutOfBounds / CircularChain at
+                    // the per-node level so the rest of the graph still
+                    // hydrates and the bad node is dropped to the
+                    // legacy-uuid fallback (or skipped) below.
+                    const maybe_stored = adapter.getNodeProperty(graph_name, slot_id, INTERNAL_NODE_ID_PROPERTY_KEY, self.allocator) catch |err| switch (err) {
+                        error.DataCorruption, error.CircularChainDetected => {
+                            log.warn("skipping node with corrupt property page during load", &.{
+                                Attr.string("graph", graph_name),
+                                Attr.int("slot_id", @intCast(slot_id)),
+                                Attr.string("error", @errorName(err)),
+                            });
+                            break :blk null;
+                        },
+                        else => return err,
+                    };
+                    if (maybe_stored) |stored_prop| {
                         defer graph_storage_adapter.freeOwnedStorageProperty(self.allocator, stored_prop);
                         switch (stored_prop) {
                             .string => |text| {

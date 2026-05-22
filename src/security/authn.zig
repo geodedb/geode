@@ -13,6 +13,15 @@
 
 const std = @import("std");
 
+// Zig 0.16 compat: std.crypto.random removed. Use getrandom syscall.
+fn compat_fillRandom(buf: []u8) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.getrandom(buf.ptr, buf.len, 0);
+    } else {
+        std.c.arc4random_buf(buf.ptr, buf.len);
+    }
+}
+
 // Zig 0.16 compat: std.time.milliTimestamp/timestamp/microTimestamp removed.
 fn compat_milliTimestamp() i64 {
     var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
@@ -48,7 +57,6 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 const Allocator = std.mem.Allocator;
-const crypto = std.crypto;
 
 const api_keys = @import("auth_lib").api_keys;
 const mtls_provider = @import("mtls_provider.zig");
@@ -137,7 +145,7 @@ pub const RotatingSessionToken = struct {
     pub fn generate(allocator: Allocator, user_id: u64, ip: ?[]const u8) !RotatingSessionToken {
         _ = allocator;
         var token: [32]u8 = undefined;
-        crypto.random.bytes(&token);
+        compat_fillRandom(&token);
 
         const now = compat_timestamp();
 
@@ -168,7 +176,7 @@ pub const RotatingSessionToken = struct {
         self.previous_expires_at = now + GRACE_PERIOD_SECS;
 
         // Generate new token
-        crypto.random.bytes(&self.token);
+        compat_fillRandom(&self.token);
         self.rotation_at = now + ROTATION_INTERVAL_SECS;
         self.last_used_at = now;
     }

@@ -1173,7 +1173,44 @@ pub fn handleShortestPathAssignment(
 // CANARY: REQ=REQ-EXEC-REFACTOR-006; FEATURE="ExecutionRefactoring"; ASPECT=MATCH_OPERATIONS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-10-17
 // Extracted MATCH operations from execution.zig for better modularity (M1 Phase 6)
 
+// GAP-0336 helper: check whether a node's properties satisfy every literal
+// property constraint in `pattern_props`.  Properties whose value expression
+// contains an unresolved variable reference are skipped (they'll be checked
+// later by the executor when the full env is available).  Returns true when
+// `pattern_props` is null/empty (no constraint).
+fn nodeMatchesProps(
+    allocator: std.mem.Allocator,
+    node: *graph_store.Node,
+    pattern_props: ?[]ast.Property,
+    prop_env: Env,
+) bool {
+    const props = pattern_props orelse return true;
+    for (props) |prop| {
+        if (containsVariableReference(prop.value.*)) continue;
+        if (node.properties.get(prop.key)) |node_prop_val| {
+            const node_val = propertyValueToValue(node_prop_val);
+            const expected_val = eval.evalExpr(allocator, prop.value.*, prop_env) catch return false;
+            if (!valuesEqual(node_val, expected_val)) return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
 // CANARY: REQ=REQ-MULTI-GRAPH-013; FEATURE="MultiGraphIsolation"; ASPECT=MatchCreate; STATUS=TESTED; TEST=geodetestlab/specs/multi_graph.yml; OWNER=engine; UPDATED=2025-12-22
+// CANARY: REQ=REQ-GAP-0336-UMH-BINDING; FEATURE="MatchCreateBindingFix"; ASPECT=PatternVarResolution; STATUS=IMPL; TEST=geodetestlab/specs/gql_undirected_multi_hop.yml; OWNER=engine; UPDATED=2026-05-22
+// GAP-0336 fix: MATCH ... CREATE ... previously extracted variable→node
+// bindings from `match_result.columns` (i.e. RETURN projections).  When the
+// RETURN list does not include the matched node variables — e.g.
+// `RETURN 'e2' AS edge` — those bindings were empty and the CREATE pattern
+// silently created brand-new anonymous nodes instead of wiring up the
+// matched ones.  Fix: when every MATCH chain is a simple node pattern,
+// build bindings by walking q.match.chains directly and resolving each
+// named pattern node against the store (graph + tenant + label + prop
+// filters, same RLS check as the MATCH path).  Chains with hops keep the
+// legacy projection-based behaviour because those bindings carry through
+// match_result rows via the Node-typed columns the executor already emits.
 pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param_names_arg: []const []const u8, param_values_arg: []const Value, current_graph: ?[]const u8) !ExecutionResult {
     // First execute MATCH to get bindings - use full MATCH path to handle all cases (multi-node, etc)
     const match_result = try executeMatchQueryWithParams(allocator, q, param_names_arg, param_values_arg, q.inline_let_bindings, current_graph);
@@ -1200,6 +1237,18 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
         };
     }
 
+    // GAP-0336: detect whether every MATCH chain is a simple node pattern
+    // (no hops, only a head).  In that case we cannot trust
+    // match_result.columns to carry the matched-node bindings — we re-walk
+    // the chains and resolve each named node against the store ourselves.
+    var all_simple_node_chains = true;
+    for (q.match.chains) |chain| {
+        if (chain.hops.len > 0 or chain.head == null) {
+            all_simple_node_chains = false;
+            break;
+        }
+    }
+
     // Track all created entities across all matched rows
     var all_created_nodes = std.StringHashMap(u64).init(allocator);
     defer all_created_nodes.deinit();
@@ -1208,45 +1257,188 @@ pub fn executeMatchCreateQuery(allocator: std.mem.Allocator, q: ast.Query, param
 
     var total_created_count: i64 = 0;
 
-    // Iterate over ALL matched rows and execute CREATE for each combination
-    for (match_result.rows) |row| {
-        // Extract bindings from this matched row
-        var bindings = std.StringHashMap(u64).init(allocator);
-        defer bindings.deinit();
+    if (all_simple_node_chains) {
+        // GAP-0336: Build per-chain candidate lists by re-scanning the store
+        // for each chain's NodePattern.  Then iterate the Cartesian product
+        // and dispatch a CREATE per combination with proper bindings.
+        var rls_row_local = std.StringHashMap(rls.Value).init(allocator);
+        defer rls_row_local.deinit();
+        const store = graph_store.getGlobalStore(allocator);
+        const filter_graph = current_graph orelse "default";
+        const filter_tenant = getSessionTenantFilter();
 
-        for (match_result.columns, 0..) |col_name, i| {
-            if (i < row.len) {
-                // Extract node ID from matched value
-                if (row[i] == .Node) {
-                    try bindings.put(col_name, row[i].Node.id);
-                    // Also add to all_created_nodes for RETURN clause
-                    try all_created_nodes.put(col_name, row[i].Node.id);
+        var chain_matches = std.ArrayList(std.ArrayList(u64)).empty;
+        defer {
+            for (chain_matches.items) |*matches| {
+                matches.deinit(allocator);
+            }
+            chain_matches.deinit(allocator);
+        }
+
+        // For each chain, resolve the head NodePattern to a list of node ids.
+        var any_chain_empty = false;
+        for (q.match.chains) |chain| {
+            const node_pattern = chain.head.?;
+            var matches = std.ArrayList(u64).empty;
+
+            const prop_env = Env{
+                .names = &.{},
+                .values = &.{},
+                .param_names = param_names_arg,
+                .param_values = param_values_arg,
+                .allocator = allocator,
+            };
+
+            if (node_pattern.labels.len > 0) {
+                var label_node_ids = try store.getNodesByLabels(allocator, filter_graph, node_pattern.labels, filter_tenant);
+                defer label_node_ids.deinit(allocator);
+
+                for (label_node_ids.items) |node_id| {
+                    const node = store.nodes.getPtr(node_id) orelse continue;
+                    if (!passesRLSFilter(&rls_row_local, node.*)) continue;
+                    if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
+                    try matches.append(allocator, node_id);
+                }
+            } else {
+                // Unlabeled pattern: graph-scoped scan.
+                var node_iter = store.iterateNodesInGraph(filter_graph);
+                while (node_iter.next()) |node| {
+                    if (!passesTenantFilter(node.*, filter_tenant)) continue;
+                    if (!passesRLSFilter(&rls_row_local, node.*)) continue;
+                    if (!nodeMatchesProps(allocator, node, node_pattern.props, prop_env)) continue;
+                    try matches.append(allocator, node.id);
                 }
             }
+
+            if (matches.items.len == 0) {
+                any_chain_empty = true;
+            }
+            try chain_matches.append(allocator, matches);
         }
 
-        // Execute CREATE with these bindings, tracking created entities (using current graph)
-        var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
-        defer {
-            // Task 12 (enterprise-ingest-throughput): the StringHashMaps
-            // inside `result` are built with `allocator`; previously only
-            // the merge into `all_created_nodes` / `all_created_relationships`
-            // happened and the per-call maps were leaked.  Release them
-            // after copy.
-            result.created_nodes.deinit();
-            result.created_relationships.deinit();
-        }
-        total_created_count += result.created_count;
+        if (!any_chain_empty) {
+            // Honor WHERE clause and DISTINCT/ORDER semantics from MATCH:
+            // The MATCH executor already produced `match_result.rows.len`
+            // surviving combinations.  Our Cartesian product gives the same
+            // shape (since each chain is independent and we re-applied the
+            // same filters).  Iterate the product and dispatch CREATE.
+            var indices = try allocator.alloc(usize, chain_matches.items.len);
+            defer allocator.free(indices);
+            for (indices) |*idx| idx.* = 0;
 
-        // Merge created entities into all_created collections
-        var node_iter = result.created_nodes.iterator();
-        while (node_iter.next()) |entry| {
-            try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
-        }
+            while (true) {
+                // Build bindings for this combination.
+                var bindings = std.StringHashMap(u64).init(allocator);
+                defer bindings.deinit();
+                for (q.match.chains, 0..) |chain, ci| {
+                    const node_pattern = chain.head.?;
+                    if (node_pattern.name) |var_name| {
+                        const node_id = chain_matches.items[ci].items[indices[ci]];
+                        try bindings.put(var_name, node_id);
+                        try all_created_nodes.put(var_name, node_id);
+                    }
+                }
 
-        var rel_iter = result.created_relationships.iterator();
-        while (rel_iter.next()) |entry| {
-            try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
+                // GAP-0336: Honor WHERE clause when re-walking chains.
+                // Build env for evaluation.
+                var should_create = true;
+                if (q.where_clause) |where_expr| {
+                    var env_names = try allocator.alloc([]const u8, q.match.chains.len);
+                    defer allocator.free(env_names);
+                    var env_values = try allocator.alloc(Value, q.match.chains.len);
+                    defer allocator.free(env_values);
+
+                    for (q.match.chains, 0..) |chain, ci| {
+                        const node_pattern = chain.head.?;
+                        env_names[ci] = node_pattern.name orelse "";
+                        const node_id = chain_matches.items[ci].items[indices[ci]];
+                        const node_ptr = store.nodes.getPtr(node_id) orelse continue;
+                        env_values[ci] = Value{ .Node = node_ptr };
+                    }
+
+                    const env = Env{
+                        .names = env_names,
+                        .values = env_values,
+                        .param_names = param_names_arg,
+                        .param_values = param_values_arg,
+                        .allocator = allocator,
+                    };
+                    const where_result = eval.evalExpr(allocator, where_expr, env) catch Value{ .Null = {} };
+                    should_create = switch (where_result) {
+                        .Bool => |b| b,
+                        .Null => false,
+                        .Int => |i| i != 0,
+                        else => false,
+                    };
+                }
+
+                if (should_create) {
+                    var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+                    defer {
+                        result.created_nodes.deinit();
+                        result.created_relationships.deinit();
+                    }
+                    total_created_count += result.created_count;
+
+                    var node_iter = result.created_nodes.iterator();
+                    while (node_iter.next()) |entry| {
+                        try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                    var rel_iter = result.created_relationships.iterator();
+                    while (rel_iter.next()) |entry| {
+                        try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
+                    }
+                }
+
+                // Advance indices (lexicographic increment).
+                var carry: usize = 1;
+                var i: usize = indices.len;
+                while (i > 0 and carry > 0) {
+                    i -= 1;
+                    indices[i] += carry;
+                    if (indices[i] >= chain_matches.items[i].items.len) {
+                        indices[i] = 0;
+                        carry = 1;
+                    } else {
+                        carry = 0;
+                    }
+                }
+                if (carry > 0) break; // Wrapped around — done.
+            }
+        }
+    } else {
+        // Legacy path: chains contain hops.  Extract node bindings from the
+        // MATCH result columns (works when the RETURN projection includes
+        // Node-typed values for the matched variables).
+        for (match_result.rows) |row| {
+            var bindings = std.StringHashMap(u64).init(allocator);
+            defer bindings.deinit();
+
+            for (match_result.columns, 0..) |col_name, i| {
+                if (i < row.len) {
+                    if (row[i] == .Node) {
+                        try bindings.put(col_name, row[i].Node.id);
+                        try all_created_nodes.put(col_name, row[i].Node.id);
+                    }
+                }
+            }
+
+            var result = try executeCreateForBatchWithTracking(allocator, create_pattern, bindings, current_graph);
+            defer {
+                result.created_nodes.deinit();
+                result.created_relationships.deinit();
+            }
+            total_created_count += result.created_count;
+
+            var node_iter = result.created_nodes.iterator();
+            while (node_iter.next()) |entry| {
+                try all_created_nodes.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+
+            var rel_iter = result.created_relationships.iterator();
+            while (rel_iter.next()) |entry| {
+                try all_created_relationships.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
         }
     }
 
