@@ -189,7 +189,22 @@ pub const WebhookSink = struct {
 
 /// SSRF prevention: reject webhook URLs targeting private/reserved networks.
 /// Blocks localhost, link-local, cloud metadata endpoints, and RFC1918 private ranges.
+///
+/// #842: a test-only escape hatch (GEODE_WEBHOOK_ALLOW_PRIVATE=1) lets the
+/// harness stand up a localhost HTTP mock to exercise retry / dead-letter
+/// behavior without disabling the SSRF guard in production. The env var is
+/// read fresh on every call so test setup can flip it without restarting
+/// the process. Off by default; never set in release deployments.
 fn isPrivateHost(host: []const u8) bool {
+    if (@import("builtin").os.tag != .windows) {
+        const name_z: [*:0]const u8 = "GEODE_WEBHOOK_ALLOW_PRIVATE";
+        if (std.c.getenv(name_z)) |ptr| {
+            var len: usize = 0;
+            while (ptr[len] != 0) : (len += 1) {}
+            const v = ptr[0..len];
+            if (std.mem.eql(u8, v, "1") or std.mem.eql(u8, v, "true")) return false;
+        }
+    }
     // Block localhost variants
     if (std.mem.eql(u8, host, "localhost") or
         std.mem.eql(u8, host, "127.0.0.1") or
