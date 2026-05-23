@@ -225,7 +225,7 @@ test "GAP-0723: Opcode.fromByte returns null on unknown byte" {
     // the lookup table (e.g. `else => .nop`) fails here too.
     try testing.expect(CompiledExpression.Opcode.fromByte(0xAA) == null);
     try testing.expect(CompiledExpression.Opcode.fromByte(0x06) == null); // gap in ops
-    try testing.expect(CompiledExpression.Opcode.fromByte(0x13) == null); // gap in ops
+    try testing.expect(CompiledExpression.Opcode.fromByte(0x14) == null); // gap in ops (0x13 = load_attr, ABAC)
     // Positive cases: a few spot-checks of real opcodes.
     try testing.expect(CompiledExpression.Opcode.fromByte(0x00) == .nop);
     try testing.expect(CompiledExpression.Opcode.fromByte(0x02) == .push_true);
