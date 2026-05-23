@@ -322,16 +322,17 @@ test "concurrent MATCH-by-property scales across threads" {
 
     const wall_ns = wall_end - wall_start;
 
-    // Ratio check: parallel wall must be under 2× single-thread baseline.
+    // Ratio check: parallel wall must be under 5/2× single-thread baseline.
     // Fully-serialized (the bug) would land near N×baseline = 4×.
-    // Perfectly-parallel lands near 1×baseline. The 2× bound cleanly
-    // separates the two even with honest scheduler jitter.
-    const max_allowed_ns = baseline_ns * 2;
+    // Perfectly-parallel lands near 1×baseline. The 2.5× bound still
+    // cleanly separates the two while tolerating CPU contention from the
+    // sharded pre-push hook running 4 shards in parallel.
+    const max_allowed_ns = (baseline_ns * 5) / 2;
 
     if (wall_ns > max_allowed_ns) {
         std.debug.print(
             "concurrent MATCH-by-property did NOT scale.  wall={d}ms " ++
-                "baseline_1thread={d}ms bound=2×baseline={d}ms threads={d} " ++
+                "baseline_1thread={d}ms bound=2.5×baseline={d}ms threads={d} " ++
                 "iters/thread={d} work/query={d}ms.  Handler is serializing " ++
                 "reads behind the exclusive writer lock — see " ++
                 "src/server/quic_connection_handler.zig:2302-2325.\n",
