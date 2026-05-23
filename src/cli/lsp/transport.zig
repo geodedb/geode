@@ -147,6 +147,23 @@ pub const StdioTransport = struct {
     stdout: std.Io.File,
     stderr: std.Io.File,
     io: std.Io,
+    /// GAP-0344: persistent framer state. The original implementation
+    /// stack-allocated a fresh `Framer` on every `readMessage` call,
+    /// silently discarding any bytes already pulled into the framer's
+    /// 4 KiB look-ahead buffer that belonged to the *next* message. When
+    /// a client pipelined multiple frames in one write (initialize +
+    /// initialized + didOpen + completion is the canonical sequence),
+    /// the second-and-later messages were lost and the read loop blocked
+    /// forever waiting for already-delivered bytes. Lazily initialised
+    /// in `readMessage` because the framer's `read_ctx` must point at
+    /// the *final* address of this StdioTransport, which is only known
+    /// after the value is moved into its owning Server / Transport
+    /// union.
+    framer: framer_mod.Framer = .{
+        .read_fn = readStreamingAdapter,
+        .read_ctx = undefined,
+    },
+    framer_bound: bool = false,
 
     pub fn init(allocator: Allocator) TransportError!StdioTransport {
         return .{
@@ -171,11 +188,13 @@ pub const StdioTransport = struct {
     }
 
     pub fn readMessage(self: *StdioTransport) ![]const u8 {
-        // F-04: delegate to the buffered framer. The framer owns a 4 KiB
-        // read-ahead buffer and uses parseContentLength's cap (16 MiB)
-        // implicitly via MAX_LSP_MESSAGE.
-        var f = framer_mod.Framer.init(readStreamingAdapter, self);
-        const body = f.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |err| switch (err) {
+        // GAP-0344: bind the framer's context pointer the first time we
+        // read — at this moment `self` is at its final address.
+        if (!self.framer_bound) {
+            self.framer.read_ctx = self;
+            self.framer_bound = true;
+        }
+        const body = self.framer.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |err| switch (err) {
             framer_mod.FramerError.EndOfStream => return TransportError.EndOfStream,
             framer_mod.FramerError.MissingContentLength => return TransportError.MissingContentLength,
             framer_mod.FramerError.InvalidContentLength => return TransportError.InvalidContentLength,
@@ -217,6 +236,15 @@ pub const TcpTransport = struct {
     allocator: Allocator,
     io: std.Io,
     stream: std.Io.net.Stream,
+    /// GAP-0344: persistent framer state. See StdioTransport.framer for
+    /// the full rationale — short version: pipelined messages were lost
+    /// when the framer's 4 KiB look-ahead buffer was rebuilt every
+    /// readMessage call.
+    framer: framer_mod.Framer = .{
+        .read_fn = readAdapter,
+        .read_ctx = undefined,
+    },
+    framer_bound: bool = false,
 
     pub fn init(allocator: Allocator, io: std.Io, stream: std.Io.net.Stream) TransportError!TcpTransport {
         return .{ .allocator = allocator, .io = io, .stream = stream };
@@ -243,8 +271,13 @@ pub const TcpTransport = struct {
     }
 
     pub fn readMessage(self: *TcpTransport) ![]const u8 {
-        var f = framer_mod.Framer.init(readAdapter, self);
-        return f.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |e| switch (e) {
+        // GAP-0344: bind the framer's context pointer the first time we
+        // read — at this moment `self` is at its final address.
+        if (!self.framer_bound) {
+            self.framer.read_ctx = self;
+            self.framer_bound = true;
+        }
+        return self.framer.readMessage(MAX_LSP_MESSAGE, self.allocator) catch |e| switch (e) {
             framer_mod.FramerError.EndOfStream => return TransportError.EndOfStream,
             framer_mod.FramerError.MissingContentLength => return TransportError.MissingContentLength,
             framer_mod.FramerError.InvalidContentLength => return TransportError.InvalidContentLength,

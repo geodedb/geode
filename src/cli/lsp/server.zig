@@ -783,7 +783,14 @@ pub const Server = struct {
             return;
         };
 
-        const hover = try features.provideHover(self.allocator, doc, line, character, self.schema);
+        // GAP-0344: same hardening as handleCompletion — provideHover must
+        // never leave the request unanswered. Errors collapse to a null
+        // result so the client unblocks instead of waiting for its read
+        // timeout.
+        const hover = features.provideHover(self.allocator, doc, line, character, self.schema) catch {
+            try self.sendResult(id, .null);
+            return;
+        };
         defer if (hover) |h| self.allocator.free(h.contents.value);
 
         if (hover) |h| {
@@ -824,7 +831,18 @@ pub const Server = struct {
             return;
         };
 
-        const items = try features.provideCompletion(self.allocator, doc, line, character, self.schema);
+        // GAP-0344: provideCompletion has historically been allowed to throw
+        // (e.g. OOM on a large schema scan, malformed cursor position). The
+        // request handler MUST always respond to the client — propagating
+        // an error here leaves the LSP client hanging until its read timeout
+        // because the main loop only logs the error without sending a
+        // JSON-RPC error reply. Catch + return an empty completion list so
+        // the client always observes a response; downstream features such as
+        // hover/definition use the same pattern.
+        const items = features.provideCompletion(self.allocator, doc, line, character, self.schema) catch {
+            try self.sendResult(id, .{ .array = std.json.Array.init(self.allocator) });
+            return;
+        };
         defer {
             for (items) |item| {
                 if (item.insertText) |text| {

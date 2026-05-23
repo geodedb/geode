@@ -702,6 +702,25 @@ pub fn provideCompletion(
                         .insertText = lbl,
                     });
                 }
+                // GAP-0344: when the schema has no node labels yet (fresh
+                // database) the client still needs *some* suggestion so the
+                // completion popup is not empty. Surface the language's
+                // built-in type names — every type is a syntactically
+                // valid label identifier and the popup is a useful
+                // discovery surface for new users learning the type
+                // system.
+                if (items.items.len == 0) {
+                    for (language_metadata.types) |typ| {
+                        if (ctx.prefix.len > 0 and !startsWithCI(typ.name, ctx.prefix)) continue;
+                        try items.append(allocator, .{
+                            .label = typ.name,
+                            .kind = .Class,
+                            .detail = "Built-in type (no labels yet)",
+                            .documentation = typ.doc,
+                            .insertText = typ.name,
+                        });
+                    }
+                }
                 return items.toOwnedSlice(allocator);
             },
             .edge_type => {
@@ -715,6 +734,20 @@ pub fn provideCompletion(
                         .documentation = null,
                         .insertText = t,
                     });
+                }
+                // GAP-0344: same fall-back as the label branch — empty
+                // schema should still yield non-empty completions.
+                if (items.items.len == 0) {
+                    for (language_metadata.types) |typ| {
+                        if (ctx.prefix.len > 0 and !startsWithCI(typ.name, ctx.prefix)) continue;
+                        try items.append(allocator, .{
+                            .label = typ.name,
+                            .kind = .Reference,
+                            .detail = "Built-in type (no edge types yet)",
+                            .documentation = typ.doc,
+                            .insertText = typ.name,
+                        });
+                    }
                 }
                 return items.toOwnedSlice(allocator);
             },

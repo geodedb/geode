@@ -117,9 +117,15 @@ pub fn callTool(
 
 /// Execute a GQL query against Geode
 fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
-    // Parse the query from args
+    // GAP-0345: argument-validation failures MUST be returned as MCP
+    // tool results with `isError: true` so MCP clients see a structured
+    // error rather than a raw JSON blob that the framework cannot
+    // interpret. Returning the literal `{"error": "..."}` string here
+    // caused MCP clients to receive `result: {"error": "..."}` without
+    // any `isError` flag — clients then had no machine-readable way to
+    // distinguish a successful call from a malformed argument set.
     const parsed = std.json.parseFromSlice(QueryArgs, allocator, args_json, .{}) catch {
-        return "{\"error\": \"Invalid query arguments\"}";
+        return try formatErrorResponse(allocator, "Invalid query arguments");
     };
     defer parsed.deinit();
 
@@ -143,8 +149,46 @@ fn executeQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: 
         return try formatErrorResponse(allocator, @errorName(err));
     };
 
-    // Format as MCP tool result
+    // GAP-0345: the QUIC server reports query-execution failures (parse
+    // errors, type mismatches, runtime errors) by setting the
+    // `status_class` field of the result envelope to something other
+    // than the GQLSTATE success class `00000` and by carrying the
+    // diagnostic in additional_statuses. The MCP client needs an
+    // `isError: true` signal to distinguish these from successful
+    // empty result sets — otherwise a client cannot tell whether the
+    // query ran successfully or blew up. Detect a non-success status
+    // class and convert it to an MCP error result; pass-through on
+    // success.
+    if (looksLikeQueryError(result)) {
+        defer allocator.free(result);
+        return try formatErrorResponse(allocator, result);
+    }
+
     return try formatToolResult(allocator, result);
+}
+
+/// GAP-0345: lightweight detector for QUIC query-failure responses.
+/// Two on-the-wire shapes carry execution failures:
+///   • GQLSTATE envelope with `"status_class":"<class>"` whose class
+///     is not the success class `00000`.
+///   • Error object form: `"error":{"code":"<gqlstate>","message":...}`
+///     attached to an otherwise empty result document.
+/// Either signal means the QUIC server reported failure for the
+/// query and the MCP tool result must be flagged `isError: true` so
+/// MCP clients can distinguish from an empty success.  We deliberately
+/// stay textual rather than re-parsing the JSON to keep the cost on
+/// the happy path negligible.
+fn looksLikeQueryError(payload: []const u8) bool {
+    // Error-object form takes precedence — the QUIC client surfaces
+    // parse / planner / runtime failures via this shape.
+    if (std.mem.indexOf(u8, payload, "\"error\":{\"code\":")) |_| return true;
+
+    const needle = "\"status_class\":\"";
+    const idx = std.mem.indexOf(u8, payload, needle) orelse return false;
+    const start = idx + needle.len;
+    if (start + 5 > payload.len) return false;
+    const class = payload[start .. start + 5];
+    return !std.mem.eql(u8, class, "00000");
 }
 
 /// Get database schema information
@@ -165,8 +209,10 @@ fn getSchema(allocator: std.mem.Allocator, endpoint: ?[]const u8) ![]const u8 {
 
 /// Explain a GQL query plan
 fn explainQuery(allocator: std.mem.Allocator, endpoint: ?[]const u8, args_json: []const u8) ![]const u8 {
+    // GAP-0345: same fix as executeQuery — wrap argument parse failure
+    // as a structured MCP error result rather than a raw error JSON.
     const parsed = std.json.parseFromSlice(QueryArgs, allocator, args_json, .{}) catch {
-        return "{\"error\": \"Invalid query arguments\"}";
+        return try formatErrorResponse(allocator, "Invalid query arguments");
     };
     defer parsed.deinit();
 
