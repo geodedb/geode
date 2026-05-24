@@ -98,3 +98,32 @@ test "createGraph: sequential repeat is also idempotent" {
     try store.createGraph("repeat_me"); // pre-fix: error.GraphAlreadyExists
     try testing.expect(store.graphExists("repeat_me"));
 }
+
+// dsn_graph_binding.yml defense-in-depth (2026-05-24).
+//
+// The QUIC + gRPC HELLO handlers run two checks before deciding between
+// "bind" and "auto-create":
+//
+//     in_store = store.graphExists(name)
+//     in_catalog = cat.hasGraph(name)
+//
+// If both are false the handler falls into the auto-create branch.  If
+// `createGraph` then errors AND the graph is now visible to either layer
+// (because a sibling — DDL on the same server, a successful adapter put
+// where the in-memory put raced — registered it concurrently), the
+// handler now binds instead of bouncing the client with "Failed to
+// create graph".  This pins the contract at the storage layer: after
+// createGraph returns Ok, the post-condition (graphExists is true) must
+// hold — so the handler's recheck is meaningful.
+test "createGraph: graphExists reflects the post-condition after Ok return" {
+    var store = try graph_store.GraphStore.init(testing.allocator);
+    defer store.deinit();
+
+    try testing.expect(!store.graphExists("postcondition_test"));
+    try store.createGraph("postcondition_test");
+    try testing.expect(store.graphExists("postcondition_test"));
+
+    // Repeat: still present, still Ok.
+    try store.createGraph("postcondition_test");
+    try testing.expect(store.graphExists("postcondition_test"));
+}

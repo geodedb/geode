@@ -1538,43 +1538,65 @@ fn handleHandshake(request_bytes: []const u8, trans: *GrpcTransport, allocator: 
                     const can_create = auth_result.role == .Admin or auth_result.role == .ReadWrite;
 
                     if (can_create) {
-                        _ = gstore.createGraph(requested_graph) catch |err| {
-                            log.err("Graph auto-creation failed", &.{
-                                Attr.string("graph", requested_graph),
-                                Attr.string("error", @errorName(err)),
-                            });
-                            const resp = schema.HelloResponse{
-                                .success = false,
-                                .session_id = "",
-                                .error_message = "Failed to create graph",
-                                .capabilities = caps,
+                        var auto_create_succeeded = false;
+                        if (gstore.createGraph(requested_graph)) {
+                            auto_create_succeeded = true;
+                        } else |err| {
+                            // dsn_graph_binding.yml defense-in-depth
+                            // (2026-05-24): mirror the QUIC handler — if
+                            // the post-condition (graph exists) is
+                            // satisfied despite createGraph errors, bind
+                            // instead of bouncing the client.
+                            if (gstore.graphExists(requested_graph) or cat.hasGraph(requested_graph)) {
+                                log.warn("createGraph errored but graph is present; binding instead", &.{
+                                    Attr.string("graph", requested_graph),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                                resolved_graph = requested_graph;
+                            } else {
+                                log.err("Graph auto-creation failed", &.{
+                                    Attr.string("graph", requested_graph),
+                                    Attr.string("error", @errorName(err)),
+                                });
+                                const resp = schema.HelloResponse{
+                                    .success = false,
+                                    .session_id = "",
+                                    .error_message = "Failed to create graph",
+                                    .capabilities = caps,
+                                };
+                                return encodeMessage(allocator, resp);
+                            }
+                        }
+                        if (auto_create_succeeded) {
+                            const uuid = graph_store.GraphStore.getGraphUuid(requested_graph) orelse {
+                                const resp = schema.HelloResponse{
+                                    .success = false,
+                                    .session_id = "",
+                                    .error_message = "Graph created without persistent UUID",
+                                    .capabilities = caps,
+                                };
+                                return encodeMessage(allocator, resp);
                             };
-                            return encodeMessage(allocator, resp);
-                        };
-                        const uuid = graph_store.GraphStore.getGraphUuid(requested_graph) orelse {
-                            const resp = schema.HelloResponse{
-                                .success = false,
-                                .session_id = "",
-                                .error_message = "Graph created without persistent UUID",
-                                .capabilities = caps,
+                            cat.addGraphWithUuid(requested_graph, uuid) catch |err| switch (err) {
+                                // Race-safe — same shape as the QUIC handler.
+                                error.GraphAlreadyExists => {},
+                                else => {
+                                    gstore.dropGraph(requested_graph) catch {};
+                                    log.err("Failed to persist graph metadata", &.{
+                                        Attr.string("graph", requested_graph),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                    const resp = schema.HelloResponse{
+                                        .success = false,
+                                        .session_id = "",
+                                        .error_message = "Failed to persist graph metadata",
+                                        .capabilities = caps,
+                                    };
+                                    return encodeMessage(allocator, resp);
+                                },
                             };
-                            return encodeMessage(allocator, resp);
-                        };
-                        cat.addGraphWithUuid(requested_graph, uuid) catch |err| {
-                            gstore.dropGraph(requested_graph) catch {};
-                            log.err("Failed to persist graph metadata", &.{
-                                Attr.string("graph", requested_graph),
-                                Attr.string("error", @errorName(err)),
-                            });
-                            const resp = schema.HelloResponse{
-                                .success = false,
-                                .session_id = "",
-                                .error_message = "Failed to persist graph metadata",
-                                .capabilities = caps,
-                            };
-                            return encodeMessage(allocator, resp);
-                        };
-                        resolved_graph = requested_graph;
+                            resolved_graph = requested_graph;
+                        }
                     } else {
                         const resp = schema.HelloResponse{
                             .success = false,

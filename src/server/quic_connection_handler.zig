@@ -2978,8 +2978,34 @@ fn handleClientMessage(
                             break :blk role == .Admin or role == .ReadWrite;
                         } else !user_mgmt.isAuthEnabled(); // No auth = allow
 
-                        if (can_create) {
+                        if (can_create) auto_create_done: {
                             _ = store.createGraph(requested_graph) catch |err| {
+                                // dsn_graph_binding.yml defense-in-depth
+                                // (2026-05-24): createGraph errored but the
+                                // post-condition (graph exists) may already
+                                // be satisfied — e.g. a CREATE GRAPH DDL on
+                                // the SAME server registered the graph in
+                                // the catalog between this connection's
+                                // earlier pre-check (line 2911-2912) and
+                                // this auto-create, leaving createGraph to
+                                // race with the adapter's hash put.  When
+                                // the graph is now visible to either store
+                                // or catalog, the user's goal is achieved;
+                                // bind to it instead of bouncing the
+                                // client with "Failed to create graph".
+                                if (store.graphExists(requested_graph) or cat.hasGraph(requested_graph)) {
+                                    log.warn("createGraph errored but graph is present; binding instead", &.{
+                                        Attr.string("graph", requested_graph),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                    if (state.exec_session) |*sess| {
+                                        if (sess.graph) |old| gpa.free(old);
+                                        sess.graph = try gpa.dupe(u8, requested_graph);
+                                    }
+                                    state.graph_bound = true;
+                                    resolved_graph = requested_graph;
+                                    break :auto_create_done;
+                                }
                                 log.err("Graph auto-creation failed", &.{
                                     Attr.string("graph", requested_graph),
                                     Attr.string("error", @errorName(err)),
