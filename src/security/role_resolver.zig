@@ -60,21 +60,43 @@ pub fn resolveRoleFromGraph(store: *geode.graph_store.GraphStore, record: user_s
     }
     const uid = user_node_id orelse return authRoleFromRecord(record);
 
-    // Traverse outgoing HAS_ROLE edges to find the role node.
+    // Traverse outgoing HAS_ROLE edges and pick the role from the most
+    // recently created edge (highest edge_id, which is monotonic).
+    //
+    // Pre-fix this loop returned the first HAS_ROLE edge HashMap
+    // iteration surfaced — which, after an `ALTER USER ... SET ROLE`
+    // (which only appends a new HAS_ROLE edge — see
+    // storage/user_storage.zig:assignUserRole), gave a non-deterministic
+    // result.  geode_auth_ddl_persistence.yml's
+    // persist-permissions-after-restart test caught it intermittently:
+    // the user landed back at the OLD role after every other restart.
+    //
+    // Writers now also revoke prior built-in HAS_ROLE edges on every
+    // ALTER USER ... SET ROLE (server/server_init.zig:writerSetRole),
+    // so new on-disk data never accumulates more than one built-in
+    // HAS_ROLE edge.  This last-write-wins resolver is a compat shield
+    // for legacy state written by pre-fix versions of geode (and a
+    // belt-and-braces guarantee against any future writer that forgets
+    // to revoke first).
     const edge_ids = store.getOutgoingEdgeIds(uid) orelse return authRoleFromRecord(record);
+    var best_role: ?geode.user_management.Role = null;
+    var best_eid: u64 = 0;
     for (edge_ids) |eid| {
         const edge = store.getEdgePtr(eid) orelse continue;
         if (!std.mem.eql(u8, edge.graph_name, SECURITY_GRAPH)) continue;
         if (!std.mem.eql(u8, edge.label, HAS_ROLE)) continue;
 
-        // Found a HAS_ROLE edge; read the role name from the target node.
         const role_name_prop = store.getNodeProperty(edge.to_id, "name") orelse continue;
         const role_name = switch (role_name_prop) {
             .String => |s| s,
             else => continue,
         };
-        if (geode.user_management.Role.fromString(role_name)) |r| return r;
+        const parsed = geode.user_management.Role.fromString(role_name) orelse continue;
+        if (best_role == null or eid > best_eid) {
+            best_role = parsed;
+            best_eid = eid;
+        }
     }
 
-    return authRoleFromRecord(record);
+    return best_role orelse authRoleFromRecord(record);
 }

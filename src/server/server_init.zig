@@ -745,6 +745,25 @@ fn writerUpdatePassword(ctx: ?*anyopaque, username: []const u8, new_password_has
 fn writerSetRole(ctx: ?*anyopaque, username: []const u8, role: user_mgmt.Role) anyerror!void {
     const agm: *auth_graph_manager.AuthGraphManager = @ptrCast(@alignCast(ctx.?));
     const uid = (try agm.findUserIdByName(username)) orelse return;
+
+    // geode_auth_ddl_persistence.yml regression: storage.assignUserRole
+    // only short-circuits when the SAME (uid, rid) edge already exists,
+    // so successive ALTER USER ... SET ROLE calls leave one HAS_ROLE
+    // edge per role ever assigned.  After a restart, resolveRoleFromGraph
+    // walks those edges and the first one HashMap iteration surfaces
+    // wins — non-deterministic and roughly 50% of restarts hydrated the
+    // OLD built-in role.  A user has exactly one built-in role at a
+    // time, so revoke any prior built-in HAS_ROLE edge before assigning
+    // the new one.  Custom roles live on their own HAS_ROLE edges and
+    // are intentionally NOT touched here.
+    const builtin_roles = [_]user_mgmt.Role{ .Admin, .ReadWrite, .User, .ReadOnly };
+    for (builtin_roles) |old_role| {
+        if (old_role == role) continue;
+        if (try agm.findRoleIdByName(old_role.toString())) |old_rid| {
+            _ = try agm.revokeUserRole(&agm.hmac_key, uid, old_rid);
+        }
+    }
+
     _ = try agm.createRole(&agm.hmac_key, role.toString(), "");
     if (try agm.findRoleIdByName(role.toString())) |rid| {
         _ = try agm.assignUserRole(&agm.hmac_key, uid, rid);
