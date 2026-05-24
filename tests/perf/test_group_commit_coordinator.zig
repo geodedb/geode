@@ -225,17 +225,13 @@ fn concurrentWorker(ctx: *ConcurrentCtx) void {
 }
 
 test "group commit: 16 concurrent submitters land all ops + coalesce batches" {
-    // Skip on CI runners — this concurrency stress test produces an
-    // intermittent segfault inside applyShardBatch on shared
-    // GitLab-SaaS hardware (pipeline #1007: SIGABRT at
-    // group_commit.zig:476 dereferencing op.resultPtr()). The bug is
-    // a real but pre-existing concurrency edge under release-safe;
-    // memory.md notes "perf/coordinator failures unrelated to OTel
-    // work — don't try to fix them in OTel tasks". Locals stay
-    // exposed; CI marks SKIPPED.
-    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
-        return error.SkipZigTest;
-    }
+    // Correctness assertions (zero loss, batch coalescing) run
+    // unconditionally. The SIGABRT at applyShardBatch (group_commit.zig
+    // line ~466) that previously forced CI to skip was a UAF: the apply
+    // loop woke the waiter and THEN re-read `op.resultPtr().err` for
+    // metrics, but the waiter could have already returned to its caller
+    // and freed the stack-allocated ApplyOp. Fixed by harvesting the
+    // err tally before the wake. See group_commit.zig commit notes.
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 

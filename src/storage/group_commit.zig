@@ -463,20 +463,29 @@ pub const ShardedCoordinator = struct {
             }
         }
 
+        // Tally per-op outcomes BEFORE waking — once a waiter is woken,
+        // its `submit()` call returns and the caller may free the op (the
+        // typical pattern is a stack-allocated ApplyOp on the submitter's
+        // frame), so reading `op.resultPtr()` after wake is a UAF. This
+        // surfaced as a SIGABRT at this line under 16-way concurrent
+        // submit in test_group_commit_coordinator. Order is: harvest
+        // -> bump metrics -> wake.
+        const batch_len: usize = batch.len;
+        var errs: u64 = 0;
+        for (batch) |op| if (op.resultPtr().err != null) {
+            errs += 1;
+        };
+
+        // Aggregate into coordinator-wide counters for runtime_metrics.
+        _ = self.apply_batches_total.fetchAdd(1, .monotonic);
+        _ = self.apply_ops_total.fetchAdd(@intCast(batch_len), .monotonic);
+        if (errs > 0) _ = self.apply_errors_total.fetchAdd(errs, .monotonic);
+
         for (batch) |op| {
             const res = op.resultPtr();
             res.done.store(1, .release);
             std.Io.futexWake(io, u32, &res.done.raw, 1);
         }
-
-        // Aggregate into coordinator-wide counters for runtime_metrics.
-        _ = self.apply_batches_total.fetchAdd(1, .monotonic);
-        _ = self.apply_ops_total.fetchAdd(@intCast(batch.len), .monotonic);
-        var errs: u64 = 0;
-        for (batch) |op| if (op.resultPtr().err != null) {
-            errs += 1;
-        };
-        if (errs > 0) _ = self.apply_errors_total.fetchAdd(errs, .monotonic);
     }
 
     pub fn shardQueueDepthForTest(self: *ShardedCoordinator, shard_idx: usize) usize {
