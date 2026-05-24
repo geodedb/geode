@@ -2675,10 +2675,22 @@ pub const StorageAdapter = struct {
             if (!nstore.free_space.isAllocated(page_id)) continue;
 
             // Unpin cached frame when moving to a different shard or page.
+            //
+            // CRITICAL: clear the cached_shard_idx / cached_page_id tracking
+            // BETWEEN the old unpin and the new pin. If `bp.pin` errors,
+            // `cached_frame` still points at the just-unpinned old frame,
+            // and the function-exit `defer` would otherwise call `unpin`
+            // again on it (`bp.unpin(bp.frameIndex(cached_frame), false)`).
+            // The buffer pool asserts `pin_count > 0` on every unpin, so
+            // that double-unpin surfaces as a SIGABRT — observed under the
+            // 16-way concurrent UNION DISTINCT load in
+            // test_gap0814_union_parallelism.
             if (cached_shard_idx == null or cached_shard_idx.? != shard_idx or cached_page_id.? != page_id) {
                 if (cached_shard_idx != null and cached_page_id != null) {
                     const old_bp = mg.engine.shards[cached_shard_idx.?].node_store.buffer_pool;
                     old_bp.unpin(old_bp.frameIndex(cached_frame), false);
+                    cached_shard_idx = null;
+                    cached_page_id = null;
                 }
                 cached_frame = try bp.pin(.nodes, page_id);
                 cached_shard_idx = shard_idx;

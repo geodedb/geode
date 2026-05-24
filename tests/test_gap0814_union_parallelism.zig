@@ -95,17 +95,14 @@ const Harness = struct {
 };
 
 test "GAP-0814: UNION DISTINCT across two labels returns merged distinct rows" {
-    // Skip on CI runners — this concurrency-stress test produces an
-    // intermittent SIGABRT ("reached unreachable code") inside
-    // graph_storage_adapter::getNodesByLabel's unpin path on shared
-    // GitLab-SaaS hardware (pipeline #1015). The bug is a real but
-    // pre-existing concurrency edge under release-safe; memory.md
-    // notes "perf/coordinator failures unrelated to OTel work — don't
-    // try to fix them in OTel tasks". Locals stay exposed; CI marks
-    // SKIPPED.
-    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
-        return error.SkipZigTest;
-    }
+    // Previously skipped on CI because of a SIGABRT in
+    // graph_storage_adapter::getNodesByLabel's unpin path (pipeline #1015).
+    // Root cause was a double-unpin in the cached-frame transition: when
+    // `bp.pin` errored, the function-exit defer re-unpinned the
+    // already-unpinned old frame, tripping the buffer-pool
+    // `pin_count > 0` assert. Fixed by clearing the cached state between
+    // the old unpin and the new pin so the defer no-ops on the failure
+    // path. See graph_storage_adapter.zig commit notes.
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -181,23 +178,11 @@ test "GAP-0814: UNION ALL preserves all rows (no dedup)" {
 }
 
 test "GAP-0814: UNION ALL 500+500 parallelism latency gate" {
-    // SkipZigTest until the underlying concurrency edge in
-    // graph_storage_adapter::getNodesByLabel's unpin path is fixed —
-    // this test deterministically panics with "reached unreachable
-    // code" under sufficiently aggressive 16-way fan-out, both on
-    // GitLab-SaaS CI (pipeline #1015) and on the local `make test`
-    // chain.  The sibling DISTINCT-arm test at line 97 already
-    // self-skips with the same env gate, and the pre-push hook
-    // comment lists this whole file in the CI-skip set
-    // ("test_gap0814_union_parallelism").  Skip by default so
-    // `make test` is reliably green; opt in with `GEODE_RUN_FLAKY=1`
-    // to re-expose locally for debugging the upstream bug.
-    if (std.c.getenv("GITLAB_CI") != null or
-        std.c.getenv("CI") != null or
-        std.c.getenv("GEODE_RUN_FLAKY") == null)
-    {
-        return error.SkipZigTest;
-    }
+    // Previously skipped due to the same getNodesByLabel double-unpin
+    // SIGABRT as the DISTINCT-arm test (now fixed; see graph_storage_
+    // adapter.zig commit notes). The remaining assertions below are
+    // both deterministic — a row-count check and a parallel-path-taken
+    // counter probe — so this test now runs unconditionally.
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
