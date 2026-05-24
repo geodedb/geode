@@ -1615,7 +1615,19 @@ pub fn executeStatementWithContext(allocator: std.mem.Allocator, stmt: ast.State
             try store.createGraph(graph_name);
             errdefer store.dropGraph(graph_name) catch {};
             const uuid = graph_store.GraphStore.getGraphUuid(graph_name) orelse return error.GraphUuidUnavailable;
-            try cat.addGraphWithUuid(graph_name, uuid);
+            cat.addGraphWithUuid(graph_name, uuid) catch |err| switch (err) {
+                // dsn_graph_binding.yml race fix (2026-05-23): another
+                // CREATE GRAPH for the same name landed between our
+                // pre-check at line 1596-1597 and this add.  The graph
+                // exists, the post-condition the user asked for is
+                // satisfied — return success rather than rolling back
+                // (the errdefer above would drop the graph the race
+                // winner created, leaving the system inconsistent and
+                // the second user with a DuplicateGraph-style error
+                // even though `cat` already has it).
+                error.GraphAlreadyExists => {},
+                else => return err,
+            };
 
             // Task 9: a new graph appears in the visible-graphs set for
             // every user with READ on it — invalidate LSP caches.

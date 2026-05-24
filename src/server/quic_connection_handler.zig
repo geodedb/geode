@@ -3003,20 +3003,33 @@ fn handleClientMessage(
                                 try sendQuicMessage(gpa, stream, resp);
                                 return;
                             };
-                            cat.addGraphWithUuid(requested_graph, uuid) catch |err| {
-                                store.dropGraph(requested_graph) catch {};
-                                log.err("Failed to persist auto-created graph in catalog", &.{
-                                    Attr.string("graph", requested_graph),
-                                    Attr.string("error", @errorName(err)),
-                                });
-                                const resp = schema.QuicServerMessage{ .hello = .{
-                                    .success = false,
-                                    .session_id = try gpa.dupe(u8, ""),
-                                    .error_message = try gpa.dupe(u8, "Failed to persist graph metadata"),
-                                    .capabilities = caps,
-                                } };
-                                try sendQuicMessage(gpa, stream, resp);
-                                return;
+                            cat.addGraphWithUuid(requested_graph, uuid) catch |err| switch (err) {
+                                // dsn_graph_binding.yml race fix (2026-05-23):
+                                // another connection won the race to register
+                                // this graph in the catalog between our
+                                // `cat.hasGraph` pre-check (line 2912) and
+                                // this add.  The graph IS present — proceed
+                                // to bind.  Pre-fix we'd drop the graph the
+                                // race winner just created, then surface
+                                // "Failed to persist graph metadata" to the
+                                // client and leave the catalog inconsistent
+                                // with the store.
+                                error.GraphAlreadyExists => {},
+                                else => {
+                                    store.dropGraph(requested_graph) catch {};
+                                    log.err("Failed to persist auto-created graph in catalog", &.{
+                                        Attr.string("graph", requested_graph),
+                                        Attr.string("error", @errorName(err)),
+                                    });
+                                    const resp = schema.QuicServerMessage{ .hello = .{
+                                        .success = false,
+                                        .session_id = try gpa.dupe(u8, ""),
+                                        .error_message = try gpa.dupe(u8, "Failed to persist graph metadata"),
+                                        .capabilities = caps,
+                                    } };
+                                    try sendQuicMessage(gpa, stream, resp);
+                                    return;
+                                },
                             };
 
                             if (state.exec_session) |*sess| {

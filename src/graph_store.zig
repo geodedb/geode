@@ -546,6 +546,19 @@ pub const GraphStore = struct {
     incoming_edges: sharded_store.ShardedStore(u64, std.ArrayList(u64)), // to_node_id -> edge_ids
     /// Per-graph IdMaps for UUIDv7 ↔ engine slot_id translation.
     id_maps: std.StringHashMap(id_map_mod.IdMap) = undefined,
+    // dsn_graph_binding.yml race fix (2026-05-23): serialize CREATE /
+    // OPEN-OR-CREATE / DROP graph mutations so the in-memory `graphs`
+    // map and the adapter-backed registry can't observe each other in
+    // half-applied states.  Without this, two concurrent QUIC HELLOs
+    // hitting `createGraph` for the same fresh DSN-bound name both
+    // pass the unguarded `self.graphs.contains` pre-check, both call
+    // the (already-serialized) vtable, and the loser's `graphs.put`
+    // races on a stale "doesn't exist" assumption — surfacing
+    // `error.GraphAlreadyExists` from the second `contains` check and
+    // bubbling up to the client as "Failed to create graph".  Tier 1
+    // leaf mutex per CLAUDE.md: never acquired while any higher-tier
+    // mutex is held.
+    graphs_mutex: std.Io.Mutex = std.Io.Mutex.init,
     /// Optional CSR adjacency for fast traversal (if built elsewhere)
     csr: ?*const anyopaque = null,
     // CANARY: REQ=REQ-BINARY-PERSIST-DIRTY-001; FEATURE="BinaryPersistence"; ASPECT=DirtyTracking; STATUS=TESTED; TEST=tests/test_gap0514_graph_store_regression.zig; OWNER=storage; UPDATED=2026-04-11
@@ -1373,15 +1386,42 @@ pub const GraphStore = struct {
     }
 
     pub fn createGraph(self: *GraphStore, graph_name: []const u8) !void {
+        // dsn_graph_binding.yml race fix (2026-05-23): serialize the
+        // (vtable get-or-create + in-memory contains/put) pair so two
+        // concurrent CREATE GRAPH / DSN-auto-create paths can't both
+        // observe `!contains`, both insert, and surface a spurious
+        // `GraphAlreadyExists` from the loser's second `contains` check.
+        // See `graphs_mutex` field doc and
+        // `tests/test_create_graph_race_regression.zig`.
+        self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
         // Create the persisted graph first so the in-memory registry never
-        // diverges from the adapter-backed storage layout.
+        // diverges from the adapter-backed storage layout.  The adapter's
+        // getOrCreate is itself idempotent (StorageAdapter.getOrCreateGraph
+        // returns the existing handle if the registry already has the name),
+        // so this call is safe to repeat across the race window.
         if (global_vtable) |vt| {
             _ = try vt.getOrCreateGraphFn(vt.ctx, graph_name);
         }
+
+        // Idempotency: if a sibling caller already registered this graph
+        // in the in-memory map (sequential repeat OR concurrent race
+        // winner ahead of us under the same mutex round) treat as
+        // success — the post-condition the caller wanted (graph exists)
+        // is satisfied.  Pre-fix this returned `error.GraphAlreadyExists`
+        // and the QUIC HELLO handler translated that to "Failed to create
+        // graph", failing test 10 of dsn_graph_binding.yml whenever the
+        // adjacent CREATE GRAPH IF NOT EXISTS in test 9 had already
+        // landed.  Callers that need strict "did I create this graph
+        // just now" semantics (none today) would have to gate above
+        // this layer.
         if (self.graphs.contains(graph_name)) {
-            return error.GraphAlreadyExists;
+            return;
         }
+
         const name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(name_copy);
         try self.graphs.put(name_copy, {});
 
         // Initialize IdMap for the new graph
@@ -1393,6 +1433,12 @@ pub const GraphStore = struct {
 
     /// Open a graph using a known UUID (for catalog recovery).
     pub fn openOrCreateGraphWithUuid(self: *GraphStore, graph_name: []const u8, graph_uuid: [16]u8) !void {
+        // Same race protection as createGraph — concurrent catalog
+        // recovery for the same name must not double-put into
+        // `self.graphs` and leak the loser's name_copy slice.
+        self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
         if (global_adapter) |adapter| {
             _ = try adapter.openGraphWithUuid(graph_name, graph_uuid);
         }
@@ -1400,6 +1446,7 @@ pub const GraphStore = struct {
             return;
         }
         const name_copy = try self.allocator.dupe(u8, graph_name);
+        errdefer self.allocator.free(name_copy);
         try self.graphs.put(name_copy, {});
         _ = try self.getOrCreateIdMap(graph_name);
         self.dirty.store(true, .release);
@@ -1416,6 +1463,15 @@ pub const GraphStore = struct {
     }
 
     pub fn dropGraph(self: *GraphStore, graph_name: []const u8) !void {
+        // Match createGraph/openOrCreateGraphWithUuid serialization so a
+        // concurrent CREATE+DROP for the same name can't observe a
+        // half-applied state (adapter dropped but registry still has
+        // the entry, or vice versa).  `clearNodesForGraph` does not
+        // touch `self.graphs` so the leaf-mutex invariant holds — see
+        // `graphs_mutex` field doc.
+        self.graphs_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
+        defer self.graphs_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
+
         // Dual-write: drop from adapter, then fall through to local cleanup
         if (global_vtable) |vt| {
             vt.dropGraphFn(vt.ctx, graph_name);
