@@ -232,16 +232,14 @@ fn concurrentWorker(ctx: *WorkerCtx) !void {
 }
 
 test "two-phase lock: 16 threads beat single-thread by >= 4x" {
-    // Skip on shared/oversubscribed CI runners where 16-way parallelism
-    // contends with co-tenant jobs and the speedup invariant becomes
-    // environmental noise. GitLab CI sets `GITLAB_CI=true`; the generic
-    // `CI=true` covers other CI providers too. Locals stay exposed to
-    // the regression check. See pipeline #1007 (CI got speedup=0.66x
-    // with parallel=2.59s vs baseline=1.70s, breaching the
-    // `2*parallel <= 3*baseline` threshold).
-    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
-        return error.SkipZigTest;
-    }
+    // Correctness (edge counts, deadline accounting) runs unconditionally
+    // so the two-phase split is regression-covered everywhere. The
+    // *timing-ratio* invariant at the bottom is the part that's noise-
+    // sensitive on shared/oversubscribed runners (pipeline #1007 saw
+    // speedup=0.66x with parallel=2.59s vs baseline=1.70s, breaching
+    // `2*parallel <= 3*baseline`), so we gate THAT assertion on the
+    // absence of CI/GITLAB_CI rather than skipping the whole test.
+    const in_ci = std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -370,7 +368,10 @@ test "two-phase lock: 16 threads beat single-thread by >= 4x" {
         .{ baseline_elapsed, parallel_elapsed, speedup },
     );
     // parallel_elapsed <= 1.5 * baseline_elapsed  ↔  2 * parallel <= 3 * baseline
-    try testing.expect(2 * parallel_elapsed <= 3 * baseline_elapsed);
+    // Only enforced off shared runners — see top-of-test comment.
+    if (!in_ci) {
+        try testing.expect(2 * parallel_elapsed <= 3 * baseline_elapsed);
+    }
 }
 
 // ----------------------------------------------------------------------

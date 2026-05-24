@@ -84,16 +84,13 @@ const Harness = struct {
 };
 
 test "GAP-0811b: sum(p.age) label-index scan without materialize" {
-    // Skip on CI runners — the assertion `elapsed_ns < 10_000_000`
-    // (10 ms) is a fast-path latency check that fires falsely under
-    // shared-runner / 4-way-shard contention even when the fast path
-    // is in fact taking effect. Same quarantine pattern as
-    // test_gap0814_union_parallelism, test_group_commit_coordinator,
-    // and test_two_phase_edge_lock — local devs still run it; CI marks
-    // SKIPPED.
-    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
-        return error.SkipZigTest;
-    }
+    // The result-correctness assertions (row count, expected sum) run
+    // unconditionally so the fast path is regression-covered everywhere.
+    // The 10 ms latency budget at the bottom is what's noise-sensitive on
+    // shared-runner / 4-way-shard contention even when the fast path is
+    // in fact taking effect — so we gate THAT assertion on the absence
+    // of CI/GITLAB_CI rather than skipping the whole test.
+    const in_ci = std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null;
     var h = try Harness.init(testing.allocator);
     defer h.deinit();
 
@@ -127,9 +124,11 @@ test "GAP-0811b: sum(p.age) label-index scan without materialize" {
     try testing.expectEqual(@as(usize, 1), res.rows.len);
     try testing.expectEqual(expected_sum, res.rows[0][0].Int);
     // Slow path at 1000 nodes measured ~18 ms pre-fix. Fast path should
-    // stay well under 10 ms even under CI load.
+    // stay well under 10 ms locally — only enforced off shared runners.
     std.debug.print("[GAP-0811b sum] elapsed_ns={d}\n", .{elapsed_ns});
-    try testing.expect(elapsed_ns < 10_000_000);
+    if (!in_ci) {
+        try testing.expect(elapsed_ns < 10_000_000);
+    }
 }
 
 test "GAP-0811b: avg(p.age) returns correct decimal" {

@@ -381,17 +381,15 @@ test "e2e_timeseries: GQL function integration" {
 }
 
 test "e2e_timeseries: performance benchmark" {
-    // Skip on CI runners — the assertions
-    //   write_throughput > 100_000 points/sec
-    //   query_time < 5_000 ms
-    // are perf gates that fire under shared-runner / 4-way-shard
-    // contention even when the timeseries implementation is healthy.
-    // Same quarantine pattern as test_gap0814_union_parallelism,
-    // test_group_commit_coordinator, and test_two_phase_edge_lock —
-    // local devs still get the benchmark numbers; CI marks SKIPPED.
-    if (std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null) {
-        return error.SkipZigTest;
-    }
+    // The insertMany / sampleBy / valueBefore / last calls below all run
+    // unconditionally so the timeseries store is regression-covered
+    // everywhere (any allocator/encoding/path bug surfaces as an error
+    // from the API itself). The three perf-ratio assertions at the
+    // bottom (write_throughput, query_time, bytes_per_point) are the
+    // parts that fire falsely on shared-runner / 4-way-shard contention,
+    // so we gate THOSE on the absence of CI/GITLAB_CI rather than
+    // skipping the whole test.
+    const in_ci = std.c.getenv("GITLAB_CI") != null or std.c.getenv("CI") != null;
     const allocator = std.testing.allocator;
 
     var store = timeseries.Store.init(allocator);
@@ -442,8 +440,11 @@ test "e2e_timeseries: performance benchmark" {
 
     std.debug.print("  Memory usage: {d:.2} bytes per point\n", .{bytes_per_point});
 
-    // Performance assertions (relaxed for Debug builds)
-    try std.testing.expect(write_throughput > 100000); // > 100K points/sec (Debug)
-    try std.testing.expect(query_time < 5000); // < 5s for queries (Debug)
-    try std.testing.expect(bytes_per_point < 32); // < 32 bytes per point in memory
+    // Performance assertions (relaxed for Debug builds) — only enforced
+    // off shared runners where the timing budgets are meaningful.
+    if (!in_ci) {
+        try std.testing.expect(write_throughput > 100000); // > 100K points/sec (Debug)
+        try std.testing.expect(query_time < 5000); // < 5s for queries (Debug)
+        try std.testing.expect(bytes_per_point < 32); // < 32 bytes per point in memory
+    }
 }
