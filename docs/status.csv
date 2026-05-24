@@ -3055,7 +3055,7 @@ REQ-LOADTEST-WORKLOADS-001,WorkloadPatterns,Definition,EXEMPT,,,loadtest,2026-01
 REQ-LSP-001,Language Server Protocol,LSPServer,EXEMPT,,,cli,2025-10-28,src/cli/main.zig
 REQ-LSP-001,LanguageServerProtocol,LSPServer,TESTED,,,cli,2026-01-15,tests/test_gap_analysis_january_2026.zig
 REQ-LSP-AUTH-GATE-001,LspPermissionAwareCompletion,AuthGate,TESTED,,,lsp,2026-05-14,src/cli/lsp/server_auth_test.zig
-REQ-LSP-AUTH-GATE-001,LspPermissionAwareCompletion,LibExportAuthn,IMPL,,,lsp,2026-05-14,src/lib.zig
+REQ-LSP-AUTH-GATE-001,LspPermissionAwareCompletion,LibExportAuthn,IMPL,,,lsp,2026-05-23,src/lib.zig
 REQ-LSP-AUTH-NOAUTH-001,LspPermissionAwareCompletion,NoAuthBind,TESTED,,,lsp,2026-05-14,src/cli/lsp/server_auth_test.zig
 REQ-LSP-EMBEDDED-E2E-001,LspPermissionAwareCompletion,EmbeddedTcpAuthGate,TESTED,,,lsp,2026-05-14,tests/test_lsp_embedded_e2e.zig
 REQ-LSP-GOTODEF-001,GoToDefinition,VariableLookup,TESTED,,,lsp,2026-05-06,src/cli/lsp/features.zig

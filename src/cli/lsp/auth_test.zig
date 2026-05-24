@@ -123,3 +123,68 @@ test "AuthState.verify with Verifier rejects an unknown token" {
     try testing.expectError(auth.AuthError.InvalidToken, s.verify(alloc, verifier));
     try testing.expect(!s.verified);
 }
+
+// ---------------------------------------------------------------------
+// AuthProvider → Verifier adapter (Task 28 follow-up).
+//
+// These tests exercise `auth.verifierFromAuthProvider` against a real
+// `authn.AuthProvider`. The provider is configured with an API key whose
+// bearer token authenticates a session; the adapter must route the
+// bearer through `AuthProvider.authenticate({.bearer_token=…})` and
+// surface the resulting username via `Verifier.Outcome.ok`.
+//
+// The negative path exercises the fail-closed behavior: a token the
+// provider does not recognise must return `.invalid`, and an empty
+// token must short-circuit without ever calling the provider.
+// ---------------------------------------------------------------------
+const authn = @import("geode").security.authn;
+
+test "verifierFromAuthProvider: bearer token resolves through AuthProvider" {
+    const alloc = testing.allocator;
+
+    var provider = authn.AuthProvider.init(alloc);
+    defer provider.deinit();
+
+    const scopes = [_][]const u8{ "lsp:read", "schema:introspect" };
+    const full_token = try provider.api_key_manager.createKey(42, "lsp_test_user", &scopes, null);
+    defer alloc.free(full_token);
+
+    const verifier = auth.verifierFromAuthProvider(&provider);
+
+    var s = auth.AuthState{ .token = try alloc.dupe(u8, full_token) };
+    defer s.deinit(alloc);
+
+    try s.verify(alloc, verifier);
+    try testing.expect(s.verified);
+    try testing.expectEqualStrings("lsp_test_user", s.user);
+}
+
+test "verifierFromAuthProvider: unknown bearer token reports invalid" {
+    const alloc = testing.allocator;
+
+    var provider = authn.AuthProvider.init(alloc);
+    defer provider.deinit();
+
+    const verifier = auth.verifierFromAuthProvider(&provider);
+
+    var s = auth.AuthState{ .token = try alloc.dupe(u8, "definitely-not-a-real-key") };
+    defer s.deinit(alloc);
+
+    try testing.expectError(auth.AuthError.InvalidToken, s.verify(alloc, verifier));
+    try testing.expect(!s.verified);
+}
+
+test "verifierFromAuthProvider: empty token rejected without provider call" {
+    // The adapter short-circuits empty tokens to .invalid; AuthState.verify
+    // itself rejects them earlier with MissingToken, so we exercise the
+    // adapter contract directly here.
+    const alloc = testing.allocator;
+    _ = alloc;
+
+    var provider = authn.AuthProvider.init(testing.allocator);
+    defer provider.deinit();
+
+    const verifier = auth.verifierFromAuthProvider(&provider);
+    const out = verifier.verifyFn(verifier.ctx, "");
+    try testing.expect(out == .invalid);
+}

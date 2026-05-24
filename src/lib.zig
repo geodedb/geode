@@ -758,18 +758,21 @@ pub const fle_key_types = @import("fle_key_types");
 pub const user_management = @import("security/user_management.zig");
 pub const api_keys = @import("auth_lib").api_keys;
 pub const mtls_provider = @import("security/mtls_provider.zig");
-// CANARY: REQ=REQ-LSP-AUTH-GATE-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=LibExportAuthn; STATUS=IMPL; OWNER=lsp; UPDATED=2026-05-14
+// CANARY: REQ=REQ-LSP-AUTH-GATE-001; FEATURE="LspPermissionAwareCompletion"; ASPECT=LibExportAuthn; STATUS=IMPL; OWNER=lsp; UPDATED=2026-05-23
 //
-// `security/authn.zig` is the unified AuthProvider chain in the design
-// docs, but it currently does not compile against Zig 0.16's stdlib
-// (uses `std.crypto.random.bytes`, which Zig 0.16 retired in favor of
-// the runtime-instantiated CSPRNG path). It is therefore NOT
-// re-exported here. The LSP `AuthState.verify` reaches the verifier
-// through an opaque vtable (`auth_mod.Verifier`) instead, which lets
-// stdio LSP run unauthenticated (null verifier ⇒ fail-closed) while
-// keeping the wiring ready for Task 28 to install a real verifier once
-// the authn.zig migration lands. See src/cli/lsp/auth.zig for the
-// Verifier type.
+// `security/authn.zig` is the unified AuthProvider chain.  It already
+// compiles against Zig 0.16 via the `compat_fillRandom` /
+// `compat_*Timestamp` shims at the top of authn.zig (landed in commit
+// bd5b8c52, 2026-05-22) — and is re-exported as
+// `geode.security.authn` at line 447 above.  Note for future
+// readers: the LSP path reaches it through the
+// `lsp_auth.verifierFromAuthProvider` adapter (cli/lsp/auth.zig).  The
+// embedded-TCP listener in `geode serve` now bootstraps a process-global
+// AuthProvider and installs the adapter so embedded LSP clients can
+// authenticate against the same store the QUIC handler uses (Task 28
+// of docs/superpowers/plans/2026-05-14-lsp-permission-aware-completion.md).
+// Stdio LSP remains fail-closed by default; `--no-auth` opts out for
+// development workflows.
 
 // HMAC chain integrity module for internal auth storage
 pub const auth_hmac = @import("auth_lib").hmac;

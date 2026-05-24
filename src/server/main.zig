@@ -106,6 +106,17 @@ const geode_auth = @import("geode_auth");
 // resolve against src/server/main.zig's containing dir.
 const lsp_server = @import("../cli/lsp/server.zig");
 const lsp_transport_mod = @import("../cli/lsp/transport.zig");
+// LSP AuthProvider→Verifier adapter (Task 28 follow-up).
+const lsp_auth_mod = @import("../cli/lsp/auth.zig");
+const authn_mod = geode.security.authn;
+
+// Process-global AuthProvider used by the embedded LSP TCP listener to
+// authenticate `initialize` bearer / session tokens.  `null` until the
+// server bootstraps it (and stays `null` if `--lsp-port=0`), in which
+// case the listener stays fail-closed.  The provider lives for the
+// lifetime of the server process — we never tear it down because the
+// listener and accepted sessions hold borrowed pointers into it.
+var g_lsp_auth_provider: ?*authn_mod.AuthProvider = null;
 // GPS Phase 4 (Task 4-1): role resolution extracted to dedicated module.
 // Use the geode lib re-export rather than a raw file path so that the
 // "user_storage" named import inside role_resolver.zig is resolved correctly.
@@ -291,6 +302,11 @@ const LspListenerArgs = struct {
     allocator: std.mem.Allocator,
     port: u16,
     loopback_only: bool,
+    // Optional verifier installed into every accepted LSP session.
+    // `null` keeps the listener fail-closed (legacy behavior); a real
+    // verifier is built by `verifierFromAuthProvider(g_lsp_auth_provider)`
+    // when the server bootstraps an AuthProvider.
+    verifier: ?lsp_auth_mod.Verifier = null,
 };
 
 fn runLspListener(args: LspListenerArgs) void {
@@ -352,6 +368,7 @@ fn runLspListener(args: LspListenerArgs) void {
             .allocator = args.allocator,
             .io = io,
             .stream = accepted,
+            .verifier = args.verifier,
         };
         const thr = std.Thread.spawn(.{}, runLspSession, .{session_args}) catch |err| {
             log.err("LSP session spawn error", &.{Attr.string("error", @errorName(err))});
@@ -367,6 +384,11 @@ const LspSessionArgs = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     stream: std.Io.net.Stream,
+    // Forwarded from the listener.  When non-null this is plumbed into
+    // `lsp_server.Server.initWithTransport` so the per-session
+    // `AuthState.verify` call can validate the client's bearer / session
+    // token against the live AuthProvider.
+    verifier: ?lsp_auth_mod.Verifier,
 };
 
 fn runLspSession(args: *LspSessionArgs) void {
@@ -374,20 +396,20 @@ fn runLspSession(args: *LspSessionArgs) void {
     // it on every return path.
     defer args.allocator.destroy(args);
 
-    // TODO(Task-LSP-AUTH-ADAPTER): wire a real AuthProvider→Verifier
-    // adapter so embedded LSP sessions can authenticate against the
-    // same user store the QUIC handler uses. Until then this listener
-    // is bound but cannot satisfy any client's initialize request —
-    // `verifier = null` + `allow_unauth = false` is fail-closed by
-    // design (see src/cli/lsp/server.zig:initWithTransport for the
-    // gate). The TCP-embedded path REQUIRES auth (the `--no-auth`
-    // bypass is unavailable here — it is stdio-only).
+    // AuthProvider→Verifier adapter is wired below via `args.verifier`
+    // (built by `lsp_auth_mod.verifierFromAuthProvider`).  When the
+    // server bootstrapped an AuthProvider this is non-null and the LSP
+    // session validates `initialize` tokens against the live provider.
+    // Otherwise the verifier stays `null` and the session is fail-closed
+    // (every initialize is rejected) — same legacy behavior as before
+    // the adapter landed.  The TCP-embedded path still REQUIRES auth
+    // (`--no-auth` is stdio-only).
     var tx = lsp_transport_mod.Transport.initTcp(args.allocator, args.io, args.stream) catch |err| {
         log.warn("LSP transport init error", &.{Attr.string("error", @errorName(err))});
         args.stream.close(args.io);
         return;
     };
-    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, null, false) catch |err| {
+    var srv = lsp_server.Server.initWithTransport(args.allocator, tx, args.verifier, false) catch |err| {
         log.warn("LSP server init error", &.{Attr.string("error", @errorName(err))});
         tx.deinit();
         return;
@@ -1308,10 +1330,38 @@ pub fn main() !void {
         // `runLspListener` for the auth caveat.
         const lsp_bootstrap_cfg = parseLspBootstrapConfig(gpa);
         if (lsp_bootstrap_cfg.port != 0) {
+            // Bootstrap the process-global AuthProvider used by every
+            // accepted LSP session.  AuthProvider.init is allocation-only
+            // (no I/O, no syscalls beyond the mutex pair); we keep it
+            // alive for the lifetime of the process.  Empty stores by
+            // default — operators populate API keys via the auth CLI /
+            // server-side procedures before clients can authenticate.
+            const lsp_provider = gpa.create(authn_mod.AuthProvider) catch |err| {
+                log.err("Failed to allocate LSP AuthProvider", &.{Attr.string("error", @errorName(err))});
+                return err;
+            };
+            lsp_provider.* = authn_mod.AuthProvider.init(gpa);
+            g_lsp_auth_provider = lsp_provider;
+            // The listener thread is detached and the verifier borrows
+            // `lsp_provider` for the lifetime of the process, so the
+            // tear-down has to wait until the rest of the server shutdown
+            // sequence has joined / cancelled every in-flight LSP session
+            // (see the QUIC drain block further down).  Order here matches
+            // graph_store: register a defer on the same scope so the
+            // free runs exactly once when `cmdServe` returns.  DebugAllocator
+            // otherwise reports the AuthProvider as leaked on graceful exit.
+            defer {
+                g_lsp_auth_provider = null;
+                lsp_provider.deinit();
+                gpa.destroy(lsp_provider);
+            }
+            const lsp_verifier = lsp_auth_mod.verifierFromAuthProvider(lsp_provider);
+
             const lsp_thr = std.Thread.spawn(.{}, runLspListener, .{LspListenerArgs{
                 .allocator = gpa,
                 .port = lsp_bootstrap_cfg.port,
                 .loopback_only = lsp_bootstrap_cfg.loopback_only,
+                .verifier = lsp_verifier,
             }}) catch |err| {
                 log.err("Failed to spawn LSP listener thread", &.{
                     Attr.string("error", @errorName(err)),

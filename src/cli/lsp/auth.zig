@@ -35,12 +35,13 @@ const geode = @import("geode");
 const user_management = geode.user_management;
 
 /// Verifier vtable: the LSP server passes one of these into
-/// `AuthState.verify`. The opaque-pointer + function-pointer pair is
-/// what unblocks Task 12 in the face of the broken `security/authn.zig`
-/// Zig-0.16 migration (the canonical `AuthProvider` does not compile
-/// under the current toolchain — see lib.zig's authn note). In Task 28
-/// the production wiring will adapt the real `AuthProvider.authenticate`
-/// to this same shape; tests in this file install a fake.
+/// `AuthState.verify`. The opaque-pointer + function-pointer pair lets
+/// the LSP code stay decoupled from the concrete `AuthProvider` type
+/// in `security/authn.zig` — useful for tests (in-process stubs, no
+/// need to spin up an entire AuthProvider) and for keeping the LSP
+/// build graph independent of every authn dependency.  Production
+/// callers use `verifierFromAuthProvider` (below) to wrap a real
+/// `*AuthProvider`; tests in this file install a fake.
 ///
 /// `verifyFn` returns an `Outcome.ok` on success, populating the username
 /// and an optional role string (which the caller maps through
@@ -120,15 +121,17 @@ pub const AuthState = struct {
     /// `self.verified = true`.
     ///
     /// **Verifier semantics.** The canonical validator is
-    /// `security/authn.zig:AuthProvider.authenticate()`, but that file
-    /// does not currently compile against Zig 0.16 (it predates the
-    /// `std.crypto.random` removal — see lib.zig's authn note). Until
-    /// the migration lands, the LSP server passes a `Verifier` vtable
-    /// instead of a raw `AuthProvider`. Production code (Task 28) will
-    /// install a verifier whose `ctx` is the real `AuthProvider*` and
-    /// whose `verifyFn` calls `authenticate({.bearer_token=…})` then
-    /// `…({.session_token=…})` — the same in-order chain the QUIC
-    /// handler enforces (authn.zig:261-306).
+    /// `security/authn.zig:AuthProvider.authenticate()`.  The LSP
+    /// server reaches it through a small `Verifier` vtable (so the
+    /// LSP code does not have to take a direct dependency on the
+    /// `authn` module). `verifierFromAuthProvider` below is the
+    /// adapter the embedded-TCP listener (`geode serve`) installs: it
+    /// wraps a real `*AuthProvider` and tries
+    /// `authenticate({.bearer_token=…})` first, then
+    /// `authenticate({.session_token=…})` — the same in-order chain
+    /// the QUIC handler enforces (authn.zig:261-306).  Stdio LSP keeps
+    /// `verifier = null` (fail-closed) unless launched with
+    /// `--no-auth`.
     ///
     /// When `verifier` is `null` we cannot authenticate; every
     /// non-empty token returns `InvalidToken`. This is the fail-closed
@@ -166,3 +169,60 @@ pub const AuthState = struct {
         }
     }
 };
+
+// ----------------------------------------------------------------------
+// AuthProvider → Verifier adapter (Task 28 follow-up).
+//
+// Wraps a live `geode.security.authn.AuthProvider` so the LSP server's
+// vtable-shaped `Verifier` can dispatch through the same authentication
+// chain the QUIC handler enforces. The TCP-embedded LSP listener
+// constructed by `geode serve` (src/server/main.zig:runLspSession)
+// passes the result of `verifierFromAuthProvider` so embedded clients
+// can authenticate against the same API-key + session-token store the
+// rest of the server already uses.
+//
+// **Chain.** Bearer token first (API-key path), then session token
+// (rotating session path). The two `authenticate` calls are mutually
+// exclusive on the input — a token is either a Bearer or a session.
+// Both call into the same `AuthProvider`. We don't try mTLS here
+// because the LSP `initialize` envelope only carries an opaque token,
+// not a client certificate (mTLS belongs at the QUIC accept layer).
+//
+// **Ownership.** `Verifier.Outcome.ok.username` is a borrowed slice;
+// callers (i.e. `AuthState.verify`) immediately `allocator.dupe` it
+// before any subsequent provider call can invalidate the backing
+// storage. Same lifetime contract the in-test `testVerifierFn` in
+// `auth_test.zig` already exercises.
+const authn = @import("geode").security.authn;
+
+fn authProviderVerifyFn(ctx: *anyopaque, token: []const u8) Verifier.Outcome {
+    if (token.len == 0) return .invalid;
+    const provider: *authn.AuthProvider = @ptrCast(@alignCast(ctx));
+
+    // 1. Try API-key (Bearer) — the common path for programmatic LSP clients.
+    if (provider.authenticate(.{ .bearer_token = token })) |result| {
+        const role_name: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
+        return .{ .ok = .{ .username = result.username, .role = role_name } };
+    } else |_| {
+        // Fall through to session-token path.
+    }
+
+    // 2. Try session token — rotating session issued by a prior login.
+    if (provider.authenticate(.{ .session_token = token })) |result| {
+        const role_name: ?[]const u8 = if (result.roles.len > 0) result.roles[0] else null;
+        return .{ .ok = .{ .username = result.username, .role = role_name } };
+    } else |_| {
+        return .invalid;
+    }
+}
+
+/// Build a `Verifier` whose `ctx` borrows `provider` for the lifetime of
+/// the returned vtable. The caller (typically `geode serve`'s embedded
+/// LSP listener bootstrap) owns the `AuthProvider`; the verifier never
+/// mutates it beyond what the in-handler `authenticate` calls already do.
+pub fn verifierFromAuthProvider(provider: *authn.AuthProvider) Verifier {
+    return Verifier{
+        .ctx = @ptrCast(provider),
+        .verifyFn = authProviderVerifyFn,
+    };
+}
