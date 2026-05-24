@@ -87,6 +87,7 @@ const server_flags = geode.server_flags;
 const cli_args = @import("cli_args.zig");
 // Import server initialization (M3.2 Phase 3 initialization extraction)
 const server_init = @import("server_init.zig");
+const fd_limit = @import("geode").fd_limit;
 // Import QUIC connection handlers (M3.3 Phase 3 QUIC handlers extraction)
 const quic_connection_handler = @import("quic_connection_handler.zig");
 // Import QUIC connection-state aggregation for runtime_metrics gauges
@@ -632,6 +633,19 @@ fn bindLib(comptime LibObservability: type, comptime scope_name: []const u8) voi
 }
 
 pub fn main() !void {
+    // Raise RLIMIT_NOFILE soft to hard before anything opens an FD. Shells
+    // that don't bump the systemd default (LimitNOFILESoft=1024) would
+    // otherwise cap us at 1024 FDs, and the sharded storage engine opens
+    // ~177 FDs per CREATE GRAPH (16 shards x ~11 files). Without this,
+    // geodetestlab spec dsn_graph_binding.yml hits EMFILE on the ~5th
+    // graph and surfaces as `ProcessFdQuotaExceeded`.
+    const fd_raise = fd_limit.raiseSoftToHard();
+    if (fd_raise.raised) {
+        std.debug.print(
+            "[startup] raised RLIMIT_NOFILE soft {d} -> {d} (hard {d})\n",
+            .{ fd_raise.soft_before, fd_raise.soft_after, fd_raise.hard },
+        );
+    }
     // P2-3: Use GeneralPurposeAllocator instead of page_allocator for server main
     var gpa_instance = std.heap.DebugAllocator(.{}){};
     defer _ = gpa_instance.deinit();

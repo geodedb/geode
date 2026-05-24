@@ -191,6 +191,11 @@ const _gap_0511 = @import("test_gap_0511_regression.zig");
 // concurrent callers (TOCTOU between vtable getOrCreate + in-memory put).
 const _create_graph_race = @import("test_create_graph_race_regression.zig");
 
+// dsn_graph_binding.yml FD-limit regression — server must raise its own
+// RLIMIT_NOFILE soft limit at startup so spawned-from-systemd shells
+// (LimitNOFILESoft=1024) don't hit EMFILE after a handful of CREATE GRAPHs.
+const _fd_limit_raise = @import("test_fd_limit_raise.zig");
+
 // Existing placeholder
 const _e2e_sort_spill_placeholder = @import("e2e_protocol_sort_spill.zig");
 

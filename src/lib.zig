@@ -251,6 +251,8 @@ pub const backup_manager = @import("server/backup_manager.zig");
 pub const impl_flagger = @import("server/flagger_impl_defined.zig");
 // Re-export proto_util for unified binary
 pub const proto_util = @import("server/proto_util.zig");
+// Re-export fd_limit helper so tests can exercise the startup hook directly.
+pub const fd_limit = @import("server/fd_limit.zig");
 // Re-export explain/profile payload builders for server handlers and tests
 pub const explain_payload = @import("server/explain_payload.zig");
 pub const profile_payload = @import("server/profile_payload.zig");
