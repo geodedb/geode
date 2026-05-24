@@ -50,21 +50,31 @@ pub fn progress(comptime fmt: []const u8, args: anytype) void {
 
 /// Get a random available port by binding to port 0 and reading the assigned port.
 /// This uses UDP to avoid leaving a connection in TIME_WAIT state.
+///
+/// Zig 0.16 retired the `std.posix.socket` / `bind` / `getsockname`
+/// wrappers; the supported path here is to use `std.os.linux.*`
+/// directly (same pattern src/cli/cli_dispatcher.zig:1267 uses for
+/// UDP probe traffic).
 pub fn getRandomPort() !u16 {
-    const sock = try posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0);
-    defer posix.close(sock);
+    const linux = std.os.linux;
 
-    var addr = posix.sockaddr.in{
-        .family = posix.AF.INET,
+    const sock_rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    if (@as(isize, @bitCast(sock_rc)) < 0) return error.SocketCreateFailed;
+    const sock_fd: i32 = @intCast(sock_rc);
+    defer _ = linux.close(sock_fd);
+
+    var addr = linux.sockaddr.in{
+        .family = linux.AF.INET,
         .port = 0, // Let OS assign a port
         .addr = 0, // INADDR_ANY
     };
+    const bind_rc = linux.bind(sock_fd, @ptrCast(&addr), @sizeOf(linux.sockaddr.in));
+    if (@as(isize, @bitCast(bind_rc)) < 0) return error.BindFailed;
 
-    try posix.bind(sock, @ptrCast(&addr), @sizeOf(posix.sockaddr.in));
-
-    var bound_addr: posix.sockaddr.in = undefined;
-    var addr_len: posix.socklen_t = @sizeOf(posix.sockaddr.in);
-    try posix.getsockname(sock, @ptrCast(&bound_addr), &addr_len);
+    var bound_addr: linux.sockaddr.in = undefined;
+    var addr_len: linux.socklen_t = @sizeOf(linux.sockaddr.in);
+    const gsn_rc = linux.getsockname(sock_fd, @ptrCast(&bound_addr), &addr_len);
+    if (@as(isize, @bitCast(gsn_rc)) < 0) return error.GetsocknameFailed;
 
     // Port is in network byte order, convert to host
     return std.mem.bigToNative(u16, bound_addr.port);
@@ -94,13 +104,20 @@ pub const TestEnv = struct {
 pub const ServerHandle = struct {
     allocator: std.mem.Allocator,
     child: std.process.Child,
-    env_map: ?std.process.EnvMap = null,
+    // Zig 0.16: std.process.EnvMap → std.process.Environ.Map.  Same
+    // role (mutable child-process env override), different module path.
+    env_map: ?std.process.Environ.Map = null,
     port: u16 = 0,
     addr: []const u8 = "",
 
     pub fn deinit(self: *ServerHandle) void {
-        _ = self.child.kill() catch {};
-        _ = self.child.wait() catch {};
+        // Zig 0.16: kill/wait take an Io parameter.  proto_test_util is
+        // a synchronous test helper — the process-global single-threaded
+        // io vtable is the right fit (same shape every other stdio site
+        // in this repo uses).
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.child.kill(io);
+        _ = self.child.wait(io) catch {};
         if (self.env_map) |*env| {
             env.deinit();
         }
@@ -120,16 +137,32 @@ pub const ServerHandle = struct {
     }
 };
 
+// Zig 0.16: std.time.milliTimestamp / std.time.sleep were removed.
+// Same compat shim shape src/security/authn.zig uses — linux-only
+// clock_gettime + nanosleep through std.os.linux.
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+    if (rc != 0) return 0;
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+fn compat_sleep(ns: u64) void {
+    const sec: i64 = @intCast(ns / std.time.ns_per_s);
+    const nsec: i64 = @intCast(ns % std.time.ns_per_s);
+    var ts: std.posix.timespec = .{ .sec = sec, .nsec = nsec };
+    _ = std.os.linux.nanosleep(&ts, null);
+}
+
 /// Wait for server to be ready by attempting to connect
 pub fn waitForServerReady(allocator: std.mem.Allocator, addr: []const u8, timeout_ms: u64) !void {
-    const start = std.time.milliTimestamp();
+    const start = compat_milliTimestamp();
     const deadline = start + @as(i64, @intCast(timeout_ms));
 
-    while (std.time.milliTimestamp() < deadline) {
+    while (compat_milliTimestamp() < deadline) {
         // Try to connect
         var client = QuicProtoClient.connect(allocator, addr) catch {
             // Connection failed, wait a bit and retry
-            std.time.sleep(100 * std.time.ns_per_ms);
+            compat_sleep(100 * std.time.ns_per_ms);
             continue;
         };
         client.deinit();
@@ -192,38 +225,80 @@ pub fn spawnServer(
     args: []const []const u8,
     env: ?[]const []const u8,
 ) !ServerHandle {
-    var handle = ServerHandle{
-        .allocator = allocator,
-        .child = std.process.Child.init(args, allocator),
-        .env_map = null,
-    };
-    handle.child.stdin_behavior = .Ignore;
-    handle.child.stdout_behavior = .Ignore;
-    handle.child.stderr_behavior = .Ignore;
+    // Zig 0.16 retired `std.process.Child.init` + `Child.spawn` in favor
+    // of the free function `std.process.spawn(io, SpawnOptions)`.
+    // `EnvMap` / `getEnvMap` were renamed to `Environ.Map` /
+    // `Environ.createMap`.  Same behavior: snapshot the parent's env,
+    // optionally overlay the test defaults + caller-supplied KVs, then
+    // hand the map to the child via `SpawnOptions.environ_map`.
+    const io = std.Io.Threaded.global_single_threaded.io();
 
-    handle.env_map = try std.process.getEnvMap(allocator);
-    if (handle.env_map) |*map| {
-        if (map.get("GEODE_ADMIN_USERNAME") == null) {
-            map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};
-        }
-        if (map.get("GEODE_ADMIN_PASSWORD") == null) {
-            map.put("GEODE_ADMIN_PASSWORD", DefaultAuth.password) catch {};
-        }
-        if (map.get("GEODE_DEFAULT_PASSWORD") == null) {
-            map.put("GEODE_DEFAULT_PASSWORD", DefaultAuth.password) catch {};
-        }
-        if (env) |pairs| {
-            for (pairs) |kv| {
-                if (std.mem.indexOfScalar(u8, kv, '=')) |eq| {
-                    map.put(kv[0..eq], kv[eq + 1 ..]) catch {};
+    // Zig 0.16: build the child env map from /proc/self/environ
+    // (NUL-separated key=value entries from the parent process's
+    // address space).  std.posix.environ was retired in 0.16 and
+    // std.c.environ would require link_libc on every test target
+    // that pulls in proto_test_util.zig — too invasive.  Reading
+    // /proc/self/environ is stdlib-only, linux-specific (which the
+    // tests here are anyway: `quic-smoke-strict` and
+    // `transport-parity-smokes` only run on the linux CI image).
+    var map = std.process.Environ.Map.init(allocator);
+    errdefer map.deinit();
+
+    {
+        // Reuse the outer `io` rather than shadowing it.
+        var environ_file = std.Io.Dir.cwd().openFile(io, "/proc/self/environ", .{ .mode = .read_only }) catch null;
+        if (environ_file) |*f| {
+            defer f.close(io);
+            // Bounded read; this proc file is tiny in practice.
+            var buf: [64 * 1024]u8 = undefined;
+            const n = f.readPositionalAll(io, &buf, 0) catch 0;
+            const data = buf[0..n];
+            var start: usize = 0;
+            for (data, 0..) |c, i| {
+                if (c != 0) continue;
+                if (i > start) {
+                    const entry = data[start..i];
+                    if (std.mem.indexOfScalar(u8, entry, '=')) |eq| {
+                        try map.put(entry[0..eq], entry[eq + 1 ..]);
+                    }
                 }
+                start = i + 1;
             }
         }
-        handle.child.env_map = map;
     }
 
-    try handle.child.spawn();
-    return handle;
+    if (map.get("GEODE_ADMIN_USERNAME") == null) {
+        map.put("GEODE_ADMIN_USERNAME", DefaultAuth.username) catch {};
+    }
+    if (map.get("GEODE_ADMIN_PASSWORD") == null) {
+        map.put("GEODE_ADMIN_PASSWORD", DefaultAuth.password) catch {};
+    }
+    if (map.get("GEODE_DEFAULT_PASSWORD") == null) {
+        map.put("GEODE_DEFAULT_PASSWORD", DefaultAuth.password) catch {};
+    }
+    if (env) |pairs| {
+        for (pairs) |kv| {
+            if (std.mem.indexOfScalar(u8, kv, '=')) |eq| {
+                map.put(kv[0..eq], kv[eq + 1 ..]) catch {};
+            }
+        }
+    }
+
+    const child = try std.process.spawn(io, .{
+        .argv = args,
+        .environ_map = &map,
+        // Zig 0.16: SpawnOptions renamed `*_behavior` to bare
+        // `stdin` / `stdout` / `stderr` of `StdIo` enum.
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    });
+
+    return ServerHandle{
+        .allocator = allocator,
+        .child = child,
+        .env_map = map,
+    };
 }
 
 const Addr = struct {

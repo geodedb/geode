@@ -2607,6 +2607,18 @@ pub fn build(b: *std.Build) void {
     merge_bench_gs_mod.addImport("hnsw_lib", hnsw_ext_mod);
     merge_bench_gs_mod.addImport("transport/thread_pool", thread_pool_mod);
     merge_bench_gs_mod.addImport("thread_pool", thread_pool_ext_mod);
+    // 2026-05-24: graph_storage_adapter.zig uses @import("otel_metrics") /
+    // @import("otel") on its write paths (createNode et al — see lines
+    // 1237, 2215, 2256, 2326, 2598).  Wire the same instances the main
+    // graph_store_mod gets so this ReleaseFast bench build doesn't see
+    // "no module named 'otel_metrics' available within module 'graph_store'".
+    const otel_resource_mod_for_merge_bench = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_resource.zig"), .target = target, .optimize = .ReleaseFast });
+    otel_resource_mod_for_merge_bench.addImport("otel", otel_mod);
+    const otel_metrics_mod_for_merge_bench = b.createModule(.{ .root_source_file = b.path("src/monitoring/otel_metrics.zig"), .target = target, .optimize = .ReleaseFast });
+    otel_metrics_mod_for_merge_bench.addImport("otel", otel_mod);
+    otel_metrics_mod_for_merge_bench.addImport("otel_resource", otel_resource_mod_for_merge_bench);
+    merge_bench_gs_mod.addImport("otel", otel_mod);
+    merge_bench_gs_mod.addImport("otel_metrics", otel_metrics_mod_for_merge_bench);
     const merge_throughput_bench = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("benchmarks/benchmark_merge_throughput.zig"), .target = target, .optimize = .ReleaseFast }) });
     merge_throughput_bench.root_module.addImport("graph_store", merge_bench_gs_mod);
     merge_throughput_bench.root_module.link_libc = true;

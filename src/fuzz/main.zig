@@ -18,17 +18,26 @@ pub fn main() !void {
         break :blk std.Io.File{ .handle = h, .flags = .{ .nonblocking = false } };
     } else std.Io.File{ .handle = std.posix.STDIN_FILENO, .flags = .{ .nonblocking = false } };
 
-    // Read input with size limit to prevent OOM
-    const max_input_size: usize = 1024 * 1024; // 1MB max
+    // Read input with size limit to prevent OOM.
+    // Zig 0.16 retired `std.Io.File.readAll`; stdin is a pipe (no
+    // positional reads), so the supported pattern is the buffered
+    // `reader().interface.readSliceShort` loop used elsewhere in this
+    // codebase (e.g. tools/fed_latency_streak.zig).  Total bytes are
+    // still capped at 1 MiB.
+    const max_input_size: usize = 1024 * 1024; // 1 MiB max
     var input_data = try alloc.alloc(u8, max_input_size);
     defer alloc.free(input_data);
 
-    const bytes_read = stdin_file.readAll(input_data) catch |err| {
-        if (err == error.WouldBlock) {
-            return; // No input available
-        }
-        return err;
-    };
+    var stdin_buf: [4096]u8 = undefined;
+    var reader = stdin_file.reader(std.Io.Threaded.global_single_threaded.io(), &stdin_buf);
+    var bytes_read: usize = 0;
+    while (bytes_read < max_input_size) {
+        // `readSliceShort` on `Io.File.Reader` returns `error{ReadFailed}`;
+        // accept whatever we managed to read so far on any read failure.
+        const n = reader.interface.readSliceShort(input_data[bytes_read..]) catch break;
+        if (n == 0) break;
+        bytes_read += n;
+    }
 
     if (bytes_read == 0) {
         return; // Empty input, nothing to fuzz
