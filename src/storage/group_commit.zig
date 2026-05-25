@@ -348,9 +348,9 @@ pub const ShardedCoordinator = struct {
             s.queue_mutex.unlock(io);
             if (batch_len == 0) continue;
 
+            // applyShardBatch bumps s.batches and s.ops_applied internally
+            // (pre-wake) so submitters observe them on submit-return.
             self.applyShardBatch(shard_idx, batch_buf[0..batch_len]);
-            _ = s.batches.fetchAdd(1, .monotonic);
-            _ = s.ops_applied.fetchAdd(batch_len, .monotonic);
         }
     }
 
@@ -469,7 +469,15 @@ pub const ShardedCoordinator = struct {
         // frame), so reading `op.resultPtr()` after wake is a UAF. This
         // surfaced as a SIGABRT at this line under 16-way concurrent
         // submit in test_group_commit_coordinator. Order is: harvest
-        // -> bump metrics -> wake.
+        // -> bump ALL metrics (coordinator + per-shard) -> wake.
+        //
+        // The per-shard `batches` / `ops_applied` bumps were historically
+        // done at the call site after this method returned, but `submit()`
+        // observes completion at the futexWake below — so any post-wake
+        // bump is racy from the submitter's perspective (the test
+        // test_sharded_coordinator_routing reads `ops_applied` immediately
+        // on submit return and saw 0). Doing both bumps here, pre-wake,
+        // makes both counters observable as soon as the submitter unblocks.
         const batch_len: usize = batch.len;
         var errs: u64 = 0;
         for (batch) |op| if (op.resultPtr().err != null) {
@@ -480,6 +488,13 @@ pub const ShardedCoordinator = struct {
         _ = self.apply_batches_total.fetchAdd(1, .monotonic);
         _ = self.apply_ops_total.fetchAdd(@intCast(batch_len), .monotonic);
         if (errs > 0) _ = self.apply_errors_total.fetchAdd(errs, .monotonic);
+
+        // Per-shard counters: must be bumped before the wake so that any
+        // submitter waking up immediately can observe them (see comment
+        // above re: test_sharded_coordinator_routing).
+        const s = &self.shards[shard_idx];
+        _ = s.batches.fetchAdd(1, .monotonic);
+        _ = s.ops_applied.fetchAdd(batch_len, .monotonic);
 
         for (batch) |op| {
             const res = op.resultPtr();
