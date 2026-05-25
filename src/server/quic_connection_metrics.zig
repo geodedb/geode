@@ -44,6 +44,7 @@
 const std = @import("std");
 const quic_transport_mod = @import("transport/quic");
 const quic_connection_handler = @import("quic_connection_handler.zig");
+const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 
 const QuicTransport = quic_transport_mod.QuicTransport;
 
@@ -148,6 +149,17 @@ pub fn leakedConnectionsRegisteredTotal(ctx_ptr: *anyopaque) u64 {
         return reg.registeredTotal();
     }
     return 0;
+}
+
+/// Nanoseconds since the most recent increment of any
+/// `proto_reader_*_total` counter (#864 frozen-counter observability).
+/// Sustained high values WITH `quic_pending_stream_handlers > 0` mean
+/// handlers are wedged downstream of `BufferedProtoReader.nextMessage`
+/// — query execution, storage locks, or response send.  Returns 0
+/// when no activity has ever been recorded (process start).
+pub fn protoReaderIdleNs(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    return proto_reader_metrics.getIdleNs();
 }
 
 /// Sum of `rec.cc.bytes_in_flight` across all active connections (bytes).

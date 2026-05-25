@@ -1074,6 +1074,7 @@ const BufferedProtoReader = struct {
                     self.start_index += 4 + msg_len;
                     self.compactBuffer();
                     _ = proto_reader_metrics.messages_delivered_total.fetchAdd(1, .monotonic);
+                    proto_reader_metrics.recordActivity();
                     return msg;
                 }
             }
@@ -1083,6 +1084,7 @@ const BufferedProtoReader = struct {
                 if (err == error.WouldBlock) {
                     would_block_attempts += 1;
                     _ = proto_reader_metrics.would_block_loop_iterations_total.fetchAdd(1, .monotonic);
+                    proto_reader_metrics.recordActivity();
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
@@ -1111,6 +1113,7 @@ const BufferedProtoReader = struct {
                 if (self.start_index == self.buffer.items.len) {
                     // Clean EOF
                     _ = proto_reader_metrics.eof_total.fetchAdd(1, .monotonic);
+                    proto_reader_metrics.recordActivity();
                     return null; // Return optional null for EOF
                 }
                 // Partial message EOF
@@ -1118,6 +1121,7 @@ const BufferedProtoReader = struct {
             }
 
             _ = proto_reader_metrics.bytes_read_total.fetchAdd(@as(u64, n), .monotonic);
+            proto_reader_metrics.recordActivity();
             try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
         }
     }

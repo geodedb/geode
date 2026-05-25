@@ -1582,6 +1582,16 @@ pub fn main() !void {
             quic_metrics.leakedConnectionsRegisteredTotal,
             quic_metrics_ctx,
         );
+        // #864 frozen-counter observability: time since the last
+        // proto_reader counter increment.  Dashboards should alert when
+        // this exceeds ~60 s while `quic_pending_stream_handlers > 0`
+        // — handlers are wedged downstream of nextMessage (query exec,
+        // storage locks, response send).
+        try metrics_registry.registerGauge(
+            "proto_reader_idle_ns",
+            quic_metrics.protoReaderIdleNs,
+            quic_metrics_ctx,
+        );
         try proto_reader_metrics.registerAll(metrics_registry);
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
@@ -1608,6 +1618,18 @@ pub fn main() !void {
         // futexWait returns void on timeout, signal, OR spurious wake, and
         // the caller is responsible for differentiating via the predicate.
         const metricsLoop = struct {
+            // #864 frozen-counter observability: threshold beyond which
+            // a proto-reader stall is logged at error level so operators
+            // get a non-silent signal.  60 s is well past the longest
+            // expected handler hop (large query + storage commit) and
+            // sub-300 s (QUIC idle reap) so the alert fires before
+            // clients see CONNECTION_CLOSE.
+            const stall_threshold_ns: u64 = 60 * std.time.ns_per_s;
+            // Suppress repeat-fire of the same stall: only log when the
+            // stall starts (idle crosses the threshold) and every 30 s
+            // thereafter while it persists.
+            const stall_relog_interval_ns: u64 = 30 * std.time.ns_per_s;
+
             fn run(ctx_ptr: *anyopaque) void {
                 const ctx: *MetricsCtx = @ptrCast(@alignCast(ctx_ptr));
                 const io = std.Io.Threaded.global_single_threaded.io();
@@ -1615,6 +1637,7 @@ pub fn main() !void {
                     .raw = std.Io.Duration.fromSeconds(5),
                     .clock = .awake,
                 } };
+                var last_stall_log_idle_ns: u64 = 0;
                 while (ctx.should_stop.load(.acquire) == 0) {
                     // Park until the 5s tick elapses or shutdown is signalled.
                     // `should_stop` is the futex word: the producer stores 1
@@ -1630,6 +1653,35 @@ pub fn main() !void {
                     defer buf.deinit(ctx.allocator);
                     ctx.registry.snapshotInto(ctx.allocator, &buf) catch continue;
                     std.log.info("metrics: {s}", .{buf.items});
+
+                    // #864 stall watchdog: detect "all proto_reader
+                    // counters frozen despite active stream handlers"
+                    // (handlers wedged downstream of nextMessage) and
+                    // log a critical line so operators get a
+                    // deterministic alert.  Read-only — never aborts
+                    // streams (a stuck handler may be mid-transaction
+                    // and force-killing it risks corruption).  Recovery
+                    // remains operator-driven (pod restart); this just
+                    // shortens detection from "user notices UI is dead"
+                    // to seconds.
+                    const idle_ns = proto_reader_metrics.getIdleNs();
+                    const pending = quic_connection_handler.getGlobalStreamThreadCount();
+                    if (idle_ns >= stall_threshold_ns and pending > 0) {
+                        const since_last_log = if (idle_ns > last_stall_log_idle_ns)
+                            idle_ns - last_stall_log_idle_ns
+                        else
+                            0;
+                        const fresh_stall = last_stall_log_idle_ns < stall_threshold_ns;
+                        if (fresh_stall or since_last_log >= stall_relog_interval_ns) {
+                            std.log.err(
+                                "proto_reader stall detected: idle_ms={d} pending_handlers={d} (handlers wedged downstream of BufferedProtoReader.nextMessage; restart pod to recover)",
+                                .{ idle_ns / std.time.ns_per_ms, pending },
+                            );
+                            last_stall_log_idle_ns = idle_ns;
+                        }
+                    } else {
+                        last_stall_log_idle_ns = 0;
+                    }
                 }
             }
         }.run;
