@@ -104,6 +104,7 @@ const multi_graph_security = geode.multi_graph_security;
 // GAP-0289: Import tenant quota manager for per-tenant resource limits
 const tenant_quota = geode.tenant_quota;
 const stream_registry = @import("active_stream_registry.zig");
+const proto_reader_registry = @import("proto_reader_registry.zig");
 
 // CANARY: REQ=REQ-SERVER-REFACTOR-012; FEATURE="ServerRefactoring"; ASPECT=QUIC_HANDLERS; STATUS=EXEMPT; OWNER=refactor; UPDATED=2025-11-14
 // Phase 3 M3.3 - QUIC Connection Handlers Module (Eighth Increment)
@@ -138,6 +139,30 @@ const index_manager = geode.index_manager;
 var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.GlobalStreamThrottle.init(
     stream_registry.default_max_global_stream_threads,
 );
+
+/// Monotonic-clock reader used by `BufferedProtoReader.recordActivity`
+/// for per-stream stall detection (#864 §10).  Mirrors the helper in
+/// `buffered_proto_reader_metrics.zig` but kept local to this module
+/// to avoid widening the metric module's API surface for what is
+/// really a handler-internal concern.
+fn monoNsFromHandler() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
+
+/// #864 §10: process-wide registry of active BufferedProtoReader
+/// instances.  Initialized once at module load; `main.zig` reads it
+/// via the metric/watchdog callbacks below.  Allocator passed at
+/// register/unregister time matches the gpa the handler is using.
+var g_proto_reader_registry: proto_reader_registry.Registry = proto_reader_registry.Registry.init();
+
+/// Snapshot accessor for the metric layer (`quic_max_stream_idle_ns`).
+pub fn getProtoReaderRegistry() *proto_reader_registry.Registry {
+    return &g_proto_reader_registry;
+}
 
 // #864 / qa-seed deadlock §6.5: process-wide leaked-connection registry.
 // `handleQuicConnection`'s acceptor-wait bail path adds entries here when
@@ -1022,6 +1047,19 @@ const BufferedProtoReader = struct {
     buffer: std.ArrayList(u8),
     start_index: usize = 0,
     read_buf: [4096]u8 = undefined,
+    /// #864 §10 per-stream stall observability.  Monotonic-clock
+    /// timestamp of the most recent `nextMessage` iteration (either a
+    /// successful message delivery, an EOF, a WouldBlock tick, or a
+    /// raw read returning bytes).  Read by the process-wide watchdog
+    /// via the registry to compute per-stream idle time — distinguishes
+    /// "this specific stream is wedged" from "all streams are stuck"
+    /// (which the process-wide `proto_reader_idle_ns` already covers).
+    last_activity_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Cached peer-address string for diagnostic logging.  Set by the
+    /// caller after `init`; the registry callback exposes it so the
+    /// stall log line can identify WHICH client is wedged.  Empty
+    /// string when unset (initial state).
+    peer_addr: []const u8 = "",
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -1038,6 +1076,46 @@ const BufferedProtoReader = struct {
 
     pub fn deinit(self: *BufferedProtoReader) void {
         self.buffer.deinit(self.allocator);
+    }
+
+    /// Snapshot the monotonic clock and publish it as the most recent
+    /// per-reader activity timestamp.  Wait-free release store.
+    /// Called from each branch of the `nextMessage` loop (alongside
+    /// the global proto_reader counter ticks) so the registry sees
+    /// progress on every iteration, not just successful deliveries.
+    fn recordActivity(self: *BufferedProtoReader) void {
+        self.last_activity_ns.store(monoNsFromHandler(), .release);
+    }
+
+    /// Registry callback: read the per-reader last-activity timestamp.
+    fn registryGetActivity(ptr: *anyopaque) u64 {
+        const self: *BufferedProtoReader = @ptrCast(@alignCast(ptr));
+        return self.last_activity_ns.load(.acquire);
+    }
+
+    /// Registry callback: read the per-reader QUIC stream id.
+    fn registryGetStreamId(ptr: *anyopaque) u64 {
+        const self: *BufferedProtoReader = @ptrCast(@alignCast(ptr));
+        return self.stream.stream_id;
+    }
+
+    /// Registry callback: read the per-reader peer-address string.
+    fn registryGetPeerAddr(ptr: *anyopaque) []const u8 {
+        const self: *BufferedProtoReader = @ptrCast(@alignCast(ptr));
+        return self.peer_addr;
+    }
+
+    /// Build a registry handle pointing at this reader.  The caller is
+    /// responsible for invoking `proto_reader_registry.register`
+    /// immediately after this returns and `unregister` before the
+    /// reader's storage is freed.
+    pub fn registryHandle(self: *BufferedProtoReader) proto_reader_registry.Handle {
+        return .{
+            .self = @ptrCast(self),
+            .getActivityNs = registryGetActivity,
+            .getStreamId = registryGetStreamId,
+            .getPeerAddr = registryGetPeerAddr,
+        };
     }
 
     // Reads the next length-prefixed message.
@@ -1075,6 +1153,7 @@ const BufferedProtoReader = struct {
                     self.compactBuffer();
                     _ = proto_reader_metrics.messages_delivered_total.fetchAdd(1, .monotonic);
                     proto_reader_metrics.recordActivity();
+                    self.recordActivity();
                     return msg;
                 }
             }
@@ -1085,6 +1164,7 @@ const BufferedProtoReader = struct {
                     would_block_attempts += 1;
                     _ = proto_reader_metrics.would_block_loop_iterations_total.fetchAdd(1, .monotonic);
                     proto_reader_metrics.recordActivity();
+                    self.recordActivity();
                     if (would_block_attempts >= max_would_block_attempts) {
                         return error.Timeout;
                     }
@@ -1114,6 +1194,7 @@ const BufferedProtoReader = struct {
                     // Clean EOF
                     _ = proto_reader_metrics.eof_total.fetchAdd(1, .monotonic);
                     proto_reader_metrics.recordActivity();
+                    self.recordActivity();
                     return null; // Return optional null for EOF
                 }
                 // Partial message EOF
@@ -1122,6 +1203,7 @@ const BufferedProtoReader = struct {
 
             _ = proto_reader_metrics.bytes_read_total.fetchAdd(@as(u64, n), .monotonic);
             proto_reader_metrics.recordActivity();
+            self.recordActivity();
             try self.buffer.appendSlice(self.allocator, self.read_buf[0..n]);
         }
     }
@@ -1805,7 +1887,22 @@ fn runStreamQueryLoop(
     peer_ip: []const u8,
 ) void {
     var line_reader = BufferedProtoReader.init(gpa, transport, stream) catch return;
-    defer line_reader.deinit();
+    line_reader.peer_addr = peer_ip;
+    // #864 §10 per-stream stall observability: hand the reader to the
+    // process-wide registry so the watchdog can detect this specific
+    // stream stalling while others keep delivering messages.  Register
+    // failure (OOM) is non-fatal — we simply lose the per-stream
+    // signal for this stream; the global proto_reader_idle_ns gauge
+    // still covers the all-streams-stuck case.
+    g_proto_reader_registry.register(gpa, line_reader.registryHandle()) catch |reg_err| {
+        log.warn("proto_reader registry append failed; per-stream stall signal disabled for this stream", &.{
+            Attr.string("error", @errorName(reg_err)),
+        });
+    };
+    defer {
+        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
+        line_reader.deinit();
+    }
 
     while (true) {
         const packet_opt = line_reader.nextMessage() catch |err| {
@@ -2108,7 +2205,17 @@ pub fn handleQuicConnection(
     // Wait for the first message (expected to be HELLO) and process it.
     // This keeps the handshake flow identical to the pre-multiplexing code.
     var line_reader = try BufferedProtoReader.init(gpa, transport, stream);
-    defer line_reader.deinit();
+    line_reader.peer_addr = peer_ip;
+    // #864 §10 per-stream stall observability — see runStreamQueryLoop.
+    g_proto_reader_registry.register(gpa, line_reader.registryHandle()) catch |reg_err| {
+        log.warn("proto_reader registry append failed; per-stream stall signal disabled for this stream", &.{
+            Attr.string("error", @errorName(reg_err)),
+        });
+    };
+    defer {
+        g_proto_reader_registry.unregister(@ptrCast(&line_reader));
+        line_reader.deinit();
+    }
 
     // Read and process the first message (HELLO).
     const hello_done = hello_blk: {

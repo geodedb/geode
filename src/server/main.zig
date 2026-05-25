@@ -1592,6 +1592,15 @@ pub fn main() !void {
             quic_metrics.protoReaderIdleNs,
             quic_metrics_ctx,
         );
+        // #864 §10 per-stream stall: surface idle time of the
+        // slowest-progressing reader so dashboards alert on per-stream
+        // wedges that the process-wide proto_reader_idle_ns misses
+        // (other streams keep ticking and cover for the stuck one).
+        try metrics_registry.registerGauge(
+            "quic_max_stream_idle_ns",
+            quic_metrics.maxStreamIdleNs,
+            quic_metrics_ctx,
+        );
         try proto_reader_metrics.registerAll(metrics_registry);
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
@@ -1681,6 +1690,30 @@ pub fn main() !void {
                         }
                     } else {
                         last_stall_log_idle_ns = 0;
+                    }
+
+                    // #864 §10 per-stream stall watchdog: walk the
+                    // process-wide proto-reader registry; if any
+                    // single stream has been idle past the threshold,
+                    // log the stream id + peer so operators can
+                    // correlate with goroutine dumps / client retries.
+                    // Distinct from the process-wide watchdog above:
+                    // catches the qa-seed reproduction where SOME
+                    // streams keep delivering messages while a
+                    // specific stream is wedged.
+                    const reg = quic_connection_handler.getProtoReaderRegistry();
+                    var ts: std.os.linux.timespec = undefined;
+                    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+                    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+                    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+                    const now_ns: u64 = sec * std.time.ns_per_s + nsec;
+                    if (reg.maxIdleNs(now_ns)) |snap| {
+                        if (snap.idle_ns >= stall_threshold_ns) {
+                            std.log.err(
+                                "per-stream proto_reader stall: stream_id={d} peer={s} idle_ms={d} (this stream wedged while others may still be progressing; restart pod or wait for client retry)",
+                                .{ snap.stream_id, snap.peer_addr, snap.idle_ns / std.time.ns_per_ms },
+                            );
+                        }
                     }
                 }
             }

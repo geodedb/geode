@@ -162,6 +162,29 @@ pub fn protoReaderIdleNs(ctx_ptr: *anyopaque) u64 {
     return proto_reader_metrics.getIdleNs();
 }
 
+/// Idle time (ns) of the slowest-progressing per-stream reader
+/// (#864 §10 per-stream stall observability).  Catches the qa-seed
+/// failure pattern where most streams keep delivering messages but a
+/// SPECIFIC stream is wedged — the process-wide `proto_reader_idle_ns`
+/// stays low because the other streams cover for the stuck one.
+/// Returns 0 when there are no active readers or when no reader has
+/// yet recorded activity.
+pub fn maxStreamIdleNs(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    const reg = quic_connection_handler.getProtoReaderRegistry();
+    const now = nowMonoNs();
+    const snap = reg.maxIdleNs(now) orelse return 0;
+    return snap.idle_ns;
+}
+
+fn nowMonoNs() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
+
 /// Sum of `rec.cc.bytes_in_flight` across all active connections (bytes).
 /// Spikes here suggest the congestion window is full — packets cannot
 /// be sent until ACKs free up credit. Acquires `connections_mutex`
