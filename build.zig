@@ -914,6 +914,21 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("cli_args", cli_args_mod);
     const run_cli_args_cluster_tests = b.addRunArtifact(cli_args_cluster_tests);
 
+    // ClusterCoordinator.Config field tests (Tasks A3/A3b/A3c of the 2026-05-25
+    // distributed cluster testing plan). Imports the full geode root module so
+    // the test sees the *production* ClusterCoordinator (via
+    // `geode.distributed.cluster.ClusterCoordinator`) instead of a re-rooted copy.
+    const cluster_coord_config_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_coordinator_config.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_coord_config_tests.root_module.addImport("geode", root_mod);
+    cluster_coord_config_tests.root_module.link_libc = true;
+    const run_cluster_coord_config_tests = b.addRunArtifact(cluster_coord_config_tests);
+    const cluster_coord_config_step = b.step("test-cluster-coord-config", "Run ClusterCoordinator.Config bootstrap field tests (A3/A3b/A3c)");
+    cluster_coord_config_step.dependOn(&run_cluster_coord_config_tests.step);
+
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
     // src/graph_store.zig. The graph_store module needs logging as a named import.
     // Do NOT add geode here — graph_store.zig is transitively included in geode and adding
@@ -1884,6 +1899,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_math_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_string_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cli_args_cluster_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_coord_config_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);

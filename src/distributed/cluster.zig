@@ -302,7 +302,24 @@ pub const ClusterCoordinator = struct {
     message_callback: ?*const fn (*ClusterCoordinator, *const Message) void = null,
     // PERF-D006: Connection semaphore to limit concurrent cluster threads
     active_connections: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    /// Maximum simultaneous inbound peer connections (sourced from
+    /// Config.max_connections at init time).  PERF-D006.
     max_connections: u32 = 100,
+
+    // === Cluster bootstrap state (Task A3/A3b/A3c of 2026-05-25 plan) ===
+    // Mirrored from Config so background loops can read them without
+    // re-touching the Config struct.  All three are stored by reference;
+    // the caller is responsible for keeping the backing memory alive for
+    // the lifetime of the coordinator.
+    /// Address `networkLoop` binds the intra-cluster listener to.
+    listen_address: []const u8 = "0.0.0.0",
+    /// Port `networkLoop` binds the intra-cluster listener to.
+    cluster_port: u16 = 4242,
+    /// Pre-shared token validated on every inbound cluster connection.
+    /// Empty string disables the auth check (used by A3f).
+    cluster_token: []const u8 = "",
+    /// Cluster name, used for OTel attributes and operator-facing logs.
+    cluster_name: []const u8 = "geode-cluster",
 
     // QUAL-D004: Shutdown signal and pool handles for graceful stop.
     shutdown: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
@@ -400,6 +417,11 @@ pub const ClusterCoordinator = struct {
         quic_server: ?quic.QuicTransport,
         connections: std.AutoHashMap(u64, Connection),
         message_queue: MessageQueue,
+        /// Task A3c (2026-05-25 plan): cap on simultaneous inbound peer
+        /// connections, sourced from `Config.max_connections`.  Mirrors the
+        /// coordinator-level field for callers that only have a pointer to
+        /// the transport.
+        max_connections: u32 = 256,
 
         pub const Connection = struct {
             stream: *quic.QuicStream,
@@ -440,8 +462,13 @@ pub const ClusterCoordinator = struct {
         config: Config,
     ) !ClusterCoordinator {
         const peers = try resolvePeers(allocator, config.peers);
-        const raft = try allocator.create(RaftNode);
-        raft.* = try RaftNode.init(
+        // RaftNode.init() already returns a heap-owned *RaftNode (it does the
+        // create() inside).  The previous code double-allocated by calling
+        // allocator.create(RaftNode) and then assigning raft.* = init(...),
+        // which doesn't even type-check (init returns a pointer, not a
+        // value).  As with resolvePeers above, this path was never reached
+        // from production until the A3 test forced full type resolution.
+        const raft = try RaftNode.init(
             allocator,
             node_id,
             peers,
@@ -469,6 +496,14 @@ pub const ClusterCoordinator = struct {
             .health_monitor = try initHealthMonitor(allocator, config),
             .raft_nonce_tracker = try NonceTracker.init(allocator, 10000),
             .replay_guard = ReplayGuard.init(allocator, 1024, 30_000),
+            // Task A3/A3b/A3c: mirror cluster bootstrap fields from Config
+            // so networkLoop and the auth path can read them without
+            // re-touching the Config struct.
+            .max_connections = config.max_connections,
+            .listen_address = config.listen_address,
+            .cluster_port = config.cluster_port,
+            .cluster_token = config.cluster_token,
+            .cluster_name = config.cluster_name,
         };
     }
 
@@ -594,9 +629,19 @@ pub const ClusterCoordinator = struct {
     }
 
     fn networkLoop(self: *ClusterCoordinator) !void {
-        // Initialize (or reuse) QUIC server transport
+        // Initialize (or reuse) QUIC server transport.
+        //
+        // Task A3b (2026-05-25 plan): bind to `self.listen_address` and
+        // `self.cluster_port` from the Config instead of the hardcoded
+        // `0.0.0.0:quic.DEFAULT_PORT`.  Without this fix, two coordinators
+        // on one host both race to grab port 3141 and one of them fails
+        // EADDRINUSE — which is exactly the case the harness multi-node
+        // smoke tests want to cover.
         if (self.network_transport.quic_server == null) {
-            const qt = try quic.QuicTransport.init(self.allocator, .{ .address = "0.0.0.0", .port = quic.DEFAULT_PORT });
+            const qt = try quic.QuicTransport.init(self.allocator, .{
+                .address = self.listen_address,
+                .port = self.cluster_port,
+            });
             self.network_transport.quic_server = qt;
             try self.network_transport.quic_server.?.listen();
         }
@@ -950,8 +995,15 @@ pub const ClusterCoordinator = struct {
     }
 
     // Helper functions
-    fn resolvePeers(allocator: Allocator, peer_configs: []const PeerConfig) ![]RaftNode.Peer {
-        var peers = try allocator.alloc(RaftNode.Peer, peer_configs.len);
+    // NOTE: `Peer` is a module-level type in raft_consensus.zig (not nested
+    // inside RaftNode), so the qualified reference is `raft_consensus.Peer`,
+    // not `RaftNode.Peer`.  Previously this miscoded reference compiled only
+    // because `init` is never called from the main library — the type check
+    // was lazily deferred.  The first test that actually constructs a
+    // ClusterCoordinator (tests/test_cluster_coordinator_config.zig, A3)
+    // forced the compiler to resolve the symbol.
+    fn resolvePeers(allocator: Allocator, peer_configs: []const PeerConfig) ![]raft_consensus.Peer {
+        var peers = try allocator.alloc(raft_consensus.Peer, peer_configs.len);
         for (peer_configs, 0..) |config, i| {
             peers[i] = .{
                 .id = config.id,
@@ -966,9 +1018,15 @@ pub const ClusterCoordinator = struct {
     }
 
     fn initClusterState(allocator: Allocator) !ClusterState {
+        // Zig 0.16 std.ArrayList is now unmanaged by default — there is no
+        // `init(allocator)` on Aligned(T, null).  The previous code only
+        // type-checked because ClusterCoordinator.init was never invoked
+        // from production.  The A3 test changed that.  We use `.empty` for
+        // the unmanaged ArrayLists; AutoHashMap is still managed in 0.16
+        // so its `.init(allocator)` survives.
         return ClusterState{
-            .nodes = std.ArrayList(NodeInfo).init(allocator),
-            .shards = std.ArrayList(ShardInfo).init(allocator),
+            .nodes = .empty,
+            .shards = .empty,
             .replication_map = std.AutoHashMap(u64, []u64).init(allocator),
             .leader_node = null,
             .cluster_version = 1,
@@ -984,16 +1042,21 @@ pub const ClusterCoordinator = struct {
     }
 
     fn initNetworkTransport(allocator: Allocator, config: Config) !NetworkTransport {
-        _ = config;
+        // Task A3c (2026-05-25 plan): consume Config — previously this
+        // function threw the argument away with `_ = config;`, which meant
+        // there was no way to plumb operator-controlled limits down to the
+        // transport layer.  We currently only need `max_connections` here;
+        // future tasks (A3f auth, etc.) can grow this struct as needed.
         return NetworkTransport{
             .allocator = allocator,
             .quic_server = null,
             .connections = std.AutoHashMap(u64, NetworkTransport.Connection).init(allocator),
             .message_queue = .{
-                .incoming = std.ArrayList(NetworkTransport.IncomingMessage).init(allocator),
-                .outgoing = std.ArrayList(NetworkTransport.OutgoingMessage).init(allocator),
+                .incoming = .empty,
+                .outgoing = .empty,
                 .mutex = std.Io.Mutex.init,
             },
+            .max_connections = config.max_connections,
         };
     }
 
@@ -1465,6 +1528,34 @@ pub const ClusterCoordinator = struct {
         failover_config: FailoverConfig = .{},
         health_check_interval_ms: u64 = 1000,
         unhealthy_threshold: u32 = 3,
+
+        // === Cluster bootstrap configuration (Task A3 of 2026-05-25 plan) ===
+        // These fields let multiple coordinator processes co-exist on one host
+        // (different cluster_port values) and authenticate inter-node traffic
+        // (cluster_token).  All five are stored by reference — the caller
+        // owns the backing memory.
+
+        /// Address this node binds its intra-cluster listener to. Used by
+        /// `networkLoop`.  Defaults to all interfaces so a vanilla single-node
+        /// dev run still accepts loopback peers without extra config.
+        listen_address: []const u8 = "0.0.0.0",
+        /// Port this node binds its intra-cluster listener to.  Defaults to
+        /// 4242 so it does NOT collide with the QUIC client port (3141) when
+        /// a coordinator is started in the same process as a client-facing
+        /// QUIC server, and so the harness can place 3 nodes on one host at
+        /// 4242 / 4243 / 4244.
+        cluster_port: u16 = 4242,
+        /// Pre-shared token validated on every inbound cluster connection.
+        /// Empty string disables the auth check (single-node dev mode).
+        /// Stored by reference — caller owns the lifetime.
+        cluster_token: []const u8 = "",
+        /// Cluster name (for OTel attributes and operator-facing logs).
+        cluster_name: []const u8 = "geode-cluster",
+        /// Maximum simultaneous inbound connections from peers.  Mirrored
+        /// into `ClusterCoordinator.max_connections` so the existing PERF-D006
+        /// connection-semaphore in `networkLoop` reads it without going
+        /// back to the Config.
+        max_connections: u32 = 256,
     };
 
     pub const PeerConfig = struct {
