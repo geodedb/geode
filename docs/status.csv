@@ -757,6 +757,8 @@ REQ-DIST-QUERY-COORD-TEST-001,DistQueryCoord,CoordinationTests,TESTED,,,dist,202
 REQ-DIST-QUERY-COORD-TEST-001,Distributed Query Coordination Tests,UnitTests,EXEMPT,,,dist,2025-10-05,tests/test_distributed_query_coordination.zig
 REQ-DIST-QUERY-TRANSPORT-001,Distributed Query Transport,QueryTransport,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
 REQ-DIST-QUERY-TRANSPORT-002,Remote Query Execution,RemoteExecution,IMPL,,,dist,2026-04-01,src/distributed/query_transport.zig
+REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,BridgeAndDrainReady,TESTED,,,distributed,2026-05-25,tests/test_drainready_dispatch.zig
+REQ-DIST-RAFT-DRAINREADY-DISPATCH,Raft Wrapper Transport Dispatch,DrainReadyMessages,TESTED,,,distributed,2026-05-25,src/distributed/raft_consensus.zig
 REQ-DIST-RANGE-001,Key Range Operations,RangeOverlap,IMPL,,,distributed,2026-04-10,src/distributed/sharding.zig
 REQ-DIST-RANGE-SHARD-001,Range-Based Sharding,ShardLookup,IMPL,,,distributed,2026-04-10,src/distributed/sharding.zig
 REQ-DIST-REGISTRY-001,Node Registry,MultiNode,TESTED,,,distributed,2026-04-06,src/distributed/test_query_transport_node_registry.zig

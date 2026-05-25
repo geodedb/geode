@@ -211,6 +211,9 @@ const _test_cluster_bootstrap = @import("test_cluster_bootstrap.zig");
 // In-process 3-node leader election smoke test (Task A5 of the same plan)
 const _test_cluster_3node_election = @import("test_cluster_3node_election.zig");
 
+// drainReady-and-bridge dispatch test (Task A5b of the same plan)
+const _test_drainready_dispatch = @import("test_drainready_dispatch.zig");
+
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
     std.testing.refAllDecls(_advanced_types_operators);
@@ -218,6 +221,7 @@ test "aggregate: geode module loads" {
     std.testing.refAllDecls(_test_cluster_coordinator_config);
     std.testing.refAllDecls(_test_cluster_bootstrap);
     std.testing.refAllDecls(_test_cluster_3node_election);
+    std.testing.refAllDecls(_test_drainready_dispatch);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);

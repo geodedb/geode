@@ -1107,6 +1107,23 @@ pub fn build(b: *std.Build) void {
     const cluster_3node_election_step = b.step("test-cluster-3node-election", "Run in-process 3-node leader election smoke test (A5)");
     cluster_3node_election_step.dependOn(&run_cluster_3node_election_tests.step);
 
+    // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
+    // distributed cluster testing plan).  Confirms that
+    // RaftNode.setTransport installs the bridge into the inner raft library
+    // so outbound vote/heartbeat traffic reaches the wrapper Transport (and
+    // therefore QUIC in production).  Uses Transport.send_override to
+    // capture dispatches without spinning up a QUIC listener.
+    const drainready_dispatch_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_drainready_dispatch.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    drainready_dispatch_tests.root_module.addImport("geode", root_mod);
+    drainready_dispatch_tests.root_module.link_libc = true;
+    const run_drainready_dispatch_tests = b.addRunArtifact(drainready_dispatch_tests);
+    const drainready_dispatch_step = b.step("test-drainready-dispatch", "Run raft drainReady-and-bridge dispatch test (A5b)");
+    drainready_dispatch_step.dependOn(&run_drainready_dispatch_tests.step);
+
     // RaftCommand oneof refactor tests (Task A4b of the 2026-05-25 distributed
     // cluster testing plan). Pins the protobuf-oneof shape of RaftCommand so
     // a future regression that reintroduces `union(enum)` for the submessage
