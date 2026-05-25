@@ -8,13 +8,49 @@
 |---|---|---|
 | `3332be51` | feat(cli): add --cluster-port and --peers server flags | A1 |
 | `92a84bc3` | feat(distributed): extend ClusterCoordinator.Config with cluster bootstrap fields | A3, A3b, A3c |
-| `8a84c542` | feat(server): boot ClusterCoordinator from GEODE_CLUSTER_TOKEN | A2, A4 (init-only — see blocker) |
+| `8a84c542` | feat(server): boot ClusterCoordinator from GEODE_CLUSTER_TOKEN | A2, A4 (init-only at the time) |
+| `d4ed43f6` | docs: distributed cluster testing plan + session handoff | — |
+| `e08bc896` | fix(distributed): RaftCommand oneof refactor unblocks coord.start() | A4b, A4c |
+| `4050f120` | fix(distributed): heap-allocate RaftNode storage to fix UAF | A4d |
 
-Net diff vs branch root: 9 files changed, ~700 insertions. Branch: `feat/distributed-cluster-testing`.
+Net diff vs branch root: 15 files changed, **2816 insertions, 77 deletions**. Branch: `feat/distributed-cluster-testing`.
 
-All three commits are green: `zig build test` exits 0, 6/6 cluster_bootstrap tests pass, 4/4 cluster_coordinator_config tests pass, 5/5 cli_args_cluster tests pass.
+All six commits are green: `zig build test` exits 0. 1702/1703 tests pass (1 pre-existing skipped).
+- 5/5 cli_args_cluster tests
+- 4/4 cluster_coordinator_config tests
+- 6/6 cluster_bootstrap tests
+- 8/8 raft_command_refactor tests
 
-## The hard blocker
+**Manual smoke (single-node cluster mode):**
+```bash
+GEODE_CLUSTER_TOKEN=test GEODE_NODE_ID=1 GEODE_CLUSTER_PORT=14242 \
+  ./zig-out/bin/geode serve --listen-quic 127.0.0.1:13141
+```
+- Logs `[startup] Cluster coordinator started node_id=1 cluster_port=14242 cluster_name=geode-cluster`
+- Background loops run productively (raft advance + ready + tick all succeed)
+- QUIC listens on both cluster port (14242) and client port (13141)
+- Process exits cleanly on SIGTERM
+- 0 "raft advance error" / "ReadyNotAdvanced" log lines
+
+**This is the first time in the project history that geode actually runs cluster code.**
+
+## The hard blocker (RESOLVED)
+
+The protobuf union-as-submessage compile error described below was **fixed** in commit `e08bc896` (A4b). The follow-on storage UAF was **fixed** in `4050f120` (A4d). Single-node cluster mode now runs end-to-end.
+
+The next blocker (multi-node, not single-node) is implementing peer dialing + leader election with peers — see "Next blocker" section below.
+
+## Next blocker
+
+Multi-node mode (3+ processes forming a cluster) has not been smoke-tested yet. The remaining work needed:
+
+1. **A5: in-process 3-node smoke** — spin up 3 ClusterCoordinator instances on loopback, verify leader election within 5s, verify writes replicate. This is now possible (Raft progresses) but requires the test to actually wire 3 coordinators with shared cluster_token and proper peer lists.
+2. **A6: subprocess 3-node smoke** — spawn 3 `./zig-out/bin/geode serve` processes, verify cluster forms. May surface real bugs in peer dialing (`network_transport.zig` is heavy QUIC code that's never been exercised in practice).
+3. **A3d: public proposeWrite API** — needed so tests can submit writes and observe replication.
+4. **A3e: forwardToShard** — `cluster.zig:1446` still returns `Response{ .status = .OK }` without forwarding. Cross-shard reads silently no-op.
+5. **A3f: auth_token validation** — config has cluster_token but accept() doesn't gate on it yet.
+
+## The hard blocker (HISTORICAL — for context)
 
 **`maybeStart` in `src/server/cluster_bootstrap.zig` calls `coord.init()` only, NOT `coord.start()`.**
 
@@ -35,34 +71,56 @@ Calling `start()` forces Zig to analyze the full background-loop call chain (raf
 ## Task status at session end
 
 ```
-COMPLETED:
-  #1  A1: Add --cluster-port and --peers CLI flags
-  #3  A3: Extend ClusterCoordinator.Config
-  #12 A3b: Fix networkLoop hardcoded port
-  #13 A3c: Make initNetworkTransport honor Config
-  #2  A2: Create src/server/cluster_bootstrap.zig
-  #4  A4: Wire cluster_bootstrap into main.zig (INIT-ONLY)
+COMPLETED (8 tasks, 6 commits):
+  #1  A1  Add --cluster-port and --peers CLI flags
+  #3  A3  Extend ClusterCoordinator.Config
+  #12 A3b Fix networkLoop hardcoded port
+  #13 A3c Make initNetworkTransport honor Config
+  #2  A2  Create src/server/cluster_bootstrap.zig
+  #4  A4  Wire cluster_bootstrap into main.zig
+  #18 A4b Resolve protobuf union-as-submessage compile error
+  #19 A4c Call coord.start() from maybeStart
+  #28 A4d Heap-allocate RaftNode storage to fix UAF
 
-BLOCKED ON #18:
-  #18 A4b: Resolve protobuf union-as-submessage compile error  ← UNBLOCK FIRST
-  #19 A4c: Call coord.start() from maybeStart
-  #5  A5: In-process 3-node replication smoke test
-  #6  A6: Subprocess 3-node cluster smoke test
-  #14 A3d: Public proposeWrite/applyCommand API
-  #15 A3e: forwardToShard cross-node reads
-  #16 A3f: auth_token validation on accept
-  #7  A7: SHOW CLUSTER STATUS GQL surface
-  #8  A8: Verify Raft apply → graph_store wiring
-  #20 W1: Per-node WAL writes during Raft apply               (NEW from user ask)
-  #21 W2: WAL replay → cluster catch-up                       (NEW)
-  #22 W3: WAL HMAC chain across cluster nodes                 (NEW)
-  #23 S1: consistent_hash sharding distribution               (NEW)
-  #24 S2: Cross-shard read forwarding                         (NEW)
-  #25 S3: Shard rebalancing on node add/remove                (NEW)
-  #26 S4: Sharding + replication_factor interaction           (NEW)
+PENDING (multi-node + cross-cluster features):
+  #5  A5  In-process 3-node replication smoke test
+  #6  A6  Subprocess 3-node cluster smoke test
+  #14 A3d Public proposeWrite/applyCommand API
+  #15 A3e forwardToShard cross-node reads (currently no-op)
+  #16 A3f auth_token validation on accept
+  #7  A7  SHOW CLUSTER STATUS GQL surface
+  #8  A8  Verify Raft apply → graph_store wiring
+  #20 W1  Per-node WAL writes during Raft apply              (USER-ADDED)
+  #21 W2  WAL replay → cluster catch-up                      (USER-ADDED)
+  #22 W3  WAL HMAC chain across cluster nodes                (USER-ADDED)
+  #23 S1  consistent_hash sharding distribution              (USER-ADDED)
+  #24 S2  Cross-shard read forwarding                        (USER-ADDED)
+  #25 S3  Shard rebalancing on node add/remove               (USER-ADDED)
+  #26 S4  Sharding + replication_factor interaction          (USER-ADDED)
   #9  Phase B: Harness cluster orchestration (B1-B5)
   #10 Phase C: Multi-node correctness specs (C1-C17)
   #11 Phase D: Iterate /codepros:bug-fix to 100% pass
+```
+
+## Recommended next-session start
+
+```
+You are resuming the distributed cluster testing initiative on branch
+feat/distributed-cluster-testing (6 commits ahead of main).
+
+Single-node cluster mode now works end-to-end (commits 3332be51 → 4050f120).
+The next milestone is multi-node — start with task #5 (A5: in-process 3-node
+smoke). It's now unblocked because Raft makes real progress.
+
+Read in order:
+  1. docs/superpowers/plans/2026-05-25-cluster-testing-session-handoff.md (this file)
+  2. docs/superpowers/plans/2026-05-25-geode-distributed-cluster-testing.md (full plan)
+  3. Latest commit messages on the branch (each closes specific tasks)
+
+The user-added W1-W3 (WAL cross-cluster) and S1-S4 (sharding cross-cluster)
+work is best tackled AFTER A5/A6 prove multi-node actually works — those
+tests will surface the real gaps in network_transport.zig peer dialing
+and consistent_hash routing.
 ```
 
 ## User-added scope (this session)
