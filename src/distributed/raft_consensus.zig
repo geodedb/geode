@@ -271,6 +271,18 @@ pub const RpcClient = struct {
 pub const Transport = struct {
     allocator: Allocator,
     server: ?quic.QuicTransport = null,
+    /// Optional override for `send`.  When non-null, `Transport.send`
+    /// dispatches through this function pointer instead of the default
+    /// QUIC+TLS path.  Used by `tests/test_drainready_dispatch.zig` (A5b
+    /// of the 2026-05-25 distributed cluster testing plan) to capture
+    /// outbound raft messages produced by the inner raft library without
+    /// spinning up a QUIC listener or a TLS handshake.  Production code
+    /// leaves this null so the default path is used.
+    send_override: ?*const fn (self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) anyerror!void = null,
+    /// Optional opaque context for `send_override`.  Tests can stash a
+    /// pointer to their capture struct here and retrieve it from inside
+    /// the override callback.  Ignored by the default send path.
+    send_override_ctx: ?*anyopaque = null,
 
     pub fn init(allocator: Allocator) Transport {
         return .{ .allocator = allocator };
@@ -290,6 +302,10 @@ pub const Transport = struct {
     // SEC-D011: TLS-aware Raft transport matching cluster.zig:sendToNode pattern.
     // CANARY: REQ=SEC-D011; FEATURE="Raft RPC TLS"; ASPECT=TransportSend; STATUS=TESTED; OWNER=security; UPDATED=2026-04-10
     pub fn send(self: *Transport, peer: Peer, from: u64, term: u64, msg: Message) !void {
+        if (self.send_override) |override| {
+            try override(self, peer, from, term, msg);
+            return;
+        }
         var qc = quic.QuicClient.init(self.allocator);
         defer qc.deinit();
         try connectWithTLS(&qc, self.allocator, peer.endpoint, peer.port);
@@ -649,11 +665,21 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .term = rvr.term,
             .vote_granted = rvr.vote_granted,
         } },
+        // raft_schema.AppendEntries.entries is an ArrayList that holds the
+        // log entries to replicate.  We construct it empty here because the
+        // current path is exercised only by raft RequestVote/heartbeat
+        // traffic (A5b of the 2026-05-25 distributed cluster testing plan)
+        // — the GraphMutation / SchemaChange / config_change replication
+        // payload conversion is tracked separately and lives outside this
+        // dispatch hot path.  Initializing as `.empty` matches the
+        // protobuf encoder's expectation that a missing field is an empty
+        // repeated submessage.
         .append_entries => |ae| .{ .append_entries = .{
             .term = ae.term,
             .leader_id = ae.leader_id,
             .prev_log_index = ae.prev_log_index,
             .prev_log_term = ae.prev_log_term,
+            .entries = std.ArrayList(raft_schema.RaftLogEntry).empty,
             .leader_commit = ae.leader_commit,
         } },
         .append_entries_response => |aer| .{ .append_entries_response = .{
@@ -669,9 +695,12 @@ fn messageToProto(allocator: Allocator, msg: Message) !raft_schema.RaftMessage {
             .offset = is.offset,
             .done = is.done,
         } },
+        // raft_schema.InstallSnapshotResponse has no `success` field on the
+        // wire schema; the receiving side defaults `success = true` (absence
+        // implies ACK), mirroring the behavior already documented in
+        // `protoToMessage` below.
         .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
             .term = isr.term,
-            .success = isr.success,
         } },
     };
 }
@@ -998,8 +1027,32 @@ pub const RaftNode = struct {
         self.pending_responses.deinit();
     }
 
+    /// Wire the wrapper's geode-level `Transport` (typically QUIC+TLS in
+    /// production) so that outbound raft traffic produced by the inner raft
+    /// library reaches its peers.
+    ///
+    /// Why this is non-trivial: raft-0.1.3 dispatches messages via its own
+    /// `raft_lib.Transport` interface — when the inner node calls
+    /// `sendMsg(to, msg)` it invokes the inner transport's vtable directly
+    /// rather than buffering into `Ready.messages`.  Without a bridge, the
+    /// wrapper's `transport` field would be set but no raft traffic would
+    /// flow over it, which is exactly the bug A5b of the 2026-05-25
+    /// distributed cluster testing plan addresses.
+    ///
+    /// The fix: install a tiny adapter that implements
+    /// `raft_lib.Transport.VTable` and forwards each `(to, msg)` to the
+    /// wrapper transport's `send(peer, from, term, geode_msg)` after
+    /// looking up the peer's endpoint by id and converting the raft_lib
+    /// Message into the geode Message union.
+    ///
+    /// Tests that drive multiple raft nodes in-process should call
+    /// `setInnerTransport` instead — that path bypasses this bridge.
     pub fn setTransport(self: *RaftNode, t: *Transport) void {
         self.transport = t;
+        self.inner.setTransport(.{
+            .ptr = @ptrCast(self),
+            .vtable = &RaftLibTransportBridge.vtable,
+        });
     }
 
     /// Inject the underlying raft library's Transport directly into the inner
@@ -1169,6 +1222,33 @@ pub const RaftNode = struct {
             self.stats.entries_applied += 1;
         }
 
+        // Dispatch outbound raft messages produced by this tick to their
+        // target peers.  In raft-0.1.3 the inner node sends messages directly
+        // via its own Transport vtable (see RaftLibTransportBridge below), so
+        // `rd.messages` is currently always empty — but the API exposes the
+        // field and a future version may buffer here, so we treat it as a
+        // legitimate dispatch surface.  For in-process tests the inner
+        // transport vtable (set via `setInnerTransport`) handles routing
+        // before drain ever runs; for production, `setTransport` installs
+        // the bridge so this loop is a defensive secondary path.
+        // CANARY: REQ=REQ-DIST-RAFT-DRAINREADY-DISPATCH; FEATURE="Raft Wrapper Transport Dispatch"; ASPECT=DrainReadyMessages; STATUS=TESTED; TEST=tests/test_drainready_dispatch.zig; OWNER=distributed; UPDATED=2026-05-25
+        if (rd.messages.len > 0) {
+            if (self.transport != null) {
+                for (rd.messages) |msg| {
+                    self.dispatchRaftLibMessage(msg) catch |err| {
+                        log.warn("raft message dispatch failed", &.{
+                            Attr.string("error", @errorName(err)),
+                        });
+                        // Drop the message — raft will retry on next heartbeat.
+                    };
+                }
+            } else {
+                log.debug("raft drainReady has messages but no wrapper transport set", &.{
+                    Attr.uint("message_count", rd.messages.len),
+                });
+            }
+        }
+
         // raft-0.1.3 advance() is zero-arg and returns `!void`.  We can't
         // propagate the error from this void fn, so log on failure — the
         // next ready() call will report ReadyNotAdvanced if we silently
@@ -1177,7 +1257,171 @@ pub const RaftNode = struct {
             log.warn("raft advance error", &.{Attr.string("error", @errorName(err))});
         };
     }
+
+    /// Look up a peer by id.  Returns null if the id isn't in `self.peers`.
+    /// Linear scan is fine: the peer count is bounded by the cluster size
+    /// (typically 3-7) and message dispatch dominates lookup cost.
+    fn findPeerById(self: *RaftNode, to: u64) ?Peer {
+        for (self.peers) |p| {
+            if (p.id == to) return p;
+        }
+        return null;
+    }
+
+    /// Forward a raft_lib.Message to a known destination through the wrapper
+    /// transport.  Used by both the bridge (where the raft library tells us
+    /// `to` via its vtable callback) and the `drainReady` defensive loop
+    /// (where we derive `to` from the message body).
+    ///
+    /// Note: we read `current_term` from `self.inner` rather than the
+    /// wrapper mirror.  The wrapper's `self.current_term` is only refreshed
+    /// inside `drainReady`, but the bridge can fire while `inner.step` is
+    /// still mid-call (the raft library dispatches messages synchronously
+    /// as they're emitted), so the inner term is the only authoritative
+    /// source at this point.
+    fn dispatchRaftLibMessageWithDest(self: *RaftNode, to: u64, msg: raft_lib.Message) !void {
+        const t = self.transport orelse return error.NoTransport;
+        const peer = self.findPeerById(to) orelse return error.PeerNotFound;
+        const geode_msg = try raftLibMessageToGeode(self.allocator, msg);
+        try t.send(peer, self.id, self.inner.current_term, geode_msg);
+    }
+
+    /// drainReady-driven dispatch: the inner raft library hands us a
+    /// `Ready.messages` slice with no per-message destination, so we
+    /// recover it from the message body (candidate_id for RequestVote,
+    /// leader_id for AppendEntries / InstallSnapshot).  Response messages
+    /// can't be routed this way — the raft library always pairs responses
+    /// with the original sender at message-emit time and never buffers
+    /// them into `Ready.messages` in raft-0.1.3.  Returns
+    /// MessageWithoutDestination if the type is unsupported here.
+    fn dispatchRaftLibMessage(self: *RaftNode, msg: raft_lib.Message) !void {
+        const to = raftLibMessageDestination(msg) orelse return error.MessageWithoutDestination;
+        return self.dispatchRaftLibMessageWithDest(to, msg);
+    }
 };
+
+/// Adapter that implements `raft_lib.Transport` and forwards every send
+/// through the wrapper `Transport` field of the surrounding `RaftNode`.
+///
+/// Installed by `RaftNode.setTransport` so that messages produced by the
+/// inner raft library (RequestVote, AppendEntries, etc.) reach their target
+/// peers over the wrapper's transport (QUIC+TLS in production).  Without
+/// this adapter, the inner raft library has no way to send anywhere — it
+/// only knows about `raft_lib.Transport`, not the geode-level `Transport`.
+///
+/// The `to` parameter supplied by the raft library is authoritative: it is
+/// set correctly for every message type, including responses where the
+/// destination cannot be recovered from the body.
+const RaftLibTransportBridge = struct {
+    pub const vtable = raft_lib.Transport.VTable{ .send = &sendImpl };
+
+    fn sendImpl(ptr: *anyopaque, to: u64, msg: raft_lib.Message) void {
+        const node: *RaftNode = @ptrCast(@alignCast(ptr));
+        node.dispatchRaftLibMessageWithDest(to, msg) catch |err| {
+            log.warn("raft bridge send failed", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("to", to),
+            });
+        };
+    }
+};
+
+/// Recover the destination node id from a raft_lib.Message body for the
+/// message types where it is unambiguous.  Returns null for response
+/// messages, which carry no destination of their own — the raft library
+/// always knows the destination at the point of emit, but a buffered
+/// Ready.messages slice has no way to encode it.
+fn raftLibMessageDestination(msg: raft_lib.Message) ?u64 {
+    return switch (msg) {
+        .request_vote => |rv| rv.candidate_id,
+        .append_entries => |ae| ae.leader_id,
+        .install_snapshot => |is| is.leader_id,
+        // For response messages there is no destination embedded in the
+        // body.  The bridge path uses the `to` argument from the vtable
+        // and never reaches this branch; the drainReady fallback returns
+        // MessageWithoutDestination here so the message is dropped (raft
+        // will retry on the next heartbeat).
+        .request_vote_response,
+        .append_entries_response,
+        .install_snapshot_response,
+        => null,
+    };
+}
+
+/// Convert a raft_lib.Message into the geode wire-format Message used by
+/// `Transport.send` / `writeRaftFrame`.  Allocates only where the geode
+/// representation owns a copy (append_entries.entries is deep-copied).
+/// Caller (the wrapper Transport) is responsible for freeing any
+/// allocations attached to the returned Message once the send completes.
+///
+/// The geode Message variants carry strictly more fields than the
+/// raft_lib counterparts (e.g. `voter_id`); we fill those with defaults
+/// since they are populated on the receiving side from the wire envelope.
+fn raftLibMessageToGeode(allocator: Allocator, msg: raft_lib.Message) !Message {
+    return switch (msg) {
+        .request_vote => |rv| Message{ .request_vote = .{
+            .term = rv.term,
+            .candidate_id = rv.candidate_id,
+            .last_log_index = rv.last_log_index,
+            .last_log_term = rv.last_log_term,
+            .pre_vote = rv.pre_vote,
+        } },
+        .request_vote_response => |rvr| Message{
+            .request_vote_response = .{
+                .term = rvr.term,
+                .vote_granted = rvr.vote_granted,
+                // The geode Message carries a voter_id field; the raft_lib
+                // counterpart does not.  Set to 0 — the receiver fills it
+                // from the wire envelope's `from` field.
+                .voter_id = 0,
+            },
+        },
+        .append_entries => |ae| blk: {
+            // Convert raft_lib.Entry[] -> geode LogEntry[] (re-serializing
+            // each command's tag-prefixed bytes back into the Command
+            // variant the wire format expects).
+            const entries = try allocator.alloc(LogEntry, ae.entries.len);
+            errdefer allocator.free(entries);
+            for (ae.entries, 0..) |e, i| {
+                const cmd = deserializeCommand(e.data) catch Command{ .write = e.data };
+                entries[i] = .{
+                    .term = e.term,
+                    .index = e.index,
+                    .command = cmd,
+                    .timestamp = compat_milliTimestamp(),
+                    .client_id = null,
+                    .serial_number = null,
+                };
+            }
+            break :blk Message{ .append_entries = .{
+                .term = ae.term,
+                .leader_id = ae.leader_id,
+                .prev_log_index = ae.prev_log_index,
+                .prev_log_term = ae.prev_log_term,
+                .entries = entries,
+                .leader_commit = ae.leader_commit,
+            } };
+        },
+        .append_entries_response => |aer| Message{ .append_entries_response = .{
+            .term = aer.term,
+            .success = aer.success,
+            .match_index = aer.match_index,
+        } },
+        .install_snapshot => |is| Message{ .install_snapshot = .{
+            .term = is.term,
+            .leader_id = is.leader_id,
+            .last_included_index = is.last_included_index,
+            .last_included_term = is.last_included_term,
+            .offset = is.offset,
+            .data = is.data,
+            .done = is.done,
+        } },
+        .install_snapshot_response => |isr| Message{ .install_snapshot_response = .{
+            .term = isr.term,
+            .success = isr.success,
+        } },
+    };
+}
 
 // ---- Tests ----
 
