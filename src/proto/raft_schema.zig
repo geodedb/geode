@@ -54,7 +54,7 @@ pub const GraphMutation = struct {
 
     pub const _desc_table = .{
         .graph = fd(1, .{ .scalar = .string }),
-        .mutation_type = fd(2, .{ .scalar = .@"enum" }),
+        .mutation_type = fd(2, .{ .@"enum" = {} }),
         .data = fd(3, .{ .scalar = .bytes }),
         .txn_id = fd(4, .{ .scalar = .uint64 }),
     };
@@ -70,7 +70,7 @@ pub const SchemaChange = struct {
     schema: []const u8 = "",
 
     pub const _desc_table = .{
-        .operation = fd(1, .{ .scalar = .@"enum" }),
+        .operation = fd(1, .{ .@"enum" = {} }),
         .graph = fd(2, .{ .scalar = .string }),
         .schema = fd(3, .{ .scalar = .string }),
     };
@@ -87,7 +87,7 @@ pub const ConfigChange = struct {
     server_port: ?u32 = null,
 
     pub const _desc_table = .{
-        .change_type = fd(1, .{ .scalar = .@"enum" }),
+        .change_type = fd(1, .{ .@"enum" = {} }),
         .server_id = fd(2, .{ .scalar = .uint64 }),
         .server_endpoint = fd(3, .{ .scalar = .string }),
         .server_port = fd(4, .{ .scalar = .uint32 }),

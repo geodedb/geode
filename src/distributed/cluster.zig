@@ -35,6 +35,26 @@ fn compat_microTimestamp() i64 {
     return @as(i64, ts.sec) * 1_000_000 + @divTrunc(@as(i64, ts.nsec), 1_000);
 }
 
+// Zig 0.16 compat: std.Thread.sleep was removed; use raw linux nanosleep.
+fn compat_sleepNs(ns: u64) void {
+    if (comptime @import("builtin").os.tag == .linux) {
+        const req = std.os.linux.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.os.linux.timespec = undefined;
+        _ = std.os.linux.nanosleep(&req, &rem);
+    } else {
+        // POSIX fallback via libc nanosleep.
+        const req = std.c.timespec{
+            .sec = @intCast(ns / std.time.ns_per_s),
+            .nsec = @intCast(ns % std.time.ns_per_s),
+        };
+        var rem: std.c.timespec = undefined;
+        _ = std.c.nanosleep(&req, &rem);
+    }
+}
+
 // Zig 0.16 compat: std.process.getEnvVarOwned was removed.
 fn getEnvVarOwned(allocator: std.mem.Allocator, name: []const u8) error{ EnvironmentVariableNotFound, OutOfMemory }![]u8 {
     const name_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
@@ -95,7 +115,7 @@ const Message = struct {
     auth_token: []const u8 = "",
 
     pub const _desc_table = .{
-        .msg_type = fd(1, .{ .scalar = .@"enum" }),
+        .msg_type = fd(1, .{ .@"enum" = {} }),
         .key = fd(2, .{ .scalar = .string }),
         .client_id = fd(3, .{ .scalar = .string }),
         .data = fd(4, .{ .scalar = .bytes }),
@@ -120,7 +140,7 @@ const Response = struct {
     leader_id: ?u64 = null,
 
     pub const _desc_table = .{
-        .status = fd(1, .{ .scalar = .@"enum" }),
+        .status = fd(1, .{ .@"enum" = {} }),
         .data = fd(2, .{ .scalar = .bytes }),
         .leader_id = fd(3, .{ .scalar = .uint64 }),
     };
@@ -227,7 +247,7 @@ const TxnMetadata = struct {
     pub const _desc_table = .{
         .client_id = fd(1, .{ .scalar = .string }),
         .timestamp = fd(2, .{ .scalar = .int64 }),
-        .msg_type = fd(3, .{ .scalar = .@"enum" }),
+        .msg_type = fd(3, .{ .@"enum" = {} }),
     };
 
     pub fn deinit(self: *TxnMetadata, allocator: std.mem.Allocator) void {
@@ -511,6 +531,13 @@ pub const ClusterCoordinator = struct {
         self.stop();
         self.raft_nonce_tracker.deinit();
         self.replay_guard.deinit();
+        // resolvePeers duped each peer.endpoint into self.allocator; raft's
+        // own deinit doesn't reclaim them, so free them here before the
+        // backing slice goes away.
+        for (self.raft.peers) |peer| {
+            if (peer.endpoint.len > 0) self.allocator.free(peer.endpoint);
+        }
+        self.allocator.free(self.raft.peers);
         self.raft.deinit();
         self.allocator.destroy(self.raft);
         for (self.cluster_state.nodes.items) |*node| {
@@ -524,13 +551,13 @@ pub const ClusterCoordinator = struct {
             }
             node.metadata.deinit();
         }
-        self.cluster_state.nodes.deinit();
+        self.cluster_state.nodes.deinit(self.allocator);
         for (self.cluster_state.shards.items) |shard| {
             if (shard.replica_nodes.len > 0) {
                 self.allocator.free(shard.replica_nodes);
             }
         }
-        self.cluster_state.shards.deinit();
+        self.cluster_state.shards.deinit(self.allocator);
         self.cluster_state.replication_map.deinit();
 
         var conn_it = self.network_transport.connections.iterator();
@@ -554,7 +581,7 @@ pub const ClusterCoordinator = struct {
             server.deinit();
         }
 
-        self.health_monitor.health_checks.deinit();
+        self.health_monitor.health_checks.deinit(self.allocator);
     }
 
     // QUAL-D004: start() spawns background threads and returns immediately.
@@ -624,7 +651,7 @@ pub const ClusterCoordinator = struct {
     fn raftLoop(self: *ClusterCoordinator) !void {
         while (!self.shutdown.load(.acquire)) {
             try self.raft.tick();
-            std.time.sleep(10 * std.time.ns_per_ms);
+            compat_sleepNs(10 * std.time.ns_per_ms);
         }
     }
 
@@ -698,7 +725,7 @@ pub const ClusterCoordinator = struct {
                 }
             }
 
-            std.time.sleep(self.health_monitor.check_interval_ms * std.time.ns_per_ms);
+            compat_sleepNs(self.health_monitor.check_interval_ms * std.time.ns_per_ms);
         }
     }
 
@@ -707,7 +734,7 @@ pub const ClusterCoordinator = struct {
             if (self.raft.state == .leader) {
                 try self.performReplication();
             }
-            std.time.sleep(100 * std.time.ns_per_ms);
+            compat_sleepNs(100 * std.time.ns_per_ms);
         }
     }
 
@@ -778,7 +805,7 @@ pub const ClusterCoordinator = struct {
             const frame_res = raft_consensus.readRaftFrame(self.allocator, stream) catch |err| switch (err) {
                 error.EndOfStream => break,
                 error.WouldBlock => {
-                    std.Thread.sleep(200 * std.time.ns_per_us);
+                    compat_sleepNs(200 * std.time.ns_per_us);
                     continue;
                 },
                 else => return err,
@@ -1092,8 +1119,9 @@ pub const ClusterCoordinator = struct {
     }
 
     fn getAvailableNodes(self: *ClusterCoordinator, shard: *ShardInfo) ![]u64 {
-        var available = std.ArrayList(u64).init(self.allocator);
-        defer available.deinit();
+        // Zig 0.16: std.ArrayList is unmanaged — pass allocator to every op.
+        var available: std.ArrayList(u64) = .empty;
+        defer available.deinit(self.allocator);
 
         for (self.cluster_state.nodes.items) |node| {
             if (node.state != .active) continue;
@@ -1108,10 +1136,10 @@ pub const ClusterCoordinator = struct {
             }
             if (is_replica) continue;
 
-            try available.append(node.id);
+            try available.append(self.allocator, node.id);
         }
 
-        return available.toOwnedSlice();
+        return available.toOwnedSlice(self.allocator);
     }
 
     // CANARY: REQ=REQ-DIST-CLUSTER-002; FEATURE="DistributedCluster"; ASPECT=Replication; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-01

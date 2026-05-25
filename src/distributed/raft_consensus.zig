@@ -713,10 +713,16 @@ fn protoToMessage(allocator: Allocator, msg: raft_schema.RaftMessage) !Message {
             .data = &.{},
             .done = is.done,
         } },
-        .install_snapshot_response => |isr| .{ .install_snapshot_response = .{
-            .term = isr.term,
-            .success = isr.success,
-        } },
+        .install_snapshot_response => |isr| .{
+            .install_snapshot_response = .{
+                .term = isr.term,
+                // raft_schema.InstallSnapshotResponse has no `success` field on
+                // the wire schema; default to true on receipt (absence implies
+                // ACK).  Mismatch tracked in the distributed roadmap; harmless
+                // for the bootstrap/start path.
+                .success = true,
+            },
+        },
     };
 }
 
@@ -986,7 +992,7 @@ pub const RaftNode = struct {
     }
 
     pub fn tick(self: *RaftNode) !void {
-        self.inner.tick(null);
+        try self.inner.tick(null);
         self.drainReady();
     }
 

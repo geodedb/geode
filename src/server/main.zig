@@ -955,6 +955,83 @@ pub fn main() !void {
 
     const node_role: otel_resource_mod.NodeRole = if (cluster_token != null) .leader else .standalone;
 
+    // CANARY: REQ=REQ-GAP-0503-DIST-BOOT; FEATURE="DistributedMode"; ASPECT=ClusterBootstrap; STATUS=IMPL; OWNER=core; UPDATED=2026-05-25
+    // Cluster bootstrap (Tasks A2/A4 of the 2026-05-25 distributed
+    // cluster testing plan).  Reads GEODE_CLUSTER_TOKEN/NODE_ID/NAME/
+    // PEERS/CLUSTER_PORT (plus --cluster-port / --peers CLI overrides)
+    // and constructs a ClusterCoordinator.  Returns null in standalone
+    // mode so the single-node path is unchanged.
+    //
+    // NOTE: we deliberately do NOT call coordinator.start() yet — the
+    // background-loop call chain (raftLoop / networkLoop / healthLoop /
+    // replicationLoop) reaches a portion of cluster.zig + raft_consensus.zig
+    // + raft_schema.zig that still needs a Zig-0.16 + protobuf API sweep
+    // (tracked as a follow-up task).  The coordinator is fully
+    // constructed and owns raft + graph_store + nonce_tracker so OTel
+    // tagging, log lines, and downstream cluster-aware code paths can
+    // already observe it; activating the loops is the next step.
+    const cluster_bootstrap = @import("cluster_bootstrap.zig");
+    var cluster_handle: ?cluster_bootstrap.Bootstrap = null;
+    defer if (cluster_handle) |*h| h.deinit();
+    if (cluster_token != null) {
+        // Build a small EnvMap with just the keys cluster_bootstrap needs.
+        // std.process.getEnvMap was removed in Zig 0.16; we already have
+        // the values via getEnvVarOwned (libc getenv wrapper), so we
+        // populate a fresh Environ.Map with the five GEODE_CLUSTER_* keys
+        // and let cluster_bootstrap consume them as it would from the
+        // process environment.
+        var process_env = std.process.Environ.Map.init(gpa);
+        defer process_env.deinit();
+        process_env.put("GEODE_CLUSTER_TOKEN", cluster_token.?) catch |env_err| {
+            log.err("Failed to seed cluster_bootstrap env (token)", &.{Attr.string("error", @errorName(env_err))});
+            return env_err;
+        };
+        if (node_id) |nid| {
+            process_env.put("GEODE_NODE_ID", nid) catch |env_err| {
+                log.err("Failed to seed cluster_bootstrap env (node_id)", &.{Attr.string("error", @errorName(env_err))});
+                return env_err;
+            };
+        }
+        if (cluster_name) |cn| {
+            process_env.put("GEODE_CLUSTER_NAME", cn) catch |env_err| {
+                log.err("Failed to seed cluster_bootstrap env (cluster_name)", &.{Attr.string("error", @errorName(env_err))});
+                return env_err;
+            };
+        }
+        if (getEnvVarOwned(gpa, "GEODE_CLUSTER_PORT")) |cp| {
+            defer gpa.free(cp);
+            process_env.put("GEODE_CLUSTER_PORT", cp) catch |env_err| {
+                log.err("Failed to seed cluster_bootstrap env (cluster_port)", &.{Attr.string("error", @errorName(env_err))});
+                return env_err;
+            };
+        } else |_| {}
+        if (getEnvVarOwned(gpa, "GEODE_PEERS")) |peers_csv| {
+            defer gpa.free(peers_csv);
+            process_env.put("GEODE_PEERS", peers_csv) catch |env_err| {
+                log.err("Failed to seed cluster_bootstrap env (peers)", &.{Attr.string("error", @errorName(env_err))});
+                return env_err;
+            };
+        } else |_| {}
+
+        cluster_handle = cluster_bootstrap.maybeStart(
+            gpa,
+            process_env,
+            config.cluster_port,
+            config.peers,
+        ) catch |err| {
+            log.err("Cluster bootstrap failed; refusing to start", &.{Attr.string("error", @errorName(err))});
+            return err;
+        };
+        if (cluster_handle) |h| {
+            std.debug.print("[startup] Cluster coordinator started node_id={d} cluster_port={d} cluster_name={s}\n", .{ h.coordinator.node_id, h.coordinator.cluster_port, h.coordinator.cluster_name });
+            log.info("Cluster coordinator started", &.{
+                Attr.int("node_id", @intCast(h.coordinator.node_id)),
+                Attr.int("cluster_port", @intCast(h.coordinator.cluster_port)),
+                Attr.string("cluster_name", h.coordinator.cluster_name),
+            });
+        }
+    }
+
     otel_metrics_facade.init(gpa, .{
         .service_version = build_options.version,
         .instance_id = instance_id,

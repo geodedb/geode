@@ -929,6 +929,32 @@ pub fn build(b: *std.Build) void {
     const cluster_coord_config_step = b.step("test-cluster-coord-config", "Run ClusterCoordinator.Config bootstrap field tests (A3/A3b/A3c)");
     cluster_coord_config_step.dependOn(&run_cluster_coord_config_tests.step);
 
+    // cluster_bootstrap module + tests (Task A2 of the 2026-05-25
+    // distributed cluster testing plan). The module wraps the env-var/CLI
+    // glue around ClusterCoordinator.Config so the server boot path (main.zig)
+    // and the harness can both construct a coordinator from the same source
+    // of truth. Imports `geode` for distributed.cluster.ClusterCoordinator.
+    const cluster_bootstrap_mod = b.createModule(.{
+        .root_source_file = b.path("src/server/cluster_bootstrap.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cluster_bootstrap_mod.addImport("geode", root_mod);
+    cluster_bootstrap_mod.link_libc = true;
+    const cluster_bootstrap_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_bootstrap.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_bootstrap_tests.root_module.addImport("cluster_bootstrap", cluster_bootstrap_mod);
+    cluster_bootstrap_tests.root_module.link_libc = true;
+    // all_tests.zig pulls test_cluster_bootstrap.zig through refAllDecls, so
+    // custom_tests also needs the named module to satisfy comptime imports.
+    custom_tests.root_module.addImport("cluster_bootstrap", cluster_bootstrap_mod);
+    const run_cluster_bootstrap_tests = b.addRunArtifact(cluster_bootstrap_tests);
+    const cluster_bootstrap_step = b.step("test-cluster-bootstrap", "Run cluster_bootstrap.zig tests (A2)");
+    cluster_bootstrap_step.dependOn(&run_cluster_bootstrap_tests.step);
+
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
     // src/graph_store.zig. The graph_store module needs logging as a named import.
     // Do NOT add geode here — graph_store.zig is transitively included in geode and adding
@@ -1900,6 +1926,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_string_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cli_args_cluster_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_coord_config_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cluster_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);

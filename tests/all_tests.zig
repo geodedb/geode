@@ -205,11 +205,15 @@ const _test_cli_args_cluster = @import("test_cli_args_cluster.zig");
 // Distributed cluster coordinator Config tests (Tasks A3/A3b/A3c of the same plan)
 const _test_cluster_coordinator_config = @import("test_cluster_coordinator_config.zig");
 
+// Cluster bootstrap (env-var/CLI -> ClusterCoordinator) tests (Task A2 of the same plan)
+const _test_cluster_bootstrap = @import("test_cluster_bootstrap.zig");
+
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
     std.testing.refAllDecls(_advanced_types_operators);
     std.testing.refAllDecls(_test_cli_args_cluster);
     std.testing.refAllDecls(_test_cluster_coordinator_config);
+    std.testing.refAllDecls(_test_cluster_bootstrap);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);
