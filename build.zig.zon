@@ -111,8 +111,8 @@
             // `cross-macos-{x86_64,arm64}` targets). Sunset the patch
             // and bump to b73a804+ once the sibling-pin convergence
             // resolves the diamond.
-            .url = "git+https://gitlab.com/devnw/zig/quic.git#v0.1.18",
-            .hash = "quic-0.1.18-gBIqUZ0qOgAf6VimtQC94kXntSqcPPtKYv8CKxMRSvSQ",
+            .url = "git+https://gitlab.com/devnw/zig/quic.git?ref=v0.1.19#5bac8937f79b95c28e631e50a1d56320bc86b106",
+            .hash = "quic-0.1.18-gBIqUR3vOgDMlCiSPykDj_IZ-c88OLqAdWSdWYxyQkje",
         },
 
         // =======================================================================
@@ -220,8 +220,8 @@
             // pin at 49f59f7 (NoHandshakeKeys retry fix). Without
             // this both quic versions appear in the build graph and
             // the Phase 4.5 drain wouldn't engage on client paths.
-            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git#v0.2.7",
-            .hash = "geode_client_zig-0.2.7-8ysbV5laCQA3njKyKsYinzGO5Y4UMIOAXvk4-s2JZfbj",
+            .url = "git+https://gitlab.com/devnw/codepros/geode/geode-client-zig.git?ref=v0.2.8#c8c19cabfacb3b9d1ee9fb73c6b7124dcdb63429",
+            .hash = "geode_client_zig-0.2.8-8ysbV8ZaCQDzhENCdwPCvieZ7z3VFPJcV2dk2WJObTt6",
         },
 
         // =======================================================================
