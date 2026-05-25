@@ -1073,6 +1073,7 @@ REQ-GAP-0496-RLS-INJECTION-GUARD,RLSSecurity,InjectionPrevention,TESTED,,,securi
 REQ-GAP-0503-DIST-BOOT,DistributedMode,ClusterBootstrap,IMPL,,,core,2026-05-25,src/server/cluster_bootstrap.zig
 REQ-GAP-0503-DIST-BOOT,DistributedMode,ClusterBootstrap,IMPL,,,core,2026-05-25,src/server/main.zig
 REQ-GAP-0503-DIST-BOOT,DistributedMode,ClusterBootstrap,TESTED,,,core,2026-05-25,tests/test_cluster_bootstrap.zig
+REQ-GAP-0503-DIST-BOOT,DistributedMode,RaftCommandOneof,TESTED,,,core,2026-05-25,tests/test_raft_command_refactor.zig
 REQ-GAP-0503-DIST-GATE,DistributedMode,ServerStartup,TESTED,,,core,2026-04-05,src/server/main.zig
 REQ-GAP-0509-SHOW-TABLES-TENANT,ShowTablesTenantIsolation,LabelEnumeration,TESTED,,,security,2026-04-11,src/graph_store.zig
 REQ-GAP-0509-TENANT-ISOLATION,TenantIsolationCoverage,Regression,TESTED,,,security,2026-04-11,tests/test_gap0509_tenant_isolation.zig

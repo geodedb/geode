@@ -169,20 +169,21 @@ pub fn maybeStart(
         // reachable in the documented flow).
         else => return Error.InvalidNodeId,
     };
-    // NOTE: We intentionally do NOT call `coord.start()` here.  The
-    // background loops (`raftLoop`, `networkLoop`, `healthLoop`,
-    // `replicationLoop`) reach a sizable surface of cluster.zig +
-    // raft_consensus.zig + raft_schema.zig code that still carries
-    // pre-existing Zig-0.16 stdlib + protobuf API drift.  Until that
-    // remediation lands (tracked as a follow-up: "cluster.zig start path
-    // 0.16 compat sweep"), the bootstrap stops at init and the caller
-    // can call `Bootstrap.start()` explicitly once the call-chain
-    // compiles.  Returning a configured-but-not-started coordinator
-    // keeps the public Config/CLI surface honest: env vars + flags are
-    // parsed, the Config struct is constructed, the coordinator owns
-    // the raft + graph_store + nonce_tracker, and the OTel/log tagging
-    // in main.zig can already see it.  Manual smoke = "Cluster
-    // coordinator started" log line; no peer chatter yet.
+    // A4c: spin up background loops (raftLoop / networkLoop / healthLoop /
+    // replicationLoop) now that A4b removed the union-as-submessage compile
+    // error in raft_schema.RaftCommand.  Any failure in start() must roll
+    // back the heap-allocated coordinator we already created above.
+    coord.start() catch |err| {
+        coord.deinit();
+        allocator.destroy(coord);
+        for (owned_addresses) |a| allocator.free(a);
+        allocator.free(owned_addresses);
+        allocator.free(owned_peer_configs);
+        return switch (err) {
+            error.OutOfMemory => Error.OutOfMemory,
+            else => Error.InvalidNodeId,
+        };
+    };
 
     return Bootstrap{
         .coordinator = coord,
@@ -192,19 +193,13 @@ pub fn maybeStart(
     };
 }
 
-// NOTE on a deliberately-missing `Bootstrap.start` wrapper:
-// Defining a method body here that calls `self.coordinator.start()`
-// would force the Zig compiler to analyze the full ClusterCoordinator
-// start-path (raftLoop / networkLoop / healthLoop / replicationLoop)
-// from this file's reachability graph, which transitively reaches the
-// raft_schema protobuf reflection on RaftCommand (a union-as-submessage
-// that the in-tree protobuf-0.1.3 cannot model — see the latent
-// compile errors documented in the follow-up task "cluster.zig start
-// path 0.16 + protobuf compat sweep").  Callers who want to activate
-// the loops invoke `bs.coordinator.start()` directly; doing so today
-// will fail compilation until that sweep lands.  Keeping `start()` off
-// this module means the bootstrap surface — config-parsing + init —
-// compiles cleanly and is testable in isolation.
+// A4b/A4c (2026-05-25): `coord.start()` is now invoked inline above.
+// RaftCommand was refactored from `union(enum)` to a protobuf-oneof struct
+// (src/proto/raft_schema.zig) so the protobuf-0.1.3 reflection can walk it
+// as a `.submessage`; that removed the compile error that previously
+// blocked any caller from reaching the background loops.  Callers no
+// longer need to invoke start() out-of-band — Bootstrap returns with the
+// raft/network/health/replication loops already running.
 
 /// Parse a single "host:port" spec, append it to the address + peer-config
 /// lists if it isn't a self-reference.  Peer IDs are derived from the
