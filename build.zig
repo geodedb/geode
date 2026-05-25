@@ -955,6 +955,23 @@ pub fn build(b: *std.Build) void {
     const cluster_bootstrap_step = b.step("test-cluster-bootstrap", "Run cluster_bootstrap.zig tests (A2)");
     cluster_bootstrap_step.dependOn(&run_cluster_bootstrap_tests.step);
 
+    // In-process 3-node leader election smoke test (Task A5 of the 2026-05-25
+    // distributed cluster testing plan).  Constructs three ClusterCoordinator
+    // instances on loopback, wires their inner raft library nodes via
+    // raft_lib.InProcessTransport, and asserts a single leader is elected
+    // within 10s.  Pulls in the geode module so the test sees the real
+    // ClusterCoordinator type (via `geode.distributed.cluster`).
+    const cluster_3node_election_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_3node_election.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_3node_election_tests.root_module.addImport("geode", root_mod);
+    cluster_3node_election_tests.root_module.link_libc = true;
+    const run_cluster_3node_election_tests = b.addRunArtifact(cluster_3node_election_tests);
+    const cluster_3node_election_step = b.step("test-cluster-3node-election", "Run in-process 3-node leader election smoke test (A5)");
+    cluster_3node_election_step.dependOn(&run_cluster_3node_election_tests.step);
+
     // RaftCommand oneof refactor tests (Task A4b of the 2026-05-25 distributed
     // cluster testing plan). Pins the protobuf-oneof shape of RaftCommand so
     // a future regression that reintroduces `union(enum)` for the submessage

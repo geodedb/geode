@@ -1002,6 +1002,28 @@ pub const RaftNode = struct {
         self.transport = t;
     }
 
+    /// Inject the underlying raft library's Transport directly into the inner
+    /// raft node.  Used by in-process multi-node tests (e.g. A5 in the
+    /// 2026-05-25 distributed cluster testing plan) to wire several inner
+    /// raft nodes together via `raft_lib.InProcessTransport` without going
+    /// through the QUIC layer.  Production code wires QUIC via the outer
+    /// `setTransport` instead.
+    pub fn setInnerTransport(self: *RaftNode, t: raft_lib.Transport) void {
+        self.inner.setTransport(t);
+    }
+
+    /// Deliver an inbound raft_lib message directly to the inner raft node
+    /// (bypassing the geode Message conversion path) and then drain Ready
+    /// state.  Used by in-process multi-node tests that pull messages out
+    /// of a `raft_lib.InProcessTransport` inbox and feed them back into
+    /// the recipient raft node.  Production code routes inbound traffic
+    /// through `handleMessage` (which decodes the geode Message wire
+    /// format first).
+    pub fn stepInner(self: *RaftNode, from: u64, msg: raft_lib.Message) !void {
+        try self.inner.step(from, msg);
+        self.drainReady();
+    }
+
     pub fn setStorage(_: *RaftNode, _: *PersistentStorage) !void {
         // External library manages its own storage
     }

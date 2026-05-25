@@ -503,6 +503,45 @@ pub const ClusterCoordinator = struct {
         raft_apply.setGlobalStore(store);
         raft.apply_callback = &raft_apply.applyCallbackFn;
 
+        var cluster_state = try initClusterState(allocator);
+        // Task A5 (2026-05-25 plan): seed cluster_state.nodes from PeerConfig
+        // so the network transport's findNodeEndpoint() lookup works from
+        // t=0.  Without this bridge, sendToNode(peer_id) always returns
+        // error.NodeNotFound because cluster_state.nodes only gets populated
+        // by inbound JOIN_CLUSTER messages — but the leader hasn't been
+        // elected yet, so no node has joined yet, so the address book is
+        // empty, so RequestVote can't be sent, so no leader is ever
+        // elected.  The "host:port" endpoint format matches what
+        // findNodeEndpoint() (this file, search "lastIndexOf") expects.
+        errdefer {
+            for (cluster_state.nodes.items) |*node| {
+                if (node.endpoint.len > 0) allocator.free(node.endpoint);
+                node.metadata.deinit();
+            }
+            cluster_state.nodes.deinit(allocator);
+            cluster_state.shards.deinit(allocator);
+            cluster_state.replication_map.deinit();
+        }
+        for (config.peers) |pc| {
+            const ep = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ pc.address, pc.port });
+            errdefer allocator.free(ep);
+            try cluster_state.nodes.append(allocator, .{
+                .id = pc.id,
+                .endpoint = ep,
+                .state = .active,
+                .role = .follower,
+                .capacity = .{
+                    .cpu_cores = 0,
+                    .memory_gb = 0,
+                    .storage_gb = 0,
+                    .network_mbps = 0,
+                    .current_load = 0.0,
+                },
+                .last_heartbeat = compat_milliTimestamp(),
+                .metadata = std.StringHashMap([]const u8).init(allocator),
+            });
+        }
+
         return ClusterCoordinator{
             .allocator = allocator,
             .node_id = node_id,
@@ -511,7 +550,7 @@ pub const ClusterCoordinator = struct {
             .replication_factor = config.replication_factor,
             .sharding_strategy = config.sharding_strategy,
             .failover_config = config.failover_config,
-            .cluster_state = try initClusterState(allocator),
+            .cluster_state = cluster_state,
             .network_transport = try initNetworkTransport(allocator, config),
             .health_monitor = try initHealthMonitor(allocator, config),
             .raft_nonce_tracker = try NonceTracker.init(allocator, 10000),
