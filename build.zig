@@ -874,6 +874,9 @@ pub fn build(b: *std.Build) void {
     custom_tests.root_module.addImport("schema", schema_mod);
     custom_tests.root_module.addImport("transport/quic", transport_quic_mod);
     custom_tests.root_module.addImport("grpc_client", grpc_client_mod);
+    // test_cli_args_cluster.zig (added under all_tests.zig) imports cli_args via
+    // a named module. The module itself is created lower in this file (search for
+    // "cli_args_mod") so the addImport happens after that declaration.
 
     // New unit tests for recent implementations
     // Moved from src/ to tests/ (#402 #413)
@@ -888,6 +891,28 @@ pub fn build(b: *std.Build) void {
     const string_func_tests = b.addTest(.{ .root_module = b.createModule(.{ .root_source_file = b.path("tests/test_string_functions.zig"), .target = target, .optimize = optimize }) });
     string_func_tests.root_module.addImport("uuid", uuid_ext_mod);
     const run_string_func_tests = b.addRunArtifact(string_func_tests);
+
+    // Distributed cluster CLI flag tests (Task A1 of 2026-05-25-geode-distributed-cluster-testing).
+    // Tests the new --cluster-port and --peers flags via parseArgsFromSlice. Imports cli_args
+    // through a named module — Zig 0.16 disallows test imports that escape the test root with
+    // relative paths like @import("../src/server/cli_args.zig").
+    const cli_args_mod = b.createModule(.{
+        .root_source_file = b.path("src/server/cli_args.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    cli_args_mod.addImport("config", config_mod);
+    cli_args_mod.addImport("build_options", build_options_mod);
+    const cli_args_cluster_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cli_args_cluster.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cli_args_cluster_tests.root_module.addImport("cli_args", cli_args_mod);
+    // all_tests.zig pulls test_cli_args_cluster.zig through refAllDecls, so custom_tests
+    // also needs the named module to satisfy the comptime import resolution.
+    custom_tests.root_module.addImport("cli_args", cli_args_mod);
+    const run_cli_args_cluster_tests = b.addRunArtifact(cli_args_cluster_tests);
 
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
     // src/graph_store.zig. The graph_store module needs logging as a named import.
@@ -1858,6 +1883,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_custom_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_math_func_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_string_func_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_cli_args_cluster_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);

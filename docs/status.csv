@@ -698,6 +698,10 @@ REQ-DIST-2PC-UNDO-002,2PC Undo Pre-Image Capture,NodeCapture,TESTED,,,distribute
 REQ-DIST-2PC-UNDO-003,2PC Undo Pre-Image Capture,EdgeCapture,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
 REQ-DIST-2PC-UNDO-004,2PC Undo Apply,AtomicRollback,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
 REQ-DIST-2PC-UNDO-005,2PC Undo Pre-Image Tests,TestCoverage,TESTED,,,distributed,2026-04-06,src/distributed/twophase.zig
+REQ-DIST-CLI-001,DistributedClusterCLI,ArgParsing,TESTED,,,core,2026-05-25,tests/test_cli_args_cluster.zig
+REQ-DIST-CLI-001,DistributedClusterCLI,ClusterPort,TESTED,,,core,2026-05-25,src/server/cli_args.zig
+REQ-DIST-CLI-001,DistributedClusterCLI,PeersList,TESTED,,,core,2026-05-25,src/server/cli_args.zig
+REQ-DIST-CLI-001,DistributedClusterCLI,ServerConfig,TESTED,,,core,2026-05-25,src/server/cli_args.zig
 REQ-DIST-CLUSTER-001,DistributedCluster,ReplicationLag,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
 REQ-DIST-CLUSTER-002,ClusterReplication,SnapshotSerialization,TESTED,,,distributed,2026-04-05,src/graph_store.zig
 REQ-DIST-CLUSTER-002,DistributedCluster,Replication,IMPL,,,distributed,2026-04-01,src/distributed/cluster.zig
