@@ -199,9 +199,13 @@ const _fd_limit_raise = @import("test_fd_limit_raise.zig");
 // Existing placeholder
 const _e2e_sort_spill_placeholder = @import("e2e_protocol_sort_spill.zig");
 
+// Distributed cluster CLI flag tests (Task A1 of 2026-05-25 distributed cluster testing plan)
+const _test_cli_args_cluster = @import("test_cli_args_cluster.zig");
+
 test "aggregate: geode module loads" {
     // Basic sanity check: parse trivial query
     std.testing.refAllDecls(_advanced_types_operators);
+    std.testing.refAllDecls(_test_cli_args_cluster);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);
     defer res.deinit();
     try std.testing.expect(res.program.statements.len == 1);

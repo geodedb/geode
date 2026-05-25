@@ -53,6 +53,17 @@ pub const ServerConfig = struct {
     // Longer interval reduces persistence thread race window with query threads
     persist_interval_ms: u64 = 30000,
 
+    // Cluster bootstrap configuration.
+    // Set --cluster-port (or GEODE_CLUSTER_PORT) and --peers (or GEODE_PEERS, comma-separated)
+    // to participate in a Raft cluster. Activation also requires GEODE_CLUSTER_TOKEN.
+    // CANARY: REQ=REQ-DIST-CLI-001; FEATURE="DistributedClusterCLI"; ASPECT=ServerConfig; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=core; UPDATED=2026-05-25
+    cluster_port: ?u16 = null,
+
+    // Owned list of peer addresses in "host:port" form (cluster ports, not client ports).
+    // Empty list = no peers configured via CLI. Env var GEODE_PEERS may still apply
+    // downstream when cluster_bootstrap.parseConfig sees an empty CLI list.
+    peers: [][]const u8 = &.{},
+
     // Track which fields were allocated (vs static strings)
     _allocated_listen_quic: bool = false,
     _allocated_listen_grpc: bool = false,
@@ -60,6 +71,7 @@ pub const ServerConfig = struct {
     _allocated_key_path: bool = false,
     _allocated_data_dir: bool = false,
     _allocated_log_level_arg: bool = false,
+    _allocated_peers: bool = false,
 
     /// Free all allocated memory
     pub fn deinit(self: *ServerConfig, allocator: std.mem.Allocator) void {
@@ -69,6 +81,10 @@ pub const ServerConfig = struct {
         if (self._allocated_key_path) if (self.key_path) |s| allocator.free(s);
         if (self._allocated_data_dir) if (self.data_dir) |s| allocator.free(s);
         if (self._allocated_log_level_arg) if (self.log_level_arg) |s| allocator.free(s);
+        if (self._allocated_peers) {
+            for (self.peers) |p| allocator.free(p);
+            allocator.free(self.peers);
+        }
     }
 };
 
@@ -172,6 +188,8 @@ pub fn printHelp() void {
     std.debug.print("  --idle-timeout <ms>          QUIC idle timeout in milliseconds (default: 300000)\n", .{});
     std.debug.print("  --max-connections <n>        Cap concurrent QUIC connections (default: 10000)\n", .{});
     std.debug.print("  --persist-interval <ms>      Background persistence interval in milliseconds (default: 100)\n", .{});
+    std.debug.print("  --cluster-port <port>        Raft cluster listen port (also requires GEODE_CLUSTER_TOKEN to activate)\n", .{});
+    std.debug.print("  --peers <h:p,h:p,...>        Comma-separated list of cluster peers (cluster ports, not client ports)\n", .{});
     std.debug.print("  --no-auth                    Disable authentication (NOT recommended for production)\n", .{});
     std.debug.print("  --insecure-allow-all         Bypass ALL authorization checks (NOT FOR PRODUCTION)\n", .{});
     std.debug.print("  --help                       Show this help message\n", .{});
@@ -206,30 +224,39 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
     const filled = cmdline_data[0..total_read];
 
     // Split by null bytes to get individual args
-    var args_list = std.ArrayList([:0]u8).empty;
+    var args_list = std.ArrayList([]const u8).empty;
     defer args_list.deinit(allocator);
     var start: usize = 0;
     for (filled, 0..) |c, i| {
         if (c == 0) {
             if (i > start) {
-                cmdline_data[i] = 0; // ensure sentinel
-                const arg: [:0]u8 = cmdline_data[start..i :0];
-                args_list.append(allocator, arg) catch return error.OutOfMemory;
+                args_list.append(allocator, filled[start..i]) catch return error.OutOfMemory;
             }
             start = i + 1;
         }
     }
-    const args = args_list.items;
-    if (args.len == 0) return error.StdioUnavailable;
+    if (args_list.items.len == 0) return error.StdioUnavailable;
 
+    return try parseArgsFromSlice(allocator, args_list.items);
+}
+
+/// Parse command line arguments from a caller-supplied slice.
+/// This is the testable seam under parseArgs — unit tests construct an
+/// argv slice in-memory and avoid /proc/self/cmdline.
+/// Returns null if --help/-h was encountered (caller should exit).
+pub fn parseArgsFromSlice(allocator: std.mem.Allocator, args: []const []const u8) !?ServerConfig {
     var config = ServerConfig{};
     var custom_config_path: ?[]const u8 = null;
 
+    if (args.len == 0) return error.StdioUnavailable;
+
     // Check for help flag first
-    for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            printHelp();
-            return null; // Signal to caller that help was shown
+    if (args.len > 1) {
+        for (args[1..]) |arg| {
+            if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+                printHelp();
+                return null; // Signal to caller that help was shown
+            }
         }
     }
 
@@ -312,6 +339,37 @@ pub fn parseArgs(allocator: std.mem.Allocator) !?ServerConfig {
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--persist-interval") and ai + 1 < args.len) {
             config.persist_interval_ms = std.fmt.parseUnsigned(u64, args[ai + 1], 10) catch 100;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--cluster-port") and ai + 1 < args.len) {
+            // CANARY: REQ=REQ-DIST-CLI-001; FEATURE="DistributedClusterCLI"; ASPECT=ClusterPort; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=core; UPDATED=2026-05-25
+            config.cluster_port = std.fmt.parseUnsigned(u16, args[ai + 1], 10) catch null;
+            ai += 1;
+        } else if (std.mem.eql(u8, arg, "--peers") and ai + 1 < args.len) {
+            // CANARY: REQ=REQ-DIST-CLI-001; FEATURE="DistributedClusterCLI"; ASPECT=PeersList; STATUS=TESTED; TEST=tests/test_cli_args_cluster.zig; OWNER=core; UPDATED=2026-05-25
+            const raw = args[ai + 1];
+            // Count non-empty parts so we can size the destination slice exactly.
+            var count: usize = 0;
+            var probe = std.mem.splitScalar(u8, raw, ',');
+            while (probe.next()) |part| {
+                if (part.len > 0) count += 1;
+            }
+            // If a previous --peers run already allocated a list, free it so we don't leak.
+            if (config._allocated_peers) {
+                for (config.peers) |p| allocator.free(p);
+                allocator.free(config.peers);
+                config._allocated_peers = false;
+                config.peers = &.{};
+            }
+            const list = try allocator.alloc([]const u8, count);
+            var idx: usize = 0;
+            var it = std.mem.splitScalar(u8, raw, ',');
+            while (it.next()) |part| {
+                if (part.len == 0) continue;
+                list[idx] = try allocator.dupe(u8, part);
+                idx += 1;
+            }
+            config.peers = list;
+            config._allocated_peers = true;
             ai += 1;
         } else if (std.mem.eql(u8, arg, "--enable-auth")) {
             config.enable_auth = true;
