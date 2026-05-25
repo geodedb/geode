@@ -955,6 +955,22 @@ pub fn build(b: *std.Build) void {
     const cluster_bootstrap_step = b.step("test-cluster-bootstrap", "Run cluster_bootstrap.zig tests (A2)");
     cluster_bootstrap_step.dependOn(&run_cluster_bootstrap_tests.step);
 
+    // RaftCommand oneof refactor tests (Task A4b of the 2026-05-25 distributed
+    // cluster testing plan). Pins the protobuf-oneof shape of RaftCommand so
+    // a future regression that reintroduces `union(enum)` for the submessage
+    // type breaks the suite at this test rather than silently re-blocking
+    // ClusterCoordinator.start().
+    const raft_command_refactor_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_raft_command_refactor.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    raft_command_refactor_tests.root_module.addImport("raft_schema", raft_schema_mod);
+    raft_command_refactor_tests.root_module.addImport("protobuf", protobuf_mod);
+    const run_raft_command_refactor_tests = b.addRunArtifact(raft_command_refactor_tests);
+    const raft_command_refactor_step = b.step("test-raft-command-refactor", "Run RaftCommand oneof refactor regression tests (A4b)");
+    raft_command_refactor_step.dependOn(&run_raft_command_refactor_tests.step);
+
     // graph_algo tests use @import("graph_store") which is wired as a named module rooted at
     // src/graph_store.zig. The graph_store module needs logging as a named import.
     // Do NOT add geode here — graph_store.zig is transitively included in geode and adding
@@ -1927,6 +1943,7 @@ pub fn build(b: *std.Build) void {
     shardDep(test_step, &run_cli_args_cluster_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_coord_config_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_cluster_bootstrap_tests.step, 1, test_shard_loads, test_shard_index);
+    shardDep(test_step, &run_raft_command_refactor_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_algo_tests.step, 1, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_graph_store_unit_tests.step, 8, test_shard_loads, test_shard_index);
     shardDep(test_step, &run_point_read_view_zero_copy_tests.step, 1, test_shard_loads, test_shard_index);

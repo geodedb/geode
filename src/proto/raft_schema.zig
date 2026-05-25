@@ -148,15 +148,33 @@ pub const TxnDecide = struct {
     }
 };
 
-pub const RaftCommand = union(enum) {
-    noop: Noop,
-    write: WriteCommand,
-    graph_mutation: GraphMutation,
-    schema_change: SchemaChange,
-    config_change: ConfigChange,
-    snapshot_pointer: SnapshotPointer,
-    txn_prepare: TxnPrepare,
-    txn_decide: TxnDecide,
+// RaftCommand is the protobuf submessage carried by RaftLogEntry.command.
+//
+// Modeled as a struct-of-optionals (protobuf "oneof" semantics: exactly one
+// field is non-null at a time) rather than a `union(enum)`.  The in-tree
+// protobuf-0.1.3 library cannot model a `union(enum)` as a `.submessage`
+// (see `protobuf.zig:713` / `wire.zig:704` — those reflection helpers
+// require `@typeInfo(T) == .@"struct"`).  Using a struct keeps the wire
+// format identical (same field numbers) while letting the protobuf
+// reflection machinery walk the fields the same way it walks every other
+// message type.
+//
+// Construct one of:
+//   * `RaftCommand{}` — empty, no variant set; `active() == null`.
+//   * `RaftCommand{ .noop = .{} }` — direct literal.
+//   * `RaftCommand.ofNoop(.{})` — convenience constructor (one per variant).
+//
+// Read with `cmd.active()` (returns `ActiveVariant` enum, or `null` if zero
+// or multiple fields are set — the latter would be a protocol violation).
+pub const RaftCommand = struct {
+    noop: ?Noop = null,
+    write: ?WriteCommand = null,
+    graph_mutation: ?GraphMutation = null,
+    schema_change: ?SchemaChange = null,
+    config_change: ?ConfigChange = null,
+    snapshot_pointer: ?SnapshotPointer = null,
+    txn_prepare: ?TxnPrepare = null,
+    txn_decide: ?TxnDecide = null,
 
     pub const _desc_table = .{
         .noop = fd(1, .{ .submessage = {} }),
@@ -169,10 +187,92 @@ pub const RaftCommand = union(enum) {
         .txn_decide = fd(8, .{ .submessage = {} }),
     };
 
-    pub fn deinit(self: *RaftCommand, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            inline else => |*case| case.deinit(allocator),
+    pub const ActiveVariant = enum {
+        noop,
+        write,
+        graph_mutation,
+        schema_change,
+        config_change,
+        snapshot_pointer,
+        txn_prepare,
+        txn_decide,
+    };
+
+    /// Returns the active variant tag, or null if no variant is set, or if
+    /// more than one variant is set (protocol violation — callers should
+    /// reject such frames).
+    pub fn active(self: *const RaftCommand) ?ActiveVariant {
+        var count: u8 = 0;
+        var which: ?ActiveVariant = null;
+        if (self.noop != null) {
+            count += 1;
+            which = .noop;
         }
+        if (self.write != null) {
+            count += 1;
+            which = .write;
+        }
+        if (self.graph_mutation != null) {
+            count += 1;
+            which = .graph_mutation;
+        }
+        if (self.schema_change != null) {
+            count += 1;
+            which = .schema_change;
+        }
+        if (self.config_change != null) {
+            count += 1;
+            which = .config_change;
+        }
+        if (self.snapshot_pointer != null) {
+            count += 1;
+            which = .snapshot_pointer;
+        }
+        if (self.txn_prepare != null) {
+            count += 1;
+            which = .txn_prepare;
+        }
+        if (self.txn_decide != null) {
+            count += 1;
+            which = .txn_decide;
+        }
+        return if (count == 1) which else null;
+    }
+
+    pub fn ofNoop(v: Noop) RaftCommand {
+        return .{ .noop = v };
+    }
+    pub fn ofWrite(v: WriteCommand) RaftCommand {
+        return .{ .write = v };
+    }
+    pub fn ofGraphMutation(v: GraphMutation) RaftCommand {
+        return .{ .graph_mutation = v };
+    }
+    pub fn ofSchemaChange(v: SchemaChange) RaftCommand {
+        return .{ .schema_change = v };
+    }
+    pub fn ofConfigChange(v: ConfigChange) RaftCommand {
+        return .{ .config_change = v };
+    }
+    pub fn ofSnapshotPointer(v: SnapshotPointer) RaftCommand {
+        return .{ .snapshot_pointer = v };
+    }
+    pub fn ofTxnPrepare(v: TxnPrepare) RaftCommand {
+        return .{ .txn_prepare = v };
+    }
+    pub fn ofTxnDecide(v: TxnDecide) RaftCommand {
+        return .{ .txn_decide = v };
+    }
+
+    pub fn deinit(self: *RaftCommand, allocator: std.mem.Allocator) void {
+        if (self.noop) |*v| v.deinit(allocator);
+        if (self.write) |*v| v.deinit(allocator);
+        if (self.graph_mutation) |*v| v.deinit(allocator);
+        if (self.schema_change) |*v| v.deinit(allocator);
+        if (self.config_change) |*v| v.deinit(allocator);
+        if (self.snapshot_pointer) |*v| v.deinit(allocator);
+        if (self.txn_prepare) |*v| v.deinit(allocator);
+        if (self.txn_decide) |*v| v.deinit(allocator);
     }
 };
 

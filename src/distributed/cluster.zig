@@ -619,13 +619,19 @@ pub const ClusterCoordinator = struct {
     }
 
     pub fn stop(self: *ClusterCoordinator) void {
+        // Signal shutdown FIRST so every loop sees `shutdown == true` on its
+        // next check.  networkLoop polls inside accept() (50ms slices) so it
+        // exits within one polling cycle; the other loops sleep-poll on
+        // `shutdown` between work units.
         self.shutdown.store(true, .release);
-        // networkLoop's accept() has a 50ms internal timeout so it will
-        // observe the shutdown flag within one polling cycle.
-        if (self.network_transport.quic_server) |*server| {
-            server.deinit();
-            self.network_transport.quic_server = null;
-        }
+
+        // Join the worker threads BEFORE destroying the QUIC server.  An
+        // earlier revision tore down `quic_server` while the network thread
+        // was still inside `waitForAccepted`, which races with that thread's
+        // `orderedRemove(0)` on `endpoint.accepted` and segfaults under the
+        // bootstrap tests (A4b reproducer).  Pool.deinit() blocks until the
+        // worker thread returns, so doing it first means the network loop
+        // has fully unwound by the time we touch the server.
         if (self.raft_pool) |pool| {
             pool.deinit();
             self.raft_pool = null;
@@ -645,6 +651,15 @@ pub const ClusterCoordinator = struct {
         if (self.connection_pool) |pool| {
             pool.deinit();
             self.connection_pool = null;
+        }
+
+        // Now that no thread can still be in accept(), it is safe to free
+        // the QUIC server.  deinit() is the only place that ever destroys
+        // it; networkLoop only reads `quic_server.?` while it holds a
+        // reference to the same pointer this code is about to free.
+        if (self.network_transport.quic_server) |*server| {
+            server.deinit();
+            self.network_transport.quic_server = null;
         }
     }
 
@@ -974,7 +989,8 @@ pub const ClusterCoordinator = struct {
 
                 // Add new replicas
                 const new_replicas = try self.allocator.alloc(u64, shard.replica_nodes.len + needed);
-                std.mem.copy(u64, new_replicas, shard.replica_nodes);
+                // Zig 0.16: std.mem.copy was removed; use @memcpy.
+                @memcpy(new_replicas[0..shard.replica_nodes.len], shard.replica_nodes);
 
                 for (0..needed) |i| {
                     new_replicas[shard.replica_nodes.len + i] = available_nodes[i];

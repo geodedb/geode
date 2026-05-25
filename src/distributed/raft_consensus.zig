@@ -1060,7 +1060,9 @@ pub const RaftNode = struct {
             } },
         };
 
-        self.inner.step(from, raft_msg, null) catch |err| {
+        // raft-0.1.3 RaftNode.step takes (from, msg); the older 3-arg form
+        // (with a trailing thread-pool param) is gone.
+        self.inner.step(from, raft_msg) catch |err| {
             log.warn("raft step error", &.{Attr.string("error", @errorName(err))});
         };
         // Free serialized entry data before freeing the entries array
@@ -1090,18 +1092,25 @@ pub const RaftNode = struct {
     }
 
     fn drainReady(self: *RaftNode) void {
-        const rd = self.inner.ready();
+        // raft-0.1.3 RaftNode.ready now returns `!rd.Ready`; surface the
+        // error in the log so we don't silently drop committed entries.
+        const rd = self.inner.ready() catch |err| {
+            log.warn("raft ready error", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
 
-        if (rd.soft_state) |ss| {
-            self.state = switch (ss.role) {
-                .leader => .leader,
-                .candidate => .candidate,
-                .follower => .follower,
-            };
-        }
+        // raft-0.1.3 removed `Ready.soft_state`; the role and term live
+        // directly on RaftNode now.  Sync our mirror state from there.
+        self.state = switch (self.inner.role) {
+            .leader => .leader,
+            .candidate => .candidate,
+            .follower => .follower,
+        };
 
         if (rd.hard_state) |hs| {
             self.current_term = hs.current_term;
+        } else {
+            self.current_term = self.inner.current_term;
         }
 
         // Apply committed entries -- deserialize the tag-prefixed command bytes
@@ -1123,7 +1132,13 @@ pub const RaftNode = struct {
             self.stats.entries_applied += 1;
         }
 
-        self.inner.advance(rd);
+        // raft-0.1.3 advance() is zero-arg and returns `!void`.  We can't
+        // propagate the error from this void fn, so log on failure — the
+        // next ready() call will report ReadyNotAdvanced if we silently
+        // skipped the call.
+        self.inner.advance() catch |err| {
+            log.warn("raft advance error", &.{Attr.string("error", @errorName(err))});
+        };
     }
 };
 
