@@ -898,7 +898,11 @@ pub const RaftNode = struct {
 
     // External raft library node
     inner: raft_lib.RaftNode,
-    storage: raft_lib.InMemoryStorage,
+    // Heap-allocated so the Storage vtable interface (which captures
+    // &storage_ptr.*) remains valid for the RaftNode's lifetime. A previous
+    // version held this as an inline value, which dangled the moment
+    // RaftNode.init returned. See A4d of the distributed cluster testing plan.
+    storage_ptr: *raft_lib.InMemoryStorage,
 
     // Configuration
     peers: []Peer,
@@ -942,7 +946,17 @@ pub const RaftNode = struct {
             peer_ids[i] = peer.id;
         }
 
-        var storage = raft_lib.InMemoryStorage.init(allocator);
+        // Heap-allocate storage so the Storage interface pointer that
+        // raft_lib.RaftNode.init captures (via storage_ptr.storage()) remains
+        // valid for the lifetime of the RaftNode. The previous version held
+        // storage as a stack-local `var`, so the interface pointer dangled the
+        // moment this function returned — surfacing as `OutOfMemory` on the
+        // first advance and then `ReadyNotAdvanced` indefinitely once
+        // ClusterCoordinator.start() became reachable (A4b/A4c).
+        const storage_ptr = try allocator.create(raft_lib.InMemoryStorage);
+        errdefer allocator.destroy(storage_ptr);
+        storage_ptr.* = raft_lib.InMemoryStorage.init(allocator);
+        errdefer storage_ptr.deinit();
 
         const heartbeat_tick: u32 = 1;
         const election_tick: u32 = @intCast(@max(2, election_timeout_ms / 50));
@@ -955,7 +969,7 @@ pub const RaftNode = struct {
             .pre_vote = true,
         };
 
-        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage.storage());
+        const inner = try raft_lib.RaftNode.init(allocator, raft_config, storage_ptr.storage());
 
         node.* = RaftNode{
             .allocator = allocator,
@@ -963,7 +977,7 @@ pub const RaftNode = struct {
             .state = .follower,
             .current_term = 0,
             .inner = inner,
-            .storage = storage,
+            .storage_ptr = storage_ptr,
             .peers = peers,
             .election_timeout_ms = election_timeout_ms,
             .transport = null,
@@ -979,7 +993,8 @@ pub const RaftNode = struct {
     pub fn deinit(self: *RaftNode) void {
         self.state = .shutdown;
         self.inner.deinit();
-        self.storage.deinit();
+        self.storage_ptr.deinit();
+        self.allocator.destroy(self.storage_ptr);
         self.pending_responses.deinit();
     }
 
