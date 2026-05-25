@@ -139,6 +139,38 @@ var g_stream_throttle: stream_registry.GlobalStreamThrottle = stream_registry.Gl
     stream_registry.default_max_global_stream_threads,
 );
 
+// #864 / qa-seed deadlock §6.5: process-wide leaked-connection registry.
+// `handleQuicConnection`'s acceptor-wait bail path adds entries here when
+// it leaves a conn alive to avoid UAF; a periodic reaper task in main.zig
+// (`reaperLoop`) detects when each entry's acceptor has finished and
+// calls `destroyConnection` to reclaim it.  Nullable so unit tests can
+// skip wiring; main.zig installs the registry at startup via
+// `setLeakedConnRegistry`.
+const leaked_conn_reaper_mod = @import("leaked_conn_reaper.zig");
+var g_leaked_conn_registry: ?*leaked_conn_reaper_mod.LeakedConnRegistry = null;
+
+/// Install the process-wide leaked-conn registry (called from main.zig).
+/// Pass `null` at shutdown to detach so subsequent leak paths skip
+/// registration without erroring.
+pub fn setLeakedConnRegistry(reg: ?*leaked_conn_reaper_mod.LeakedConnRegistry) void {
+    g_leaked_conn_registry = reg;
+}
+
+/// Snapshot accessor for the metrics layer.
+pub fn getLeakedConnRegistry() ?*leaked_conn_reaper_mod.LeakedConnRegistry {
+    return g_leaked_conn_registry;
+}
+
+fn acceptorCtxIsDone(ptr: *anyopaque) bool {
+    const ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ptr));
+    return ctx.done.load(.acquire);
+}
+
+fn acceptorCtxRelease(ptr: *anyopaque) void {
+    const ctx: *StreamAcceptorContext = @ptrCast(@alignCast(ptr));
+    ctx.release();
+}
+
 /// Override the global stream thread limit (called from server startup).
 /// A value of 0 resets to the default.
 pub fn setMaxGlobalStreamThreads(max: u32) void {
@@ -149,6 +181,28 @@ pub fn setMaxGlobalStreamThreads(max: u32) void {
 /// Return the current number of active stream handler threads globally.
 pub fn getGlobalStreamThreadCount() u32 {
     return g_stream_throttle.count();
+}
+
+/// Return the configured maximum number of concurrent stream handler
+/// threads.  Used by the runtime-metrics gauge surface so operators can
+/// compute a saturation ratio without hard-coding the cap on the
+/// dashboard side.
+pub fn getMaxGlobalStreamThreads() u32 {
+    return g_stream_throttle.max;
+}
+
+/// Counter incremented whenever a new peer-initiated stream is rejected
+/// because the global stream-handler throttle is saturated. Exposed via
+/// `getStreamAdmissionRejectionsTotal` for runtime-metrics. Lets
+/// operators detect admission backpressure independently of the
+/// would-block counter (which fires on quiescent streams too).
+var g_stream_admission_rejections: std.atomic.Value(u64) = std.atomic.Value(u64).init(0);
+
+/// Snapshot of the cumulative admission-rejection counter. The
+/// runtime-metrics framework calls this for the
+/// `quic_stream_admission_rejections_total` counter surface.
+pub fn getStreamAdmissionRejectionsTotal() u64 {
+    return g_stream_admission_rejections.load(.monotonic);
 }
 
 /// Set the global mTLS provider (called from server/main.zig during startup)
@@ -1447,6 +1501,17 @@ pub const StreamAcceptorContext = struct {
             self.allocator.destroy(self);
         }
     }
+
+    /// Bump the refcount by one.  Used by the leaked-connection reaper
+    /// registry (§6.5): when the owner bails on the acceptor's exit
+    /// deadline it parks the {conn, ctx} pair with an additional ref so
+    /// the reaper can later poll `ctx.done` safely without risk of the
+    /// ctx being freed under it.  The caller must pair with a later
+    /// `release()`.  Safe to call from any thread holding a live ref.
+    pub fn addRef(self: *StreamAcceptorContext) void {
+        const prev = self.refcount.fetchAdd(1, .acq_rel);
+        std.debug.assert(prev > 0);
+    }
 };
 
 const SessionAuthStatus = enum {
@@ -1636,7 +1701,14 @@ fn streamAcceptorLoop(ctx: *StreamAcceptorContext) void {
             // PERF-P1-004: Enforce the global stream thread cap before
             // spawning. Wait up to 10 ms for a slot; if still full, apply
             // backpressure by closing this stream so the peer retries.
+            //
+            // #864 / qa-seed deadlock §6.4: count rejections via the
+            // dedicated `g_stream_admission_rejections` counter so the
+            // condition is observable independently of the would-block
+            // counter (which fires on quiescent streams too) and so
+            // operators can correlate dashboards with client back-off.
             g_stream_throttle.acquire(10 * std.time.ns_per_ms) catch {
+                _ = g_stream_admission_rejections.fetchAdd(1, .monotonic);
                 log.warn("Global stream thread limit reached, rejecting stream", &.{
                     Attr.int("active_global", @intCast(g_stream_throttle.count())),
                     Attr.int("max_global", @intCast(g_stream_throttle.max)),
@@ -2209,6 +2281,33 @@ pub fn handleQuicConnection(
                         Attr.int("elapsed_ms", @intCast(elapsed)),
                     });
                     destroy_conn = false;
+                    // #864 / qa-seed deadlock §6.5: hand the leaked conn
+                    // to the process-wide reaper so it gets reclaimed
+                    // when the acceptor eventually exits, instead of
+                    // having to wait for the QUIC 300s idle timeout.
+                    // We bump the acceptor_ctx refcount by one so the
+                    // reaper holds its own reference; the existing
+                    // `acceptor_ctx.release()` after this defer remains
+                    // unchanged.  Registration failure (e.g., OOM during
+                    // append) is non-fatal: we simply fall back to the
+                    // legacy leak behavior, since the reaper is purely
+                    // additive on top of the safety bail.
+                    if (g_leaked_conn_registry) |reg| {
+                        acceptor_ctx.addRef();
+                        reg.register(gpa, transport, conn, .{
+                            .self = @ptrCast(acceptor_ctx),
+                            .is_done = acceptorCtxIsDone,
+                            .release = acceptorCtxRelease,
+                        }) catch |reg_err| {
+                            // Drop the ref we just added; we never made
+                            // it into the registry, so nothing else will
+                            // release it.
+                            acceptor_ctx.release();
+                            log.warn("failed to register leaked conn for reaping; falling back to QUIC idle timeout", &.{
+                                Attr.string("error", @errorName(reg_err)),
+                            });
+                        };
+                    }
                     break;
                 }
                 if (elapsed > wait_warn_ms and now - last_warn_ms > 1_000) {

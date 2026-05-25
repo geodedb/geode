@@ -10,6 +10,18 @@ fn compat_sleepNs(ns: u64) void {
     _ = std.os.linux.nanosleep(&req, &rem);
 }
 
+/// Monotonic clock reader in nanoseconds, used for poll-loop cycle latency
+/// instrumentation (§6.6).  Returns 0 on syscall failure rather than
+/// propagating an error — the metric is observability-only and a missed
+/// sample is preferable to crashing the poll thread.
+fn monoNsRaw() u64 {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(.MONOTONIC, &ts);
+    const sec: u64 = if (ts.sec < 0) 0 else @intCast(ts.sec);
+    const nsec: u64 = if (ts.nsec < 0) 0 else @intCast(ts.nsec);
+    return sec * std.time.ns_per_s + nsec;
+}
+
 // VENDOR QUIC MIGRATION COMPLETE - 2025-11-20
 // This module now uses the vendor/quic library's native Endpoint API
 // Following the pattern from vendor/quic/echo_quic_server.zig
@@ -174,6 +186,18 @@ pub const QuicTransport = struct {
     /// Readers-writer sync: handler threads are "readers" (concurrent I/O),
     /// main thread is the "writer" (exclusive poll). See PollSync docs.
     poll_sync: PollSync = .{},
+    /// #864 / qa-seed deadlock §6.6: max observed `poll(0)` cycle latency
+    /// (nanoseconds) since process start. Updated lock-free via CAS from
+    /// the poll thread; read by the runtime-metrics gauge
+    /// `quic_poll_cycle_max_ns`. Lets operators detect pollLoop saturation
+    /// before handler `BufferedProtoReader.nextMessage` starts spinning.
+    poll_cycle_max_ns: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
+    /// Cumulative count of poll cycles whose `poll(0)` latency exceeded
+    /// the handler `waitForPoll(2ms)` timeout. Each such cycle means at
+    /// least one handler missed the broadcast and will re-enter its
+    /// would-block loop for another iteration. Surface via the
+    /// `quic_poll_overrun_total` gauge.
+    poll_overrun_total: std.atomic.Value(u64) = std.atomic.Value(u64).init(0),
     /// Heap-allocated QUIC config; owns the inline cert/key DER byte slices.
     quic_config: ?*VendorQuicConfig = null,
 
@@ -433,7 +457,20 @@ pub const QuicTransport = struct {
     ///
     /// The poll thread continuously processes incoming UDP datagrams into connection
     /// RX buffers and signals waiting handler threads via poll_cv.broadcast().
+    ///
+    /// #864 / qa-seed deadlock §6.6: tracks per-cycle latency so operators can
+    /// detect saturation (handler `BufferedProtoReader.nextMessage` spins on
+    /// WouldBlock once the poll cycle exceeds the handler's 2ms waitForPoll
+    /// timeout).  An overrun is any cycle whose `poll(0)` + housekeeping
+    /// exceeds the handler wait timeout — the canonical leading indicator
+    /// of pollLoop saturation.  Deeper sharding (multi-threaded poll
+    /// dispatch) requires upstream QUIC-library changes; see
+    /// divelife-argo/docs/quic-deadlock.md §6.6 for the full rationale.
     pub fn pollLoop(self: *QuicTransport, shutdown: *std.atomic.Value(bool)) void {
+        // Threshold: a single cycle whose poll(0) call exceeds the handler
+        // waitForPoll timeout (2ms — see quic_connection_handler.zig:1041)
+        // means at least one handler missed this cycle's broadcast.
+        const overrun_threshold_ns: u64 = 2 * std.time.ns_per_ms;
         while (!shutdown.load(.acquire)) {
             // Non-blocking poll — process any pending UDP datagrams without
             // blocking on the socket. poll(0) returns immediately if no data
@@ -443,11 +480,36 @@ pub const QuicTransport = struct {
             // wakeup storms that caused c=4 throughput regression.
             // drainPendingDestroy is handled by the main accept loop thread only
             // (it acquires ep.mu which would contend with poll's internal locking).
+            const start_ns = monoNsRaw();
             self.poll(0) catch {}; // Best-effort cleanup
+            const cycle_ns = monoNsRaw() -% start_ns;
+            self.observePollCycle(cycle_ns, overrun_threshold_ns);
             compat_sleepNs(500 * std.time.ns_per_us);
         }
         // Final poll to flush any remaining packets on shutdown
         self.poll(0) catch {}; // Best-effort cleanup
+    }
+
+    /// Update the poll-cycle observability counters from a single iteration.
+    /// `cycle_ns` is the duration of the `poll(0)` call (excluding the
+    /// inter-cycle sleep).  Records the max-of-window via CAS and bumps the
+    /// overrun counter if the cycle exceeded `overrun_threshold_ns`.
+    fn observePollCycle(self: *QuicTransport, cycle_ns: u64, overrun_threshold_ns: u64) void {
+        // Lock-free max via CAS loop.  At most cpu-count writers (one poll
+        // thread today) so contention is minimal; the metric reader is the
+        // gauge callback which loads once per scrape.
+        while (true) {
+            const cur = self.poll_cycle_max_ns.load(.acquire);
+            if (cycle_ns <= cur) break;
+            if (self.poll_cycle_max_ns.cmpxchgWeak(cur, cycle_ns, .acq_rel, .acquire)) |_| {
+                // Lost the race; reload and retry.
+                continue;
+            }
+            break;
+        }
+        if (cycle_ns > overrun_threshold_ns) {
+            _ = self.poll_overrun_total.fetchAdd(1, .monotonic);
+        }
     }
 
     pub fn accept(self: *QuicTransport) !*QuicConnection {
@@ -485,6 +547,21 @@ pub const QuicTransport = struct {
         self.connections_mutex.lockUncancelable(std.Io.Threaded.global_single_threaded.io());
         defer self.connections_mutex.unlock(std.Io.Threaded.global_single_threaded.io());
         return self.connections.items.len;
+    }
+
+    /// #864 §6.6: snapshot the max-observed `poll(0)` cycle latency
+    /// (nanoseconds).  Surfaces pollLoop saturation independently of the
+    /// proto-reader would-block counter so dashboards can alert on the
+    /// upstream cause rather than the downstream symptom.
+    pub fn getPollCycleMaxNs(self: *QuicTransport) u64 {
+        return self.poll_cycle_max_ns.load(.acquire);
+    }
+
+    /// #864 §6.6: snapshot the cumulative count of overran poll cycles —
+    /// cycles whose `poll(0)` exceeded the handler `waitForPoll(2ms)`
+    /// timeout, causing at least one handler to miss the broadcast.
+    pub fn getPollOverrunTotal(self: *QuicTransport) u64 {
+        return self.poll_overrun_total.load(.monotonic);
     }
 
     pub fn tryAccept(self: *QuicTransport) ?*QuicConnection {

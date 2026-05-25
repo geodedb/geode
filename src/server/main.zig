@@ -93,6 +93,7 @@ const quic_connection_handler = @import("quic_connection_handler.zig");
 // Import QUIC connection-state aggregation for runtime_metrics gauges
 // (Task 4 of docs/superpowers/plans/2026-04-25-quic-cascade-investigation.md)
 const quic_metrics = @import("quic_connection_metrics.zig");
+const leaked_conn_reaper = @import("leaked_conn_reaper.zig");
 const proto_reader_metrics = @import("buffered_proto_reader_metrics.zig");
 // CANARY: REQ=REQ-ABAC-WIRE-017; FEATURE="ABAC Enforcement"; ASPECT=AsyncConnection; STATUS=IMPL; OWNER=server; UPDATED=2026-01-27
 // GAP-0165: Import geode_auth for SecurityManager type in async connection context
@@ -279,6 +280,15 @@ fn runGrpcServerTask(context: *anyopaque) void {
 fn runPollLoopTask(context: *anyopaque) void {
     const ctx: *PollLoopContext = @ptrCast(@alignCast(context));
     quic_transport.QuicTransport.pollLoop(ctx.transport, ctx.shutdown);
+}
+
+/// #864 / qa-seed deadlock §6.5: thread entry for the leaked-connection
+/// reaper. Runs a periodic walk of the registry, reaping conns whose
+/// acceptors have exited. Exits cleanly when the registry's shutdown
+/// flag is set.
+fn runLeakedConnReaper(context: *anyopaque) void {
+    const args: *leaked_conn_reaper.ReaperArgs = @ptrCast(@alignCast(context));
+    leaked_conn_reaper.reaperLoop(args);
 }
 
 // Task 28: embedded-LSP listener + per-session thread entry points.
@@ -1520,6 +1530,58 @@ pub fn main() !void {
             quic_metrics.minFlowControlHeadroom,
             quic_metrics_ctx,
         );
+        // #864 / qa-seed deadlock §6.3: surface the global stream-throttle
+        // saturation as gauges so operators can detect pollLoop saturation
+        // before it cascades into client-side deadlocks. `pending` reports
+        // current in-flight stream handlers; `max` reports the configured
+        // cap so dashboards can compute a saturation ratio without
+        // hard-coding the limit.
+        try metrics_registry.registerGauge(
+            "quic_pending_stream_handlers",
+            quic_metrics.pendingStreamHandlers,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_max_stream_handlers",
+            quic_metrics.maxStreamHandlers,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_stream_admission_rejections_total",
+            quic_metrics.streamAdmissionRejectionsTotal,
+            quic_metrics_ctx,
+        );
+        // #864 / qa-seed deadlock §6.6: surface pollLoop cycle latency so
+        // operators can detect saturation upstream of the proto-reader
+        // would-block counter.  Sustained `quic_poll_cycle_max_ns >= 2ms`
+        // or rising `quic_poll_overrun_total` rate is the leading
+        // indicator before client-side deadlocks materialize.
+        try metrics_registry.registerGauge(
+            "quic_poll_cycle_max_ns",
+            quic_metrics.pollCycleMaxNs,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_poll_overrun_total",
+            quic_metrics.pollOverrunTotal,
+            quic_metrics_ctx,
+        );
+        // #864 / qa-seed deadlock §6.5: surface the reaper state.
+        try metrics_registry.registerGauge(
+            "quic_leaked_connections_pending",
+            quic_metrics.leakedConnectionsPending,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_leaked_connections_reaped_total",
+            quic_metrics.leakedConnectionsReapedTotal,
+            quic_metrics_ctx,
+        );
+        try metrics_registry.registerGauge(
+            "quic_leaked_connections_registered_total",
+            quic_metrics.leakedConnectionsRegisteredTotal,
+            quic_metrics_ctx,
+        );
         try proto_reader_metrics.registerAll(metrics_registry);
 
         var metrics_should_stop = std.atomic.Value(u32).init(0);
@@ -1615,6 +1677,38 @@ pub fn main() !void {
         defer {
             poll_shutdown.store(true, .release);
             poll_pool.deinit();
+        }
+
+        // #864 / qa-seed deadlock §6.5: spawn the leaked-connection
+        // reaper.  Bail entries arrive from `handleQuicConnection`'s
+        // owner-side defer when the acceptor exit-wait deadline fires.
+        // The reaper polls `ctx.done` once a second and reclaims conns
+        // whose acceptors have exited — restoring eventual cleanup from
+        // the QUIC 300s idle timeout to ~1s.
+        var leaked_registry = leaked_conn_reaper.LeakedConnRegistry.init();
+        defer leaked_registry.deinit(gpa);
+        quic_connection_handler.setLeakedConnRegistry(&leaked_registry);
+        defer quic_connection_handler.setLeakedConnRegistry(null);
+
+        var reaper_args = leaked_conn_reaper.ReaperArgs{
+            .registry = &leaked_registry,
+            .gpa = gpa,
+        };
+        const reaper_pool = thread_pool.ThreadPool.init(gpa, .{
+            .num_threads = 1,
+            .queue_capacity = 4,
+            .deinit_timeout_ns = 2 * std.time.ns_per_s,
+        }) catch |err| {
+            log.err("Failed to initialize leaked-conn reaper pool", &.{Attr.string("error", @errorName(err))});
+            return;
+        };
+        try reaper_pool.submitBlocking(.{
+            .context = @ptrCast(&reaper_args),
+            .callback = runLeakedConnReaper,
+        });
+        defer {
+            leaked_registry.shutdown.store(true, .release);
+            reaper_pool.deinit();
         }
 
         // Install SIGTERM/SIGINT handlers so the accept loop exits cleanly

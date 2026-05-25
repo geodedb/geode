@@ -43,10 +43,11 @@
 
 const std = @import("std");
 const quic_transport_mod = @import("transport/quic");
+const quic_connection_handler = @import("quic_connection_handler.zig");
 
 const QuicTransport = quic_transport_mod.QuicTransport;
 
-/// Shared context for all six gauge callbacks. Holds a borrowed
+/// Shared context for all gauge callbacks. Holds a borrowed
 /// (non-owning) pointer to the QUIC transport.
 pub const Ctx = struct {
     transport: *QuicTransport,
@@ -61,6 +62,92 @@ pub fn activeConnections(ctx_ptr: *anyopaque) u64 {
     ctx.transport.connections_mutex.lockUncancelable(io);
     defer ctx.transport.connections_mutex.unlock(io);
     return @intCast(ctx.transport.connections.items.len);
+}
+
+/// Number of stream-handler OS threads currently in flight across all
+/// QUIC connections (i.e. the saturation level of the global stream
+/// throttle). Operators should watch this against `maxStreamHandlers`
+/// — when it sustains near max, the pollLoop is at risk of saturation
+/// and clients should expect admission backpressure (#864 / divelife-argo
+/// qaseed deadlock investigation §6.3).
+///
+/// Reads an atomic counter; no transport-level lock required. The
+/// `ctx_ptr` parameter is unused but the runtime-metrics registry
+/// requires the callback signature `fn(*anyopaque) u64`.
+pub fn pendingStreamHandlers(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    return @intCast(quic_connection_handler.getGlobalStreamThreadCount());
+}
+
+/// Configured maximum number of concurrent stream-handler threads. Used
+/// as the divisor for `quic_pending_stream_handlers` to produce a
+/// saturation ratio in dashboards. Returns the current throttle cap
+/// (changes on `setMaxGlobalStreamThreads`).
+pub fn maxStreamHandlers(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    return @intCast(quic_connection_handler.getMaxGlobalStreamThreads());
+}
+
+/// Cumulative count of peer-initiated streams rejected because the global
+/// stream-handler throttle was saturated when the 10ms admission wait
+/// elapsed (#864 / qa-seed deadlock §6.4).  Monotonic counter exposed
+/// through the gauge surface; dashboards should compute the rate.
+pub fn streamAdmissionRejectionsTotal(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    return quic_connection_handler.getStreamAdmissionRejectionsTotal();
+}
+
+/// Maximum observed pollLoop cycle latency in nanoseconds since process
+/// start (#864 / qa-seed deadlock §6.6).  Alerting threshold: 2 ms (the
+/// handler waitForPoll budget).  Sustained values above 2 ms indicate
+/// pollLoop saturation and predict handler-side WouldBlock spinning.
+pub fn pollCycleMaxNs(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollCycleMaxNs();
+}
+
+/// Cumulative count of pollLoop cycles whose `poll(0)` exceeded the 2 ms
+/// handler waitForPoll timeout (#864 §6.6).  Each overrun means at least
+/// one handler missed that cycle's broadcast and re-entered its
+/// WouldBlock loop — directly correlates with
+/// `proto_reader_would_block_loop_iterations_total` ramp-up.
+pub fn pollOverrunTotal(ctx_ptr: *anyopaque) u64 {
+    const ctx: *Ctx = @ptrCast(@alignCast(ctx_ptr));
+    return ctx.transport.getPollOverrunTotal();
+}
+
+/// Current number of conns parked in the leaked-connection registry
+/// awaiting reaping (#864 / qa-seed deadlock §6.5).  Sustained non-zero
+/// values mean acceptors are stuck past their exit deadline; the reaper
+/// will reclaim them on each pass.
+pub fn leakedConnectionsPending(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    if (quic_connection_handler.getLeakedConnRegistry()) |reg| {
+        return @intCast(reg.pendingCount());
+    }
+    return 0;
+}
+
+/// Cumulative count of conns successfully reaped by the leaked-conn
+/// reaper since process start (#864 §6.5).  Monotonic; rate equals the
+/// rate of acceptor exit-deadline bails.
+pub fn leakedConnectionsReapedTotal(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    if (quic_connection_handler.getLeakedConnRegistry()) |reg| {
+        return reg.reapedTotal();
+    }
+    return 0;
+}
+
+/// Cumulative count of conns ever registered as leaked (#864 §6.5).
+/// Used with `quic_leaked_connections_reaped_total` to compute the
+/// in-flight leak count (`registered - reaped == pending`).
+pub fn leakedConnectionsRegisteredTotal(ctx_ptr: *anyopaque) u64 {
+    _ = ctx_ptr;
+    if (quic_connection_handler.getLeakedConnRegistry()) |reg| {
+        return reg.registeredTotal();
+    }
+    return 0;
 }
 
 /// Sum of `rec.cc.bytes_in_flight` across all active connections (bytes).
