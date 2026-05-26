@@ -512,9 +512,12 @@ pub const Transport = struct {
                 self.dispatchOutbox(&snap_mut);
             } else {
                 // Empty: free the zero-cap arraylist (no-op) and idle.
+                // 2 ms idle interval is well under the heartbeat
+                // budget (50 ms) while keeping the dispatch thread
+                // off-CPU when no messages are queued.
                 var empty_mut = snap;
                 empty_mut.deinit(self.allocator);
-                compat_sleep(1 * std.time.ns_per_ms);
+                compat_sleep(2 * std.time.ns_per_ms);
             }
         }
     }
@@ -546,10 +549,11 @@ pub const Transport = struct {
 
     fn clientPollLoop(self: *Transport) void {
         // Poll every cached peer client endpoint with a 0 ms timeout so
-        // we never block here.  500 µs between iterations matches the
-        // cluster-poll thread's tempo on the server side and keeps the
-        // wire-to-wire latency under ~1 ms even when the raft tick loop
-        // is busy producing messages.
+        // we never block here.  2 ms between iterations is a deliberate
+        // tradeoff: it keeps wire-to-wire latency well under the raft
+        // heartbeat interval (50 ms) while bounding the per-second
+        // wakeup rate to ~500 per node — vs. 2000/sec at 500 µs, which
+        // pinned a full CPU core per node in early iterations.
         //
         // CRITICAL: snapshot the peer pointer list before polling so we
         // don't hold `peers_mutex` while calling into the vendor library.
@@ -578,7 +582,7 @@ pub const Transport = struct {
             for (snap_buf[0..snap_len]) |pc| {
                 pc.client.poll(0) catch {};
             }
-            compat_sleep(500 * std.time.ns_per_us);
+            compat_sleep(2 * std.time.ns_per_ms);
         }
     }
 
