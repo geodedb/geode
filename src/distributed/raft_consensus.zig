@@ -290,11 +290,60 @@ pub const Transport = struct {
     /// the override callback.  Ignored by the default send path.
     send_override_ctx: ?*anyopaque = null,
 
+    /// Task A6c (2026-05-25 distributed cluster testing plan):
+    /// Persistent per-peer QUIC connection pool.  Each entry is keyed
+    /// by `peer.id` and owns a long-lived `QuicClient` plus its TLS
+    /// handshake state, so subsequent raft RPCs only allocate a fresh
+    /// bidirectional stream rather than reconstructing the entire QUIC
+    /// endpoint.  Guarded by `peers_mutex` because raft tick, heartbeat,
+    /// and inbound dispatch can all hit `send` concurrently.
+    peers_mutex: std.Io.Mutex = std.Io.Mutex.init,
+    peers: std.AutoHashMap(u64, *PeerConnection) = undefined,
+    peers_initialized: bool = false,
+
+    /// Persistent QUIC client + endpoint metadata kept alive across raft
+    /// RPCs to a single peer.  `client.deinit()` is deferred to
+    /// `Transport.deinit` (or to a re-establishment after a connection
+    /// failure), so the TLS handshake cost is paid once per peer.
+    pub const PeerConnection = struct {
+        allocator: Allocator,
+        client: quic.QuicClient,
+        /// Set after `connectWithTLS` succeeds for the first time.
+        /// Treated as "definitely-non-zero until we observe an error",
+        /// at which point the entry is evicted and rebuilt on the next
+        /// send.
+        established: bool = false,
+        endpoint: []const u8,
+        port: u16,
+
+        fn deinit(self: *PeerConnection) void {
+            self.client.deinit();
+            self.allocator.free(self.endpoint);
+            self.allocator.destroy(self);
+        }
+    };
+
     pub fn init(allocator: Allocator) Transport {
-        return .{ .allocator = allocator };
+        return .{
+            .allocator = allocator,
+            .peers_mutex = std.Io.Mutex.init,
+            .peers = std.AutoHashMap(u64, *PeerConnection).init(allocator),
+            .peers_initialized = true,
+        };
     }
 
     pub fn deinit(self: *Transport) void {
+        if (self.peers_initialized) {
+            const io = std.Io.Threaded.global_single_threaded.io();
+            self.peers_mutex.lockUncancelable(io);
+            var it = self.peers.iterator();
+            while (it.next()) |entry| {
+                entry.value_ptr.*.deinit();
+            }
+            self.peers.deinit();
+            self.peers_initialized = false;
+            self.peers_mutex.unlock(io);
+        }
         if (self.server) |*s| s.deinit();
         self.server = null;
     }
@@ -312,38 +361,130 @@ pub const Transport = struct {
             try override(self, peer, from, term, msg);
             return;
         }
-        var qc = quic.QuicClient.init(self.allocator);
-        defer qc.deinit();
-        try connectWithTLS(&qc, self.allocator, peer.endpoint, peer.port);
-        const s = try qc.getStream();
-        defer s.deinit();
-        try writeRaftFrame(self.allocator, s, from, term, msg);
-        // Task A6b (2026-05-25 distributed cluster testing plan):
-        // Without an explicit FIN the deferred `s.deinit()` calls
-        // `closeStream(stream_id, 0)` which sends RESET_STREAM, and
-        // the QUIC vendor library discards in-flight data — the
-        // receiver's `readRaftFrame` loop on the cluster networkLoop
-        // then sees the frame either truncated (InvalidInput from
-        // protobuf decode) or completely missing (WouldBlock until the
-        // retry budget elapses).  Sending FIN flushes the stream
-        // cleanly so the receiver always gets the full envelope.
-        s.finish() catch |err| {
-            log.warn("raft transport finish failed", &.{
+
+        // Task A6c: reuse a long-lived QuicClient per peer so the TLS
+        // handshake + endpoint setup cost is paid once.  Each RPC still
+        // gets a fresh bidirectional stream — that's the cheap part on
+        // an already-established QUIC connection.  Without this pool the
+        // sender's deinit() race against finish() caused the vendor
+        // library to RESET in-flight payload, surfacing as
+        // InvalidInput|WouldBlock on the receiver's networkLoop.
+        const conn = self.getOrCreatePeerConnection(peer) catch |err| {
+            log.warn("raft transport getOrCreatePeerConnection failed", &.{
                 Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
+            });
+            return err;
+        };
+
+        const s = conn.client.getStream() catch |err| {
+            // The cached connection is no longer usable (vendor library
+            // reports the underlying state is gone, peer reset, etc.).
+            // Evict it so the next send rebuilds from scratch.
+            log.warn("raft transport getStream failed; evicting cached peer connection", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
+            });
+            self.evictPeerConnection(peer.id);
+            return err;
+        };
+        defer s.deinit();
+
+        writeRaftFrame(self.allocator, s, from, term, msg) catch |err| {
+            log.warn("raft transport writeRaftFrame failed; evicting cached peer connection", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
+            });
+            self.evictPeerConnection(peer.id);
+            return err;
+        };
+
+        // Task A6b: explicit FIN on the stream so the vendor library
+        // flushes the in-flight payload rather than emitting a
+        // RESET_STREAM when the stream destructor runs.  The connection
+        // itself stays alive — only the stream is closed.
+        s.finish() catch |err| {
+            log.warn("raft transport stream finish failed", &.{
+                Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
             });
         };
-        // Poll the client endpoint briefly so the FIN and any pending
-        // payload actually leave the wire before `qc.deinit()` tears
-        // the QUIC endpoint down.  Without this, the closing endpoint
-        // races the OS-level UDP send and the receiver typically sees
-        // the connection drop before reading the frame body.  10ms is
-        // long enough on loopback for a single RTT + retransmit, well
-        // within the raft tick budget.
-        qc.poll(10) catch |err| {
+        // Drive the sender endpoint long enough to flush the data
+        // (payload + FIN) out on the wire before `s.deinit()` runs.  The
+        // connection itself stays alive — only this stream is closed —
+        // so we don't have the "qc.deinit races finish()" hazard from
+        // the original A6b code; but the receiver still needs to see
+        // the bytes before the deferred `closeStream` sends a redundant
+        // FIN.  10ms matches the heartbeat budget and is plenty on
+        // loopback for a payload-sized round-trip.
+        conn.client.poll(10) catch |err| {
             log.warn("raft transport poll-after-finish failed", &.{
                 Attr.string("error", @errorName(err)),
+                Attr.uint("peer", peer.id),
             });
         };
+    }
+
+    /// Look up or construct a persistent peer connection.  The
+    /// expensive `connectWithTLS` call is performed outside
+    /// `peers_mutex` to avoid blocking concurrent sends to other peers
+    /// during the handshake.  If two callers race to create the same
+    /// peer, the loser tears its own client down and returns the
+    /// winner's entry.
+    fn getOrCreatePeerConnection(self: *Transport, peer: Peer) !*PeerConnection {
+        const io = std.Io.Threaded.global_single_threaded.io();
+
+        // Fast path: already cached and established.
+        {
+            self.peers_mutex.lockUncancelable(io);
+            defer self.peers_mutex.unlock(io);
+            if (self.peers.get(peer.id)) |existing| {
+                if (existing.established) return existing;
+            }
+        }
+
+        // Slow path: build the client + perform TLS handshake outside
+        // the lock so we don't serialize handshakes across peers.
+        const conn = try self.allocator.create(PeerConnection);
+        errdefer self.allocator.destroy(conn);
+        conn.* = .{
+            .allocator = self.allocator,
+            .client = quic.QuicClient.init(self.allocator),
+            .established = false,
+            .endpoint = try self.allocator.dupe(u8, peer.endpoint),
+            .port = peer.port,
+        };
+        errdefer self.allocator.free(conn.endpoint);
+        errdefer conn.client.deinit();
+
+        try connectWithTLS(&conn.client, self.allocator, conn.endpoint, conn.port);
+        conn.established = true;
+
+        // Re-acquire the lock to insert.  If another caller beat us to
+        // it, prefer the existing entry and discard ours so we never
+        // leave a half-initialized client in the map.
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        if (self.peers.get(peer.id)) |existing| {
+            if (existing.established) {
+                conn.deinit();
+                return existing;
+            }
+        }
+        try self.peers.put(peer.id, conn);
+        return conn;
+    }
+
+    /// Remove a cached peer connection (typically after observing an
+    /// error on `getStream`/`writeRaftFrame`).  The entry is destroyed
+    /// in place; the next send to this peer will re-establish.
+    fn evictPeerConnection(self: *Transport, peer_id: u64) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.peers_mutex.lockUncancelable(io);
+        defer self.peers_mutex.unlock(io);
+        if (self.peers.fetchRemove(peer_id)) |kv| {
+            kv.value.deinit();
+        }
     }
 };
 
