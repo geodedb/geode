@@ -16,6 +16,37 @@
 | `7f6cc672` | fix(distributed): drainReady dispatches Ready.messages via wrapper transport | A5b |
 | `02f52c93` | test+fix(distributed): subprocess 3-node smoke + cluster QUIC infrastructure | A6 (test skipped — see below) |
 | `af0db97a` | fix(distributed): unblock cluster raft transport (A6b partial) | A6b (auth-token panic + QUIC FIN flush) |
+| `5d7dd520` | fix(distributed): persistent per-peer QUIC connection pool | A6c |
+| `ed635e70` | fix(distributed): RaftEnvelope wire-format + pre_vote propagation | A6d |
+| `b3d28e01` | fix(distributed): stabilize leader election under QUIC transport | A6e |
+| `901af767` | perf(distributed): lengthen raft transport poll intervals to 2 ms | A6e |
+| `184bdc41` | feat(distributed): public proposeWrite/waitForApplied/role API | A3d |
+| `b970047d` | feat(distributed): implement forwardToShard cross-node read routing | A3e |
+| `4cfd3d89` | feat(gql): SHOW CLUSTER STATUS returns cluster membership and role | A7 |
+| `a000340f` | fix(gql): SHOW CLUSTER STATUS reads coord.raft.peers (source of truth) | A7 follow-up |
+
+**Harness commits** (separate repo `geode-test-harness`):
+
+| Commit | Summary | Tasks closed |
+|---|---|---|
+| `1792ffd` | feat(cluster): port + token injection + readiness probe | B1, B2 |
+| `570978c` | feat(cluster): --force-cluster-size CLI + Makefile matrix | B3, B4 |
+| `0673215` | fix(cluster): wait for each node's cluster_port to bind before starting next | A6f-partial |
+
+## Current gating issue: A6f — clientPollLoop crashes in QUIC vendor library
+
+Reproduction: 3 geode processes started near-simultaneously on loopback with shared GEODE_CLUSTER_TOKEN. After leader election begins (one node may briefly become leader), one node's `clientPollLoop` (raft_consensus.zig:583) crashes inside the QUIC vendor library:
+
+```
+src/distributed/raft_consensus.zig:583  pc.client.poll(0) catch {};
+src/transport/quic.zig:1118              api.poll(ep, timeout_i32)
+zig-pkg/quic-0.1.18/src/quic/api.zig:169 ep.poll(timeout_ms)
+zig-pkg/quic-0.1.18/src/quic/endpoint.zig:829      pollWithStats
+zig-pkg/quic-0.1.18/src/quic/endpoint.zig:895      processIncomingDatagram
+zig-pkg/quic-0.1.18/src/quic/endpoint.zig:1446     processShortHeader  <-- crash
+```
+
+The harness integration test `RUN_CLUSTER_READINESS_INTEGRATION=1 pytest tests/test_cluster_readiness_integration.py` reproduces this reliably. The geode-side in-process A5 test and subprocess A6 test both pass, so this is specifically triggered when the harness orchestrates startup (likely because of timing differences in the persistent-connection-pool warmup window).
 
 Net diff vs branch root: 15 files changed, **2816 insertions, 77 deletions**. Branch: `feat/distributed-cluster-testing`.
 
