@@ -57,6 +57,16 @@ pub const Bootstrap = struct {
     owned_peer_configs: []cluster.ClusterCoordinator.PeerConfig,
 
     pub fn deinit(self: *Bootstrap) void {
+        // A7 (2026-05-26): clear the global ClusterCoordinator handle before
+        // we free the coordinator itself.  The handle is read by
+        // `executeShowClusterStatus` in `src/execution/admin_ddl.zig` to
+        // populate SHOW CLUSTER STATUS rows; leaving it pointing at freed
+        // memory after deinit would let a late query crash the server.  We
+        // accept the small window where the pointer is null but the
+        // coordinator still exists — the SHOW handler degrades to the
+        // standalone-row path, which is the same fallback used before any
+        // cluster bootstrap ran.
+        cluster.clearGlobalClusterCoordinator();
         self.coordinator.deinit();
         self.allocator.destroy(self.coordinator);
         for (self.owned_addresses) |addr| self.allocator.free(addr);
@@ -191,6 +201,13 @@ pub fn maybeStart(
             else => Error.InvalidNodeId,
         };
     };
+
+    // A7 (2026-05-26): publish the coordinator pointer to the global
+    // handle so the execution layer (admin_ddl.executeShowClusterStatus)
+    // can read membership / role / term state without taking a direct
+    // compile-time dependency on the distributed module.  Cleared by
+    // `Bootstrap.deinit` above.
+    cluster.setGlobalClusterCoordinator(coord);
 
     return Bootstrap{
         .coordinator = coord,

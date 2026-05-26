@@ -84,6 +84,37 @@ const Attr = logging.Attr;
 pub const cluster_health = @import("cluster_health.zig");
 pub const HealthMonitor = cluster_health.HealthMonitor;
 
+// CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=GlobalCoordinatorHandle; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
+// ---------------------------------------------------------------------------
+// Global ClusterCoordinator handle.
+//
+// Set by `cluster_bootstrap.maybeStart` after `ClusterCoordinator.init`
+// succeeds; cleared by `Bootstrap.deinit`.  The execution layer reads this
+// via `getGlobalClusterCoordinator()` to populate `SHOW CLUSTER STATUS` rows
+// without taking a direct compile-time dependency on the distributed module
+// (`src/execution/admin_ddl.zig` would otherwise create a layering cycle).
+//
+// Null means "standalone mode" — no cluster wired.  In that case the SHOW
+// handler returns a single synthetic row with role=standalone instead of
+// failing.
+// ---------------------------------------------------------------------------
+
+var g_cluster_coordinator: ?*ClusterCoordinator = null;
+
+pub fn setGlobalClusterCoordinator(c: *ClusterCoordinator) void {
+    g_cluster_coordinator = c;
+}
+
+/// Clear the global pointer.  Called on shutdown (or in tests) to prevent
+/// dangling references into freed coordinator memory.
+pub fn clearGlobalClusterCoordinator() void {
+    g_cluster_coordinator = null;
+}
+
+pub fn getGlobalClusterCoordinator() ?*ClusterCoordinator {
+    return g_cluster_coordinator;
+}
+
 fn envFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
     const raw = getEnvVarOwned(allocator, name) catch return false;
     defer allocator.free(raw);

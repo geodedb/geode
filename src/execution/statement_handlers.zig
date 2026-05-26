@@ -56,6 +56,12 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
         .permissions => return admin_ddl.executeShowPermissions(allocator, s.target, context),
         .version => return admin_ddl.executeShowVersion(allocator),
         .capabilities => return admin_ddl.executeShowCapabilities(allocator),
+        // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ShowDispatch; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
+        // Early-return: cluster_status builds its own columns / rows from the
+        // global ClusterCoordinator pointer rather than the catalog, so it
+        // does not pass through the catalog-locked column-and-row builder
+        // below.
+        .cluster_status => return admin_ddl.executeShowClusterStatus(allocator, context),
         // GPS policy DDL (Phase 4): SHOW POLICIES returns empty result set until
         // Phase 5 wires the persistent catalog.  Column schema matches Phase 5 plan.
         .policies => &[_][]const u8{ "name", "graph", "actions", "enabled" },
@@ -239,7 +245,7 @@ pub fn executeShow(allocator: std.mem.Allocator, s: ast.ShowStatement, context: 
             // Return empty result set (procedures might be added in future)
         },
         // The first switch returns early for these; this arm is unreachable in practice (defensive)
-        .users, .roles, .permissions, .version, .capabilities => unreachable,
+        .users, .roles, .permissions, .version, .capabilities, .cluster_status => unreachable,
         // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowGrantsRows; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
         .grants_for => {
             // Enumerate policies applicable to the requested username.

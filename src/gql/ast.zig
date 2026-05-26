@@ -571,6 +571,12 @@ pub const ShowType = enum {
     // CANARY: REQ=REQ-GPS-DDL-004; FEATURE="GPS SHOW GRANTS FOR"; ASPECT=ShowTypeGrantsFor; STATUS=TESTED; TEST=tests/test_gps_show_grants_for.zig; OWNER=security; UPDATED=2026-05-21
     /// SHOW GRANTS FOR <username>: ShowStatement.target holds the username.
     grants_for,
+    // CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ShowTypeClusterStatus; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
+    /// SHOW CLUSTER STATUS: returns one row per cluster member (node_id,
+    /// role, term, leader_id, endpoint, last_contact_ms).  In standalone mode
+    /// (no ClusterCoordinator wired), returns one row for this node with
+    /// role=standalone.
+    cluster_status,
 };
 
 pub const IndexType = enum {

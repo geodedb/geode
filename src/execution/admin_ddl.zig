@@ -12,6 +12,12 @@ const execution = @import("../execution.zig");
 const ExecutionResult = execution.ExecutionResult;
 const ExecutionContext = execution.ExecutionContext;
 const auth_dispatch = @import("auth_dispatch.zig");
+// A7 (2026-05-26): cluster module is read-only here — `getGlobalClusterCoordinator`
+// returns a `?*ClusterCoordinator` set by `cluster_bootstrap.maybeStart` after
+// the coordinator finishes initializing.  Null in standalone mode (no
+// GEODE_CLUSTER_TOKEN), in which case `executeShowClusterStatus` returns a
+// single synthetic row instead of failing.
+const cluster_mod = @import("../distributed/cluster.zig");
 
 // Step 1 finding: execution.zig does NOT re-export Value; it imports from value_types.zig
 // using a module-local `const Value = value_types.Value`. We must import directly.
@@ -175,4 +181,178 @@ pub fn executeShowCapabilities(allocator: std.mem.Allocator) !ExecutionResult {
         .rows = rows,
         .flags = std.ArrayList([]const u8).empty,
     };
+}
+
+// CANARY: REQ=REQ-DIST-SHOW-CLUSTER-STATUS; FEATURE="SHOW CLUSTER STATUS"; ASPECT=ExecuteHandler; STATUS=TESTED; TEST=tests/test_show_cluster_status.zig; OWNER=distributed; UPDATED=2026-05-26
+//
+// SHOW CLUSTER STATUS handler.  Returns one row per cluster member with
+// columns (node_id, role, term, leader_id, endpoint, last_contact_ms).
+//
+// In standalone mode (no ClusterCoordinator wired via
+// `cluster.setGlobalClusterCoordinator` during boot), returns exactly one
+// synthetic row representing this process:
+//
+//   node_id=0, role=standalone, term=0, leader_id=0, endpoint=0.0.0.0:0,
+//   last_contact_ms=0
+//
+// This shape is what the harness B2 readiness probe and operator
+// diagnostics consume; row count of zero would force every caller to
+// special-case "is the coordinator wired?" so we always return at least
+// one row.
+pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionContext) !ExecutionResult {
+    _ = ctx; // unused — SHOW CLUSTER STATUS does not gate on principal /
+    // session yet (parity with SHOW VERSION / SHOW CAPABILITIES).
+
+    // Column schema is fixed regardless of standalone-vs-cluster.
+    const column_names = [_][]const u8{ "node_id", "role", "term", "leader_id", "endpoint", "last_contact_ms" };
+    var columns = try allocator.alloc([]const u8, column_names.len);
+    for (column_names, 0..) |c, i| columns[i] = try allocator.dupe(u8, c);
+
+    const maybe_coord = cluster_mod.getGlobalClusterCoordinator();
+    if (maybe_coord == null) {
+        // Standalone mode — single synthetic row.  Every Str value here is
+        // freshly allocated via `dupe`, so we set `owns_value_memory=true`
+        // so `ExecutionResult.deinit` walks each row and frees the string
+        // backing storage instead of leaking it.
+        const rows = try allocator.alloc([]Value, 1);
+        rows[0] = try allocator.alloc(Value, column_names.len);
+        rows[0][0] = Value{ .Int = 0 };
+        rows[0][1] = Value{ .Str = try allocator.dupe(u8, "standalone") };
+        rows[0][2] = Value{ .Int = 0 };
+        rows[0][3] = Value{ .Int = 0 };
+        rows[0][4] = Value{ .Str = try allocator.dupe(u8, "0.0.0.0:0") };
+        rows[0][5] = Value{ .Int = 0 };
+        return ExecutionResult{
+            .columns = columns,
+            .rows = rows,
+            .flags = std.ArrayList([]const u8).empty,
+            .owns_value_memory = true,
+        };
+    }
+
+    const coord = maybe_coord.?;
+
+    // Snapshot the raft mirror state once so the row set is internally
+    // consistent.  role()/currentTerm() each grab the inner raft mutex;
+    // taking them once minimizes the window where a tick could shift
+    // the term mid-row.
+    const my_role_state = coord.role();
+    const my_term = coord.currentTerm();
+    const my_id = coord.node_id;
+
+    // Resolve the leader_id.  We only know it directly if THIS node is the
+    // leader; otherwise the inner raft library exposes the last observed
+    // leader through `coord.cluster_state.leader_node` (mirrored from
+    // append-entries).  When neither is true (e.g. during an election),
+    // leader_id is 0 — the harness treats this as "no leader yet".
+    const leader_id: u64 = blk: {
+        if (my_role_state == .leader) break :blk my_id;
+        if (coord.cluster_state.leader_node) |id| break :blk id;
+        break :blk 0;
+    };
+
+    const now_ms = compat_milliTimestamp();
+
+    // Emit one row for this node, plus one per peer in cluster_state.nodes.
+    // The peer list is seeded from PeerConfig at init time (see A5 fix);
+    // self is intentionally NOT in that list so we emit it explicitly.
+    const peer_count = coord.cluster_state.nodes.items.len;
+    const total_rows = peer_count + 1;
+
+    var rows = try allocator.alloc([]Value, total_rows);
+    errdefer allocator.free(rows);
+
+    // Row 0: self.
+    rows[0] = try allocator.alloc(Value, column_names.len);
+    rows[0][0] = Value{ .Int = @intCast(my_id) };
+    rows[0][1] = Value{ .Str = try allocator.dupe(u8, roleName(my_role_state)) };
+    rows[0][2] = Value{ .Int = @intCast(my_term) };
+    rows[0][3] = Value{ .Int = @intCast(leader_id) };
+    // Self-endpoint: synthesize from `listen_address:cluster_port` rather
+    // than chasing the network_transport's bound address; the coordinator
+    // already mirrors these into top-level fields exactly for this kind of
+    // operator-facing readout.
+    const self_endpoint = try std.fmt.allocPrint(
+        allocator,
+        "{s}:{d}",
+        .{ coord.listen_address, coord.cluster_port },
+    );
+    rows[0][4] = Value{ .Str = self_endpoint };
+    // last_contact_ms for self is always 0 — we're talking to ourselves.
+    rows[0][5] = Value{ .Int = 0 };
+
+    // Rows 1..N: peers as recorded in cluster_state.nodes.
+    for (coord.cluster_state.nodes.items, 0..) |peer, i| {
+        const row = try allocator.alloc(Value, column_names.len);
+        row[0] = Value{ .Int = @intCast(peer.id) };
+
+        // Peer role classification: if this peer matches the observed
+        // leader_id and we have a non-zero leader, it's the leader;
+        // otherwise we cannot directly observe candidate-vs-follower state
+        // from cluster_state, so we report `follower` as the default (the
+        // node either applied an AppendEntries from the leader, or never
+        // started a vote that we acked).  Tests assert "exactly one
+        // role=leader" — they should not depend on follower-vs-candidate
+        // distinction for peers.
+        const peer_role_str = if (leader_id != 0 and peer.id == leader_id)
+            "leader"
+        else
+            "follower";
+        row[1] = Value{ .Str = try allocator.dupe(u8, peer_role_str) };
+
+        // We do not track per-peer term; report our term as a best-effort
+        // approximation (followers converge to leader term on first
+        // append-entries).  The harness uses term for "is the cluster
+        // stable" rather than per-peer divergence detection.
+        row[2] = Value{ .Int = @intCast(my_term) };
+        row[3] = Value{ .Int = @intCast(leader_id) };
+        row[4] = Value{ .Str = try allocator.dupe(u8, peer.endpoint) };
+
+        // last_contact_ms = now - last_heartbeat.  When the peer has
+        // never been contacted, last_heartbeat is the value seeded at
+        // init time (compat_milliTimestamp), so the first probe sees a
+        // very small delta — the harness treats <5s as "alive".
+        const delta_ms: i64 = if (peer.last_heartbeat == 0) 0 else now_ms - peer.last_heartbeat;
+        row[5] = Value{ .Int = @max(@as(i64, 0), delta_ms) };
+        rows[i + 1] = row;
+    }
+
+    return ExecutionResult{
+        .columns = columns,
+        .rows = rows,
+        .flags = std.ArrayList([]const u8).empty,
+        // All Str values in every row were freshly dupe()'d or allocPrint()'d
+        // above; flag this so ExecutionResult.deinit walks each row and frees
+        // the backing strings.
+        .owns_value_memory = true,
+    };
+}
+
+/// Map raft_consensus.State enum to operator-facing strings.  Matches the
+/// vocabulary the harness B2 probe expects (leader / follower / candidate /
+/// shutdown).  Standalone is NEVER produced here — only the no-coordinator
+/// branch of `executeShowClusterStatus` emits that token.
+fn roleName(state: anytype) []const u8 {
+    return switch (state) {
+        .leader => "leader",
+        .follower => "follower",
+        .candidate => "candidate",
+        .shutdown => "shutdown",
+    };
+}
+
+/// Zig 0.16 compat: std.time.milliTimestamp was removed.  Mirror the helper
+/// used by src/distributed/cluster.zig (intentionally not exported across
+/// modules — the function is small enough to duplicate without creating
+/// import noise).
+fn compat_milliTimestamp() i64 {
+    var ts: std.posix.timespec = .{ .sec = 0, .nsec = 0 };
+    if (comptime @import("builtin").os.tag == .linux) {
+        const rc = std.os.linux.clock_gettime(.REALTIME, &ts);
+        if (rc != 0) return 0;
+    } else {
+        const rc = std.c.clock_gettime(std.c.CLOCK.REALTIME, &ts);
+        if (rc != 0) return 0;
+    }
+    return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
