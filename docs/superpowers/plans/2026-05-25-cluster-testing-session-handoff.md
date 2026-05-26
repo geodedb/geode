@@ -12,6 +12,10 @@
 | `d4ed43f6` | docs: distributed cluster testing plan + session handoff | — |
 | `e08bc896` | fix(distributed): RaftCommand oneof refactor unblocks coord.start() | A4b, A4c |
 | `4050f120` | fix(distributed): heap-allocate RaftNode storage to fix UAF | A4d |
+| `f493bc70` | test+fix(distributed): in-process 3-node leader election | A5 |
+| `7f6cc672` | fix(distributed): drainReady dispatches Ready.messages via wrapper transport | A5b |
+| `02f52c93` | test+fix(distributed): subprocess 3-node smoke + cluster QUIC infrastructure | A6 (test skipped — see below) |
+| `af0db97a` | fix(distributed): unblock cluster raft transport (A6b partial) | A6b (auth-token panic + QUIC FIN flush) |
 
 Net diff vs branch root: 15 files changed, **2816 insertions, 77 deletions**. Branch: `feat/distributed-cluster-testing`.
 
@@ -40,9 +44,15 @@ The protobuf union-as-submessage compile error described below was **fixed** in 
 
 The next blocker (multi-node, not single-node) is implementing peer dialing + leader election with peers — see "Next blocker" section below.
 
-## Next blocker
+## Next blocker (after this session)
 
-Multi-node mode (3+ processes forming a cluster) has not been smoke-tested yet. The remaining work needed:
+**Task A6c: persistent per-peer QUIC connection pool.** The subprocess 3-node test (A6 commit `02f52c93`, gated behind `RUN_SUBPROCESS_CLUSTER_TEST=1`) currently fails at leader election. A6b fixed the auth-token Invalid-free panic and added QUIC FIN/poll flush. Connections now form, raft enters candidate state, frames are sent — but the receiver hits `InvalidInput|WouldBlock` because every raft message opens a fresh TLS+QUIC handshake and tears it down ~10ms later, racing the receiver's `cluster_poll_pool` drain cycle.
+
+Fix is structural: replace `raft_consensus.Transport.send`'s one-connection-per-RPC pattern with a persistent per-peer connection (long-lived QUIC connection per remote node_id, raft messages multiplexed as streams). This is how production raft systems work and will also eliminate the `connection_pool` semaphore pressure described at `cluster.zig:614`.
+
+## Previous next-blocker (HISTORICAL — multi-node now demonstrably starts)
+
+Multi-node mode (3+ processes forming a cluster) is no longer purely hypothetical:
 
 1. **A5: in-process 3-node smoke** — spin up 3 ClusterCoordinator instances on loopback, verify leader election within 5s, verify writes replicate. This is now possible (Raft progresses) but requires the test to actually wire 3 coordinators with shared cluster_token and proper peer lists.
 2. **A6: subprocess 3-node smoke** — spawn 3 `./zig-out/bin/geode serve` processes, verify cluster forms. May surface real bugs in peer dialing (`network_transport.zig` is heavy QUIC code that's never been exercised in practice).
