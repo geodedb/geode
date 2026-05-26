@@ -1581,6 +1581,65 @@ pub const ClusterCoordinator = struct {
         };
     }
 
+    // === Public Raft proposal API (Task A3d of 2026-05-25 plan) ===
+    //
+    // These methods promote internal `raft.*` accessors to the public
+    // ClusterCoordinator surface so the harness, integration tests, and
+    // higher-level callers (W1-W3 WAL distribution tests, the harness's
+    // force-cluster-size mode, /codepros:bug-fix reproductions) can:
+    //   1. Submit writes through the leader (proposeWrite).
+    //   2. Confirm those writes have applied on this node (waitForApplied).
+    //   3. Identify which node is the leader (role / currentTerm).
+    //
+    // Locking: proposeCommand internally takes self.raft.inner_mutex (see
+    // raft_consensus.zig::proposeCommand) to keep the A6d invariant intact.
+    // role/currentTerm/appliedIndex read self.raft mirror fields and the
+    // inner library's monotonic log.applied -- safe to call concurrently
+    // with proposals on the same coordinator.
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-PROPOSE-WRITE; FEATURE="ClusterCoordinator Public Propose"; ASPECT=ProposeWrite; STATUS=TESTED; TEST=tests/test_cluster_propose_write.zig; OWNER=distributed; UPDATED=2026-05-26
+    /// Propose a write command to the Raft log.  Only valid on the leader --
+    /// returns `error.NotLeader` if this node is a follower or candidate.
+    /// Returns the log index assigned to the entry (use `waitForApplied` to
+    /// confirm it was committed and applied locally / across the cluster).
+    ///
+    /// Thread-safe: takes `self.raft.inner_mutex` internally.
+    pub fn proposeWrite(self: *ClusterCoordinator, command: raft_consensus.Command) !u64 {
+        return self.raft.proposeCommand(command);
+    }
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-WAIT-APPLIED; FEATURE="ClusterCoordinator Public Propose"; ASPECT=WaitForApplied; STATUS=TESTED; TEST=tests/test_cluster_propose_write.zig; OWNER=distributed; UPDATED=2026-05-26
+    /// Block until `index` has been applied on this node, or `deadline_ms`
+    /// milliseconds elapse from now.  Returns `error.Timeout` on the
+    /// deadline.  Polls `appliedIndex()` every 2 ms.
+    ///
+    /// Used by tests and the harness to confirm cross-node replication
+    /// after a `proposeWrite`.
+    pub fn waitForApplied(self: *ClusterCoordinator, index: u64, deadline_ms: u64) !void {
+        const begin_ms = compat_milliTimestamp();
+        const deadline = begin_ms +| @as(i64, @intCast(deadline_ms));
+        while (true) {
+            const applied = self.raft.appliedIndex();
+            if (applied >= index) return;
+            if (compat_milliTimestamp() >= deadline) return error.Timeout;
+            compat_sleepNs(2 * std.time.ns_per_ms);
+        }
+    }
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-ROLE; FEATURE="ClusterCoordinator Public Propose"; ASPECT=Role; STATUS=TESTED; TEST=tests/test_cluster_propose_write.zig; OWNER=distributed; UPDATED=2026-05-26
+    /// Returns the current Raft role of this node (leader/candidate/
+    /// follower/shutdown).  Used by tests to identify which node to propose
+    /// against.
+    pub fn role(self: *ClusterCoordinator) raft_consensus.State {
+        return self.raft.role();
+    }
+
+    // CANARY: REQ=REQ-DIST-CLUSTER-TERM; FEATURE="ClusterCoordinator Public Propose"; ASPECT=CurrentTerm; STATUS=TESTED; TEST=tests/test_cluster_propose_write.zig; OWNER=distributed; UPDATED=2026-05-26
+    /// Returns the current Raft term as last observed by drainReady.
+    pub fn currentTerm(self: *ClusterCoordinator) u64 {
+        return self.raft.currentTerm();
+    }
+
     // CANARY: REQ=REQ-GQL-020; FEATURE="Cluster QUIC Messaging"; ASPECT=SendToNode; STATUS=IMPL; OWNER=distributed; UPDATED=2026-04-05
     pub fn sendToNode(self: *ClusterCoordinator, node_id: u64, msg: Message) !void {
         const endpoint = try self.findNodeEndpoint(node_id);

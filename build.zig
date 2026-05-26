@@ -972,6 +972,23 @@ pub fn build(b: *std.Build) void {
     const cluster_3node_election_step = b.step("test-cluster-3node-election", "Run in-process 3-node leader election smoke test (A5)");
     cluster_3node_election_step.dependOn(&run_cluster_3node_election_tests.step);
 
+    // In-process 3-node propose-and-apply smoke test (Task A3d of the
+    // 2026-05-25 distributed cluster testing plan).  Builds on the A5
+    // election driver to confirm the new public ClusterCoordinator
+    // proposeWrite / waitForApplied / role / currentTerm API replicates
+    // a noop command from the elected leader to both followers within
+    // the 10 s budget.
+    const cluster_propose_write_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_propose_write.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_propose_write_tests.root_module.addImport("geode", root_mod);
+    cluster_propose_write_tests.root_module.link_libc = true;
+    const run_cluster_propose_write_tests = b.addRunArtifact(cluster_propose_write_tests);
+    const cluster_propose_write_step = b.step("test-cluster-propose-write", "Run in-process 3-node propose-and-apply smoke test (A3d)");
+    cluster_propose_write_step.dependOn(&run_cluster_propose_write_tests.step);
+
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
     // distributed cluster testing plan).  Confirms that
     // RaftNode.setTransport installs the bridge into the inner raft library

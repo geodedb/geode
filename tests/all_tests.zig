@@ -211,6 +211,11 @@ const _test_cluster_bootstrap = @import("test_cluster_bootstrap.zig");
 // In-process 3-node leader election smoke test (Task A5 of the same plan)
 const _test_cluster_3node_election = @import("test_cluster_3node_election.zig");
 
+// In-process 3-node propose-and-apply smoke test (Task A3d of the same plan).
+// Validates the new public ClusterCoordinator API surface for tests /
+// harness: proposeWrite / waitForApplied / role / currentTerm.
+const _test_cluster_propose_write = @import("test_cluster_propose_write.zig");
+
 // drainReady-and-bridge dispatch test (Task A5b of the same plan)
 const _test_drainready_dispatch = @import("test_drainready_dispatch.zig");
 
@@ -227,6 +232,7 @@ test "aggregate: geode module loads" {
     std.testing.refAllDecls(_test_cluster_coordinator_config);
     std.testing.refAllDecls(_test_cluster_bootstrap);
     std.testing.refAllDecls(_test_cluster_3node_election);
+    std.testing.refAllDecls(_test_cluster_propose_write);
     std.testing.refAllDecls(_test_drainready_dispatch);
     std.testing.refAllDecls(_test_cluster_3node_subprocess);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);

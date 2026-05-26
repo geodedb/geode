@@ -1716,11 +1716,54 @@ pub const RaftNode = struct {
         // Format: 1-byte tag | payload
         // Tags: 0=noop, 1=write, 2=graph_mutation, 3=schema_change,
         //        4=config_change, 5=snapshot_pointer, 6=txn_prepare, 7=txn_decide
+        //
+        // A3d (2026-05-26): take the inner_mutex around propose() + drain so
+        // we keep the locking invariant established by A6d.  Concurrent
+        // raftLoop ticks and inbound-message handlers may already be calling
+        // `tick()` / `step()` under the mutex, so an unguarded propose race
+        // could trigger the same `incorrect alignment` corruption A6d
+        // closed.
+        //
+        // Returns the log index assigned to the proposed entry, i.e.
+        // `log.lastIndex()` after append.  Callers can pair this with
+        // `appliedIndex()` (or the higher-level ClusterCoordinator.
+        // waitForApplied helper) to confirm commit + apply on this node.
+        // The previous form returned `stats.entries_applied` -- a running
+        // count of all entries ever applied -- which was unusable as a
+        // wait condition.  All existing internal callers ignore the
+        // return value with `_ = try ...`, so the change is local.
         const cmd_bytes = try serializeCommand(self.allocator, cmd);
         defer self.allocator.free(cmd_bytes);
+        const io = std.Io.Threaded.global_single_threaded.io();
+        self.inner_mutex.lockUncancelable(io);
+        defer self.inner_mutex.unlock(io);
+        if (self.inner.role != .leader) return error.NotLeader;
         try self.inner.propose(cmd_bytes);
+        const new_index = self.inner.log.lastIndex();
         self.drainReady();
-        return self.stats.entries_applied;
+        return new_index;
+    }
+
+    /// Returns the index of the most recently applied log entry on this
+    /// node.  Reads `inner.log.applied` directly -- this is monotonic and
+    /// only advances inside `drainReady()` after an entry is committed and
+    /// applied by `apply_callback`.  Safe to call from any thread; the
+    /// underlying u64 read is atomic on supported targets and a torn read
+    /// would at worst cause a spurious wait iteration.
+    pub fn appliedIndex(self: *RaftNode) u64 {
+        return self.inner.log.applied;
+    }
+
+    /// Returns the current Raft role of this node mirroring the inner
+    /// library's state.  Falls through to `self.state` (which `drainReady`
+    /// keeps in sync) so this remains correct under shutdown.
+    pub fn role(self: *RaftNode) State {
+        return self.state;
+    }
+
+    /// Returns the current Raft term as last observed by `drainReady`.
+    pub fn currentTerm(self: *RaftNode) u64 {
+        return self.current_term;
     }
 
     pub fn startElection(self: *RaftNode) void {
