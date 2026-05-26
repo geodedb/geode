@@ -253,10 +253,15 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
 
     const now_ms = compat_milliTimestamp();
 
-    // Emit one row for this node, plus one per peer in cluster_state.nodes.
-    // The peer list is seeded from PeerConfig at init time (see A5 fix);
-    // self is intentionally NOT in that list so we emit it explicitly.
-    const peer_count = coord.cluster_state.nodes.items.len;
+    // Emit one row for this node, plus one per peer in coord.raft.peers.
+    // raft.peers is the authoritative cluster membership populated from
+    // PeerConfig at init time (resolvePeers in cluster.zig). The previous
+    // implementation read cluster_state.nodes, which is mutated at runtime
+    // by handleJoinCluster and was observed empty in subprocess runs even
+    // though raft.peers was populated correctly. Using raft.peers guarantees
+    // SHOW CLUSTER STATUS reflects the configured membership immediately.
+    // Self is intentionally NOT in that list so we emit it explicitly.
+    const peer_count = coord.raft.peers.len;
     const total_rows = peer_count + 1;
 
     var rows = try allocator.alloc([]Value, total_rows);
@@ -281,19 +286,16 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
     // last_contact_ms for self is always 0 — we're talking to ourselves.
     rows[0][5] = Value{ .Int = 0 };
 
-    // Rows 1..N: peers as recorded in cluster_state.nodes.
-    for (coord.cluster_state.nodes.items, 0..) |peer, i| {
+    // Rows 1..N: peers as recorded in coord.raft.peers.
+    for (coord.raft.peers, 0..) |peer, i| {
         const row = try allocator.alloc(Value, column_names.len);
         row[0] = Value{ .Int = @intCast(peer.id) };
 
         // Peer role classification: if this peer matches the observed
         // leader_id and we have a non-zero leader, it's the leader;
-        // otherwise we cannot directly observe candidate-vs-follower state
-        // from cluster_state, so we report `follower` as the default (the
-        // node either applied an AppendEntries from the leader, or never
-        // started a vote that we acked).  Tests assert "exactly one
-        // role=leader" — they should not depend on follower-vs-candidate
-        // distinction for peers.
+        // otherwise we report `follower` as the default. Tests assert
+        // "exactly one role=leader" — they should not depend on
+        // follower-vs-candidate distinction for peers.
         const peer_role_str = if (leader_id != 0 and peer.id == leader_id)
             "leader"
         else
@@ -302,17 +304,17 @@ pub fn executeShowClusterStatus(allocator: std.mem.Allocator, ctx: ExecutionCont
 
         // We do not track per-peer term; report our term as a best-effort
         // approximation (followers converge to leader term on first
-        // append-entries).  The harness uses term for "is the cluster
-        // stable" rather than per-peer divergence detection.
+        // append-entries).
         row[2] = Value{ .Int = @intCast(my_term) };
         row[3] = Value{ .Int = @intCast(leader_id) };
-        row[4] = Value{ .Str = try allocator.dupe(u8, peer.endpoint) };
 
-        // last_contact_ms = now - last_heartbeat.  When the peer has
-        // never been contacted, last_heartbeat is the value seeded at
-        // init time (compat_milliTimestamp), so the first probe sees a
-        // very small delta — the harness treats <5s as "alive".
-        const delta_ms: i64 = if (peer.last_heartbeat == 0) 0 else now_ms - peer.last_heartbeat;
+        // Endpoint comes from raft.peers as "host:port".
+        const peer_endpoint = try std.fmt.allocPrint(allocator, "{s}:{d}", .{ peer.endpoint, peer.port });
+        row[4] = Value{ .Str = peer_endpoint };
+
+        // last_contact_ms = now - last_contact (raft.peers tracks this
+        // separately from cluster_state).
+        const delta_ms: i64 = if (peer.last_contact == 0) 0 else now_ms - peer.last_contact;
         row[5] = Value{ .Int = @max(@as(i64, 0), delta_ms) };
         rows[i + 1] = row;
     }
