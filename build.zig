@@ -1124,6 +1124,24 @@ pub fn build(b: *std.Build) void {
     const cluster_propose_write_step = b.step("test-cluster-propose-write", "Run in-process 3-node propose-and-apply smoke test (A3d)");
     cluster_propose_write_step.dependOn(&run_cluster_propose_write_tests.step);
 
+    // Cross-node read forwarding smoke test (Task A3e of the 2026-05-25
+    // distributed cluster testing plan).  Brings up two real
+    // ClusterCoordinators with their QUIC listeners on loopback,
+    // injects a shard pointing from coord A -> coord B, and asserts
+    // `forwardToShard` actually round-trips a cluster RPC frame and
+    // decodes the Response written by coord B.  Also covers the
+    // local short-circuit and ShardNotFound paths.
+    const cluster_forward_to_shard_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("tests/test_cluster_forward_to_shard.zig"),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    cluster_forward_to_shard_tests.root_module.addImport("geode", root_mod);
+    cluster_forward_to_shard_tests.root_module.link_libc = true;
+    const run_cluster_forward_to_shard_tests = b.addRunArtifact(cluster_forward_to_shard_tests);
+    const cluster_forward_to_shard_step = b.step("test-cluster-forward-to-shard", "Run cross-node read forwarding smoke test (A3e)");
+    cluster_forward_to_shard_step.dependOn(&run_cluster_forward_to_shard_tests.step);
+
     // drainReady-and-bridge dispatch test (Task A5b of the 2026-05-25
     // distributed cluster testing plan).  Confirms that
     // RaftNode.setTransport installs the bridge into the inner raft library

@@ -216,6 +216,11 @@ const _test_cluster_3node_election = @import("test_cluster_3node_election.zig");
 // harness: proposeWrite / waitForApplied / role / currentTerm.
 const _test_cluster_propose_write = @import("test_cluster_propose_write.zig");
 
+// Cross-node read forwarding smoke test (Task A3e of the same plan).
+// Verifies forwardToShard actually round-trips a cluster RPC frame
+// between two ClusterCoordinators over QUIC.
+const _test_cluster_forward_to_shard = @import("test_cluster_forward_to_shard.zig");
+
 // drainReady-and-bridge dispatch test (Task A5b of the same plan)
 const _test_drainready_dispatch = @import("test_drainready_dispatch.zig");
 
@@ -233,6 +238,7 @@ test "aggregate: geode module loads" {
     std.testing.refAllDecls(_test_cluster_bootstrap);
     std.testing.refAllDecls(_test_cluster_3node_election);
     std.testing.refAllDecls(_test_cluster_propose_write);
+    std.testing.refAllDecls(_test_cluster_forward_to_shard);
     std.testing.refAllDecls(_test_drainready_dispatch);
     std.testing.refAllDecls(_test_cluster_3node_subprocess);
     var res = try geode.parseGql("RETURN 1", std.testing.allocator);

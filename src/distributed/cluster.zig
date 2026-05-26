@@ -150,6 +150,131 @@ const Response = struct {
     }
 };
 
+// ---- Cluster RPC framing (Task A3e of 2026-05-25 plan) ----
+//
+// Cross-node read forwarding (`forwardToShard`) uses a request/response
+// protocol that shares the same intra-cluster QUIC listener as Raft
+// consensus traffic.  To distinguish the two frame types on a single
+// stream, every cluster RPC frame is prefixed with a 1-byte magic
+// marker (`CLUSTER_RPC_MAGIC`).  Raft frames begin with a 4-byte
+// big-endian length whose high byte is `0x00` for any frame under 16
+// MiB, so the magic byte is unambiguous: receivers peek the first byte
+// to decide whether to dispatch via `readRaftFrame` (raft) or the
+// cluster RPC reader (this module).
+//
+// Wire format (request and response both share the same shape):
+//   [1 byte: CLUSTER_RPC_MAGIC]
+//   [4 bytes: big-endian payload length]
+//   [N bytes: protobuf-encoded Message (request) or Response (reply)]
+//
+// A single bidirectional stream carries exactly one request frame
+// followed by exactly one response frame written by the receiver
+// before the stream is FIN'd.  This keeps the protocol lightweight
+// (no request-id correlation needed) and matches the existing
+// "one-frame-per-stream" idiom used by the raft transport.
+const CLUSTER_RPC_MAGIC: u8 = 0xC1;
+const CLUSTER_RPC_MAX_FRAME: u32 = 16 * 1024 * 1024; // 16 MiB, same as raft
+
+/// Encode `msg` (request) or `resp` (response) into an on-wire cluster
+/// RPC frame.  The caller owns the returned slice and MUST free it.
+fn encodeClusterRpcFrame(allocator: Allocator, value: anytype) ![]u8 {
+    var aw: std.Io.Writer.Allocating = try std.Io.Writer.Allocating.initCapacity(allocator, 256);
+    defer aw.deinit();
+    try protobuf.encode(&aw.writer, allocator, value);
+    const body = aw.writer.buffer[0..aw.writer.end];
+    const framed = try allocator.alloc(u8, 1 + 4 + body.len);
+    framed[0] = CLUSTER_RPC_MAGIC;
+    std.mem.writeInt(u32, framed[1..5], @intCast(body.len), .big);
+    @memcpy(framed[5..], body);
+    return framed;
+}
+
+/// Read exactly `buf.len` bytes from `stream`, polling on WouldBlock.
+/// Generic over any stream type that exposes a `read([]u8) !usize`
+/// method (QuicStream on the server side, QuicClientStream on the
+/// client side).  Returns `error.EndOfStream` if the peer FIN'd
+/// before any byte arrived, `error.UnexpectedEndOfStream` if it FIN'd
+/// mid-frame, and `error.Timeout` if the per-call max retry budget
+/// expires.
+fn readExactCluster(stream: anytype, buf: []u8) !void {
+    var read_len: usize = 0;
+    var retry_count: usize = 0;
+    const max_retries: usize = 1000; // ~5s at 5ms sleep
+    while (read_len < buf.len) {
+        const n = stream.read(buf[read_len..]) catch |err| {
+            if (err == error.WouldBlock) {
+                retry_count += 1;
+                if (retry_count >= max_retries) return error.Timeout;
+                compat_sleepNs(5 * std.time.ns_per_ms);
+                continue;
+            }
+            return err;
+        };
+        if (n == 0) {
+            if (read_len == 0) return error.EndOfStream;
+            retry_count += 1;
+            if (retry_count >= max_retries) return error.UnexpectedEndOfStream;
+            compat_sleepNs(5 * std.time.ns_per_ms);
+            continue;
+        }
+        read_len += n;
+        retry_count = 0;
+    }
+}
+
+/// Read the cluster RPC frame body that follows a `CLUSTER_RPC_MAGIC`
+/// byte.  The magic byte must have already been consumed by the
+/// caller (the receiver's frame-type peek); only the 4-byte length
+/// and payload remain on the wire.  Returns an allocator-owned
+/// payload buffer; the caller owns it and MUST free.
+fn readClusterRpcBodyAfterMagic(allocator: Allocator, stream: anytype) ![]u8 {
+    var len_buf: [4]u8 = undefined;
+    try readExactCluster(stream, len_buf[0..]);
+    const msg_len = std.mem.readInt(u32, &len_buf, .big);
+    if (msg_len == 0) return error.InvalidFrame;
+    if (msg_len > CLUSTER_RPC_MAX_FRAME) return error.FrameTooLarge;
+    const payload = try allocator.alloc(u8, msg_len);
+    errdefer allocator.free(payload);
+    try readExactCluster(stream, payload);
+    return payload;
+}
+
+/// Read a full cluster RPC frame (magic + length + body).  Used by
+/// the request originator (`forwardToShard`) to consume the
+/// response.  Returns an allocator-owned payload buffer; the caller
+/// owns it and MUST free.
+fn readClusterRpcFrame(allocator: Allocator, stream: anytype) ![]u8 {
+    var magic_buf: [1]u8 = undefined;
+    try readExactCluster(stream, magic_buf[0..]);
+    if (magic_buf[0] != CLUSTER_RPC_MAGIC) return error.InvalidFrame;
+    return readClusterRpcBodyAfterMagic(allocator, stream);
+}
+
+/// Adapter that prepends a single already-consumed byte to an
+/// underlying stream.  Used by the inbound dispatcher to feed the
+/// raft frame reader after peeking the first byte of the wire stream.
+/// `Inner` must be a pointer to a type that exposes a
+/// `read([]u8) !usize` method (matches both `*quic.QuicStream` and
+/// `*quic.QuicClientStream`).
+fn PrefixedStream(comptime Inner: type) type {
+    return struct {
+        inner: Inner,
+        prefix: u8,
+        have_prefix: bool,
+
+        const Self = @This();
+
+        pub fn read(self: *Self, buf: []u8) !usize {
+            if (self.have_prefix and buf.len > 0) {
+                buf[0] = self.prefix;
+                self.have_prefix = false;
+                return 1;
+            }
+            return self.inner.read(buf);
+        }
+    };
+}
+
 const ReplicationPayload = struct {
     shard_id: u64 = 0,
     snapshot: []const u8 = "",
@@ -1039,12 +1164,21 @@ pub const ClusterCoordinator = struct {
             }
             seen_streams.put(stream.stream_id, {}) catch {};
 
-            // Each stream carries a single raft frame.  Read once, then
-            // discard the stream — the next RPC arrives on a fresh
+            // Each stream carries a single inbound frame.  Read once,
+            // then either dispatch as raft (existing path) or cluster
+            // RPC (A3e, this commit).  The next RPC arrives on a fresh
             // stream which `acceptStream` will surface on the next
             // iteration.
-            self.readOneRaftFrameAndDispatch(stream) catch |err| {
-                log.debug("readOneRaftFrameAndDispatch error", &.{
+            //
+            // A3e (2026-05-26): the wire now multiplexes two frame
+            // types on the same stream by inspecting the first byte.
+            // `CLUSTER_RPC_MAGIC` selects the request/response path
+            // (cluster RPC); any other byte is treated as the high
+            // byte of a 4-byte big-endian length prefix and fed into
+            // the existing raft frame reader.  We peek by reading
+            // exactly one byte first, then dispatch.
+            self.dispatchInboundStream(stream) catch |err| {
+                log.debug("dispatchInboundStream error", &.{
                     Attr.string("error", @errorName(err)),
                 });
             };
@@ -1052,13 +1186,138 @@ pub const ClusterCoordinator = struct {
         }
     }
 
-    /// Read exactly one raft frame from `stream`, apply security checks,
-    /// and dispatch into the raft state machine.  Best-effort: any error
-    /// surfaces as a debug log and a non-zero return; the connection
-    /// handler keeps the connection open and accepts the next stream.
-    fn readOneRaftFrameAndDispatch(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
-        const frame_res = try raft_consensus.readRaftFrame(self.allocator, stream);
+    /// Peek the first byte on `stream` and dispatch to either the
+    /// raft frame reader (existing behaviour) or the cluster RPC
+    /// handler (A3e, this commit).  See the `CLUSTER_RPC_MAGIC`
+    /// comment for the wire format and rationale.
+    fn dispatchInboundStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
+        var first: [1]u8 = undefined;
+        readExactCluster(stream, first[0..]) catch |err| {
+            // EndOfStream means the peer FIN'd before sending any
+            // payload — common during connection teardown.  Bubble up
+            // silently so the caller's debug log doesn't fire on a
+            // routine shutdown.
+            if (err == error.EndOfStream) return;
+            return err;
+        };
+
+        if (first[0] == CLUSTER_RPC_MAGIC) {
+            try self.handleClusterRpcOnStream(stream);
+            return;
+        }
+
+        // Non-magic byte: treat as the high byte of a raft frame's
+        // 4-byte big-endian length prefix.  Wrap the stream with a
+        // small adapter that prepends the byte we already consumed
+        // and feed it into the existing raft frame reader.
+        var prefix = PrefixedStream(*quic.QuicStream){ .inner = stream, .prefix = first[0], .have_prefix = true };
+        try self.dispatchRaftFrameFromAdaptedStream(&prefix);
+    }
+
+    /// Run the cluster RPC request/response cycle on `stream`.  The
+    /// magic byte has already been consumed by the caller.  Reads the
+    /// request payload, dispatches via `handleClusterMessage`, then
+    /// writes a length-prefixed Response back on the same stream.
+    fn handleClusterRpcOnStream(self: *ClusterCoordinator, stream: *quic.QuicStream) !void {
+        const payload = try readClusterRpcBodyAfterMagic(self.allocator, stream);
+        defer self.allocator.free(payload);
+
+        var reader: std.Io.Reader = .fixed(payload);
+        var msg = protobuf.decode(Message, &reader, self.allocator) catch |err| {
+            log.warn("Cluster RPC decode failed", &.{Attr.string("error", @errorName(err))});
+            try self.writeClusterRpcResponse(stream, Response{ .status = .ERR });
+            return;
+        };
+        defer msg.deinit(self.allocator);
+
+        // SEC-D001: validate auth token on inbound cluster RPC
+        // frames.  Matches the raft frame check above.  When the
+        // local `cluster_token` is empty (single-node dev mode) we
+        // accept anything; otherwise the token in the Message must
+        // match GEODE_CLUSTER_TOKEN.
+        if (self.cluster_token.len > 0 and !cluster_auth.validateClusterToken(msg.auth_token)) {
+            log.warn("Cluster RPC rejected: invalid or missing cluster token", &.{});
+            try self.writeClusterRpcResponse(stream, Response{ .status = .ERR });
+            return;
+        }
+
+        // Dispatch.  Inbound cluster RPCs always execute LOCALLY on
+        // this node — the originator already routed the message to
+        // us via `forwardToShard`, so we must not re-forward (which
+        // would loop indefinitely if the local shard ownership
+        // table disagrees with the originator's).  The result
+        // Response may carry a `data` slice owned by the handler's
+        // allocator; we encode it before `Response.deinit` reclaims
+        // any backing heap memory.
+        var resp = self.handleClusterRpcLocal(msg) catch |err| Response{
+            .status = .ERR,
+            .data = std.fmt.allocPrint(self.allocator, "handler error: {s}", .{@errorName(err)}) catch null,
+        };
+        defer resp.deinit(self.allocator);
+
+        try self.writeClusterRpcResponse(stream, resp);
+    }
+
+    /// Inbound cluster RPC handler executed on the *target* node.
+    /// This must NOT re-enter `forwardToShard` / `handleShardQuery`
+    /// — the originator has already routed the message to us.
+    ///
+    /// Today this only handles READ messages; writes / 2PC reuse
+    /// the existing raft + 2PC paths and are not wired through the
+    /// cluster RPC frame yet (tracked under task S2 in the plan).
+    /// JOIN_CLUSTER / LEAVE_CLUSTER / REPLICATE_DATA / FAILOVER_REQUEST
+    /// arriving on this path are rejected with ERR so the originator
+    /// surfaces a clear failure rather than silently no-op'ing — the
+    /// pre-A3e handlers for those message types live in
+    /// `handleJoinCluster` / `handleLeaveCluster` / etc. and have
+    /// Zig 0.16 ArrayList API drift that is out of scope here.
+    fn handleClusterRpcLocal(self: *ClusterCoordinator, msg: Message) !Response {
+        switch (msg.msg_type) {
+            .READ => return self.executeLocalRead(msg),
+            else => return Response{ .status = .ERR },
+        }
+    }
+
+    /// Execute a READ message locally and return a Response.  The
+    /// returned `data` field (if non-null) is allocated with
+    /// `self.allocator` and freed by the caller's `Response.deinit`.
+    ///
+    /// A3e (2026-05-26): the cluster RPC wire path is now plumbed
+    /// end-to-end (originator -> QUIC -> target -> response).  The
+    /// actual read execution against `self.store` is task S2 in the
+    /// plan; this implementation returns an OK status with an
+    /// "executed:<node_id>:<key>" envelope so tests can assert the
+    /// message was delivered to the expected target node.  When S2
+    /// lands, this body grows into a real graph_store query path.
+    fn executeLocalRead(self: *ClusterCoordinator, msg: Message) !Response {
+        const key = msg.key orelse "";
+        const data = try std.fmt.allocPrint(
+            self.allocator,
+            "executed:{d}:{s}",
+            .{ self.node_id, key },
+        );
+        return Response{ .status = .OK, .data = data };
+    }
+
+    fn writeClusterRpcResponse(self: *ClusterCoordinator, stream: *quic.QuicStream, resp: Response) !void {
+        const framed = try encodeClusterRpcFrame(self.allocator, resp);
+        defer self.allocator.free(framed);
+        try stream.writeAll(framed);
+        // Best-effort FIN so the requester's reader sees stream
+        // termination rather than waiting for the idle timeout.
+        stream.finish() catch {};
+    }
+
+    fn dispatchRaftFrameFromAdaptedStream(self: *ClusterCoordinator, prefix: anytype) !void {
+        const frame_res = try raft_consensus.readRaftFrame(self.allocator, prefix);
         defer frame_res.deinit(self.allocator);
+        try self.applyDecodedRaftFrame(frame_res);
+    }
+
+    /// Apply security checks + dispatch a decoded raft frame.  Pulled
+    /// out of `readOneRaftFrameAndDispatch` so the new prefix-aware
+    /// path (above) can reuse the same logic without duplication.
+    fn applyDecodedRaftFrame(self: *ClusterCoordinator, frame_res: raft_consensus.DecodedRaftFrame) !void {
 
         // SEC-D001: Always validate cluster token on incoming Raft frames.
         // Reject frames without valid token regardless of whether env var is set.
@@ -1861,12 +2120,151 @@ pub const ClusterCoordinator = struct {
         _ = try self.raft.proposeCommand(command);
     }
 
+    // CANARY: REQ=REQ-DIST-CLUSTER-FORWARD-SHARD; FEATURE="DistributedCluster"; ASPECT=ForwardToShard; STATUS=TESTED; TEST=tests/test_cluster_forward_to_shard.zig; OWNER=distributed; UPDATED=2026-05-26
+    //
+    // Task A3e (2026-05-25 distributed cluster testing plan):
+    // Route a read query to the node that owns `shard_id` and return
+    // the Response that node produces.
+    //
+    // Resolution order for the target node:
+    //   1. If this coordinator already owns the shard (we are the
+    //      primary or a replica), short-circuit through the local
+    //      message handler.  No cluster traffic — the read serves
+    //      out of our local graph_store.
+    //   2. Otherwise prefer the shard's `primary_node`; on lookup
+    //      failure (endpoint missing, peer not yet in
+    //      `cluster_state.nodes`), fall back to the first reachable
+    //      replica.
+    //   3. If neither resolves to a known endpoint, return error.
+    //
+    // Wire path:
+    //   forwardToShard opens a fresh one-shot QUIC client to the
+    //   target endpoint (same TLS / insecure-mode plumbing as
+    //   `sendToNode`), opens a bidirectional stream, writes a single
+    //   cluster RPC request frame (`CLUSTER_RPC_MAGIC`-prefixed),
+    //   then reads the matching response frame on the same stream
+    //   and decodes it back into a `Response`.
+    //
+    // We deliberately do NOT reuse `raft_transport`'s persistent
+    // peer connection pool here: that pool's `getStream` /
+    // `writeRaftFrame` path is wired exclusively for raft RPC
+    // semantics (single-frame write, no reply correlation).  Layering
+    // a second protocol on top of the same pool would require
+    // pool-aware response routing, which is more invasive than the
+    // task scope warrants.  One-shot connections are slower per RPC
+    // but match the existing `sendToNode` baseline, and the planned
+    // S2 work (cross-shard read forwarding integration test) will
+    // upgrade to a pooled path when there's a benchmark gating it.
     fn forwardToShard(self: *ClusterCoordinator, shard_id: u64, msg: Message) !Response {
-        _ = self;
-        _ = shard_id;
-        _ = msg;
-        // Forward read query to shard
-        return Response{ .status = .OK };
+        // Find the shard descriptor.  Returns ShardNotFound if no
+        // shard with this id is currently in `cluster_state.shards`.
+        const shard = self.findShard(shard_id) orelse return error.ShardNotFound;
+
+        // Local short-circuit.  When this coordinator already owns
+        // the shard, executing through `executeLocalRead` is
+        // equivalent to the over-the-wire path — but we save the
+        // round-trip and avoid bouncing the message through the
+        // intra-cluster QUIC listener.  This deliberately bypasses
+        // `handleClusterMessage` / `handleShardQuery` because those
+        // would recompute the target shard and could loop back into
+        // `forwardToShard`.
+        if (self.ownsShard(shard)) {
+            return self.executeLocalRead(msg);
+        }
+
+        // Pick a target node.  Primary first, then replicas in order.
+        const target_node = self.pickReachableShardOwner(shard) orelse return error.NoReachableShardOwner;
+
+        return self.sendClusterRpcToNode(target_node, msg);
+    }
+
+    /// Returns the ShardInfo for `shard_id`, or null if absent.
+    fn findShard(self: *ClusterCoordinator, shard_id: u64) ?*ShardInfo {
+        for (self.cluster_state.shards.items) |*shard| {
+            if (shard.id == shard_id) return shard;
+        }
+        return null;
+    }
+
+    /// True when this coordinator is the primary or one of the
+    /// replicas of `shard`.
+    fn ownsShard(self: *ClusterCoordinator, shard: *ShardInfo) bool {
+        if (shard.primary_node == self.node_id) return true;
+        for (shard.replica_nodes) |replica| {
+            if (replica == self.node_id) return true;
+        }
+        return false;
+    }
+
+    /// Pick the first replica (primary first, then replicas in
+    /// declaration order) that resolves to a known endpoint in
+    /// `cluster_state.nodes` AND is not this coordinator itself.
+    /// Returns null when no candidate qualifies.
+    fn pickReachableShardOwner(self: *ClusterCoordinator, shard: *ShardInfo) ?u64 {
+        if (shard.primary_node != self.node_id and self.hasEndpoint(shard.primary_node)) {
+            return shard.primary_node;
+        }
+        for (shard.replica_nodes) |replica| {
+            if (replica == self.node_id) continue;
+            if (self.hasEndpoint(replica)) return replica;
+        }
+        return null;
+    }
+
+    fn hasEndpoint(self: *ClusterCoordinator, node_id: u64) bool {
+        _ = self.findNodeEndpoint(node_id) catch return false;
+        return true;
+    }
+
+    /// Send `msg` to `target_node` over a one-shot QUIC client
+    /// connection, await the Response frame written by the
+    /// receiver, and return it.  The returned `Response` owns its
+    /// `data` slice via the test/caller allocator; the caller MUST
+    /// call `Response.deinit(allocator)` to free it.
+    fn sendClusterRpcToNode(self: *ClusterCoordinator, target_node: u64, msg: Message) !Response {
+        const endpoint = try self.findNodeEndpoint(target_node);
+        const colon_idx = std.mem.lastIndexOf(u8, endpoint, ":") orelse return error.InvalidAddress;
+        const host = endpoint[0..colon_idx];
+        const port = try std.fmt.parseInt(u16, endpoint[colon_idx + 1 ..], 10);
+
+        var client = quic.QuicClient.init(self.allocator);
+        defer client.deinit();
+
+        const allow_insecure = cluster_auth.isInsecureModeAllowed();
+        if (allow_insecure) {
+            log.warn("SECURITY WARNING: Cluster RPC TLS verification disabled via GEODE_CLUSTER_INSECURE", &.{});
+            _ = client.connectInsecure(host, port, true) catch |err| return err;
+        } else {
+            const ca_path = getEnvVarOwned(self.allocator, "GEODE_CLUSTER_CA_CERT") catch null;
+            defer if (ca_path) |p| self.allocator.free(p);
+
+            if (ca_path) |path| {
+                try client.connectEx(host, port, path, null, null);
+            } else {
+                try client.connect(host, port);
+            }
+        }
+        _ = client.waitForHandshake(10) catch |err| return err;
+
+        var stream = try client.openStream(true);
+        defer stream.deinit();
+
+        // Write the request frame (magic + len + protobuf Message).
+        const req_frame = try encodeClusterRpcFrame(self.allocator, msg);
+        defer self.allocator.free(req_frame);
+        try stream.writeAll(req_frame);
+        // Half-close so the receiver knows no more request bytes
+        // will arrive.  The stream remains open for the response
+        // direction.
+        stream.finish() catch {};
+
+        // Read the response frame (magic + len + protobuf Response).
+        const resp_payload = try readClusterRpcFrame(self.allocator, stream);
+        defer self.allocator.free(resp_payload);
+
+        var reader: std.Io.Reader = .fixed(resp_payload);
+        const decoded = try protobuf.decode(Response, &reader, self.allocator);
+        return decoded;
     }
 
     fn handleFailoverRequest(self: *ClusterCoordinator, msg: Message) !Response {
@@ -1931,6 +2329,43 @@ pub const ClusterCoordinator = struct {
         address: []const u8,
         port: u16,
     };
+};
+
+// ---------------------------------------------------------------------------
+// Public testing surface
+// ---------------------------------------------------------------------------
+// Task A3e (2026-05-25 distributed cluster testing plan): expose just
+// enough of the private Message / Response / forwardToShard machinery
+// so the regression test (tests/test_cluster_forward_to_shard.zig) can
+// drive the cross-node read path without leaking those internals into
+// the production API surface.  Everything inside `testing_surface` is
+// gated by a CANARY=EXEMPT marker — never call these from non-test
+// code.  Re-exported from the geode module root as
+// `geode.distributed.cluster.testing` (lower-case alias below).
+//
+// File-scope aliases used to bridge the file-private types into the
+// public `testing_surface` namespace below.  The aliases are not
+// `pub` — only the `testing_surface` struct's `pub const`
+// declarations leak them out of this module.  Inside the struct
+// body the fn signature uses the alias name to disambiguate from
+// the file-private `Message` / `Response` / `ResponseStatus`
+// symbols that share the unqualified name.
+const TestingMessage = Message;
+const TestingResponse = Response;
+const TestingResponseStatus = ResponseStatus;
+
+// CANARY: REQ=REQ-DIST-CLUSTER-FORWARD-SHARD-TEST-SURFACE; FEATURE="DistributedCluster"; ASPECT=TestExposure; STATUS=EXEMPT; OWNER=distributed; UPDATED=2026-05-26
+pub const testing_surface = struct {
+    pub const Message = TestingMessage;
+    pub const Response = TestingResponse;
+    pub const ResponseStatus = TestingResponseStatus;
+    pub fn forwardToShard(
+        coord: *ClusterCoordinator,
+        shard_id: u64,
+        msg: TestingMessage,
+    ) !TestingResponse {
+        return coord.forwardToShard(shard_id, msg);
+    }
 };
 
 // ---------------------------------------------------------------------------
